@@ -1,0 +1,5 @@
+# Minimal dependencies for MVP
+# Use this if you don't need image/OCR fallback
+
+pywinauto>=0.6.8
+Pillow>=9.0.0

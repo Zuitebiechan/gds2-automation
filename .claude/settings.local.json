@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install:*)",
+      "Bash(python3 -m pip install:*)",
+      "Bash(python3 -m py_compile:*)",
+      "Bash(python3:*)",
+      "Bash(python scripts/run_demo.py:*)",
+      "Bash(python:*)",
+      "Bash(where:*)",
+      "Bash(dir /s /b \"C:\\\\Program Files \\(x86\\)\\\\Windows Kits\\\\10\\\\bin\\\\*\\\\x64\\\\inspect.exe\")",
+      "Bash(powershell:*)",
+      "Bash(start \"\" \"C:\\\\Program Files \\(x86\\)\\\\Windows Kits\\\\10\\\\bin\\\\10.0.26100.0\\\\x64\\\\inspect.exe\")",
+      "Bash(dir:*)",
+      "Bash(reg query \"HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Uninstall\" /s /f \"GDS\")",
+      "Bash(findstr:*)",
+      "Bash(taskkill:*)",
+      "Bash(cd:*)",
+      "Bash(move srcworkersgds2tasks.py _archiveold_tasks.py)",
+      "Bash(move scriptsrun_demo.py _archiveold_run_demo.py)",
+      "Bash(Remove-Item -Path \"C:\\\\Users\\\\shsww\\\\projects\\\\RPA_demo\\\\test_imports.py\" -Force)",
+      "Bash(Write-Host \"Deleted test_imports.py\")",
+      "Bash(Remove-Item -Path \"C:\\\\Users\\\\shsww\\\\projects\\\\RPA_demo\\\\tests\\\\test_flow.py\" -Force)",
+      "Bash(Write-Host \"Deleted tests/test_flow.py\")",
+      "Bash(Remove-Item -Path \"C:\\\\Users\\\\shsww\\\\projects\\\\RPA_demo\\\\config\\\\settings.py\" -Force)",
+      "Bash(Write-Host \"Deleted config/settings.py\")",
+      "Bash(Remove-Item -Path \"C:\\\\Users\\\\shsww\\\\projects\\\\RPA_demo\\\\src\\\\utils\\\\logger.py\" -Force)",
+      "Bash(Write-Host \"Deleted src/utils/logger.py\")",
+      "Bash(del \"\\\\?\\\\C:\\\\Users\\\\shsww\\\\projects\\\\RPA_demo\\\\nul\")",
+      "Bash(git -C \"C:\\\\Users\\\\shsww\\\\projects\\\\RPA_demo\" status)",
+      "Bash(gh auth status:*)",
+      "Bash(git -C:*)"
+    ]
+  }
+}
