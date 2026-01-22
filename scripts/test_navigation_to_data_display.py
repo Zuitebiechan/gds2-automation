@@ -61,13 +61,14 @@ from src.pages import (
 )
 
 
-def find_button_on_screen(button_name: str, confidence: float = 0.8) -> tuple:
+def find_button_on_screen(button_name: str, confidence: float = 0.8, region=None) -> tuple:
     """
     Find a button on screen using image matching.
 
     Args:
         button_name: Name of button image file (without .png)
         confidence: Matching confidence threshold (0-1)
+        region: Optional (left, top, width, height) to search in specific area
 
     Returns:
         (x, y) center coordinates if found, None otherwise
@@ -78,7 +79,10 @@ def find_button_on_screen(button_name: str, confidence: float = 0.8) -> tuple:
         return None
 
     try:
-        location = pyautogui.locateOnScreen(str(image_path), confidence=confidence)
+        if region:
+            location = pyautogui.locateOnScreen(str(image_path), confidence=confidence, region=region)
+        else:
+            location = pyautogui.locateOnScreen(str(image_path), confidence=confidence)
         if location:
             center = pyautogui.center(location)
             logger.info(f"Found button '{button_name}' at ({center.x}, {center.y})")
@@ -137,7 +141,7 @@ def is_button_enabled(button_name: str, confidence: float = 0.9) -> bool:
         return False
 
 
-def click_button_by_image(button_name: str, confidence: float = 0.8, timeout: float = 10) -> bool:
+def click_button_by_image(button_name: str, confidence: float = 0.8, timeout: float = 10, region=None) -> bool:
     """
     Find and click a button using image matching.
 
@@ -145,6 +149,7 @@ def click_button_by_image(button_name: str, confidence: float = 0.8, timeout: fl
         button_name: Name of button image file (without .png)
         confidence: Matching confidence threshold
         timeout: Maximum time to search
+        region: Optional (left, top, width, height) to search in specific area
 
     Returns:
         True if found and clicked, False otherwise
@@ -152,7 +157,7 @@ def click_button_by_image(button_name: str, confidence: float = 0.8, timeout: fl
     start_time = time.time()
 
     while time.time() - start_time < timeout:
-        coords = find_button_on_screen(button_name, confidence)
+        coords = find_button_on_screen(button_name, confidence, region=region)
         if coords:
             x, y = coords
             logger.info(f"Clicking button '{button_name}' at ({x}, {y})")
@@ -311,6 +316,7 @@ def main():
     print()
 
     try:
+        # Use GDS2Driver only for button state checking via pywinauto
         with GDS2Driver() as driver:
             # Step 1: Verify Main Menu
             print("Step 1: Verifying Main Menu...")
@@ -321,75 +327,130 @@ def main():
             print("  [OK] At Main Menu")
             time.sleep(0.5)
 
-            # Step 2: Click Diagnostics (PyAutoGUI via page object)
-            print("Step 2: Clicking Diagnostics...")
-            device_explorer = main_menu.click_diagnostics()
-            print("  [OK] Device Explorer appeared")
+        # Step 2: Click Diagnostics using PyAutoGUI+OpenCV
+        print("Step 2: Clicking Diagnostics button (PyAutoGUI)...")
+        if not click_button_by_image("diagnostics", confidence=0.8, timeout=10):
+            print("  [ERROR] Could not find Diagnostics button")
+            return 1
+        print("  [OK] Clicked Diagnostics")
+        time.sleep(3)  # Wait for popup or page to load
+
+        # Step 3: Check if Device Explorer popup appears
+        # If it appears, select VCI device and click Continue
+        # If not, we're already at Vehicle Selection page
+        print("Step 3: Checking for Device Explorer popup...")
+
+        # Wait and check for Continue button multiple times (popup may take time to appear)
+        popup_detected = False
+        for _ in range(5):  # Check for up to 2.5 seconds
+            continue_coords = find_button_on_screen("continue", confidence=0.9)
+            if continue_coords:
+                popup_detected = True
+                break
             time.sleep(0.5)
 
-            # Step 3: Select VCI device (PyAutoGUI via page object)
-            print(f"Step 3: Selecting VCI device ({vci_device})...")
-            vehicle_selection = device_explorer.select_device(vci_device)
-            print("  [OK] Vehicle Selection page")
-            time.sleep(0.5)
-
-            # Step 4: Click Enter (PyAutoGUI via page object)
-            print("Step 4: Clicking Enter...")
-            diagnostics_menu = vehicle_selection.click_enter()
-            if not diagnostics_menu.is_displayed():
-                print("  [ERROR] Not at Diagnostics Menu")
-                return 1
-            print("  [OK] Diagnostics Menu")
-            time.sleep(0.5)
-
-            # Step 5: Select Module Diagnostics (click the list item directly - no Enter!)
-            # Note: Clicking Enter would cause GDS2 to auto-select the first module
-            print("Step 5: Selecting Module Diagnostics...")
-            driver.click_list_item(Loc.DiagnosticsMenu.MODULE_DIAGNOSTICS)
-            print("  [OK] Module Diagnostics selected")
-            time.sleep(2)  # Wait for module list to appear
-
-            # Step 6: Use OCR to find and click Engine Control Module directly
-            # The module list items are directly clickable
-            print(f"Step 6: Finding '{target_module}' using OCR...")
-
-            if find_and_click_text(target_module, timeout=15, confidence_threshold=50):
-                print(f"  [OK] Clicked on {target_module}")
-                time.sleep(2)  # Wait for module options to load
+        if popup_detected:
+            print("  [OK] Device Explorer popup detected")
+            # Select VCI device using OCR
+            print(f"  Selecting VCI device '{vci_device}' (OCR)...")
+            if find_and_click_text(vci_device, timeout=5, confidence_threshold=50):
+                print(f"  [OK] Selected {vci_device}")
             else:
-                print(f"  [ERROR] Could not find '{target_module}' on screen")
-                return 1
+                print(f"  [WARN] Could not find '{vci_device}', it may already be selected")
+            time.sleep(1)
 
-            # Step 7: Use OCR to find and click Data Display
-            print("Step 7: Finding 'Data Display' using OCR...")
-
-            if find_and_click_text("Data Display", timeout=10, confidence_threshold=50):
-                print("  [OK] Clicked on Data Display")
-                time.sleep(3)  # Wait for data selection to load
+            # Click Continue button
+            print("  Clicking Continue button (PyAutoGUI)...")
+            if click_button_by_image("continue", confidence=0.9, timeout=5):
+                print("  [OK] Clicked Continue")
             else:
-                print("  [ERROR] Could not find 'Data Display' on screen")
+                print("  [ERROR] Could not click Continue button")
                 return 1
+            time.sleep(3)  # Wait for Vehicle Selection page
 
-            # Step 8: Select a data category (e.g., "Engine Data") and click Enter
-            print("Step 8: Selecting data category 'Engine Data'...")
-            if find_and_click_text("Engine Data", timeout=10, confidence_threshold=50):
-                print("  [OK] Selected Engine Data")
-                time.sleep(1)
+            # Now click Enter for Vehicle Selection
+            print("Step 4: Clicking Enter button to confirm vehicle (PyAutoGUI)...")
+            if not click_button_by_image("enter", confidence=0.9, timeout=10):
+                print("  [ERROR] Could not find Enter button for vehicle confirmation")
+                return 1
+            print("  [OK] Clicked Enter")
+            time.sleep(5)  # Wait for Diagnostics Menu to fully load
+        else:
+            print("  [INFO] No Device Explorer popup, already at Vehicle Selection")
+            # Click Enter for Vehicle Selection
+            print("Step 4: Clicking Enter button to confirm vehicle (PyAutoGUI)...")
+            if not click_button_by_image("enter", confidence=0.9, timeout=10):
+                print("  [ERROR] Could not find Enter button for vehicle confirmation")
+                return 1
+            print("  [OK] Clicked Enter")
+            time.sleep(5)  # Wait for Diagnostics Menu to fully load
 
-                # Click Enter to confirm selection
-                if driver.element_exists(Loc.Navigation.ENTER_BTN, timeout=2):
-                    driver.click_button(Loc.Navigation.ENTER_BTN)
-                    print("  [OK] Clicked Enter")
-                    time.sleep(5)  # Wait for Data Display page to load with data
-            else:
-                print("  [WARN] Could not find 'Engine Data', trying to proceed...")
+        # Step 5: Select Module Diagnostics using OCR
+        print("Step 5: Selecting 'Module Diagnostics' (OCR)...")
+        if not find_and_click_text("Module Diagnostics", timeout=15, confidence_threshold=40):
+            print("  [ERROR] Could not find 'Module Diagnostics'")
+            # Debug: take a screenshot to see what's on screen
+            print("  [DEBUG] Taking screenshot for debugging...")
+            screenshot = ImageGrab.grab()
+            screenshot.save("debug_step5_screenshot.png")
+            print("  [DEBUG] Screenshot saved to debug_step5_screenshot.png")
 
-            # Step 9: Click Create Report (PyAutoGUI via driver)
-            print("Step 9: Clicking Create Report...")
-            time.sleep(2)  # Wait for data to populate
+            # Also try to OCR the whole screen and print what we see
+            print("  [DEBUG] OCR text found on screen:")
+            gray = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2GRAY)
+            text = pytesseract.image_to_string(gray)
+            for line in text.split('\n')[:20]:
+                if line.strip():
+                    print(f"    {line.strip()}")
+            return 1
+        print("  [OK] Module Diagnostics selected")
+        time.sleep(2)  # Wait for module list to appear
 
-            if driver.element_exists(Loc.DataDisplay.CREATE_REPORT_BTN, timeout=10):
-                driver.click_button(Loc.DataDisplay.CREATE_REPORT_BTN)
+        # Step 6: Use OCR to find and click Engine Control Module directly
+        # The module list items are directly clickable
+        print(f"Step 6: Finding '{target_module}' using OCR...")
+
+        if find_and_click_text(target_module, timeout=15, confidence_threshold=50):
+            print(f"  [OK] Clicked on {target_module}")
+            time.sleep(2)  # Wait for module options to load
+        else:
+            print(f"  [ERROR] Could not find '{target_module}' on screen")
+            return 1
+
+        # Step 7: Use OCR to find and click Data Display
+        print("Step 7: Finding 'Data Display' using OCR...")
+
+        if find_and_click_text("Data Display", timeout=10, confidence_threshold=50):
+            print("  [OK] Clicked on Data Display")
+            time.sleep(3)  # Wait for data selection to load
+        else:
+            print("  [ERROR] Could not find 'Data Display' on screen")
+            return 1
+
+        # Step 8: Select a data category (e.g., "Engine Data") and click Enter
+        print("Step 8: Selecting data category 'Engine Data' (OCR)...")
+        if find_and_click_text("Engine Data", timeout=10, confidence_threshold=50):
+            print("  [OK] Selected Engine Data")
+            time.sleep(1)
+
+            # Click Enter to confirm selection (PyAutoGUI)
+            print("Step 8b: Clicking Enter to confirm (PyAutoGUI)...")
+            if not click_button_by_image("enter", confidence=0.9, timeout=5):
+                print("  [ERROR] Could not find Enter button")
+                return 1
+            print("  [OK] Clicked Enter")
+            time.sleep(5)  # Wait for Data Display page to load with data
+        else:
+            print("  [WARN] Could not find 'Engine Data', trying to proceed...")
+
+        # Step 9: Click Create Report (PyAutoGUI)
+        print("Step 9: Clicking Create Report (PyAutoGUI)...")
+        time.sleep(2)  # Wait for data to populate
+
+        # Wait for Create Report button to be enabled (pywinauto check only)
+        if wait_for_button_enabled("create_report", timeout=60):
+            # Now click it with PyAutoGUI
+            if click_button_by_image("create_report", confidence=0.9, timeout=10):
                 print("  [OK] Clicked Create Report!")
                 time.sleep(2)
 
@@ -399,20 +460,11 @@ def main():
                 print("=" * 60)
                 return 0
             else:
-                # Fallback: try OCR for Create Report button
-                print("  [INFO] Trying OCR for Create Report...")
-                if find_and_click_text("Create Report", timeout=10, confidence_threshold=50):
-                    print("  [OK] Clicked Create Report (via OCR)!")
-                    time.sleep(2)
-
-                    print()
-                    print("=" * 60)
-                    print("SUCCESS: Navigated to Data Display and created report!")
-                    print("=" * 60)
-                    return 0
-                else:
-                    print("  [ERROR] Could not find 'Create Report' button")
-                    return 1
+                print("  [ERROR] Could not find Create Report button image")
+                return 1
+        else:
+            print("  [ERROR] Create Report button did not become enabled")
+            return 1
 
     except Exception as e:
         logger.exception("Navigation test failed")
