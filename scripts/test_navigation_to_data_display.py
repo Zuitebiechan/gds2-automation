@@ -337,6 +337,9 @@ def find_text_on_screen(target_text: str, confidence_threshold: float = 60) -> t
 
     # Search each line for the target text
     # Sort by Y position to find top-most match first
+    best_match = None
+    best_match_score = 0
+
     for y_bucket in sorted(lines.keys()):
         items = lines[y_bucket]
         # Sort items by X position (left to right)
@@ -345,9 +348,21 @@ def find_text_on_screen(target_text: str, confidence_threshold: float = 60) -> t
         # Build the line text
         line_text = ' '.join(item[4] for item in items)
 
-        # Check if the line STARTS with the target text (exact match at beginning)
-        # This prevents "Engine Data" from matching "Engine Cooling and HVAC Data"
+        # Check if the target text appears in the line
+        # Score: 2 = starts with target, 1 = contains target
+        score = 0
         if line_text.startswith(target_lower):
+            score = 2  # Best match - line starts with target
+        elif target_lower in line_text:
+            # Check if target appears as a complete phrase (not part of longer word)
+            # e.g., "engine data" should match but not match "engine data display"
+            idx = line_text.find(target_lower)
+            end_idx = idx + len(target_lower)
+            # Check if followed by end of string or non-alphanumeric
+            if end_idx >= len(line_text) or not line_text[end_idx].isalnum():
+                score = 1  # Good match - contains target as complete phrase
+
+        if score > best_match_score:
             # Find the specific items that match the target words
             matching_items = []
             for word in target_words:
@@ -361,6 +376,7 @@ def find_text_on_screen(target_text: str, confidence_threshold: float = 60) -> t
                         break
 
             if matching_items:
+                best_match_score = score
                 # Calculate bounding box of all matching items
                 min_x = min(item[0] for item in matching_items)
                 max_x = max(item[0] + item[2] for item in matching_items)
@@ -371,8 +387,16 @@ def find_text_on_screen(target_text: str, confidence_threshold: float = 60) -> t
                 center_y = (min_y + max_y) // 2
 
                 matched_text = ' '.join(item[4] for item in matching_items)
-                logger.info(f"Found '{matched_text}' matching '{target_text}' at ({center_x}, {center_y})")
-                return (center_x, center_y)
+                best_match = (center_x, center_y, matched_text)
+
+                # If we found a "startswith" match, use it immediately
+                if score == 2:
+                    break
+
+    if best_match:
+        center_x, center_y, matched_text = best_match
+        logger.info(f"Found '{matched_text}' matching '{target_text}' at ({center_x}, {center_y})")
+        return (center_x, center_y)
 
     return None
 
