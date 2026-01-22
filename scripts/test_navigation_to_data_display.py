@@ -349,9 +349,11 @@ def find_text_on_screen(target_text: str, confidence_threshold: float = 60) -> t
         line_text = ' '.join(item[4] for item in items)
 
         # Check if the target text appears in the line
-        # Score: 2 = starts with target, 1 = contains target
+        # Score: 3 = exact, 2 = starts with target, 1 = contains target, 0.5 = partial (OCR cutoff)
         score = 0
-        if line_text.startswith(target_lower):
+        if line_text == target_lower:
+            score = 3  # Exact match
+        elif line_text.startswith(target_lower):
             score = 2  # Best match - line starts with target
         elif target_lower in line_text:
             # Check if target appears as a complete phrase (not part of longer word)
@@ -361,6 +363,15 @@ def find_text_on_screen(target_text: str, confidence_threshold: float = 60) -> t
             # Check if followed by end of string or non-alphanumeric
             if end_idx >= len(line_text) or not line_text[end_idx].isalnum():
                 score = 1  # Good match - contains target as complete phrase
+        else:
+            # Check for partial match (OCR sometimes cuts off first few chars)
+            # e.g., "gine data" should match "engine data"
+            for i in range(1, min(4, len(target_lower))):
+                partial_target = target_lower[i:]  # Try without first i chars
+                if line_text.startswith(partial_target) or line_text == partial_target:
+                    score = 0.5  # Partial match - OCR likely cut off beginning
+                    logger.debug(f"Partial match: '{line_text}' matches '{target_lower}' (missing first {i} chars)")
+                    break
 
         if score > best_match_score:
             # Find the specific items that match the target words
