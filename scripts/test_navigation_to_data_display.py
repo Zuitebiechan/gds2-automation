@@ -49,7 +49,9 @@ tesseract_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 pytesseract.pytesseract.tesseract_cmd = tesseract_path
 
 # Path to button images
-IMAGES_DIR = Path(r"C:\Users\shsww\projects\RPA_demo\images\buttons")
+BUTTONS_DIR = Path(r"C:\Users\shsww\projects\RPA_demo\images\buttons")
+# Path to list item images
+LIST_ITEMS_DIR = Path(r"C:\Users\shsww\projects\RPA_demo\images\list_items")
 
 from src.core.driver import GDS2Driver
 from src.core.locators import Loc
@@ -73,7 +75,7 @@ def find_button_on_screen(button_name: str, confidence: float = 0.8, region=None
     Returns:
         (x, y) center coordinates if found, None otherwise
     """
-    image_path = IMAGES_DIR / f"{button_name}.png"
+    image_path = BUTTONS_DIR / f"{button_name}.png"
     if not image_path.exists():
         logger.warning(f"Button image not found: {image_path}")
         return None
@@ -91,6 +93,61 @@ def find_button_on_screen(button_name: str, confidence: float = 0.8, region=None
         logger.debug(f"Error finding button '{button_name}': {e}")
 
     return None
+
+
+def find_list_item_on_screen(item_name: str, confidence: float = 0.9) -> tuple:
+    """
+    Find a list item on screen using image matching.
+
+    Args:
+        item_name: Name of list item image file (without .png)
+        confidence: Matching confidence threshold (0-1)
+
+    Returns:
+        (x, y) center coordinates if found, None otherwise
+    """
+    image_path = LIST_ITEMS_DIR / f"{item_name}.png"
+    if not image_path.exists():
+        logger.warning(f"List item image not found: {image_path}")
+        return None
+
+    try:
+        location = pyautogui.locateOnScreen(str(image_path), confidence=confidence)
+        if location:
+            center = pyautogui.center(location)
+            logger.info(f"Found list item '{item_name}' at ({center.x}, {center.y})")
+            return (center.x, center.y)
+    except Exception as e:
+        logger.debug(f"Error finding list item '{item_name}': {e}")
+
+    return None
+
+
+def click_list_item_by_image(item_name: str, confidence: float = 0.9, timeout: float = 10) -> bool:
+    """
+    Find and click a list item using image matching.
+
+    Args:
+        item_name: Name of list item image file (without .png)
+        confidence: Matching confidence threshold
+        timeout: Maximum time to search
+
+    Returns:
+        True if found and clicked, False otherwise
+    """
+    start_time = time.time()
+
+    while time.time() - start_time < timeout:
+        coords = find_list_item_on_screen(item_name, confidence)
+        if coords:
+            x, y = coords
+            logger.info(f"Clicking list item '{item_name}' at ({x}, {y})")
+            pyautogui.click(x, y)
+            return True
+        time.sleep(0.5)
+
+    logger.warning(f"Could not find list item '{item_name}' within {timeout}s")
+    return False
 
 
 def is_button_enabled(button_name: str, confidence: float = 0.9) -> bool:
@@ -385,23 +442,10 @@ def main():
             print("  [OK] Clicked Enter")
             time.sleep(5)  # Wait for Diagnostics Menu to fully load
 
-        # Step 5: Select Module Diagnostics using OCR
-        print("Step 5: Selecting 'Module Diagnostics' (OCR)...")
-        if not find_and_click_text("Module Diagnostics", timeout=15, confidence_threshold=40):
+        # Step 5: Select Module Diagnostics using PyAutoGUI+OpenCV
+        print("Step 5: Selecting 'Module Diagnostics' (PyAutoGUI)...")
+        if not click_list_item_by_image("module_diagnostics", confidence=0.9, timeout=10):
             print("  [ERROR] Could not find 'Module Diagnostics'")
-            # Debug: take a screenshot to see what's on screen
-            print("  [DEBUG] Taking screenshot for debugging...")
-            screenshot = ImageGrab.grab()
-            screenshot.save("debug_step5_screenshot.png")
-            print("  [DEBUG] Screenshot saved to debug_step5_screenshot.png")
-
-            # Also try to OCR the whole screen and print what we see
-            print("  [DEBUG] OCR text found on screen:")
-            gray = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2GRAY)
-            text = pytesseract.image_to_string(gray)
-            for line in text.split('\n')[:20]:
-                if line.strip():
-                    print(f"    {line.strip()}")
             return 1
         print("  [OK] Module Diagnostics selected")
         time.sleep(2)  # Wait for module list to appear
@@ -417,10 +461,10 @@ def main():
             print(f"  [ERROR] Could not find '{target_module}' on screen")
             return 1
 
-        # Step 7: Use OCR to find and click Data Display
-        print("Step 7: Finding 'Data Display' using OCR...")
+        # Step 7: Use PyAutoGUI+OpenCV to find and click Data Display
+        print("Step 7: Finding 'Data Display' (PyAutoGUI)...")
 
-        if find_and_click_text("Data Display", timeout=10, confidence_threshold=50):
+        if click_list_item_by_image("data_display", confidence=0.9, timeout=10):
             print("  [OK] Clicked on Data Display")
             time.sleep(3)  # Wait for data selection to load
         else:
