@@ -48,6 +48,9 @@ import numpy as np
 tesseract_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 pytesseract.pytesseract.tesseract_cmd = tesseract_path
 
+# Path to button images
+IMAGES_DIR = Path(r"C:\Users\shsww\projects\RPA_demo\images\buttons")
+
 from src.core.driver import GDS2Driver
 from src.core.locators import Loc
 from src.pages import (
@@ -56,6 +59,133 @@ from src.pages import (
     VehicleSelectionPage,
     DiagnosticsMenuPage,
 )
+
+
+def find_button_on_screen(button_name: str, confidence: float = 0.8) -> tuple:
+    """
+    Find a button on screen using image matching.
+
+    Args:
+        button_name: Name of button image file (without .png)
+        confidence: Matching confidence threshold (0-1)
+
+    Returns:
+        (x, y) center coordinates if found, None otherwise
+    """
+    image_path = IMAGES_DIR / f"{button_name}.png"
+    if not image_path.exists():
+        logger.warning(f"Button image not found: {image_path}")
+        return None
+
+    try:
+        location = pyautogui.locateOnScreen(str(image_path), confidence=confidence)
+        if location:
+            center = pyautogui.center(location)
+            logger.info(f"Found button '{button_name}' at ({center.x}, {center.y})")
+            return (center.x, center.y)
+    except Exception as e:
+        logger.debug(f"Error finding button '{button_name}': {e}")
+
+    return None
+
+
+def is_button_enabled(button_name: str, confidence: float = 0.9) -> bool:
+    """
+    Check if a button is enabled.
+
+    Uses pywinauto for accurate state detection since image templates
+    for enabled/disabled buttons are too similar.
+
+    Args:
+        button_name: Base name of button (e.g., 'home', 'clear_dtcs')
+        confidence: Not used, kept for API compatibility
+
+    Returns:
+        True if button is enabled, False otherwise
+    """
+    # Map button names to pywinauto titles
+    button_title_map = {
+        'home': 'Home',
+        'back': 'Back',
+        'enter': 'Enter',
+        'clear_dtcs': 'Clear DTCs',
+        'create_report': 'Create Report',
+        'diagnostics': 'Diagnostics',
+    }
+
+    title = button_title_map.get(button_name, button_name.replace('_', ' ').title())
+
+    try:
+        from src.core.driver import GDS2Driver
+        # Use a quick connection to check button state
+        driver = GDS2Driver()
+        driver.connect()
+        window = driver.get_window()
+
+        btn = window.child_window(title=title, control_type='Button')
+        if btn.exists(timeout=1):
+            is_enabled = btn.is_enabled()
+            logger.info(f"Button '{button_name}' ({title}) is {'ENABLED' if is_enabled else 'DISABLED'}")
+            driver.disconnect()
+            return is_enabled
+        else:
+            logger.warning(f"Button '{button_name}' ({title}) not found")
+            driver.disconnect()
+            return False
+    except Exception as e:
+        logger.error(f"Error checking button state: {e}")
+        return False
+
+
+def click_button_by_image(button_name: str, confidence: float = 0.8, timeout: float = 10) -> bool:
+    """
+    Find and click a button using image matching.
+
+    Args:
+        button_name: Name of button image file (without .png)
+        confidence: Matching confidence threshold
+        timeout: Maximum time to search
+
+    Returns:
+        True if found and clicked, False otherwise
+    """
+    start_time = time.time()
+
+    while time.time() - start_time < timeout:
+        coords = find_button_on_screen(button_name, confidence)
+        if coords:
+            x, y = coords
+            logger.info(f"Clicking button '{button_name}' at ({x}, {y})")
+            pyautogui.click(x, y)
+            return True
+        time.sleep(0.5)
+
+    logger.warning(f"Could not find button '{button_name}' within {timeout}s")
+    return False
+
+
+def wait_for_button_enabled(button_name: str, timeout: float = 60) -> bool:
+    """
+    Wait for a button to become enabled.
+
+    Args:
+        button_name: Base name of button
+        timeout: Maximum wait time
+
+    Returns:
+        True if button became enabled, False if timeout
+    """
+    logger.info(f"Waiting for button '{button_name}' to become enabled...")
+    start_time = time.time()
+
+    while time.time() - start_time < timeout:
+        if is_button_enabled(button_name):
+            logger.info(f"Button '{button_name}' is now enabled")
+            return True
+        time.sleep(1)
+
+    logger.warning(f"Button '{button_name}' did not become enabled within {timeout}s")
+    return False
 
 
 def find_text_on_screen(target_text: str, confidence_threshold: float = 60) -> tuple:
