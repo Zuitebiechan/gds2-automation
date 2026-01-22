@@ -65,7 +65,7 @@ from src.pages import (
 
 def find_button_on_screen(button_name: str, confidence: float = 0.8, region=None) -> tuple:
     """
-    Find a button on screen using image matching.
+    Find a button on screen using grayscale image matching.
 
     Args:
         button_name: Name of button image file (without .png)
@@ -81,14 +81,34 @@ def find_button_on_screen(button_name: str, confidence: float = 0.8, region=None
         return None
 
     try:
+        # Load template in grayscale
+        template = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+        if template is None:
+            logger.warning(f"Could not load template: {image_path}")
+            return None
+
+        # Capture screen and convert to grayscale
+        screenshot = ImageGrab.grab()
         if region:
-            location = pyautogui.locateOnScreen(str(image_path), confidence=confidence, region=region)
+            screenshot = screenshot.crop((region[0], region[1], region[0] + region[2], region[1] + region[3]))
+        screenshot_gray = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2GRAY)
+
+        # Perform template matching
+        result = cv2.matchTemplate(screenshot_gray, template, cv2.TM_CCOEFF_NORMED)
+        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+
+        if max_val >= confidence:
+            h, w = template.shape
+            center_x = max_loc[0] + w // 2
+            center_y = max_loc[1] + h // 2
+            # Adjust for region offset if used
+            if region:
+                center_x += region[0]
+                center_y += region[1]
+            logger.info(f"Found button '{button_name}' at ({center_x}, {center_y}) with confidence {max_val:.3f}")
+            return (center_x, center_y)
         else:
-            location = pyautogui.locateOnScreen(str(image_path), confidence=confidence)
-        if location:
-            center = pyautogui.center(location)
-            logger.info(f"Found button '{button_name}' at ({center.x}, {center.y})")
-            return (center.x, center.y)
+            logger.debug(f"Button '{button_name}' best match {max_val:.3f} below threshold {confidence}")
     except Exception as e:
         logger.debug(f"Error finding button '{button_name}': {e}")
 
@@ -97,7 +117,7 @@ def find_button_on_screen(button_name: str, confidence: float = 0.8, region=None
 
 def find_list_item_on_screen(item_name: str, confidence: float = 0.9) -> tuple:
     """
-    Find a list item on screen using image matching.
+    Find a list item on screen using grayscale image matching.
 
     Args:
         item_name: Name of list item image file (without .png)
@@ -112,13 +132,32 @@ def find_list_item_on_screen(item_name: str, confidence: float = 0.9) -> tuple:
         return None
 
     try:
-        location = pyautogui.locateOnScreen(str(image_path), confidence=confidence)
-        if location:
-            center = pyautogui.center(location)
-            logger.info(f"Found list item '{item_name}' at ({center.x}, {center.y})")
-            return (center.x, center.y)
+        # Load template in grayscale
+        template = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+        if template is None:
+            logger.warning(f"Could not load template: {image_path}")
+            return None
+
+        # Capture screen and convert to grayscale
+        screenshot = ImageGrab.grab()
+        screenshot_gray = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2GRAY)
+
+        # Perform template matching
+        result = cv2.matchTemplate(screenshot_gray, template, cv2.TM_CCOEFF_NORMED)
+        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+
+        if max_val >= confidence:
+            h, w = template.shape
+            center_x = max_loc[0] + w // 2
+            center_y = max_loc[1] + h // 2
+            logger.info(f"Found list item '{item_name}' at ({center_x}, {center_y}) with confidence {max_val:.3f}")
+            return (center_x, center_y)
+        else:
+            logger.debug(f"List item '{item_name}' best match {max_val:.3f} below threshold {confidence}")
     except Exception as e:
         logger.debug(f"Error finding list item '{item_name}': {e}")
+
+    return None
 
     return None
 
