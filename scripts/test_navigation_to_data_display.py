@@ -473,7 +473,7 @@ def main():
 
             # Now click Enter for Vehicle Selection
             print("Step 4: Clicking Enter button to confirm vehicle (PyAutoGUI)...")
-            if not click_button_by_image("enter", confidence=0.9, timeout=10):
+            if not click_button_by_image("enter", confidence=0.85, timeout=10):
                 print("  [ERROR] Could not find Enter button for vehicle confirmation")
                 return 1
             print("  [OK] Clicked Enter")
@@ -482,7 +482,7 @@ def main():
             print("  [INFO] No Device Explorer popup, already at Vehicle Selection")
             # Click Enter for Vehicle Selection
             print("Step 4: Clicking Enter button to confirm vehicle (PyAutoGUI)...")
-            if not click_button_by_image("enter", confidence=0.9, timeout=10):
+            if not click_button_by_image("enter", confidence=0.85, timeout=10):
                 print("  [ERROR] Could not find Enter button for vehicle confirmation")
                 return 1
             print("  [OK] Clicked Enter")
@@ -490,7 +490,7 @@ def main():
 
         # Step 5: Select Module Diagnostics using PyAutoGUI+OpenCV
         print("Step 5: Selecting 'Module Diagnostics' (PyAutoGUI)...")
-        if not click_list_item_by_image("module_diagnostics", confidence=0.9, timeout=10):
+        if not click_list_item_by_image("module_diagnostics", confidence=0.85, timeout=10):
             print("  [ERROR] Could not find 'Module Diagnostics'")
             return 1
         print("  [OK] Module Diagnostics selected")
@@ -510,7 +510,7 @@ def main():
         # Step 7: Use PyAutoGUI+OpenCV to find and click Data Display
         print("Step 7: Finding 'Data Display' (PyAutoGUI)...")
 
-        if click_list_item_by_image("data_display", confidence=0.9, timeout=10):
+        if click_list_item_by_image("data_display", confidence=0.85, timeout=10):
             print("  [OK] Clicked on Data Display")
             time.sleep(3)  # Wait for data selection to load
         else:
