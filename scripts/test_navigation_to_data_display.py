@@ -342,24 +342,15 @@ def main():
             print("  [OK] Diagnostics Menu")
             time.sleep(0.5)
 
-            # Step 5: Select Module Diagnostics (PyAutoGUI via driver)
+            # Step 5: Select Module Diagnostics (click the list item directly - no Enter!)
+            # Note: Clicking Enter would cause GDS2 to auto-select the first module
             print("Step 5: Selecting Module Diagnostics...")
             driver.click_list_item(Loc.DiagnosticsMenu.MODULE_DIAGNOSTICS)
-            time.sleep(0.5)
-            driver.click_button(Loc.DiagnosticsMenu.ENTER_BTN)
-            print("  [OK] Entered Module Diagnostics")
-            time.sleep(3)  # Wait for first module to auto-load
+            print("  [OK] Module Diagnostics selected")
+            time.sleep(2)  # Wait for module list to appear
 
-            # Step 5b: GDS2 auto-selects the first module, so click Back to see module list
-            print("Step 5b: Clicking Back to see module list...")
-            if driver.element_exists(Loc.Navigation.BACK_BTN, timeout=2):
-                driver.click_button(Loc.Navigation.BACK_BTN)
-                print("  [OK] Back at module list")
-                time.sleep(2)  # Wait for module list to display
-            else:
-                print("  [WARN] Back button not found, continuing...")
-
-            # Step 6: Use OCR to find and click Engine Control Module
+            # Step 6: Use OCR to find and click Engine Control Module directly
+            # The module list items are directly clickable
             print(f"Step 6: Finding '{target_module}' using OCR...")
 
             if find_and_click_text(target_module, timeout=15, confidence_threshold=50):
@@ -379,8 +370,8 @@ def main():
                 print("  [ERROR] Could not find 'Data Display' on screen")
                 return 1
 
-            # Step 7b: Select a data category (e.g., "Engine Data") and click Enter
-            print("Step 7b: Selecting data category 'Engine Data'...")
+            # Step 8: Select a data category (e.g., "Engine Data") and click Enter
+            print("Step 8: Selecting data category 'Engine Data'...")
             if find_and_click_text("Engine Data", timeout=10, confidence_threshold=50):
                 print("  [OK] Selected Engine Data")
                 time.sleep(1)
@@ -393,8 +384,8 @@ def main():
             else:
                 print("  [WARN] Could not find 'Engine Data', trying to proceed...")
 
-            # Step 8: Click Create Report (PyAutoGUI via driver)
-            print("Step 8: Clicking Create Report...")
+            # Step 9: Click Create Report (PyAutoGUI via driver)
+            print("Step 9: Clicking Create Report...")
             time.sleep(2)  # Wait for data to populate
 
             if driver.element_exists(Loc.DataDisplay.CREATE_REPORT_BTN, timeout=10):
