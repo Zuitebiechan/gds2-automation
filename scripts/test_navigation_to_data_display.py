@@ -336,20 +336,27 @@ def find_text_on_screen(target_text: str, confidence_threshold: float = 60) -> t
             lines[y_bucket].append((x, y, w, h, text.lower()))
 
     # Search each line for the target text
-    for y_bucket, items in lines.items():
+    # Sort by Y position to find top-most match first
+    for y_bucket in sorted(lines.keys()):
+        items = lines[y_bucket]
         # Sort items by X position (left to right)
         items.sort(key=lambda item: item[0])
 
         # Build the line text
         line_text = ' '.join(item[4] for item in items)
 
-        # Check if all target words are in this line in order
-        if all(word in line_text for word in target_words):
+        # Check if the line STARTS with the target text (exact match at beginning)
+        # This prevents "Engine Data" from matching "Engine Cooling and HVAC Data"
+        if line_text.startswith(target_lower):
             # Find the specific items that match the target words
             matching_items = []
             for word in target_words:
                 for item in items:
-                    if word in item[4] and item not in matching_items:
+                    if item[4] == word and item not in matching_items:
+                        matching_items.append(item)
+                        break
+                    elif word in item[4] and item not in matching_items:
+                        # Partial match as fallback
                         matching_items.append(item)
                         break
 
@@ -510,19 +517,12 @@ def main():
             print("  [ERROR] Could not find 'Data Display' on screen")
             return 1
 
-        # Step 8: Select a data category (e.g., "Engine Data") and click Enter
+        # Step 8: Select a data category (e.g., "Engine Data") using OCR
+        # Note: No Enter button needed - clicking the item directly selects it
         print("Step 8: Selecting data category 'Engine Data' (OCR)...")
         if find_and_click_text("Engine Data", timeout=10, confidence_threshold=50):
             print("  [OK] Selected Engine Data")
-            time.sleep(1)
-
-            # Click Enter to confirm selection (PyAutoGUI)
-            print("Step 8b: Clicking Enter to confirm (PyAutoGUI)...")
-            if not click_button_by_image("enter", confidence=0.9, timeout=5):
-                print("  [ERROR] Could not find Enter button")
-                return 1
-            print("  [OK] Clicked Enter")
-            time.sleep(5)  # Wait for Data Display page to load with data
+            time.sleep(3)  # Wait for Data Display page to load with data
         else:
             print("  [WARN] Could not find 'Engine Data', trying to proceed...")
 
@@ -532,8 +532,8 @@ def main():
 
         # Wait for Create Report button to be enabled (pywinauto check only)
         if wait_for_button_enabled("create_report", timeout=60):
-            # Now click it with PyAutoGUI
-            if click_button_by_image("create_report", confidence=0.9, timeout=10):
+            # Now click it with PyAutoGUI (grayscale matching)
+            if click_button_by_image("create_report", confidence=0.8, timeout=10):
                 print("  [OK] Clicked Create Report!")
                 time.sleep(2)
 
