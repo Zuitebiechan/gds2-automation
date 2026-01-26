@@ -3,11 +3,12 @@
 GDS2 RPA Demo Main Entry
 
 Provides multiple run modes:
-    python main.py demo                                    - Run demo workflow (default: Engine Data)
-    python main.py demo --module "..." --data "..."        - Run with custom module and data
-    python main.py inspect                                 - Inspect GDS2 UI structure
-    python main.py test-connection                         - Test GDS2 connection
-    python main.py discover                                - Run discovery utility
+    python main.py web                                      - Start Web UI (recommended)
+    python main.py demo                                     - Run demo workflow (default: Engine Data)
+    python main.py demo --module "..." --data "..."         - Run with custom module and data
+    python main.py inspect                                  - Inspect GDS2 UI structure
+    python main.py test-connection                          - Test GDS2 connection
+    python main.py discover                                 - Run discovery utility
 """
 
 import sys
@@ -19,6 +20,31 @@ import logging
 if sys.platform == 'win32':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
+
+def run_web(args):
+    """Start the Web UI server."""
+    print("=" * 60)
+    print("  GDS2 Automation Web UI")
+    print("=" * 60)
+    print()
+    print(f"  Open in browser: http://localhost:{args.port}")
+    print()
+    print("  If using proxy, add 'localhost' to bypass list")
+    print("=" * 60)
+    print()
+
+    # Import and run Flask app
+    from app import app, app_state, GDS2State
+
+    # Reset state on startup
+    app_state.gds2_state = GDS2State.MAIN_MENU.value
+    app_state.current_module = None
+    app_state.current_data_category = None
+    app_state.data_list_focus_index = 0
+
+    app.run(debug=args.debug, host='127.0.0.1', port=args.port, use_reloader=False)
+    return 0
 
 
 def run_demo(args):
@@ -73,6 +99,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+    python main.py web                                               # Start Web UI (recommended)
+    python main.py web --port 8000                                   # Start Web UI on custom port
     python main.py demo                                              # Run with default settings
     python main.py demo --module "[K20] Engine Control Module" --data "Misfire Data"
     python main.py demo -v                                           # Run with verbose logging
@@ -84,8 +112,21 @@ Examples:
 
     parser.add_argument(
         "command",
-        choices=["demo", "inspect", "test-connection", "discover"],
+        choices=["web", "demo", "inspect", "test-connection", "discover"],
         help="Command to run",
+    )
+
+    # Web-specific arguments
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8080,
+        help="Web UI port (default: 8080)"
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable Flask debug mode"
     )
 
     # Demo-specific arguments
@@ -117,7 +158,10 @@ Examples:
 
     args = parser.parse_args()
 
-    if args.command == "demo":
+    if args.command == "web":
+        return run_web(args)
+
+    elif args.command == "demo":
         return run_demo(args)
 
     elif args.command == "inspect":

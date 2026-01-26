@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GDS2 Automation Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f7fa;
+            color: #2c3e50;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        header {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+
+        h1 {
+            font-size: 32px;
+            color: #2c3e50;
+            margin-bottom: 10px;
+        }
+
+        .subtitle {
+            color: #7f8c8d;
+            font-size: 16px;
+        }
+
+        .layout {
+            display: grid;
+            grid-template-columns: 300px 1fr;
+            gap: 20px;
+        }
+
+        .sidebar {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            height: fit-content;
+        }
+
+        .sidebar h2 {
+            font-size: 18px;
+            margin-bottom: 15px;
+            color: #34495e;
+        }
+
+        .status-item {
+            margin-bottom: 15px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 5px;
+        }
+
+        .status-label {
+            font-size: 12px;
+            color: #7f8c8d;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 5px;
+        }
+
+        .status-value {
+            font-size: 14px;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        .state-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .state-main_menu { background: #d4edda; color: #155724; }
+        .state-module_list { background: #e2e3e5; color: #383d41; }
+        .state-data_list { background: #fff3cd; color: #856404; }
+        .state-data_display { background: #cce5ff; color: #004085; }
+        .state-unknown { background: #f8d7da; color: #721c24; }
+
+        .main-content {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .step-section {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 2px solid #e1e8ed;
+            border-radius: 8px;
+        }
+
+        .step-section.active {
+            border-color: #3498db;
+            background: #f8fbff;
+        }
+
+        .step-section.completed {
+            border-color: #27ae60;
+            background: #f8fff8;
+        }
+
+        .step-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .step-number {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            background: #e1e8ed;
+            color: #7f8c8d;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            margin-right: 10px;
+        }
+
+        .step-section.active .step-number {
+            background: #3498db;
+            color: white;
+        }
+
+        .step-section.completed .step-number {
+            background: #27ae60;
+            color: white;
+        }
+
+        .step-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #34495e;
+        }
+
+        .step-description {
+            font-size: 13px;
+            color: #7f8c8d;
+            margin-bottom: 15px;
+        }
+
+        .control-row {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        label {
+            font-size: 14px;
+            font-weight: 600;
+            color: #34495e;
+        }
+
+        select {
+            padding: 10px 15px;
+            border: 2px solid #e1e8ed;
+            border-radius: 6px;
+            font-size: 14px;
+            background: white;
+            cursor: pointer;
+            min-width: 300px;
+        }
+
+        select:disabled {
+            background: #f5f5f5;
+            cursor: not-allowed;
+        }
+
+        select:hover:not(:disabled) {
+            border-color: #3498db;
+        }
+
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-primary {
+            background: #3498db;
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: #2980b9;
+        }
+
+        .btn-success {
+            background: #27ae60;
+            color: white;
+        }
+
+        .btn-success:hover:not(:disabled) {
+            background: #229954;
+        }
+
+        .loading {
+            display: none;
+            padding: 15px;
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            color: #856404;
+        }
+
+        .loading.show {
+            display: block;
+        }
+
+        .error {
+            display: none;
+            padding: 15px;
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            color: #721c24;
+        }
+
+        .error.show {
+            display: block;
+        }
+
+        .success {
+            display: none;
+            padding: 15px;
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            color: #155724;
+        }
+
+        .success.show {
+            display: block;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+
+        thead {
+            background: #f8f9fa;
+        }
+
+        th {
+            padding: 12px;
+            text-align: left;
+            font-size: 13px;
+            font-weight: 600;
+            color: #495057;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 2px solid #dee2e6;
+        }
+
+        td {
+            padding: 12px;
+            border-bottom: 1px solid #e9ecef;
+            font-size: 14px;
+        }
+
+        tr:hover {
+            background: #f8f9fa;
+        }
+
+        .no-data {
+            text-align: center;
+            padding: 40px;
+            color: #7f8c8d;
+        }
+
+        .download-btn {
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>GDS2 Automation Dashboard</h1>
+            <p class="subtitle">Vehicle Diagnostics Data Display - Engine Control Module</p>
+        </header>
+
+        <div class="layout">
+            <aside class="sidebar">
+                <h2>Status</h2>
+                <div class="status-item">
+                    <div class="status-label">GDS2 State</div>
+                    <div class="status-value">
+                        <span id="gds2-state" class="state-badge state-main_menu">Main Menu</span>
+                    </div>
+                </div>
+
+                <div class="status-item">
+                    <div class="status-label">Current Module</div>
+                    <div id="current-module" class="status-value">-</div>
+                </div>
+
+                <div class="status-item">
+                    <div class="status-label">Current Data</div>
+                    <div id="current-data" class="status-value">-</div>
+                </div>
+
+                <hr style="margin: 20px 0; border: none; border-top: 1px solid #e1e8ed;">
+
+                <h2>Vehicle Info</h2>
+                <div class="status-item">
+                    <div class="status-label">VIN</div>
+                    <div id="vehicle-vin" class="status-value">-</div>
+                </div>
+                <div class="status-item">
+                    <div class="status-label">Make</div>
+                    <div id="vehicle-make" class="status-value">-</div>
+                </div>
+                <div class="status-item">
+                    <div class="status-label">Model</div>
+                    <div id="vehicle-model" class="status-value">-</div>
+                </div>
+                <div class="status-item">
+                    <div class="status-label">Year</div>
+                    <div id="vehicle-year" class="status-value">-</div>
+                </div>
+            </aside>
+
+            <main class="main-content">
+                <div id="loading" class="loading">
+                    Processing...
+                </div>
+
+                <div id="error" class="error"></div>
+
+                <div id="success" class="success"></div>
+
+                <!-- Step 1: Fetch Modules -->
+                <div id="step1" class="step-section active">
+                    <div class="step-header">
+                        <div class="step-number">1</div>
+                        <div class="step-title">Fetch Modules</div>
+                    </div>
+                    <div class="step-description">
+                        GDS2 must be at <strong>Main Menu</strong>. This will navigate to Module List and discover all modules.
+                    </div>
+                    <div class="control-row">
+                        <button id="fetch-modules-btn" class="btn-success">Fetch Modules</button>
+                    </div>
+                </div>
+
+                <!-- Step 2: Select Module & Fetch Data Categories -->
+                <div id="step2" class="step-section">
+                    <div class="step-header">
+                        <div class="step-number">2</div>
+                        <div class="step-title">Select Module & Fetch Data Categories</div>
+                    </div>
+                    <div class="step-description">
+                        GDS2 must be at <strong>Module List</strong>. Select a module, then fetch its data categories.
+                    </div>
+                    <div class="control-row">
+                        <select id="module-select" disabled>
+                            <option value="">Complete Step 1 first</option>
+                        </select>
+                        <button id="fetch-categories-btn" class="btn-success" disabled>Fetch Data Categories</button>
+                    </div>
+                </div>
+
+                <!-- Step 3: Select Data & Search -->
+                <div id="step3" class="step-section">
+                    <div class="step-header">
+                        <div class="step-number">3</div>
+                        <div class="step-title">Select Data & Search</div>
+                    </div>
+                    <div class="step-description">
+                        GDS2 must be at <strong>Data List</strong>. Select a data category and click Search. GDS2 will fetch the data and return to Data List.
+                    </div>
+                    <div class="control-row">
+                        <select id="data-select" disabled>
+                            <option value="">Complete Step 2 first</option>
+                        </select>
+                        <button id="search-btn" class="btn-primary" disabled>Search</button>
+                    </div>
+                </div>
+
+                <!-- Data Display -->
+                <div id="data-table-container">
+                    <div class="no-data">
+                        Complete the steps above to view data.
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script>
+        let currentModules = [];
+        let currentDataCategories = [];
+        let currentState = { gds2_state: 'main_menu' };
+
+        // Step 1: Fetch Modules
+        document.getElementById('fetch-modules-btn').addEventListener('click', async () => {
+            showLoading('Navigating to Module List and discovering modules...');
+
+            try {
+                const response = await fetch('/api/fetch_modules', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({})
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    currentModules = data.modules;
+                    currentState = data.state;
+                    updateState();
+
+                    // Update module select
+                    const select = document.getElementById('module-select');
+                    select.disabled = false;
+                    select.innerHTML = currentModules.map(m =>
+                        `<option value="${m}">${m}</option>`
+                    ).join('');
+
+                    // Enable step 2
+                    document.getElementById('fetch-categories-btn').disabled = false;
+
+                    // Update step styling
+                    document.getElementById('step1').classList.remove('active');
+                    document.getElementById('step1').classList.add('completed');
+                    document.getElementById('step2').classList.add('active');
+
+                    showSuccess(`Found ${currentModules.length} modules! GDS2 is now at Module List.`);
+                } else {
+                    showError(data.error || 'Failed to fetch modules');
+                }
+            } catch (error) {
+                showError('Failed to fetch modules: ' + error.message);
+            } finally {
+                hideLoading();
+            }
+        });
+
+        // Step 2: Fetch Data Categories
+        document.getElementById('fetch-categories-btn').addEventListener('click', async () => {
+            const moduleName = document.getElementById('module-select').value;
+            if (!moduleName) return;
+
+            showLoading(`Selecting ${moduleName} and discovering data categories...`);
+
+            try {
+                const response = await fetch('/api/fetch_categories', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({module: moduleName})
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    currentDataCategories = data.data_categories;
+                    currentState = data.state;
+                    updateState();
+
+                    // Update data select
+                    const select = document.getElementById('data-select');
+                    select.disabled = false;
+                    select.innerHTML = currentDataCategories.map(d =>
+                        `<option value="${d}">${d}</option>`
+                    ).join('');
+
+                    // Enable step 3
+                    document.getElementById('search-btn').disabled = false;
+
+                    // Update step styling
+                    document.getElementById('step2').classList.remove('active');
+                    document.getElementById('step2').classList.add('completed');
+                    document.getElementById('step3').classList.add('active');
+
+                    showSuccess(`Found ${currentDataCategories.length} data categories! GDS2 is now at Data List.`);
+                } else {
+                    showError(data.error || 'Failed to fetch data categories');
+                }
+            } catch (error) {
+                showError('Failed to fetch data categories: ' + error.message);
+            } finally {
+                hideLoading();
+            }
+        });
+
+        // Step 3: Search
+        document.getElementById('search-btn').addEventListener('click', async () => {
+            const moduleName = document.getElementById('module-select').value;
+            const dataCategory = document.getElementById('data-select').value;
+
+            if (!moduleName || !dataCategory) return;
+
+            showLoading(`Searching ${dataCategory}...`);
+
+            try {
+                const response = await fetch('/api/search_data', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        module: moduleName,
+                        data_category: dataCategory
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    currentState = data.state;
+                    updateState();
+                    displayReportData(data.report_data);
+                    showSuccess(`Data fetched! GDS2 returned to Data List. You can search another data category.`);
+                } else {
+                    showError(data.error || 'Failed to search data');
+                }
+            } catch (error) {
+                showError('Failed to search data: ' + error.message);
+            } finally {
+                hideLoading();
+            }
+        });
+
+        // Update state display
+        function updateState() {
+            const stateBadge = document.getElementById('gds2-state');
+            const stateClass = 'state-' + currentState.gds2_state;
+            stateBadge.className = 'state-badge ' + stateClass;
+            stateBadge.textContent = currentState.gds2_state.replace(/_/g, ' ');
+
+            document.getElementById('current-module').textContent = currentState.current_module || '-';
+            document.getElementById('current-data').textContent = currentState.current_data_category || '-';
+        }
+
+        // Display report data
+        function displayReportData(reportData) {
+            const container = document.getElementById('data-table-container');
+
+            // Update vehicle info
+            if (reportData.vehicle_info) {
+                document.getElementById('vehicle-vin').textContent = reportData.vehicle_info.vin || '-';
+                document.getElementById('vehicle-make').textContent = reportData.vehicle_info.make || '-';
+                document.getElementById('vehicle-model').textContent = reportData.vehicle_info.model || '-';
+                document.getElementById('vehicle-year').textContent = reportData.vehicle_info.year || '-';
+            }
+
+            // Display data table
+            if (reportData.data_items && reportData.data_items.length > 0) {
+                const rows = reportData.data_items.map(item => `
+                    <tr>
+                        <td>${item.parameter}</td>
+                        <td>${item.value}</td>
+                        <td>${item.units}</td>
+                    </tr>
+                `).join('');
+
+                container.innerHTML = `
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Parameter</th>
+                                <th>Value</th>
+                                <th>Units</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${rows}
+                        </tbody>
+                    </table>
+                    <button class="btn-success download-btn" onclick="downloadCSV()">Download CSV</button>
+                `;
+            } else {
+                container.innerHTML = '<div class="no-data">No data items found in report</div>';
+            }
+        }
+
+        // Download CSV
+        function downloadCSV() {
+            const table = document.querySelector('table');
+            if (!table) return;
+
+            let csv = [];
+            const rows = table.querySelectorAll('tr');
+
+            for (let row of rows) {
+                const cols = row.querySelectorAll('td, th');
+                const csvRow = Array.from(cols).map(col => `"${col.textContent}"`).join(',');
+                csv.push(csvRow);
+            }
+
+            const csvContent = csv.join('\n');
+            const blob = new Blob([csvContent], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'gds2_data.csv';
+            a.click();
+        }
+
+        // Helper functions
+        function showLoading(message) {
+            const loading = document.getElementById('loading');
+            loading.textContent = message;
+            loading.classList.add('show');
+            hideError();
+            hideSuccess();
+        }
+
+        function hideLoading() {
+            document.getElementById('loading').classList.remove('show');
+        }
+
+        function showError(message) {
+            const error = document.getElementById('error');
+            error.textContent = message;
+            error.classList.add('show');
+            hideLoading();
+            hideSuccess();
+        }
+
+        function hideError() {
+            document.getElementById('error').classList.remove('show');
+        }
+
+        function showSuccess(message) {
+            const success = document.getElementById('success');
+            success.textContent = message;
+            success.classList.add('show');
+            hideLoading();
+            hideError();
+
+            setTimeout(() => {
+                hideSuccess();
+            }, 5000);
+        }
+
+        function hideSuccess() {
+            document.getElementById('success').classList.remove('show');
+        }
+
+        // Check if we have cached data on load
+        async function checkCachedData() {
+            try {
+                const modulesResponse = await fetch('/api/modules');
+                const modulesData = await modulesResponse.json();
+
+                if (modulesData.modules && modulesData.modules.length > 0) {
+                    currentModules = modulesData.modules;
+
+                    // Populate module select
+                    const select = document.getElementById('module-select');
+                    select.disabled = false;
+                    select.innerHTML = currentModules.map(m =>
+                        `<option value="${m}">${m}</option>`
+                    ).join('');
+
+                    // Mark step 1 as completed, step 2 as active
+                    document.getElementById('step1').classList.remove('active');
+                    document.getElementById('step1').classList.add('completed');
+                    document.getElementById('step2').classList.add('active');
+                    document.getElementById('fetch-categories-btn').disabled = false;
+
+                    // Check if first module has cached categories
+                    const firstModule = currentModules[0];
+                    const categoriesResponse = await fetch(`/api/data_categories?module=${encodeURIComponent(firstModule)}`);
+                    const categoriesData = await categoriesResponse.json();
+
+                    if (categoriesData.data_categories && categoriesData.data_categories.length > 0) {
+                        currentDataCategories = categoriesData.data_categories;
+
+                        const dataSelect = document.getElementById('data-select');
+                        dataSelect.disabled = false;
+                        dataSelect.innerHTML = currentDataCategories.map(d =>
+                            `<option value="${d}">${d}</option>`
+                        ).join('');
+
+                        // Mark step 2 as completed, step 3 as active
+                        document.getElementById('step2').classList.remove('active');
+                        document.getElementById('step2').classList.add('completed');
+                        document.getElementById('step3').classList.add('active');
+                        document.getElementById('search-btn').disabled = false;
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to check cached data:', error);
+            }
+        }
+
+        // Initialize
+        checkCachedData();
+    </script>
+</body>
+</html>
