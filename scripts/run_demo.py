@@ -1,79 +1,102 @@
 #!/usr/bin/env python
 """
-GDS2 RPA Demo - New Architecture
+GDS2 RPA Demo
 
-Uses the refactored architecture with:
-- core/driver.py - Low-level UI automation
-- pages/ - Page Objects
-- workflows/ - Business logic
-- utils/ - Helpers
+Uses PyAutoGUI+OpenCV for buttons and keyboard navigation for lists.
 
 Usage:
-    python scripts/run_demo_v2.py
+    python scripts/run_demo.py
+    python scripts/run_demo.py --module "[K20] Engine Control Module" --data "Ignition Data"
 """
 
 import sys
-import json
+import io
+import argparse
+import logging
 from pathlib import Path
+
+# Fix console encoding for Windows
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.core.driver import GDS2Driver
-from src.workflows import ReadVehicleDTCWorkflow
-
 
 def main():
-    """Run the demo using new architecture."""
+    """Run the demo."""
+    parser = argparse.ArgumentParser(description="GDS2 RPA Demo")
+    parser.add_argument(
+        "--vci",
+        default="SM2 USB",
+        help="VCI device name (default: SM2 USB)"
+    )
+    parser.add_argument(
+        "--module",
+        default="[K20] Engine Control Module",
+        help="Target module (default: [K20] Engine Control Module)"
+    )
+    parser.add_argument(
+        "--data",
+        default="Engine Data",
+        help="Data category (default: Engine Data)"
+    )
+    parser.add_argument(
+        "--vehicle",
+        default="current_vehicle",
+        help="Vehicle ID for mapping storage (default: current_vehicle)"
+    )
+    parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Enable verbose logging"
+    )
+    args = parser.parse_args()
+
+    # Setup logging
+    log_level = logging.INFO if args.verbose else logging.WARNING
+    logging.basicConfig(level=log_level, format='%(message)s')
+
     print("=" * 60)
-    print("GDS2 RPA Demo - New Architecture v2")
+    print("GDS2 RPA Demo")
     print("=" * 60)
-    print("Features:")
-    print("  - Auto-launches GDS2 if not running")
-    print("  - Auto-navigates to main menu")
-    print("  - Reads all vehicle DTCs")
-    print("  - Generates HTML report")
+    print()
+    print("Architecture:")
+    print("  - PyAutoGUI+OpenCV: buttons and fixed list items")
+    print("  - pywinauto: list item discovery")
+    print("  - Keyboard navigation: module and data list selection")
+    print()
+    print(f"VCI Device: {args.vci}")
+    print(f"Target Module: {args.module}")
+    print(f"Data Category: {args.data}")
+    print(f"Vehicle ID: {args.vehicle}")
     print("=" * 60)
     print()
 
-    # VCI device configuration
-    vci_device = "SM2 USB"
-    print(f"VCI Device: {vci_device}")
+    from src.workflows import ReadDataDisplayWorkflow
+
+    workflow = ReadDataDisplayWorkflow(vehicle_id=args.vehicle)
+    result = workflow.execute(
+        vci_device=args.vci,
+        target_module=args.module,
+        data_category=args.data,
+    )
+
     print()
+    print("=" * 60)
+    print("Demo Result")
+    print("=" * 60)
 
-    # Use context manager for driver
-    with GDS2Driver() as driver:
-        # Create and execute workflow
-        workflow = ReadVehicleDTCWorkflow(driver)
-        result = workflow.execute(vci_device=vci_device)
-
-        # Display results
-        print()
-        print("=" * 60)
-        print("Demo Result")
-        print("=" * 60)
-
-        if result["success"]:
-            print(f"[OK] Success!")
-            print(f"    DTCs found: {len(result['dtc_list'])}")
-            print()
-
-            # Show DTCs
-            if result["dtc_list"]:
-                print("DTC List:")
-                for dtc in result["dtc_list"]:
-                    print(f"    [{dtc['code']}] {dtc['description']} ({dtc['status']})")
-                print()
-
-            # Show report path
-            if result.get("report_path"):
-                print(f"Report: {result['report_path']}")
-
-            return 0
-        else:
-            print(f"[FAILED] {result.get('error', 'Unknown error')}")
-            return 1
+    if result["success"]:
+        print("[OK] Success!")
+        if result.get("report_path"):
+            print(f"Report: {result['report_path']}")
+        return 0
+    else:
+        print(f"[FAILED] {result.get('error', 'Unknown error')}")
+        return 1
 
 
 if __name__ == "__main__":

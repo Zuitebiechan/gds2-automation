@@ -3,13 +3,68 @@
 GDS2 RPA Demo Main Entry
 
 Provides multiple run modes:
-    python main.py demo            - Run demo workflow
-    python main.py inspect         - Inspect GDS2 UI structure
-    python main.py test-connection - Test GDS2 connection
+    python main.py demo                                    - Run demo workflow (default: Engine Data)
+    python main.py demo --module "..." --data "..."        - Run with custom module and data
+    python main.py inspect                                 - Inspect GDS2 UI structure
+    python main.py test-connection                         - Test GDS2 connection
+    python main.py discover                                - Run discovery utility
 """
 
 import sys
+import io
 import argparse
+import logging
+
+# Fix console encoding for Windows
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
+
+def run_demo(args):
+    """Run the GDS2 RPA demo workflow."""
+    # Setup logging
+    log_level = logging.INFO if args.verbose else logging.WARNING
+    logging.basicConfig(level=log_level, format='%(message)s')
+
+    print("=" * 60)
+    print("GDS2 RPA Demo")
+    print("=" * 60)
+    print()
+    print("Architecture:")
+    print("  - PyAutoGUI+OpenCV: buttons and fixed list items")
+    print("  - pywinauto: list item discovery")
+    print("  - Keyboard navigation: module and data list selection")
+    print()
+    print(f"VCI Device: {args.vci}")
+    print(f"Target Module: {args.module}")
+    print(f"Data Category: {args.data}")
+    print(f"Vehicle ID: {args.vehicle}")
+    print("=" * 60)
+    print()
+
+    from src.workflows import ReadDataDisplayWorkflow
+
+    workflow = ReadDataDisplayWorkflow(vehicle_id=args.vehicle)
+    result = workflow.execute(
+        vci_device=args.vci,
+        target_module=args.module,
+        data_category=args.data,
+    )
+
+    print()
+    print("=" * 60)
+    print("Demo Result")
+    print("=" * 60)
+
+    if result["success"]:
+        print("[OK] Success!")
+        if result.get("report_path"):
+            print(f"Report: {result['report_path']}")
+        return 0
+    else:
+        print(f"[FAILED] {result.get('error', 'Unknown error')}")
+        return 1
 
 
 def main():
@@ -18,23 +73,52 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    python main.py demo              # Run demo workflow
-    python main.py inspect           # Inspect GDS2 UI
-    python main.py test-connection   # Test GDS2 connection
+    python main.py demo                                              # Run with default settings
+    python main.py demo --module "[K20] Engine Control Module" --data "Misfire Data"
+    python main.py demo -v                                           # Run with verbose logging
+    python main.py inspect                                           # Inspect GDS2 UI
+    python main.py test-connection                                   # Test GDS2 connection
+    python main.py discover                                          # Run discovery utility
         """,
     )
 
     parser.add_argument(
         "command",
-        choices=["demo", "inspect", "test-connection"],
+        choices=["demo", "inspect", "test-connection", "discover"],
         help="Command to run",
+    )
+
+    # Demo-specific arguments
+    parser.add_argument(
+        "--vci",
+        default="SM2 USB",
+        help="VCI device name (default: SM2 USB)"
+    )
+    parser.add_argument(
+        "--module",
+        default="[K20] Engine Control Module",
+        help="Target module (default: [K20] Engine Control Module)"
+    )
+    parser.add_argument(
+        "--data",
+        default="Engine Data",
+        help="Data category (default: Engine Data)"
+    )
+    parser.add_argument(
+        "--vehicle",
+        default="current_vehicle",
+        help="Vehicle ID for mapping storage (default: current_vehicle)"
+    )
+    parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Enable verbose logging"
     )
 
     args = parser.parse_args()
 
     if args.command == "demo":
-        from scripts.run_demo import main as run_demo
-        return run_demo()
+        return run_demo(args)
 
     elif args.command == "inspect":
         from scripts.inspect_gds2 import main as inspect_gds2
@@ -43,6 +127,10 @@ Examples:
     elif args.command == "test-connection":
         from scripts.test_connection import test_connection
         return test_connection()
+
+    elif args.command == "discover":
+        from scripts.run_discovery import main as run_discovery
+        return run_discovery()
 
     return 0
 

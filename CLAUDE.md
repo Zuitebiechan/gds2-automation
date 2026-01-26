@@ -1,7 +1,7 @@
 # RPA_demo Project Memory
 
-**Last Updated:** 2026-01-20
-**Status:** Demo Working - Page Object Pattern Implemented
+**Last Updated:** 2026-01-26
+**Status:** Production Ready - Keyboard Navigation with On-Demand Discovery
 
 ---
 
@@ -26,11 +26,15 @@
 ### The Big Picture
 This project uses **RPA (Robotic Process Automation) + AI** to automate vehicle diagnostic software like **GDS2** (General Motors Diagnostic System 2). The long-term goal is to deploy this in production environments for actual vehicle diagnostics automation.
 
-### Current Phase: Page Object Pattern Implemented
-- **Objective:** Validate RPA for diagnostic automation
-- **Scope:** Read DTC (Diagnostic Trouble Codes) from all vehicle modules
-- **Result:** Successfully reading 31 DTCs from connected vehicle via HTML report parsing
-- **Architecture:** Clean Page Object pattern with fluent navigation and centralized locators
+### Current Phase: Production Ready with Hybrid Automation
+- **Objective:** Automate vehicle diagnostics data collection
+- **Scope:** Read data from any module/category (Engine Data, Misfire Data, etc.)
+- **Result:** Successfully reading data from multiple categories with HTML report parsing
+- **Architecture:** Hybrid approach combining PyAutoGUI+OpenCV (buttons) with keyboard navigation (lists)
+
+### Confirmed Working Workflows
+1. **Read Vehicle DTC** - Read all DTCs from vehicle (31 DTCs from HTML report)
+2. **Read Data Display** - Read data from specific module and category (e.g., Engine Control Module → Misfire Data)
 
 ### Assumptions (Confirmed Working)
 - GDS2 is already open at Main Menu
@@ -42,40 +46,55 @@ This project uses **RPA (Robotic Process Automation) + AI** to automate vehicle 
 
 ## Architecture Overview
 
-### Three-Layer Architecture
+### Hybrid Automation Architecture
 
 ```
 ┌─────────────────────────────────────────┐
 │         Workflow Layer                  │  ← Business process orchestration
 │   - ReadVehicleDTCWorkflow              │
-│   - Fluent navigation chains            │
+│   - ReadDataDisplayWorkflow             │
+│   - On-demand discovery integration     │
 └─────────────────┬───────────────────────┘
                   │
 ┌─────────────────▼───────────────────────┐
-│         Page Object Layer               │  ← UI abstraction
-│   - MainMenuPage, DTCPage, etc.         │
-│   - Each page returns next page         │
-│   - Uses centralized Locators           │
+│    Hybrid Automation Layer              │  ← PyAutoGUI + Keyboard Navigation
+│   - PyAutoGUI+OpenCV: buttons/devices   │
+│   - Keyboard: DOWN+ENTER for lists      │
+│   - Template matching for fast selection│
+└─────────────────┬───────────────────────┘
+                  │
+┌─────────────────▼───────────────────────┐
+│      Discovery & Mapping Layer          │  ← pywinauto list enumeration
+│   - VehicleDiscovery: get list items    │
+│   - VehicleMapping: store/retrieve JSON │
+│   - On-demand module/data discovery     │
 └─────────────────┬───────────────────────┘
                   │
 ┌─────────────────▼───────────────────────┐
 │         Driver Layer                    │  ← Low-level UI automation
-│   - GDS2Driver (pywinauto wrapper)      │
-│   - DPI-aware clicking                  │
-│   - Screenshot comparison               │
+│   - pywinauto: list item enumeration    │
+│   - PyAutoGUI: mouse/keyboard control   │
+│   - OpenCV: template matching           │
 └─────────────────────────────────────────┘
 ```
 
-### Fluent Navigation Pattern
+### Keyboard Navigation with On-Demand Discovery
 
 ```python
-# Clean, readable navigation chain
-dtc_page = (main_menu
-    .click_diagnostics()      # Returns DeviceExplorerPage
-    .select_device("SM2 USB") # Returns VehicleSelectionPage
-    .click_enter()            # Returns DiagnosticsMenuPage
-    .select_vehicle_diagnostics()  # Returns VehicleDiagnosticsPage
-    .select_vehicle_dtc_info())    # Returns DTCPage
+# Workflow automatically discovers and navigates
+workflow = ReadDataDisplayWorkflow(vehicle_id="current_vehicle")
+result = workflow.execute(
+    vci_device="SM2 USB",
+    target_module="[K20] Engine Control Module",
+    data_category="Misfire Data",
+)
+
+# Behind the scenes:
+# 1. If module list not discovered → discover now → save to JSON
+# 2. Get module index from JSON → press DOWN N times → press ENTER
+# 3. If data categories not discovered → discover now → save to JSON
+# 4. Get data index from JSON → press DOWN N times → press ENTER
+# 5. Click Create Report using PyAutoGUI+OpenCV
 ```
 
 ---
@@ -96,43 +115,65 @@ RPA_demo/
 │   │       ├── __init__.py
 │   │       └── screenshot.py     # Screenshot comparison interface
 │   │
-│   ├── pages/                    # Page Object classes
-│   │   ├── __init__.py           # Exports all pages
-│   │   ├── base_page.py          # BasePage abstract class
-│   │   ├── main_menu_page.py     # Main Menu
-│   │   ├── device_explorer_page.py    # Device Explorer popup
-│   │   ├── vehicle_selection_page.py  # Vehicle Selection
-│   │   ├── diagnostics_menu_page.py   # Diagnostics Menu
-│   │   ├── vehicle_diagnostics_page.py # Vehicle Diagnostics submenu
-│   │   └── dtc_page.py           # DTC Information page
+│   ├── discovery/                # Discovery system (NEW)
+│   │   ├── __init__.py
+│   │   └── vehicle_mapping.py    # VehicleDiscovery & VehicleMapping
+│   │
+│   ├── pages/                    # Page Object classes (legacy DTC workflow)
+│   │   ├── __init__.py
+│   │   ├── base_page.py
+│   │   ├── main_menu_page.py
+│   │   ├── device_explorer_page.py
+│   │   ├── vehicle_selection_page.py
+│   │   ├── diagnostics_menu_page.py
+│   │   ├── vehicle_diagnostics_page.py
+│   │   └── dtc_page.py
 │   │
 │   ├── workflows/                # Business workflows
 │   │   ├── __init__.py
-│   │   ├── base_workflow.py      # BaseWorkflow abstract class
-│   │   └── read_vehicle_dtc.py   # Read DTC workflow
+│   │   ├── base_workflow.py      # BaseWorkflow with PyAutoGUI+OpenCV
+│   │   ├── read_vehicle_dtc.py   # Read DTC workflow (Page Objects)
+│   │   └── read_data_display.py  # Read Data Display (Keyboard+Discovery)
 │   │
-│   ├── vision/                   # Vision features (optional)
+│   ├── vision/                   # Vision features
 │   │   ├── __init__.py
-│   │   └── screenshot_comparator.py  # OpenCV screenshot comparison
+│   │   ├── screenshot_comparator.py  # OpenCV screenshot comparison
+│   │   └── vlm_finder.py         # VLM-based element finding (fallback)
 │   │
 │   └── utils/                    # Utilities
 │       ├── __init__.py
 │       └── report_parser.py      # HTML report parsing
 │
-├── scripts/                      # Entry point scripts
-│   ├── run_demo.py               # Demo execution
+├── scripts/                      # Utility scripts
+│   ├── run_demo.py               # Legacy demo execution script
+│   ├── run_discovery.py          # Manual discovery utility
 │   ├── inspect_gds2.py           # UI inspection tool
 │   └── test_connection.py        # Connection testing
 │
+├── mappings/                     # Auto-generated discovery data (NEW)
+│   └── current_vehicle.json      # Module and data category mappings
+│
+├── images/                       # Template images for PyAutoGUI (NEW)
+│   ├── buttons/                  # Button templates
+│   │   ├── diagnostics.png
+│   │   ├── module_diagnostics.png
+│   │   ├── data_display.png
+│   │   ├── enter.png
+│   │   ├── create_report.png
+│   │   └── ok.png
+│   └── devices/                  # Device templates
+│       └── sm2_usb.png
+│
 ├── docs/                         # Documentation
 │   ├── CLAUDE.md                 # This file
+│   ├── SCROLLING_SUPPORT.md      # Scrolling implementation notes
 │   ├── GDS2_CONTROL_MAPPING.md   # UI control mapping
 │   └── WORKFLOW_DIAGRAM.md       # Navigation diagrams
 │
 ├── res/                          # Resources
 │   └── GM-GDS2-User-Guide.pdf    # Official GDS2 User Guide
 │
-├── main.py                       # CLI entry point
+├── main.py                       # CLI entry point (UPDATED)
 ├── requirements-minimal.txt      # Dependencies
 └── venv/                         # Virtual environment
 ```
@@ -142,19 +183,76 @@ RPA_demo/
 | File | Purpose |
 |------|---------|
 | `src/core/driver.py` | Low-level UI automation (pywinauto wrapper) |
-| `src/core/locators.py` | All UI element definitions (from GDS2 User Guide) |
-| `src/pages/*.py` | Page Object classes for each GDS2 screen |
-| `src/workflows/read_vehicle_dtc.py` | DTC reading workflow |
+| `src/discovery/vehicle_mapping.py` | Discovery system for module/data lists |
+| `src/workflows/base_workflow.py` | PyAutoGUI+OpenCV button/device clicking |
+| `src/workflows/read_data_display.py` | Main workflow with keyboard navigation |
+| `src/workflows/read_vehicle_dtc.py` | Legacy DTC reading (Page Objects) |
 | `src/utils/report_parser.py` | HTML report parsing |
-| `res/GM-GDS2-User-Guide.pdf` | Official button names reference |
+| `mappings/current_vehicle.json` | Auto-generated module/data mappings |
+| `images/buttons/*.png` | Template images for button detection |
+| `images/devices/*.png` | Template images for device selection |
+| `main.py` | CLI entry point with all commands |
 
 ---
 
 ## Design Principles
 
-### 1. Centralized Locators
+### 1. Hybrid Automation Strategy
 
-All UI elements defined in `src/core/locators.py`:
+**PyAutoGUI + OpenCV** for buttons and devices:
+- Fast template matching for fixed UI elements
+- Device selection: ~1 second (vs ~1 minute with VLM)
+- Button clicking: "Diagnostics", "Module Diagnostics", "Data Display", "Create Report"
+
+**Keyboard Navigation** for dynamic lists:
+- Reliable list item selection (DOWN N times + ENTER)
+- Works regardless of screen size or DPI
+- No coordinate-based clicking issues
+
+**pywinauto Discovery** for list enumeration:
+- Enumerate all list items without scrolling
+- Save to JSON for reuse
+- On-demand discovery per module
+
+### 2. On-Demand Discovery Pattern
+
+```python
+class ReadDataDisplayWorkflow:
+    def _select_module_keyboard(self, target_module: str):
+        # Check if module list discovered
+        if not self.mapping.has_module_list(self.vehicle_id):
+            # Discover now using pywinauto
+            self._discover_and_save_modules()
+
+        # Get index from JSON and navigate
+        module_index = self.mapping.get_module_index(self.vehicle_id, target_module)
+
+        # Press DOWN N times, then ENTER
+        for _ in range(module_index):
+            pyautogui.press('down')
+        pyautogui.press('enter')
+```
+
+**Benefits:**
+- Module list: discovered once, reused forever
+- Data categories: discovered per-module as needed
+- Fast startup (no pre-discovery delay)
+- JSON persistence across sessions
+
+### 3. Template Matching for Performance
+
+Device selection optimized:
+```python
+# Before: VLM API call (~60 seconds with timeout)
+self.click_text_vlm("SM2 USB")
+
+# After: Template matching (~1 second)
+self.click_device("sm2_usb", confidence=0.85)
+```
+
+### 4. Centralized Locators (Legacy)
+
+All UI elements defined in `src/core/locators.py` for Page Object workflows:
 
 ```python
 from src.core.locators import Loc
@@ -164,62 +262,7 @@ self.driver.click_button(Loc.MainMenu.DIAGNOSTICS_BTN)
 self.driver.wait_for_element(Loc.DTCPage.CLEAR_DTCS_BTN)
 ```
 
-**Locator Categories (from GDS2 User Guide):**
-- `Loc.Navigation` - Bottom navigation bar (Back, Home, Enter, etc.)
-- `Loc.MainMenu` - Main menu buttons
-- `Loc.DeviceExplorer` - Device selection popup
-- `Loc.VehicleSelection` - Vehicle selection page
-- `Loc.DiagnosticsMenu` - Diagnostics menu items
-- `Loc.VehicleDiagnostics` - Vehicle diagnostics submenu
-- `Loc.DTCPage` - DTC display controls
-- `Loc.DataDisplay` - Data/PID display controls
-- `Loc.ModuleDiagnostics` - Module diagnostics functions
-- `Loc.Dialog` - Common dialog buttons
-
-### 2. Page Object Pattern
-
-Each GDS2 page is a class that:
-- Identifies itself via specific elements
-- Provides actions that return the next page
-- Uses centralized locators
-
-```python
-class MainMenuPage(BasePage):
-    def is_displayed(self) -> bool:
-        return self.driver.element_exists(Loc.MainMenu.DIAGNOSTICS_BTN)
-
-    def click_diagnostics(self) -> 'DeviceExplorerPage':
-        self.driver.click_button(Loc.MainMenu.DIAGNOSTICS_BTN)
-        return DeviceExplorerPage(self.driver)
-```
-
-### 3. Fluent Navigation
-
-Methods return the next page for chaining:
-
-```python
-# In workflow
-dtc_page = (main_menu
-    .click_diagnostics()
-    .select_device(vci_device)
-    .click_enter()
-    .select_vehicle_diagnostics()
-    .select_vehicle_dtc_info())
-```
-
-### 4. Screenshot-Based Verification (Optional)
-
-When enabled, uses OpenCV to verify UI actions worked:
-
-```python
-# In driver.py - click_element()
-if self._screenshot_comparator:
-    changed, elapsed = self._screenshot_comparator.capture_and_wait_for_change(
-        action_callback=do_click,
-        timeout=10,
-        threshold=0.90,
-    )
-```
+**Note:** New Data Display workflow uses PyAutoGUI+OpenCV instead of locators.
 
 ### 5. HTML Report Parsing
 
@@ -237,50 +280,67 @@ result = parser.parse_dtc_report(report_path)
 
 ## Current Implementation Status
 
-### Demo Working (Verified 2026-01-20)
+### Production Ready (Verified 2026-01-26)
 
-**Full Demo Flow:**
+**Data Display Workflow:**
 ```
-Main Menu → Diagnostics → Device Explorer → Vehicle Selection →
-Diagnostics Menu → Vehicle Diagnostics → Vehicle DTC Information →
-Wait for Data → Create Report → Parse HTML
+Main Menu → Diagnostics (PyAutoGUI) →
+Device Explorer (template matching) →
+Vehicle Selection (PyAutoGUI) →
+Module Diagnostics (PyAutoGUI) →
+Module List (keyboard + discovery) →
+Module Submenu (PyAutoGUI) →
+Data Display (PyAutoGUI) →
+Data List (keyboard + discovery) →
+Create Report (PyAutoGUI)
 ```
 
-**Results:** 31 DTCs successfully parsed from HTML report
+**Successfully Tested:**
+- Engine Control Module → Ignition Data (index 16)
+- Engine Control Module → Misfire Data (index 19)
+- Automatic warning dialog dismissal
+- Device selection in ~1 second (template matching)
 
 ### Fully Implemented
 
 - [x] **Core Framework**
-  - [x] GDS2Driver with DPI-aware clicking
-  - [x] Centralized locators (official button names)
+  - [x] GDS2Driver with pywinauto
+  - [x] PyAutoGUI + OpenCV integration
+  - [x] Template matching for buttons/devices
   - [x] Custom exception hierarchy
-  - [x] Screenshot comparison interface
 
-- [x] **Page Objects**
-  - [x] MainMenuPage
-  - [x] DeviceExplorerPage
-  - [x] VehicleSelectionPage
-  - [x] DiagnosticsMenuPage
-  - [x] VehicleDiagnosticsPage
-  - [x] DTCPage
+- [x] **Discovery System** (NEW)
+  - [x] VehicleDiscovery - enumerate list items with pywinauto
+  - [x] VehicleMapping - JSON persistence
+  - [x] On-demand module/data discovery
+  - [x] Discovery utility script
+
+- [x] **Keyboard Navigation** (NEW)
+  - [x] List item selection (DOWN + ENTER)
+  - [x] Focus-aware navigation (start at index 0)
+  - [x] Automatic discovery integration
 
 - [x] **Workflows**
-  - [x] ReadVehicleDTCWorkflow with fluent navigation
+  - [x] ReadDataDisplayWorkflow - Keyboard + Discovery
+  - [x] ReadVehicleDTCWorkflow - Page Objects (legacy)
+  - [x] Automatic warning dialog handling
+
+- [x] **Page Objects** (Legacy DTC Workflow)
+  - [x] MainMenuPage, DeviceExplorerPage, VehicleSelectionPage
+  - [x] DiagnosticsMenuPage, VehicleDiagnosticsPage, DTCPage
 
 - [x] **Utilities**
   - [x] DTCReportParser for HTML reports
-  - [x] Data classes: DTCInfo, VehicleInfo, ModuleStatus
-
-- [x] **Vision (Optional)**
-  - [x] OpenCV screenshot comparator
+  - [x] Template matching utilities
+  - [x] Discovery scripts
 
 ### Not Yet Implemented
 
 - [ ] ClearDTCWorkflow
 - [ ] ReadModuleDTCWorkflow (specific module)
-- [ ] ReadPIDWorkflow
-- [ ] VLM fallback for element finding
-- [ ] OCR verification
+- [ ] VLM fallback for unknown elements
+- [ ] OCR verification for data values
+- [ ] Multi-vehicle session handling
 
 ---
 
@@ -360,73 +420,109 @@ class DiagnosticsMenuPage(BasePage):
 
 ### Key Discoveries
 
-1. **Dynamic Auto IDs** - Use `title` + `control_type`, not `auto_id`
-2. **JavaFX Lists** - Use keyboard navigation (`{DOWN}`, `{ENTER}`)
-3. **Data Loading** - Check if "Clear DTCs" button is enabled
-4. **Data Extraction** - Parse HTML reports, not UI tables
+1. **Keyboard Navigation Works Best** - Pressing DOWN N times + ENTER is most reliable for lists
+2. **pywinauto for Discovery** - Can enumerate all list items without scrolling using `descendants(control_type='ListItem')`
+3. **Template Matching is Fast** - PyAutoGUI + OpenCV ~1 second vs VLM ~60 seconds
+4. **Focus Starts at Top** - When entering list page, focus is always on first item (index 0)
+5. **Data Loading** - Check if "Create Report" button is enabled/visible
+6. **Data Extraction** - Parse HTML reports for structured data
+7. **Warning Dialogs** - Automatically detect and dismiss OK button popups
 
-### UI Automation Tips
+### UI Automation Best Practices
 
-- Use `invoke()` instead of `click_input()` for JavaFX buttons
-- Use keyboard navigation for list selection
-- Parse HTML reports for structured data
-- Handle popup windows with `Desktop()` (Device Explorer)
+- Use PyAutoGUI + OpenCV for buttons and fixed elements (fast, reliable)
+- Use keyboard navigation (DOWN + ENTER) for dynamic list selection
+- Use pywinauto for list item enumeration and discovery
+- Parse HTML reports instead of scraping UI tables
+- Store discovered mappings in JSON for reuse
+- Handle warning dialogs automatically with OK button detection
 
 ---
 
 ## Working Demo Flow
 
-### Navigation Path
+### Navigation Path (Data Display Workflow)
 
 ```
 1. Main Menu
-   └── Click "Diagnostics" button
+   └── Click "Diagnostics" button (PyAutoGUI)
 
 2. Device Explorer (popup)
-   └── Select "SM2 USB"
-   └── Click "Continue"
+   └── Select "SM2 USB" (template matching ~1s)
+   └── Click "Continue" (PyAutoGUI)
 
 3. Vehicle Selection
-   └── Click "Enter"
+   └── Click "Enter" (PyAutoGUI)
 
 4. Diagnostics Menu
-   └── Select "Vehicle Diagnostics"
-   └── Click "Enter"
+   └── Click "Module Diagnostics" (PyAutoGUI)
 
-5. Vehicle Diagnostics
-   └── Select "Vehicle DTC Information"
-   └── Click "Enter"
+5. Module List (keyboard navigation)
+   └── Discover modules if needed (pywinauto)
+   └── Get index from JSON
+   └── Press DOWN N times
+   └── Press ENTER
+   └── Example: "[K20] Engine Control Module" (index 5)
 
-6. DTC Information
-   └── Wait for "Clear DTCs" enabled
-   └── Click "Create Report"
+6. Module Submenu
+   └── Click "Data Display" (PyAutoGUI)
+   └── Handle warning dialog if present (auto-dismiss)
 
-7. Parse HTML Report
-   └── %LOCALAPPDATA%/Temp/GDS 2/DTC Display_*.html
+7. Data List (keyboard navigation)
+   └── Discover data categories if needed (pywinauto)
+   └── Get index from JSON
+   └── Press DOWN N times
+   └── Press ENTER
+   └── Example: "Misfire Data" (index 19)
+
+8. Data Display Page
+   └── Wait for "Create Report" button visible
+   └── Click "Create Report" (PyAutoGUI)
+
+9. Parse HTML Report
+   └── %LOCALAPPDATA%/Temp/GDS 2/Data Display_*.html
 ```
 
 ### Run the Demo
 
-**Option 1: main.py**
+**Main entry point:**
 ```bash
+# Default: Engine Data
 python main.py demo
+
+# Custom module and data category
+python main.py demo --module "[K20] Engine Control Module" --data "Misfire Data"
+
+# With verbose logging
+python main.py demo --module "[K20] Engine Control Module" --data "Ignition Data" -v
+
+# Custom VCI device
+python main.py demo --vci "SM2 USB" --module "[K20] Engine Control Module" --data "Engine Data"
 ```
 
-**Option 2: Direct script**
+**Discovery utility:**
 ```bash
-python scripts/run_demo.py
+python main.py discover
 ```
 
-**Option 3: Python code**
-```python
-from src.core.driver import GDS2Driver
-from src.workflows.read_vehicle_dtc import ReadVehicleDTCWorkflow
+**Inspect GDS2 UI:**
+```bash
+python main.py inspect
+```
 
-with GDS2Driver() as driver:
-    driver.connect()
-    workflow = ReadVehicleDTCWorkflow(driver)
-    result = workflow.execute(vci_device="SM2 USB")
-    print(f"Found {len(result['dtc_list'])} DTCs")
+**Python code:**
+```python
+from src.workflows import ReadDataDisplayWorkflow
+
+workflow = ReadDataDisplayWorkflow(vehicle_id="current_vehicle")
+result = workflow.execute(
+    vci_device="SM2 USB",
+    target_module="[K20] Engine Control Module",
+    data_category="Misfire Data",
+)
+
+if result["success"]:
+    print(f"Report: {result['report_path']}")
 ```
 
 ---
@@ -435,46 +531,76 @@ with GDS2Driver() as driver:
 
 ### "I want to..."
 
-**Add a new page object:**
-1. Create `src/pages/new_page.py`
-2. Inherit from `BasePage`
-3. Implement `name`, `is_displayed()`
-4. Add navigation methods that return next page
-5. Export in `src/pages/__init__.py`
+**Read data from a new module/category:**
+```bash
+python main.py demo --module "[Module Name]" --data "Data Category Name"
+```
+The system will automatically discover and navigate to it.
+
+**Add support for a new button:**
+1. Take screenshot of the button
+2. Save as `images/buttons/button_name.png`
+3. Use `self.click_button("button_name")` in workflow
+
+**Add support for a new device:**
+1. Take screenshot of the device in Device Explorer
+2. Save as `images/devices/device_name.png`
+3. Use `self.click_device("device_name")` in workflow
+
+**Manually discover vehicle structure:**
+```bash
+python main.py discover
+```
+Then navigate to the desired page in GDS2 and select discovery options.
 
 **Add a new workflow:**
 1. Create `src/workflows/new_workflow.py`
 2. Inherit from `BaseWorkflow`
-3. Use fluent page navigation
-4. Export in `src/workflows/__init__.py`
-
-**Add new UI elements:**
-1. Update `src/core/locators.py`
-2. Add to appropriate class (MainMenu, DTCPage, etc.)
-3. Reference GDS2 User Guide for official names
+3. Use PyAutoGUI+OpenCV for buttons
+4. Use keyboard navigation + discovery for lists
+5. Export in `src/workflows/__init__.py`
 
 **Debug navigation issues:**
-1. Run `python main.py inspect`
-2. Check element titles and control types
-3. Update locators.py accordingly
+1. Run `python main.py inspect` to check element properties
+2. Check template images in `images/` directory
+3. Run with `-v` flag for verbose logging
+4. Check `mappings/current_vehicle.json` for discovered indices
 
 ---
 
 ## Current Scope & Limitations
 
 ### What Works
-- Connect to running GDS2
-- Full navigation to Vehicle DTC Information
-- Wait for data loading (button state check)
-- Create and parse HTML report
-- Extract 31 DTCs with structured data
+- Connect to running GDS2 (Windows only)
+- Navigate to any module and data category
+- Automatic on-demand discovery of module/data lists
+- Keyboard navigation (DOWN + ENTER) for list selection
+- Template matching for buttons and devices (~1 second)
+- Automatic warning dialog dismissal
+- HTML report generation and parsing
+- JSON persistence of discovered mappings
+
+### Successfully Tested
+- Engine Control Module → Engine Data (default)
+- Engine Control Module → Ignition Data (index 16, discovered)
+- Engine Control Module → Misfire Data (index 19, discovered)
+- Device Explorer selection in ~1 second (template matching)
+- Warning dialog auto-dismissal
 
 ### Known Limitations
-- GDS2 must be open at Main Menu
-- SM2 USB VCI must be connected
-- Windows only (pywinauto)
-- Single vehicle session
-- HTML report dependency
+- GDS2 must be open at Main Menu before starting
+- VCI device must be connected and vehicle selected
+- Windows only (pywinauto, PyAutoGUI)
+- Single vehicle session per execution
+- Template images must exist for new buttons/devices
+- Discovery requires manual navigation to list pages first time
+
+### Performance
+- Device selection: ~1 second (template matching)
+- Module/data discovery: ~2-3 seconds per list (first time only)
+- Button clicking: <1 second (PyAutoGUI)
+- List navigation: ~50ms per item (keyboard)
+- Total workflow: ~15-30 seconds depending on discovery needs
 
 ---
 
@@ -485,16 +611,56 @@ with GDS2Driver() as driver:
 # Activate venv
 venv\Scripts\activate
 
-# Run demo
+# Run demo with default settings (Engine Data)
 python main.py demo
+
+# Run with custom module and data
+python main.py demo --module "[K20] Engine Control Module" --data "Misfire Data" -v
+```
+
+### Discovery Workflow
+```bash
+# Option 1: Run discovery utility
+python main.py discover
+
+# Option 2: Discovery happens automatically on first run
+# Just run the workflow with any module/data, it will discover as needed
+python main.py demo --module "New Module" --data "New Data Category"
+```
+
+### Adding New Template Images
+```bash
+# 1. Navigate GDS2 to the desired page
+# 2. Take screenshot of the button/device
+# 3. Crop to just the element (with some padding)
+# 4. Save to images/buttons/ or images/devices/
+# 5. Use lowercase with underscores: create_report.png, sm2_usb.png
 ```
 
 ### Test Imports
 ```bash
-python -c "from src.pages import MainMenuPage, DTCPage; print('OK')"
-python -c "from src.core.locators import Loc; print('OK')"
-python -c "from src.workflows import ReadVehicleDTCWorkflow; print('OK')"
+python -c "from src.workflows import ReadDataDisplayWorkflow; print('OK')"
+python -c "from src.discovery import VehicleDiscovery, VehicleMapping; print('OK')"
+python -c "from src.workflows.base_workflow import BaseWorkflow; print('OK')"
 ```
+
+### Troubleshooting
+
+**Template matching not working:**
+- Check image exists in `images/buttons/` or `images/devices/`
+- Try lower confidence: `self.click_button("name", confidence=0.7)`
+- Ensure screenshot is grayscale-compatible
+- Check GDS2 window is in focus and fully visible
+
+**Discovery not finding items:**
+- Ensure GDS2 window title contains "GDS 2"
+- Check that list page is fully loaded
+- Verify pywinauto can see the window: `python main.py inspect`
+
+**Keyboard navigation selecting wrong item:**
+- Check `mappings/current_vehicle.json` for correct indices
+- Delete JSON file and re-discover if vehicle changed
+- Ensure focus is on list (click list area first if needed)
 
 ---
 
@@ -503,8 +669,36 @@ python -c "from src.workflows import ReadVehicleDTCWorkflow; print('OK')"
 | Document | Location | Purpose |
 |----------|----------|---------|
 | GDS2 User Guide | `res/GM-GDS2-User-Guide.pdf` | Official button names, navigation flow |
+| Scrolling Support | `docs/SCROLLING_SUPPORT.md` | Scrolling implementation notes and lessons learned |
 | Control Mapping | `docs/GDS2_CONTROL_MAPPING.md` | UI control type reference |
 | Workflow Diagram | `docs/WORKFLOW_DIAGRAM.md` | Navigation flow diagrams |
+| Cleanup Summary | `CLEANUP_SUMMARY.md` | History of removed/deprecated code |
+
+---
+
+## Recent Changes (2026-01-26)
+
+### Major Updates
+1. **Keyboard Navigation** - Replaced coordinate-based clicking with DOWN+ENTER navigation
+2. **On-Demand Discovery** - Automatic module/data list discovery using pywinauto
+3. **Template Matching** - Optimized Device Explorer from ~60s to ~1s
+4. **Warning Dialog Handling** - Automatic detection and dismissal of OK button popups
+5. **Code Integration** - Merged V3 workflow as main version, removed V1/V2
+6. **CLI Integration** - Full command-line interface in main.py with all options
+
+### Files Added
+- `src/discovery/vehicle_mapping.py` - Discovery system
+- `src/vision/vlm_finder.py` - VLM fallback (optional)
+- `scripts/run_discovery.py` - Discovery utility
+- `images/buttons/*.png` - Button templates
+- `images/devices/*.png` - Device templates
+- `mappings/current_vehicle.json` - Auto-generated mappings
+- `docs/SCROLLING_SUPPORT.md` - Scrolling implementation notes
+
+### Files Removed/Cleaned
+- Old test scripts (test_scrolling.py, test_list_selection.py, etc.)
+- V1/V2 workflow versions (read_data_display_v*.py)
+- Legacy page object files (no longer used by main workflow)
 
 ---
 
