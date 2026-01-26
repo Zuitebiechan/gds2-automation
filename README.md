@@ -8,13 +8,16 @@ This project automates vehicle diagnostic workflows in GDS2 using a **hybrid aut
 - **PyAutoGUI + OpenCV** for buttons and fixed elements (fast, reliable)
 - **Keyboard Navigation** for dynamic list selection (DOWN + ENTER)
 - **pywinauto Discovery** for automatic list enumeration and mapping
+- **Flask Web UI** for visual interaction (recommended)
 
 **Current Capabilities:**
-1. Read Vehicle DTCs (all modules)
-2. Read Data Display from any module/category (Engine Data, Misfire Data, etc.)
+1. **Web UI** - 3-step visual workflow for data collection
+2. Read Vehicle DTCs (all modules)
+3. Read Data Display from any module/category (Engine Data, Misfire Data, etc.)
 
 ## Features
 
+- **Web UI** - Visual 3-step workflow interface with real-time state tracking
 - **Hybrid Automation** - Combines template matching, keyboard navigation, and discovery
 - **On-Demand Discovery** - Automatically discovers and maps module/data lists using pywinauto
 - **Template Matching** - Fast button/device detection (~1 second vs ~60 seconds with VLM)
@@ -49,7 +52,7 @@ Successfully reads data from any module and category:
 - Python 3.10+
 - GDS2 installed and running
 - VCI device connected to vehicle (e.g., SM2 USB)
-- PyAutoGUI, OpenCV, pywinauto (installed via requirements.txt)
+- Flask, PyAutoGUI, OpenCV, pywinauto (installed via requirements.txt)
 
 ## Installation
 
@@ -73,7 +76,30 @@ pip install -r requirements-minimal.txt
 2. Ensure VCI device is connected (e.g., SM2 USB)
 3. Vehicle must be connected with data loaded
 
-### Quick Start
+### Web UI (Recommended)
+
+```bash
+# Start Web UI
+python main.py web
+
+# With custom port
+python main.py web --port 8000
+
+# With debug mode
+python main.py web --debug
+```
+
+Open http://localhost:8080 in your browser and follow the 3-step workflow:
+
+| Step | Button | GDS2 Start | GDS2 End | Description |
+|------|--------|------------|----------|-------------|
+| 1 | **Fetch Modules** | Main Menu | Module List | Discover all modules |
+| 2 | **Fetch Data Categories** | Module List | Data List | Select module, discover categories |
+| 3 | **Search** | Data List | Data List | Fetch data, create report, back |
+
+Step 3 can be repeated to fetch different data categories without restarting.
+
+### CLI Mode
 
 ```bash
 # Run with default settings (Engine Control Module → Engine Data)
@@ -92,7 +118,10 @@ python main.py discover
 ### All Available Commands
 
 ```bash
-# Main workflow - read data display
+# Web UI (recommended)
+python main.py web [--port 8080] [--debug]
+
+# CLI workflow - read data display
 python main.py demo [--vci "SM2 USB"] [--module "..."] [--data "..."] [-v]
 
 # Discovery utility - manually discover module/data lists
@@ -182,6 +211,8 @@ RPA_demo/
 │   │   └── screenshot_comparator.py
 │   └── utils/               # Utilities
 │       └── report_parser.py # HTML report parsing
+├── templates/               # Web UI templates
+│   └── index.html           # Main Web UI page
 ├── images/                  # Template images
 │   ├── buttons/             # Button templates (PyAutoGUI)
 │   └── devices/             # Device templates (PyAutoGUI)
@@ -193,7 +224,8 @@ RPA_demo/
 │   └── inspect_gds2.py      # UI inspection
 ├── docs/                    # Documentation
 ├── res/                     # Resources (GDS2 User Guide)
-└── main.py                  # CLI entry point
+├── main.py                  # CLI entry point
+└── app.py                   # Flask Web UI backend
 ```
 
 ## Architecture
@@ -284,6 +316,7 @@ RPA_demo/
 - [x] Template matching for performance
 - [x] Keyboard navigation for lists
 - [x] Automatic dialog handling
+- [x] **Flask Web UI with 3-step workflow**
 - [ ] Clear Vehicle DTCs
 - [ ] Read Module-specific DTCs
 - [ ] VLM fallback for unknown elements

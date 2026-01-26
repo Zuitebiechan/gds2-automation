@@ -1,7 +1,7 @@
 # RPA_demo Project Memory
 
 **Last Updated:** 2026-01-26
-**Status:** Production Ready - Keyboard Navigation with On-Demand Discovery
+**Status:** Production Ready - Web UI + CLI with Hybrid Automation
 
 ---
 
@@ -11,13 +11,14 @@
 3. [Project Structure](#project-structure)
 4. [Design Principles](#design-principles)
 5. [Current Implementation Status](#current-implementation-status)
-6. [Key Components Deep Dive](#key-components-deep-dive)
-7. [GDS2 Integration Details](#gds2-integration-details)
-8. [Working Demo Flow](#working-demo-flow)
-9. [Navigation Guide](#navigation-guide)
-10. [Current Scope & Limitations](#current-scope--limitations)
-11. [Development Workflow](#development-workflow)
-12. [Reference Documents](#reference-documents)
+6. [Web UI Guide](#web-ui-guide)
+7. [Key Components Deep Dive](#key-components-deep-dive)
+8. [GDS2 Integration Details](#gds2-integration-details)
+9. [Working Demo Flow](#working-demo-flow)
+10. [Navigation Guide](#navigation-guide)
+11. [Current Scope & Limitations](#current-scope--limitations)
+12. [Development Workflow](#development-workflow)
+13. [Reference Documents](#reference-documents)
 
 ---
 
@@ -26,15 +27,17 @@
 ### The Big Picture
 This project uses **RPA (Robotic Process Automation) + AI** to automate vehicle diagnostic software like **GDS2** (General Motors Diagnostic System 2). The long-term goal is to deploy this in production environments for actual vehicle diagnostics automation.
 
-### Current Phase: Production Ready with Hybrid Automation
+### Current Phase: Production Ready with Web UI
 - **Objective:** Automate vehicle diagnostics data collection
 - **Scope:** Read data from any module/category (Engine Data, Misfire Data, etc.)
 - **Result:** Successfully reading data from multiple categories with HTML report parsing
+- **Interface:** Web UI (recommended) + CLI for automation
 - **Architecture:** Hybrid approach combining PyAutoGUI+OpenCV (buttons) with keyboard navigation (lists)
 
 ### Confirmed Working Workflows
-1. **Read Vehicle DTC** - Read all DTCs from vehicle (31 DTCs from HTML report)
-2. **Read Data Display** - Read data from specific module and category (e.g., Engine Control Module → Misfire Data)
+1. **Web UI 3-Step Workflow** - Fetch Modules → Fetch Categories → Search Data
+2. **Read Vehicle DTC** - Read all DTCs from vehicle (31 DTCs from HTML report)
+3. **Read Data Display** - Read data from specific module and category (e.g., Engine Control Module → Misfire Data)
 
 ### Assumptions (Confirmed Working)
 - GDS2 is already open at Main Menu
@@ -115,7 +118,7 @@ RPA_demo/
 │   │       ├── __init__.py
 │   │       └── screenshot.py     # Screenshot comparison interface
 │   │
-│   ├── discovery/                # Discovery system (NEW)
+│   ├── discovery/                # Discovery system
 │   │   ├── __init__.py
 │   │   └── vehicle_mapping.py    # VehicleDiscovery & VehicleMapping
 │   │
@@ -144,16 +147,19 @@ RPA_demo/
 │       ├── __init__.py
 │       └── report_parser.py      # HTML report parsing
 │
+├── templates/                    # Web UI templates (NEW)
+│   └── index.html                # Main Web UI page
+│
 ├── scripts/                      # Utility scripts
 │   ├── run_demo.py               # Legacy demo execution script
 │   ├── run_discovery.py          # Manual discovery utility
 │   ├── inspect_gds2.py           # UI inspection tool
 │   └── test_connection.py        # Connection testing
 │
-├── mappings/                     # Auto-generated discovery data (NEW)
+├── mappings/                     # Auto-generated discovery data
 │   └── current_vehicle.json      # Module and data category mappings
 │
-├── images/                       # Template images for PyAutoGUI (NEW)
+├── images/                       # Template images for PyAutoGUI
 │   ├── buttons/                  # Button templates
 │   │   ├── diagnostics.png
 │   │   ├── module_diagnostics.png
@@ -165,7 +171,6 @@ RPA_demo/
 │       └── sm2_usb.png
 │
 ├── docs/                         # Documentation
-│   ├── CLAUDE.md                 # This file
 │   ├── SCROLLING_SUPPORT.md      # Scrolling implementation notes
 │   ├── GDS2_CONTROL_MAPPING.md   # UI control mapping
 │   └── WORKFLOW_DIAGRAM.md       # Navigation diagrams
@@ -173,7 +178,9 @@ RPA_demo/
 ├── res/                          # Resources
 │   └── GM-GDS2-User-Guide.pdf    # Official GDS2 User Guide
 │
-├── main.py                       # CLI entry point (UPDATED)
+├── main.py                       # CLI entry point (web, demo, inspect, discover)
+├── app.py                        # Flask Web UI backend (NEW)
+├── CLAUDE.md                     # This file
 ├── requirements-minimal.txt      # Dependencies
 └── venv/                         # Virtual environment
 ```
@@ -182,6 +189,9 @@ RPA_demo/
 
 | File | Purpose |
 |------|---------|
+| `main.py` | CLI entry point: `web`, `demo`, `inspect`, `discover` commands |
+| `app.py` | Flask Web UI backend with REST API |
+| `templates/index.html` | Web UI frontend with 3-step workflow |
 | `src/core/driver.py` | Low-level UI automation (pywinauto wrapper) |
 | `src/discovery/vehicle_mapping.py` | Discovery system for module/data lists |
 | `src/workflows/base_workflow.py` | PyAutoGUI+OpenCV button/device clicking |
@@ -191,7 +201,6 @@ RPA_demo/
 | `mappings/current_vehicle.json` | Auto-generated module/data mappings |
 | `images/buttons/*.png` | Template images for button detection |
 | `images/devices/*.png` | Template images for device selection |
-| `main.py` | CLI entry point with all commands |
 
 ---
 
@@ -309,13 +318,19 @@ Create Report (PyAutoGUI)
   - [x] Template matching for buttons/devices
   - [x] Custom exception hierarchy
 
-- [x] **Discovery System** (NEW)
+- [x] **Web UI** (NEW)
+  - [x] Flask backend with REST API
+  - [x] 3-step workflow interface
+  - [x] Real-time state tracking
+  - [x] Data table display with CSV download
+
+- [x] **Discovery System**
   - [x] VehicleDiscovery - enumerate list items with pywinauto
   - [x] VehicleMapping - JSON persistence
   - [x] On-demand module/data discovery
   - [x] Discovery utility script
 
-- [x] **Keyboard Navigation** (NEW)
+- [x] **Keyboard Navigation**
   - [x] List item selection (DOWN + ENTER)
   - [x] Focus-aware navigation (start at index 0)
   - [x] Automatic discovery integration
@@ -341,6 +356,73 @@ Create Report (PyAutoGUI)
 - [ ] VLM fallback for unknown elements
 - [ ] OCR verification for data values
 - [ ] Multi-vehicle session handling
+
+---
+
+## Web UI Guide
+
+### Starting the Web UI
+
+```bash
+# Start Web UI (recommended)
+python main.py web
+
+# With custom port
+python main.py web --port 8000
+
+# With debug mode
+python main.py web --debug
+```
+
+Open http://localhost:8080 in your browser.
+
+### 3-Step Workflow
+
+The Web UI provides a guided 3-step workflow for data collection:
+
+| Step | Button | GDS2 Start State | GDS2 End State | Description |
+|------|--------|------------------|----------------|-------------|
+| **1** | **Fetch Modules** | Main Menu | Module List | Navigate to Module List, discover all modules |
+| **2** | **Fetch Data Categories** | Module List | Data List | Select module, navigate to Data List, discover categories |
+| **3** | **Search** | Data List | Data List | Select data, fetch report, click Back |
+
+**Key Features:**
+- Each step clearly indicates what GDS2 state is expected
+- Step 3 can be repeated to fetch different data categories
+- After Step 3, GDS2 returns to Data List for continuous querying
+
+### Workflow Diagram
+
+```
+┌─────────────┐     Step 1      ┌─────────────┐     Step 2      ┌─────────────┐
+│  Main Menu  │ ──────────────> │ Module List │ ──────────────> │  Data List  │
+└─────────────┘  Fetch Modules  └─────────────┘  Fetch Categories└──────┬──────┘
+                                                                        │
+                                                                        │ Step 3
+                                                                        │ Search
+                                                                        ▼
+                                                                ┌─────────────┐
+                                                                │Data Display │
+                                                                │  + Report   │
+                                                                └──────┬──────┘
+                                                                        │
+                                                                        │ Auto Back
+                                                                        ▼
+                                                                ┌─────────────┐
+                                                                │  Data List  │ ◄── Repeat Step 3
+                                                                └─────────────┘
+```
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/fetch_modules` | POST | Step 1: Discover modules |
+| `/api/fetch_categories` | POST | Step 2: Select module, discover categories |
+| `/api/search_data` | POST | Step 3: Fetch data, create report, back |
+| `/api/modules` | GET | Get cached module list |
+| `/api/data_categories` | GET | Get cached data categories |
+| `/api/state` | GET | Get current GDS2 state |
 
 ---
 
@@ -485,7 +567,16 @@ class DiagnosticsMenuPage(BasePage):
 
 ### Run the Demo
 
-**Main entry point:**
+**Web UI (Recommended):**
+```bash
+# Start Web UI
+python main.py web
+
+# Open http://localhost:8080 in browser
+# Follow the 3-step workflow
+```
+
+**CLI entry point:**
 ```bash
 # Default: Engine Data
 python main.py demo
@@ -679,14 +770,19 @@ python -c "from src.workflows.base_workflow import BaseWorkflow; print('OK')"
 ## Recent Changes (2026-01-26)
 
 ### Major Updates
-1. **Keyboard Navigation** - Replaced coordinate-based clicking with DOWN+ENTER navigation
-2. **On-Demand Discovery** - Automatic module/data list discovery using pywinauto
-3. **Template Matching** - Optimized Device Explorer from ~60s to ~1s
-4. **Warning Dialog Handling** - Automatic detection and dismissal of OK button popups
-5. **Code Integration** - Merged V3 workflow as main version, removed V1/V2
-6. **CLI Integration** - Full command-line interface in main.py with all options
+1. **Flask Web UI** - New visual interface for GDS2 automation
+   - 3-step workflow: Fetch Modules → Fetch Categories → Search Data
+   - Real-time state tracking and display
+   - Data table with CSV download
+2. **Keyboard Navigation** - Replaced coordinate-based clicking with DOWN+ENTER navigation
+3. **On-Demand Discovery** - Automatic module/data list discovery using pywinauto
+4. **Template Matching** - Optimized Device Explorer from ~60s to ~1s
+5. **Warning Dialog Handling** - Automatic detection and dismissal of OK button popups
+6. **CLI Integration** - Full command-line interface with `web`, `demo`, `inspect`, `discover` commands
 
 ### Files Added
+- `app.py` - Flask Web UI backend
+- `templates/index.html` - Web UI frontend
 - `src/discovery/vehicle_mapping.py` - Discovery system
 - `src/vision/vlm_finder.py` - VLM fallback (optional)
 - `scripts/run_discovery.py` - Discovery utility
