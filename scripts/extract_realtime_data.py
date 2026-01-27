@@ -39,6 +39,7 @@ class DataDisplayReader:
     def __init__(self):
         self.app = None
         self.window = None
+        self._table = None  # Cache the table reference
 
     def connect(self):
         """Connect to GDS2."""
@@ -52,82 +53,114 @@ class DataDisplayReader:
             print(f"✗ Failed to connect to GDS2: {e}")
             return False
 
-    def find_data_table(self):
+    def find_data_table(self, quiet=False):
         """
         Find the data table control.
 
-        Based on inspection, the data table is Table[4] with:
-        - Rect: (L13, T182, R1263, B574)
-        - Headers: Parameter Name | Value | Unit | Control Module
-        - DataItems: 56 items (14 rows x 4 columns)
+        Based on inspection, the data table has headers:
+        Parameter Name | Value | Unit | Control Module
+        and its first child Custom control text is "Parameter Name".
         """
         try:
-            # Get all tables
             tables = self.window.descendants(control_type="Table")
 
-            # Find the table with "Parameter Name", "Value", "Unit", "Control Module" headers
             for table in tables:
-                # Get children (headers and data)
                 children = table.children()
 
-                # Check if this table has the right headers
                 header_texts = []
-                for child in children[:4]:  # Check first 4 children as potential headers
+                for child in children[:5]:
                     try:
                         text = child.window_text().strip()
                         header_texts.append(text)
                     except:
                         pass
 
-                # Look for our target table
-                if "Parameter Name" in header_texts and "Value" in header_texts:
-                    print(f"✓ Found data table with {len(children)} children")
+                if ("Parameter Name" in header_texts and "Value" in header_texts
+                        and header_texts and header_texts[0] == "Parameter Name"):
+                    if not quiet:
+                        print(f"✓ Found data table")
                     return table
 
-            print("✗ Data table not found")
+            if not quiet:
+                print("✗ Data table not found")
             return None
 
         except Exception as e:
-            print(f"✗ Error finding data table: {e}")
-            import traceback
-            traceback.print_exc()
+            if not quiet:
+                print(f"✗ Error finding data table: {e}")
             return None
 
     def extract_data_from_table(self, table) -> List[Dict[str, str]]:
         """
-        Extract data from the table.
+        Extract data from the table using DataItem controls.
 
-        Returns list of dicts with keys: parameter_name, value, unit, control_module
+        DataItems are always in groups of 4 per row:
+        [parameter_name, value, unit, control_module]
+
+        But they are NOT sorted by position in the control tree.
+        We sort by Y position first to get proper row order.
         """
         try:
-            # Get all DataItem controls (these are the data cells)
             data_items = table.descendants(control_type="DataItem")
 
-            print(f"Found {len(data_items)} data items")
-
-            # Extract text from each data item
-            texts = []
+            # Get text and position for each DataItem
+            items_with_pos = []
             for item in data_items:
                 try:
-                    text = item.window_text().strip()
-                    if text:
-                        texts.append(text)
+                    text = item.window_text()
+                    rect = item.rectangle()
+                    items_with_pos.append({
+                        'text': text.strip() if text else '',
+                        'left': rect.left,
+                        'top': rect.top,
+                    })
                 except:
                     pass
 
-            print(f"Extracted {len(texts)} non-empty texts")
+            # Sort by Y position, then X position
+            items_with_pos.sort(key=lambda x: (x['top'], x['left']))
 
-            # Group into rows of 4 (parameter_name, value, unit, control_module)
+            # Group into rows (items with same Y within 5px)
+            grouped_rows = []
+            current_row = []
+            last_top = -999
+
+            for item in items_with_pos:
+                if abs(item['top'] - last_top) > 5:
+                    if current_row:
+                        grouped_rows.append(current_row)
+                    current_row = [item]
+                    last_top = item['top']
+                else:
+                    current_row.append(item)
+
+            if current_row:
+                grouped_rows.append(current_row)
+
+            # Convert to data rows (expect 4 columns per row)
             rows = []
-            for i in range(0, len(texts), 4):
-                if i + 3 < len(texts):
-                    row = {
-                        'parameter_name': texts[i],
-                        'value': texts[i + 1],
-                        'unit': texts[i + 2],
-                        'control_module': texts[i + 3],
-                    }
-                    rows.append(row)
+            for group in grouped_rows:
+                if len(group) == 4:
+                    rows.append({
+                        'parameter_name': group[0]['text'],
+                        'value': group[1]['text'],
+                        'unit': group[2]['text'],
+                        'control_module': group[3]['text'],
+                    })
+                elif len(group) == 8:
+                    # Two rows merged at same Y (e.g., MAP Sensor + Boost Pressure)
+                    rows.append({
+                        'parameter_name': group[0]['text'],
+                        'value': group[1]['text'],
+                        'unit': group[2]['text'],
+                        'control_module': group[3]['text'],
+                    })
+                    rows.append({
+                        'parameter_name': group[4]['text'],
+                        'value': group[5]['text'],
+                        'unit': group[6]['text'],
+                        'control_module': group[7]['text'],
+                    })
 
             return rows
 
@@ -221,16 +254,23 @@ class DataDisplayReader:
             if not self.connect():
                 return None
 
-        # Try position-based extraction (more robust)
-        print("\nExtracting data by position analysis...")
-        data_rows = self.extract_data_by_position()
+        # Use cached table reference, or find it
+        if not self._table:
+            self._table = self.find_data_table(quiet=False)
 
-        if not data_rows:
-            print("Position-based extraction failed, trying table-based extraction...")
-            # Fallback to table-based extraction
-            table = self.find_data_table()
-            if table:
-                data_rows = self.extract_data_from_table(table)
+        if self._table:
+            try:
+                data_rows = self.extract_data_from_table(self._table)
+            except Exception:
+                # Table reference may be stale, re-find
+                self._table = self.find_data_table(quiet=True)
+                if self._table:
+                    data_rows = self.extract_data_from_table(self._table)
+                else:
+                    data_rows = []
+        else:
+            # Fallback to position-based extraction
+            data_rows = self.extract_data_by_position()
 
         if data_rows:
             result = {
@@ -259,7 +299,7 @@ def print_data(data: Dict):
     print("="*80)
 
 
-def stream_data(duration_seconds=60, interval_seconds=1, output_file=None):
+def stream_data(duration_seconds=60, interval_seconds=1, output_file=None, filter_params=None):
     """
     Stream data for a specified duration.
 
@@ -267,13 +307,17 @@ def stream_data(duration_seconds=60, interval_seconds=1, output_file=None):
         duration_seconds: Total duration to stream (default 60 seconds)
         interval_seconds: Sampling interval (default 1 second)
         output_file: Optional file path to save data as JSON
+        filter_params: Optional list of parameter names to filter
     """
     reader = DataDisplayReader()
 
     if not reader.connect():
         return 1
 
-    print(f"\nStreaming data for {duration_seconds} seconds (interval: {interval_seconds}s)")
+    filter_msg = ""
+    if filter_params:
+        filter_msg = f", filtering: {filter_params}"
+    print(f"\nStreaming data for {duration_seconds} seconds (interval: {interval_seconds}s{filter_msg})")
     print("Press Ctrl+C to stop early\n")
 
     data_stream = []
@@ -284,24 +328,36 @@ def stream_data(duration_seconds=60, interval_seconds=1, output_file=None):
     try:
         while time.time() < end_time:
             sample_count += 1
-            print(f"\n[Sample {sample_count}] ", end="")
+            read_start = time.time()
 
             data = reader.read_data()
+            read_elapsed = time.time() - read_start
 
             if data:
-                print(f"✓ Extracted {data['count']} parameters")
+                # Apply filter if specified
+                if filter_params:
+                    data['data'] = [
+                        row for row in data['data']
+                        if any(fp.lower() in row['parameter_name'].lower() for fp in filter_params)
+                    ]
+                    data['count'] = len(data['data'])
+
                 data_stream.append(data)
 
                 # Print first sample in detail
                 if sample_count == 1:
                     print_data(data)
+                    print(f"  (read time: {read_elapsed*1000:.0f}ms)")
                 else:
-                    # Print summary for subsequent samples
-                    print(f"  Sample data (first 3):")
-                    for i, row in enumerate(data['data'][:3]):
-                        print(f"    {row['parameter_name']:<30} {row['value']:>15} {row['unit']}")
+                    # Compact output for subsequent samples
+                    ts = data['timestamp'].split('T')[1][:12]
+                    params = " | ".join(
+                        f"{row['parameter_name']}: {row['value']} {row['unit']}"
+                        for row in data['data']
+                    )
+                    print(f"[{sample_count:3d}] {ts} ({read_elapsed*1000:.0f}ms) {params}")
             else:
-                print("✗ Failed to extract data")
+                print(f"[{sample_count:3d}] ✗ Failed to extract data")
 
             # Sleep until next sample
             next_sample_time = start_time + (sample_count * interval_seconds)
@@ -319,7 +375,24 @@ def stream_data(duration_seconds=60, interval_seconds=1, output_file=None):
     print("="*80)
     print(f"Duration: {elapsed:.1f} seconds")
     print(f"Samples collected: {len(data_stream)}")
-    print(f"Average sample rate: {len(data_stream)/elapsed:.2f} samples/second")
+    if elapsed > 0:
+        print(f"Average sample rate: {len(data_stream)/elapsed:.2f} samples/second")
+
+    # Show value changes if filter was used
+    if filter_params and len(data_stream) > 1:
+        print(f"\nValue changes detected:")
+        # Track unique values per parameter
+        for param_filter in filter_params:
+            values = []
+            for sample in data_stream:
+                for row in sample['data']:
+                    if param_filter.lower() in row['parameter_name'].lower():
+                        values.append(row['value'])
+            unique_values = list(dict.fromkeys(values))  # Preserve order, deduplicate
+            if len(unique_values) > 1:
+                print(f"  {param_filter}: {len(unique_values)} distinct values: {unique_values[:20]}")
+            else:
+                print(f"  {param_filter}: constant at {unique_values[0] if unique_values else 'N/A'}")
 
     # Save to file if requested
     if output_file and data_stream:
@@ -343,6 +416,7 @@ def main():
     parser.add_argument('--interval', type=float, default=1.0, help='Sampling interval in seconds (default: 1.0)')
     parser.add_argument('--output', type=str, help='Output JSON file path')
     parser.add_argument('--single', action='store_true', help='Read data once and exit')
+    parser.add_argument('--filter', type=str, nargs='+', help='Filter by parameter name (partial match)')
 
     args = parser.parse_args()
 
@@ -356,6 +430,14 @@ def main():
         data = reader.read_data()
 
         if data:
+            # Apply filter if specified
+            if args.filter:
+                data['data'] = [
+                    row for row in data['data']
+                    if any(fp.lower() in row['parameter_name'].lower() for fp in args.filter)
+                ]
+                data['count'] = len(data['data'])
+
             print_data(data)
 
             if args.output:
@@ -371,7 +453,7 @@ def main():
 
     else:
         # Streaming mode
-        return stream_data(args.duration, args.interval, args.output)
+        return stream_data(args.duration, args.interval, args.output, args.filter)
 
 
 if __name__ == "__main__":
