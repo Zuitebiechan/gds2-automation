@@ -852,9 +852,9 @@ def get_dtcs():
 @app.route('/api/search_data', methods=['POST'])
 def search_data():
     """
-    Step 3: Search data for selected category.
+    Get DTCs: Search data for selected category.
     Assumes GDS2 is at Data List.
-    Selects data category, creates report, clicks Back to return to Data List.
+    Selects data category, creates report, parses DTCs, clicks Back to return to Data List.
     """
     data = request.json
     module_name = data.get('module')
@@ -864,7 +864,7 @@ def search_data():
         return jsonify({"error": "Module and data category required"}), 400
 
     try:
-        logger.info(f"=== Step 3: Search {data_category} ===")
+        logger.info(f"=== Get DTCs: Search {data_category} ===")
         logger.info("Assumption: GDS2 is at Data List")
 
         # Get target index
@@ -880,8 +880,13 @@ def search_data():
         if not report_path:
             return jsonify({"error": "Failed to create report"}), 500
 
-        # Parse report
+        # Parse report for regular data
         report_data = controller.parse_report(report_path)
+
+        # Also parse for DTCs
+        from src.utils.report_parser import GDS2ReportParser
+        dtc_parser = GDS2ReportParser()
+        dtc_data = dtc_parser.parse_dtc_report(report_path)
 
         # Click Back to return to Data List
         logger.info("Clicking Back to return to Data List...")
@@ -897,11 +902,15 @@ def search_data():
         app_state.data_list_focus_index = target_index
 
         logger.info(f"Search complete. GDS2 returned to Data List (focus at index {target_index}).")
+        logger.info(f"Parsed {len(dtc_data.get('dtc_list', []))} DTCs from report.")
 
         return jsonify({
             "success": True,
             "report_path": report_path,
             "report_data": report_data,
+            "vehicle_info": dtc_data.get("vehicle_info", {}),
+            "dtc_list": dtc_data.get("dtc_list", []),
+            "module_status": dtc_data.get("module_status", []),
             "state": asdict(app_state)
         })
 

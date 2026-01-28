@@ -546,14 +546,14 @@
                     </div>
                 </div>
 
-                <!-- Step 3: Select Data & Search -->
+                <!-- Get DTCs -->
                 <div id="step3" class="step-section">
                     <div class="step-header">
                         <div class="step-number">3</div>
-                        <div class="step-title">Select Data & Search</div>
+                        <div class="step-title">Get DTCs</div>
                     </div>
                     <div class="step-description">
-                        GDS2 must be at <strong>Data List</strong>. Select a data category and click Search. GDS2 will fetch the data and return to Data List.
+                        GDS2 must be at <strong>Data List</strong>. Select a data category and click Search. GDS2 will fetch the data, parse DTCs from report, and return to Data List.
                     </div>
                     <div class="control-row">
                         <select id="data-select" disabled>
@@ -740,14 +740,14 @@
             }
         });
 
-        // Step 3: Search
+        // Get DTCs: Search
         document.getElementById('search-btn').addEventListener('click', async () => {
             const moduleName = document.getElementById('module-select').value;
             const dataCategory = document.getElementById('data-select').value;
 
             if (!moduleName || !dataCategory) return;
 
-            showLoading(`Searching ${dataCategory}...`);
+            showLoading(`Getting DTCs from ${dataCategory}...`);
 
             try {
                 const response = await fetch('/api/search_data', {
@@ -764,13 +764,15 @@
                 if (data.success) {
                     currentState = data.state;
                     updateState();
-                    displayReportData(data.report_data);
-                    showSuccess(`Data fetched! GDS2 returned to Data List. You can search another data category.`);
+                    // Pass full response including DTCs
+                    displayReportData(data);
+                    const dtcCount = data.dtc_list ? data.dtc_list.length : 0;
+                    showSuccess(`Found ${dtcCount} DTCs! GDS2 returned to Data List.`);
                 } else {
-                    showError(data.error || 'Failed to search data');
+                    showError(data.error || 'Failed to get DTCs');
                 }
             } catch (error) {
-                showError('Failed to search data: ' + error.message);
+                showError('Failed to get DTCs: ' + error.message);
             } finally {
                 hideLoading();
             }
@@ -787,21 +789,53 @@
             document.getElementById('current-data').textContent = currentState.current_data_category || '-';
         }
 
-        // Display report data
-        function displayReportData(reportData) {
+        // Display report data with DTCs
+        function displayReportData(data) {
             const container = document.getElementById('data-table-container');
+            const reportData = data.report_data || {};
 
-            // Update vehicle info
-            if (reportData.vehicle_info) {
-                document.getElementById('vehicle-vin').textContent = reportData.vehicle_info.vin || '-';
-                document.getElementById('vehicle-make').textContent = reportData.vehicle_info.make || '-';
-                document.getElementById('vehicle-model').textContent = reportData.vehicle_info.model || '-';
-                document.getElementById('vehicle-year').textContent = reportData.vehicle_info.year || '-';
+            // Update vehicle info (from DTC parser)
+            if (data.vehicle_info) {
+                document.getElementById('vehicle-vin').textContent = data.vehicle_info.vin || '-';
+                document.getElementById('vehicle-make').textContent = data.vehicle_info.make || '-';
+                document.getElementById('vehicle-model').textContent = data.vehicle_info.model || '-';
+                document.getElementById('vehicle-year').textContent = data.vehicle_info.year || '-';
             }
 
-            // Display data table
+            let html = '';
+
+            // Display DTCs if available
+            if (data.dtc_list && data.dtc_list.length > 0) {
+                const dtcRows = data.dtc_list.map(dtc => `
+                    <tr>
+                        <td><strong>${dtc.code}</strong></td>
+                        <td>${dtc.module}</td>
+                        <td>${dtc.description}</td>
+                        <td>${dtc.status}</td>
+                    </tr>
+                `).join('');
+
+                html += `
+                    <h3 style="margin: 20px 0 10px 0; color: #333;">Diagnostic Trouble Codes (${data.dtc_list.length})</h3>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Code</th>
+                                <th>Module</th>
+                                <th>Description</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${dtcRows}
+                        </tbody>
+                    </table>
+                `;
+            }
+
+            // Display data items if available
             if (reportData.data_items && reportData.data_items.length > 0) {
-                const rows = reportData.data_items.map(item => `
+                const dataRows = reportData.data_items.map(item => `
                     <tr>
                         <td>${item.parameter}</td>
                         <td>${item.value}</td>
@@ -809,7 +843,8 @@
                     </tr>
                 `).join('');
 
-                container.innerHTML = `
+                html += `
+                    <h3 style="margin: 20px 0 10px 0; color: #333;">Data Items (${reportData.data_items.length})</h3>
                     <table>
                         <thead>
                             <tr>
@@ -819,13 +854,17 @@
                             </tr>
                         </thead>
                         <tbody>
-                            ${rows}
+                            ${dataRows}
                         </tbody>
                     </table>
-                    <button class="btn-success download-btn" onclick="downloadCSV()">Download CSV</button>
                 `;
+            }
+
+            if (html) {
+                html += '<button class="btn-success download-btn" onclick="downloadCSV()">Download CSV</button>';
+                container.innerHTML = html;
             } else {
-                container.innerHTML = '<div class="no-data">No data items found in report</div>';
+                container.innerHTML = '<div class="no-data">No data found in report</div>';
             }
         }
 
