@@ -1326,6 +1326,69 @@ def start_streaming():
         if streaming_collector and streaming_collector.is_running:
             return jsonify({"error": "Streaming already running"}), 400
 
+        # Check if user has selected a data category in Step 3
+        if not app_state.current_data_category or not app_state.current_module:
+            return jsonify({
+                "error": "Please complete Step 3 first: select a module and data category"
+            }), 400
+
+        # Check current GDS2 state
+        if app_state.gds2_state != GDS2State.DATA_LIST.value:
+            return jsonify({
+                "error": f"GDS2 must be at Data List page. Current state: {app_state.gds2_state}"
+            }), 400
+
+        logger.info(f"=== Starting Monitoring for {app_state.current_data_category} ===")
+
+        # Navigate from Data List to Data Display
+        # Get target index for the data category
+        target_index = controller.mapping.get_data_category_index(
+            "current_vehicle", app_state.current_module, app_state.current_data_category
+        )
+        if target_index is None:
+            return jsonify({
+                "error": f"Data category '{app_state.current_data_category}' not found"
+            }), 400
+
+        # Navigate using keyboard (from current focus position)
+        import pyautogui
+
+        def focus_gds2():
+            try:
+                from pywinauto import Application
+                app_conn = Application(backend="uia").connect(title_re=".*GDS 2.*")
+                window = app_conn.top_window()
+                window.set_focus()
+                time.sleep(0.3)
+            except Exception as e:
+                logger.warning(f"Could not focus GDS2: {e}")
+
+        focus_gds2()
+
+        # Calculate relative steps from current focus position
+        relative_steps = target_index - app_state.data_list_focus_index
+        logger.info(f"Navigating to {app_state.current_data_category} (target={target_index}, current={app_state.data_list_focus_index}, steps={relative_steps})")
+
+        if relative_steps > 0:
+            for _ in range(relative_steps):
+                pyautogui.press('down')
+                time.sleep(0.1)
+        elif relative_steps < 0:
+            for _ in range(abs(relative_steps)):
+                pyautogui.press('up')
+                time.sleep(0.1)
+
+        time.sleep(0.5)
+        pyautogui.press('enter')
+        time.sleep(3)  # Wait for Data Display page to load
+
+        # Update state
+        app_state.gds2_state = GDS2State.DATA_DISPLAY.value
+        app_state.data_list_focus_index = target_index
+
+        logger.info("Now at Data Display page, starting collector...")
+
+        # Start the collector
         from src.streaming import RealtimeDataCollector
 
         streaming_collector = RealtimeDataCollector(
@@ -1339,8 +1402,10 @@ def start_streaming():
         logger.info(f"Started real-time streaming with interval {interval}s")
         return jsonify({
             "success": True,
-            "message": "Streaming started",
-            "interval": interval
+            "message": f"Monitoring started for {app_state.current_data_category}",
+            "interval": interval,
+            "data_category": app_state.current_data_category,
+            "state": asdict(app_state)
         })
 
     except Exception as e:
