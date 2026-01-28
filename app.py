@@ -4,11 +4,14 @@ GDS2 Automation Web UI - Flask Version
 Simple web interface for GDS2 vehicle diagnostics automation.
 """
 
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, Response
 from flask_cors import CORS
 import logging
 import re
 import time
+import json
+import queue
+import threading
 from pathlib import Path
 from enum import Enum
 from typing import Optional, Dict, Any, List
@@ -194,21 +197,38 @@ class GDS2Controller:
             # Step 2: Handle Device Explorer (if appears)
             logger.info("Step 2: Checking Device Explorer...")
             if find_button("continue", confidence=0.9):
-                device_path = DEVICES_DIR / "sm2_usb.png"
-                if device_path.exists():
-                    template = cv2.imread(str(device_path), cv2.IMREAD_GRAYSCALE)
-                    screenshot = ImageGrab.grab()
-                    screenshot_gray = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2GRAY)
-                    result = cv2.matchTemplate(screenshot_gray, template, cv2.TM_CCOEFF_NORMED)
-                    _, max_val, _, max_loc = cv2.minMaxLoc(result)
-                    if max_val >= 0.85:
-                        h, w = template.shape
-                        x, y = max_loc[0] + w // 2, max_loc[1] + h // 2
-                        pyautogui.click(x, y)
-                        time.sleep(1)
+                logger.info("  Device Explorer popup detected")
+
+                # Try to click SM2 USB device using template matching
+                # First try highlighted version, then normal version
+                screenshot = ImageGrab.grab()
+                screenshot_gray = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2GRAY)
+
+                device_matched = False
+                for device_name in ["sm2_usb_highlight", "sm2_usb"]:
+                    device_path = DEVICES_DIR / f"{device_name}.png"
+                    if device_path.exists():
+                        template = cv2.imread(str(device_path), cv2.IMREAD_GRAYSCALE)
+                        result = cv2.matchTemplate(screenshot_gray, template, cv2.TM_CCOEFF_NORMED)
+                        _, max_val, _, max_loc = cv2.minMaxLoc(result)
+                        logger.info(f"  {device_name} template match confidence: {max_val:.3f}")
+
+                        if max_val >= 0.85:
+                            h, w = template.shape
+                            x, y = max_loc[0] + w // 2, max_loc[1] + h // 2
+                            pyautogui.click(x, y)
+                            time.sleep(1)
+                            device_matched = True
+                            logger.info(f"  Successfully matched {device_name}")
+                            break
+
+                if not device_matched:
+                    logger.warning("  Failed to match any SM2 USB template")
 
                 find_and_click("continue", confidence=0.9, timeout=5)
                 time.sleep(3)
+            else:
+                logger.info("  No Device Explorer popup")
 
             # Step 3: Click Enter for vehicle selection
             logger.info("Step 3: Clicking Enter...")
@@ -410,18 +430,26 @@ class GDS2Controller:
 
             logger.info("Step 2: Checking Device Explorer...")
             if find_button("continue", confidence=0.9):
-                device_path = DEVICES_DIR / "sm2_usb.png"
-                if device_path.exists():
-                    template = cv2.imread(str(device_path), cv2.IMREAD_GRAYSCALE)
-                    screenshot = ImageGrab.grab()
-                    screenshot_gray = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2GRAY)
-                    result = cv2.matchTemplate(screenshot_gray, template, cv2.TM_CCOEFF_NORMED)
-                    _, max_val, _, max_loc = cv2.minMaxLoc(result)
-                    if max_val >= 0.85:
-                        h, w = template.shape
-                        x, y = max_loc[0] + w // 2, max_loc[1] + h // 2
-                        pyautogui.click(x, y)
-                        time.sleep(1)
+                # Try to click SM2 USB device using template matching
+                # First try highlighted version, then normal version
+                screenshot = ImageGrab.grab()
+                screenshot_gray = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2GRAY)
+
+                device_matched = False
+                for device_name in ["sm2_usb_highlight", "sm2_usb"]:
+                    device_path = DEVICES_DIR / f"{device_name}.png"
+                    if device_path.exists():
+                        template = cv2.imread(str(device_path), cv2.IMREAD_GRAYSCALE)
+                        result = cv2.matchTemplate(screenshot_gray, template, cv2.TM_CCOEFF_NORMED)
+                        _, max_val, _, max_loc = cv2.minMaxLoc(result)
+
+                        if max_val >= 0.85:
+                            h, w = template.shape
+                            x, y = max_loc[0] + w // 2, max_loc[1] + h // 2
+                            pyautogui.click(x, y)
+                            time.sleep(1)
+                            device_matched = True
+                            break
 
                 find_and_click("continue", confidence=0.9, timeout=5)
                 time.sleep(3)
@@ -1225,6 +1253,196 @@ def reset_state():
     except Exception as e:
         logger.exception("Reset failed")
         return jsonify({"error": str(e)}), 500
+
+
+# =============================================================================
+# Real-time Data Streaming (SSE)
+# =============================================================================
+
+# Global streaming state
+streaming_collector = None
+streaming_clients: List[queue.Queue] = []
+streaming_lock = threading.Lock()
+
+
+def broadcast_to_clients(event_type: str, data: dict):
+    """Broadcast data to all connected SSE clients."""
+    message = f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
+    with streaming_lock:
+        dead_clients = []
+        for client_queue in streaming_clients:
+            try:
+                client_queue.put_nowait(message)
+            except queue.Full:
+                dead_clients.append(client_queue)
+        # Remove dead clients
+        for dead in dead_clients:
+            streaming_clients.remove(dead)
+
+
+def on_realtime_data_change(changes):
+    """Callback when parameter values change."""
+    change_data = [c.to_dict() for c in changes]
+    broadcast_to_clients("changes", {
+        "type": "changes",
+        "count": len(changes),
+        "changes": change_data,
+        "timestamp": time.time()
+    })
+    logger.info(f"Broadcast {len(changes)} parameter changes")
+
+
+def on_realtime_full_data(params):
+    """Callback with all parameters on each collection."""
+    param_data = [p.to_dict() for p in params]
+    broadcast_to_clients("data", {
+        "type": "full_data",
+        "count": len(params),
+        "parameters": param_data,
+        "timestamp": time.time()
+    })
+    logger.debug(f"Broadcast {len(params)} parameters")
+
+
+def on_realtime_error(error):
+    """Callback when an error occurs."""
+    broadcast_to_clients("error", {
+        "type": "error",
+        "message": error,
+        "timestamp": time.time()
+    })
+    logger.error(f"Streaming error: {error}")
+
+
+@app.route('/api/stream/start', methods=['POST'])
+def start_streaming():
+    """Start real-time data streaming."""
+    global streaming_collector
+
+    data = request.json or {}
+    interval = data.get('interval', 3.0)
+
+    try:
+        if streaming_collector and streaming_collector.is_running:
+            return jsonify({"error": "Streaming already running"}), 400
+
+        from src.streaming import RealtimeDataCollector
+
+        streaming_collector = RealtimeDataCollector(
+            on_data_change=on_realtime_data_change,
+            on_full_data=on_realtime_full_data,
+            on_error=on_realtime_error,
+            interval_seconds=interval
+        )
+        streaming_collector.start()
+
+        logger.info(f"Started real-time streaming with interval {interval}s")
+        return jsonify({
+            "success": True,
+            "message": "Streaming started",
+            "interval": interval
+        })
+
+    except Exception as e:
+        logger.exception("Failed to start streaming")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/stream/stop', methods=['POST'])
+def stop_streaming():
+    """Stop real-time data streaming."""
+    global streaming_collector
+
+    try:
+        if streaming_collector:
+            streaming_collector.stop()
+            streaming_collector = None
+            logger.info("Stopped real-time streaming")
+            return jsonify({"success": True, "message": "Streaming stopped"})
+        else:
+            return jsonify({"message": "Streaming was not running"})
+
+    except Exception as e:
+        logger.exception("Failed to stop streaming")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/stream/status')
+def streaming_status():
+    """Get streaming status."""
+    global streaming_collector
+
+    is_running = streaming_collector is not None and streaming_collector.is_running
+    collection_count = streaming_collector.collection_count if streaming_collector else 0
+    client_count = len(streaming_clients)
+
+    return jsonify({
+        "running": is_running,
+        "collection_count": collection_count,
+        "connected_clients": client_count
+    })
+
+
+@app.route('/api/stream/events')
+def stream_events():
+    """SSE endpoint for real-time data streaming."""
+    def generate():
+        # Create a queue for this client
+        client_queue = queue.Queue(maxsize=100)
+
+        with streaming_lock:
+            streaming_clients.append(client_queue)
+
+        logger.info(f"SSE client connected. Total clients: {len(streaming_clients)}")
+
+        try:
+            # Send initial connection message
+            yield f"event: connected\ndata: {json.dumps({'message': 'Connected to real-time stream'})}\n\n"
+
+            while True:
+                try:
+                    # Wait for data with timeout (allows for connection check)
+                    message = client_queue.get(timeout=30)
+                    yield message
+                except queue.Empty:
+                    # Send keepalive
+                    yield f": keepalive\n\n"
+
+        except GeneratorExit:
+            pass
+        finally:
+            with streaming_lock:
+                if client_queue in streaming_clients:
+                    streaming_clients.remove(client_queue)
+            logger.info(f"SSE client disconnected. Total clients: {len(streaming_clients)}")
+
+    return Response(
+        generate(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no'
+        }
+    )
+
+
+@app.route('/api/stream/latest')
+def get_latest_data():
+    """Get the latest collected data (non-streaming)."""
+    global streaming_collector
+
+    if not streaming_collector:
+        return jsonify({"error": "Streaming not started"}), 400
+
+    last_values = streaming_collector.last_values
+    data = [v.to_dict() for v in last_values.values()]
+
+    return jsonify({
+        "count": len(data),
+        "parameters": data,
+        "collection_count": streaming_collector.collection_count
+    })
 
 
 if __name__ == '__main__':
