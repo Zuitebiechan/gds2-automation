@@ -546,31 +546,30 @@
                     </div>
                 </div>
 
-                <!-- Step 3: Select Data & Search -->
+                <!-- Step 3: Get DTCs -->
                 <div id="step3" class="step-section">
                     <div class="step-header">
                         <div class="step-number">3</div>
-                        <div class="step-title">Select Data & Search</div>
+                        <div class="step-title">Get DTCs</div>
                     </div>
                     <div class="step-description">
-                        GDS2 must be at <strong>Data List</strong>. Select a data category and click Search. GDS2 will fetch the data and return to Data List.
+                        GDS2 must be at <strong>Data List</strong>. Click Get DTCs to read vehicle diagnostic trouble codes and basic information.
                     </div>
                     <div class="control-row">
-                        <select id="data-select" disabled>
-                            <option value="">Complete Step 2 first</option>
-                        </select>
-                        <button id="search-btn" class="btn-primary" disabled>Search</button>
+                        <button id="get-dtcs-btn" class="btn-primary" disabled>Get DTCs</button>
                     </div>
                 </div>
 
-                <!-- Data Display -->
-                <div id="data-table-container">
-                    <div class="no-data">
-                        Complete the steps above to view data.
-                    </div>
+                <!-- DTC Display -->
+                <div id="dtc-table-container" style="display:none;">
+                    <h3>Vehicle Information</h3>
+                    <div id="vehicle-info" class="info-section"></div>
+
+                    <h3>Diagnostic Trouble Codes</h3>
+                    <div id="dtc-table"></div>
                 </div>
 
-                <!-- Real-time Streaming Panel -->
+                <!-- Real-time Data Monitoring Panel -->
                 <div id="stream-panel" class="stream-panel">
                     <div class="stream-header">
                         <div class="stream-title">Real-time Data Monitoring</div>
@@ -581,7 +580,14 @@
                     </div>
 
                     <div class="step-description">
-                        GDS2 must be at <strong>Data Display</strong> page. This will periodically click Create Report and detect parameter changes.
+                        Select a data category to monitor. GDS2 will automatically navigate from Data List to Data Display and start monitoring.
+                    </div>
+
+                    <div class="control-row" style="margin-bottom: 15px;">
+                        <label>Data Category:</label>
+                        <select id="stream-data-select" disabled>
+                            <option value="">Complete Step 2 first</option>
+                        </select>
                     </div>
 
                     <div class="control-row" style="margin-bottom: 15px;">
@@ -592,7 +598,7 @@
                             <option value="5">5 seconds</option>
                             <option value="10">10 seconds</option>
                         </select>
-                        <button id="start-stream-btn" class="btn-stream">Start Monitoring</button>
+                        <button id="start-stream-btn" class="btn-stream" disabled>Start Monitoring</button>
                         <button id="stop-stream-btn" class="btn-stop" disabled>Stop</button>
                     </div>
 
@@ -699,15 +705,16 @@
                     currentState = data.state;
                     updateState();
 
-                    // Update data select
-                    const select = document.getElementById('data-select');
-                    select.disabled = false;
-                    select.innerHTML = currentDataCategories.map(d =>
+                    // Update monitoring data select
+                    const streamSelect = document.getElementById('stream-data-select');
+                    streamSelect.disabled = false;
+                    streamSelect.innerHTML = currentDataCategories.map(d =>
                         `<option value="${d}">${d}</option>`
                     ).join('');
 
-                    // Enable step 3
-                    document.getElementById('search-btn').disabled = false;
+                    // Enable step 3 and monitoring
+                    document.getElementById('get-dtcs-btn').disabled = false;
+                    document.getElementById('start-stream-btn').disabled = false;
 
                     // Update step styling
                     document.getElementById('step2').classList.remove('active');
@@ -725,23 +732,14 @@
             }
         });
 
-        // Step 3: Search
-        document.getElementById('search-btn').addEventListener('click', async () => {
-            const moduleName = document.getElementById('module-select').value;
-            const dataCategory = document.getElementById('data-select').value;
-
-            if (!moduleName || !dataCategory) return;
-
-            showLoading(`Searching ${dataCategory}...`);
+        // Step 3: Get DTCs
+        document.getElementById('get-dtcs-btn').addEventListener('click', async () => {
+            showLoading('Getting DTCs...');
 
             try {
-                const response = await fetch('/api/search_data', {
+                const response = await fetch('/api/get_dtcs', {
                     method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        module: moduleName,
-                        data_category: dataCategory
-                    })
+                    headers: {'Content-Type': 'application/json'}
                 });
 
                 const data = await response.json();
@@ -749,13 +747,17 @@
                 if (data.success) {
                     currentState = data.state;
                     updateState();
-                    displayReportData(data.report_data);
-                    showSuccess(`Data fetched! GDS2 returned to Data List. You can search another data category.`);
+                    displayDTCData(data);
+                    showSuccess(`Found ${data.dtc_list.length} DTCs. GDS2 returned to Data List.`);
+
+                    // Mark step 3 as completed
+                    document.getElementById('step3').classList.remove('active');
+                    document.getElementById('step3').classList.add('completed');
                 } else {
-                    showError(data.error || 'Failed to search data');
+                    showError(data.error || 'Failed to get DTCs');
                 }
             } catch (error) {
-                showError('Failed to search data: ' + error.message);
+                showError('Failed to get DTCs: ' + error.message);
             } finally {
                 hideLoading();
             }
@@ -811,6 +813,51 @@
                 `;
             } else {
                 container.innerHTML = '<div class="no-data">No data items found in report</div>';
+            }
+        }
+
+        // Display DTC data
+        function displayDTCData(data) {
+            const container = document.getElementById('dtc-table-container');
+            container.style.display = 'block';
+
+            // Display vehicle info
+            const vehicleInfoHtml = `
+                <p><strong>VIN:</strong> ${data.vehicle_info.vin || '-'}</p>
+                <p><strong>Make:</strong> ${data.vehicle_info.make || '-'}</p>
+                <p><strong>Model:</strong> ${data.vehicle_info.model || '-'} (${data.vehicle_info.year || '-'})</p>
+                <p><strong>Engine:</strong> ${data.vehicle_info.engine || '-'}</p>
+            `;
+            document.getElementById('vehicle-info').innerHTML = vehicleInfoHtml;
+
+            // Display DTCs
+            if (data.dtc_list && data.dtc_list.length > 0) {
+                const rows = data.dtc_list.map(dtc => `
+                    <tr>
+                        <td>${dtc.code}</td>
+                        <td>${dtc.module}</td>
+                        <td>${dtc.description}</td>
+                        <td>${dtc.status}</td>
+                    </tr>
+                `).join('');
+
+                document.getElementById('dtc-table').innerHTML = `
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Code</th>
+                                <th>Module</th>
+                                <th>Description</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${rows}
+                        </tbody>
+                    </table>
+                `;
+            } else {
+                document.getElementById('dtc-table').innerHTML = '<div class="no-data">No DTCs found</div>';
             }
         }
 
@@ -940,19 +987,35 @@
 
         // Start streaming
         document.getElementById('start-stream-btn').addEventListener('click', async () => {
+            const dataCategory = document.getElementById('stream-data-select').value;
             const interval = parseFloat(document.getElementById('stream-interval').value);
 
+            if (!dataCategory) {
+                showError('Please select a data category to monitor');
+                return;
+            }
+
+            showLoading('Starting monitoring...');
+
             try {
-                // Start the collector on server
+                // Set the selected data category in backend state
+                // The backend will use this to navigate to the correct Data Display page
                 const response = await fetch('/api/stream/start', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ interval: interval })
+                    body: JSON.stringify({
+                        data_category: dataCategory,
+                        interval: interval
+                    })
                 });
 
                 const data = await response.json();
 
                 if (data.success || data.message) {
+                    // Update current state
+                    currentState = data.state;
+                    updateState();
+
                     // Connect to SSE
                     connectSSE();
 
@@ -960,12 +1023,13 @@
                     document.getElementById('start-stream-btn').disabled = true;
                     document.getElementById('stop-stream-btn').disabled = false;
                     document.getElementById('stream-interval').disabled = true;
+                    document.getElementById('stream-data-select').disabled = true;
                     document.getElementById('stream-indicator').classList.add('active');
                     document.getElementById('stream-status-text').textContent = 'Running';
                     document.getElementById('changes-log').style.display = 'block';
                     document.getElementById('stream-data-container').style.display = 'block';
 
-                    showSuccess('Real-time monitoring started!');
+                    showSuccess(`Monitoring "${dataCategory}" - GDS2 navigated to Data Display`);
                 } else {
                     showError(data.error || 'Failed to start streaming');
                 }
@@ -976,6 +1040,8 @@
 
         // Stop streaming
         document.getElementById('stop-stream-btn').addEventListener('click', async () => {
+            showLoading('Stopping monitoring...');
+
             try {
                 // Disconnect SSE
                 if (eventSource) {
@@ -983,18 +1049,26 @@
                     eventSource = null;
                 }
 
-                // Stop the collector on server
-                await fetch('/api/stream/stop', { method: 'POST' });
+                // Stop the collector on server (backend will click Back button)
+                const response = await fetch('/api/stream/stop', { method: 'POST' });
+                const data = await response.json();
+
+                // Update current state
+                if (data.state) {
+                    currentState = data.state;
+                    updateState();
+                }
 
                 // Update UI
                 streamingActive = false;
                 document.getElementById('start-stream-btn').disabled = false;
                 document.getElementById('stop-stream-btn').disabled = true;
                 document.getElementById('stream-interval').disabled = false;
+                document.getElementById('stream-data-select').disabled = false;
                 document.getElementById('stream-indicator').classList.remove('active');
                 document.getElementById('stream-status-text').textContent = 'Stopped';
 
-                showSuccess('Real-time monitoring stopped.');
+                showSuccess('Monitoring stopped - GDS2 returned to Data List');
             } catch (error) {
                 showError('Failed to stop streaming: ' + error.message);
             }

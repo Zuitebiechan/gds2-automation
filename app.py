@@ -769,6 +769,86 @@ def fetch_categories():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/api/get_dtcs', methods=['POST'])
+def get_dtcs():
+    """
+    Step 3: Get DTCs (Diagnostic Trouble Codes).
+    Assumes GDS2 is at Data List.
+    Selects "Vehicle DTC Information", creates report, parses DTCs, clicks Back.
+    """
+    try:
+        logger.info("=== Step 3: Get DTCs ===")
+        logger.info("Assumption: GDS2 is at Data List")
+
+        if app_state.gds2_state != GDS2State.DATA_LIST.value:
+            return jsonify({
+                "error": f"GDS2 must be at Data List page. Current state: {app_state.gds2_state}"
+            }), 400
+
+        if not app_state.current_module:
+            return jsonify({"error": "No module selected. Please complete Step 2 first."}), 400
+
+        module_name = app_state.current_module
+
+        # Find "Vehicle DTC Information" data category
+        # This is the standard data category for reading DTCs
+        dtc_category = "Vehicle DTC Information"
+        target_index = controller.mapping.get_data_category_index("current_vehicle", module_name, dtc_category)
+
+        if target_index is None:
+            # Try alternative names
+            for alt_name in ["Vehicle DTC and ID Information", "DTC Information", "Vehicle DTCs"]:
+                target_index = controller.mapping.get_data_category_index("current_vehicle", module_name, alt_name)
+                if target_index is not None:
+                    dtc_category = alt_name
+                    break
+
+        if target_index is None:
+            return jsonify({"error": "Could not find DTC data category. Please ensure vehicle supports DTC reading."}), 400
+
+        logger.info(f"Found DTC category: {dtc_category} at index {target_index}")
+
+        # Navigate to DTC display
+        report_path = controller.navigate_to_data_display(
+            module_name, dtc_category, app_state.data_list_focus_index
+        )
+
+        if not report_path:
+            return jsonify({"error": "Failed to create DTC report"}), 500
+
+        # Parse DTC report
+        from src.utils.report_parser import GDS2ReportParser
+        parser = GDS2ReportParser()
+        dtc_data = parser.parse_dtc_report(report_path)
+
+        # Click Back to return to Data List
+        logger.info("Clicking Back to return to Data List...")
+        success = controller.click_back_button()
+        if not success:
+            return jsonify({"error": "Failed to click Back button"}), 500
+
+        time.sleep(1.5)
+
+        # Update state
+        app_state.gds2_state = GDS2State.DATA_LIST.value
+        app_state.data_list_focus_index = target_index
+
+        logger.info(f"Get DTCs complete. Found {len(dtc_data['dtc_list'])} DTCs. GDS2 returned to Data List.")
+
+        return jsonify({
+            "success": True,
+            "vehicle_info": dtc_data.get("vehicle_info", {}),
+            "dtc_list": dtc_data.get("dtc_list", []),
+            "module_status": dtc_data.get("module_status", []),
+            "report_path": report_path,
+            "state": asdict(app_state)
+        })
+
+    except Exception as e:
+        logger.exception("Get DTCs failed")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/api/search_data', methods=['POST'])
 def search_data():
     """
@@ -1321,16 +1401,26 @@ def start_streaming():
 
     data = request.json or {}
     interval = data.get('interval', 3.0)
+    data_category = data.get('data_category')  # Get data category from frontend
 
     try:
         if streaming_collector and streaming_collector.is_running:
             return jsonify({"error": "Streaming already running"}), 400
 
-        # Check if user has selected a data category in Step 3
-        if not app_state.current_data_category or not app_state.current_module:
+        # Check if data category is provided
+        if not data_category:
             return jsonify({
-                "error": "Please complete Step 3 first: select a module and data category"
+                "error": "Please select a data category to monitor"
             }), 400
+
+        # Check if we have module info from Step 2
+        if not app_state.current_module:
+            return jsonify({
+                "error": "Please complete Step 2 first: fetch categories"
+            }), 400
+
+        # Update app state with selected data category
+        app_state.current_data_category = data_category
 
         # Check current GDS2 state
         if app_state.gds2_state != GDS2State.DATA_LIST.value:
@@ -1415,7 +1505,7 @@ def start_streaming():
 
 @app.route('/api/stream/stop', methods=['POST'])
 def stop_streaming():
-    """Stop real-time data streaming."""
+    """Stop real-time data streaming and navigate back to Data List."""
     global streaming_collector
 
     try:
@@ -1423,7 +1513,23 @@ def stop_streaming():
             streaming_collector.stop()
             streaming_collector = None
             logger.info("Stopped real-time streaming")
-            return jsonify({"success": True, "message": "Streaming stopped"})
+
+            # Click Back button to return to Data List
+            if app_state.gds2_state == GDS2State.DATA_DISPLAY.value:
+                logger.info("Clicking Back to return to Data List...")
+                success = controller.click_back_button()
+                if success:
+                    time.sleep(1.5)
+                    app_state.gds2_state = GDS2State.DATA_LIST.value
+                    logger.info("Returned to Data List")
+                else:
+                    logger.warning("Failed to click Back button")
+
+            return jsonify({
+                "success": True,
+                "message": "Streaming stopped and returned to Data List",
+                "state": asdict(app_state)
+            })
         else:
             return jsonify({"message": "Streaming was not running"})
 
