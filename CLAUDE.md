@@ -1,7 +1,7 @@
 # RPA_demo Project Memory
 
-**Last Updated:** 2026-01-26
-**Status:** Production Ready - Web UI + CLI with Hybrid Automation
+**Last Updated:** 2026-01-28
+**Status:** Production Ready - Web UI + CLI with Hybrid Automation + Real-time Monitoring
 
 ---
 
@@ -35,9 +35,10 @@ This project uses **RPA (Robotic Process Automation) + AI** to automate vehicle 
 - **Architecture:** Hybrid approach combining PyAutoGUI+OpenCV (buttons) with keyboard navigation (lists)
 
 ### Confirmed Working Workflows
-1. **Web UI 3-Step Workflow** - Fetch Modules → Fetch Categories → Search Data
-2. **Read Vehicle DTC** - Read all DTCs from vehicle (31 DTCs from HTML report)
-3. **Read Data Display** - Read data from specific module and category (e.g., Engine Control Module → Misfire Data)
+1. **Web UI 3-Step Workflow** - Fetch Modules → Fetch Categories → Get DTCs
+2. **Real-time Data Monitoring** - Select data category, monitor parameter changes via SSE
+3. **Read Vehicle DTC** - Read all DTCs from vehicle (31 DTCs from HTML report)
+4. **Read Data Display** - Read data from specific module and category (e.g., Engine Control Module → Misfire Data)
 
 ### Assumptions (Confirmed Working)
 - GDS2 is already open at Main Menu
@@ -138,6 +139,10 @@ RPA_demo/
 │   │   ├── read_vehicle_dtc.py   # Read DTC workflow (Page Objects)
 │   │   └── read_data_display.py  # Read Data Display (Keyboard+Discovery)
 │   │
+│   ├── streaming/                # Real-time data streaming
+│   │   ├── __init__.py
+│   │   └── realtime_collector.py # Background data collection via HTML reports
+│   │
 │   ├── vision/                   # Vision features
 │   │   ├── __init__.py
 │   │   ├── screenshot_comparator.py  # OpenCV screenshot comparison
@@ -197,7 +202,8 @@ RPA_demo/
 | `src/workflows/base_workflow.py` | PyAutoGUI+OpenCV button/device clicking |
 | `src/workflows/read_data_display.py` | Main workflow with keyboard navigation |
 | `src/workflows/read_vehicle_dtc.py` | Legacy DTC reading (Page Objects) |
-| `src/utils/report_parser.py` | HTML report parsing |
+| `src/streaming/realtime_collector.py` | Real-time data streaming via HTML reports |
+| `src/utils/report_parser.py` | HTML report parsing (data items + DTCs) |
 | `mappings/current_vehicle.json` | Auto-generated module/data mappings |
 | `images/buttons/*.png` | Template images for button detection |
 | `images/devices/*.png` | Template images for device selection |
@@ -278,12 +284,37 @@ self.driver.wait_for_element(Loc.DTCPage.CLEAR_DTCS_BTN)
 More reliable than UI scraping:
 
 ```python
-from src.utils.report_parser import DTCReportParser
+from src.utils.report_parser import GDS2ReportParser
 
-parser = DTCReportParser()
-result = parser.parse_dtc_report(report_path)
+parser = GDS2ReportParser()
+
+# Parse DTCs
+dtc_data = parser.parse_dtc_report(report_path)
 # Returns: vehicle_info, module_status, dtc_list
+
+# Parse data items
+data = parser.parse_data_display_report(report_path)
+# Returns: vehicle_info, data_items
 ```
+
+### 6. Real-time Streaming Architecture
+
+```python
+from src.streaming import RealtimeDataCollector
+
+collector = RealtimeDataCollector(
+    on_data_change=callback,   # Called when parameters change
+    on_full_data=callback,     # Called with all parameters
+    on_error=callback,         # Called on errors
+    interval_seconds=3.0       # Collection interval
+)
+collector.start()  # Starts background thread
+# ... periodically clicks Create Report, parses HTML
+collector.stop()   # Stops background thread
+```
+
+**Duplicate Parameter Handling:**
+- Parameters with same name but different units (e.g., "Turbocharger Bypass Solenoid Valve Command" with "On" vs "0%") are tracked separately using `unique_key = name|unit`
 
 ---
 
@@ -320,9 +351,18 @@ Create Report (PyAutoGUI)
 
 - [x] **Web UI** (NEW)
   - [x] Flask backend with REST API
-  - [x] 3-step workflow interface
+  - [x] 3-step workflow interface (Fetch Modules → Fetch Categories → Get DTCs)
   - [x] Real-time state tracking
   - [x] Data table display with CSV download
+  - [x] DTC parsing and display from HTML reports
+
+- [x] **Real-time Data Monitoring** (NEW)
+  - [x] Server-Sent Events (SSE) for real-time updates
+  - [x] Background data collection via Create Report + HTML parsing
+  - [x] Parameter change detection with unique key (name + unit)
+  - [x] Automatic HTML report cleanup (keeps latest 50)
+  - [x] Auto-navigate from Data List to Data Display on start
+  - [x] Auto-return to Data List on stop
 
 - [x] **Discovery System**
   - [x] VehicleDiscovery - enumerate list items with pywinauto
@@ -384,12 +424,24 @@ The Web UI provides a guided 3-step workflow for data collection:
 |------|--------|------------------|----------------|-------------|
 | **1** | **Fetch Modules** | Main Menu | Module List | Navigate to Module List, discover all modules |
 | **2** | **Fetch Data Categories** | Module List | Data List | Select module, navigate to Data List, discover categories |
-| **3** | **Search** | Data List | Data List | Select data, fetch report, click Back |
+| **3** | **Get DTCs** | Data List | Data List | Select data, fetch report, parse DTCs, click Back |
 
 **Key Features:**
 - Each step clearly indicates what GDS2 state is expected
+- Step 3 parses HTML report for DTCs and returns structured data
 - Step 3 can be repeated to fetch different data categories
 - After Step 3, GDS2 returns to Data List for continuous querying
+
+### Real-time Data Monitoring
+
+The Web UI also provides real-time parameter monitoring:
+
+1. Complete Steps 1 & 2 to discover modules and data categories
+2. Select a data category from the monitoring dropdown
+3. Click **Start Monitoring** - GDS2 auto-navigates to Data Display
+4. System periodically clicks Create Report and parses HTML for all parameters
+5. Parameter changes are detected and streamed to Web UI via SSE
+6. Click **Stop** - GDS2 auto-returns to Data List
 
 ### Workflow Diagram
 
@@ -419,10 +471,15 @@ The Web UI provides a guided 3-step workflow for data collection:
 |----------|--------|-------------|
 | `/api/fetch_modules` | POST | Step 1: Discover modules |
 | `/api/fetch_categories` | POST | Step 2: Select module, discover categories |
-| `/api/search_data` | POST | Step 3: Fetch data, create report, back |
+| `/api/search_data` | POST | Get DTCs: Fetch data, parse DTCs, create report, back |
+| `/api/get_dtcs` | POST | Get DTCs (alternative): Fetch DTC-specific data |
 | `/api/modules` | GET | Get cached module list |
 | `/api/data_categories` | GET | Get cached data categories |
 | `/api/state` | GET | Get current GDS2 state |
+| `/api/stream/start` | POST | Start real-time monitoring (with data_category) |
+| `/api/stream/stop` | POST | Stop monitoring, return to Data List |
+| `/api/stream/events` | GET | SSE endpoint for real-time data |
+| `/api/stream/status` | GET | Get streaming status |
 
 ---
 
@@ -767,11 +824,24 @@ python -c "from src.workflows.base_workflow import BaseWorkflow; print('OK')"
 
 ---
 
-## Recent Changes (2026-01-26)
+## Recent Changes (2026-01-28)
 
 ### Major Updates
+1. **Real-time Data Monitoring** - Background data streaming via SSE
+   - Select data category from dropdown, auto-navigate to Data Display
+   - Periodically click Create Report and parse HTML for all parameters
+   - Detect parameter changes and stream to Web UI
+   - Auto-return to Data List on stop
+2. **Get DTCs** - Step 3 renamed, now parses HTML for DTC information
+   - Returns vehicle_info, dtc_list, module_status alongside data items
+   - Displays DTCs table (Code, Module, Description, Status) in Web UI
+3. **Duplicate Parameter Handling** - Unique key (name|unit) for parameters with same name but different units
+4. **Auto HTML Report Cleanup** - Keeps latest 50 HTML reports to prevent disk space issues
+5. **Dual Device Template Matching** - Try highlighted SM2 USB template first, fall back to normal
+
+### Previous Changes (2026-01-26)
 1. **Flask Web UI** - New visual interface for GDS2 automation
-   - 3-step workflow: Fetch Modules → Fetch Categories → Search Data
+   - 3-step workflow: Fetch Modules → Fetch Categories → Get DTCs
    - Real-time state tracking and display
    - Data table with CSV download
 2. **Keyboard Navigation** - Replaced coordinate-based clicking with DOWN+ENTER navigation
@@ -780,7 +850,16 @@ python -c "from src.workflows.base_workflow import BaseWorkflow; print('OK')"
 5. **Warning Dialog Handling** - Automatic detection and dismissal of OK button popups
 6. **CLI Integration** - Full command-line interface with `web`, `demo`, `inspect`, `discover` commands
 
-### Files Added
+### Files Added (2026-01-28)
+- `src/streaming/__init__.py` - Streaming module
+- `src/streaming/realtime_collector.py` - Background data collection
+- `images/devices/sm2_usb_highlight.png` - Highlighted device template
+- `images/manifest.json` - Template images manifest
+- `images/buttons/back.png`, `home.png`, `refresh.png`, etc. - Additional button templates
+- `images/list_items/*.png` - List item templates
+- `images/pages/*.png` - Page header templates
+
+### Files Added (2026-01-26)
 - `app.py` - Flask Web UI backend
 - `templates/index.html` - Web UI frontend
 - `src/discovery/vehicle_mapping.py` - Discovery system

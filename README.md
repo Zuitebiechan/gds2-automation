@@ -11,20 +11,25 @@ This project automates vehicle diagnostic workflows in GDS2 using a **hybrid aut
 - **Flask Web UI** for visual interaction (recommended)
 
 **Current Capabilities:**
-1. **Web UI** - 3-step visual workflow for data collection
-2. Read Vehicle DTCs (all modules)
-3. Read Data Display from any module/category (Engine Data, Misfire Data, etc.)
+1. **Web UI** - 3-step workflow for data collection + real-time monitoring
+2. **Get DTCs** - Parse HTML reports for Diagnostic Trouble Codes
+3. **Real-time Data Monitoring** - Stream parameter changes via SSE
+4. Read Vehicle DTCs (all modules)
+5. Read Data Display from any module/category (Engine Data, Misfire Data, etc.)
 
 ## Features
 
 - **Web UI** - Visual 3-step workflow interface with real-time state tracking
+- **Get DTCs** - Parse HTML reports for DTCs (Code, Module, Description, Status)
+- **Real-time Data Monitoring** - Stream parameter changes via Server-Sent Events (SSE)
 - **Hybrid Automation** - Combines template matching, keyboard navigation, and discovery
 - **On-Demand Discovery** - Automatically discovers and maps module/data lists using pywinauto
 - **Template Matching** - Fast button/device detection (~1 second vs ~60 seconds with VLM)
 - **Keyboard Navigation** - Reliable list item selection (DOWN N times + ENTER)
 - **JSON Persistence** - Stores discovered mappings for reuse across sessions
-- **HTML Report Parsing** - Extract structured data from GDS2-generated reports
+- **HTML Report Parsing** - Extract structured data and DTCs from GDS2-generated reports
 - **Auto Dialog Handling** - Automatically dismisses warning popups
+- **Auto Cleanup** - Keeps latest 50 HTML reports to prevent disk space issues
 - **DPI-Aware** - Handles Windows display scaling automatically
 
 ## Demo Results
@@ -95,9 +100,18 @@ Open http://localhost:8080 in your browser and follow the 3-step workflow:
 |------|--------|------------|----------|-------------|
 | 1 | **Fetch Modules** | Main Menu | Module List | Discover all modules |
 | 2 | **Fetch Data Categories** | Module List | Data List | Select module, discover categories |
-| 3 | **Search** | Data List | Data List | Fetch data, create report, back |
+| 3 | **Get DTCs** | Data List | Data List | Fetch data, parse DTCs, create report, back |
 
-Step 3 can be repeated to fetch different data categories without restarting.
+Step 3 parses HTML report for DTCs and data items, then returns to Data List.
+
+### Real-time Data Monitoring
+
+After completing Steps 1 & 2:
+1. Select a data category from the monitoring dropdown
+2. Click **Start Monitoring** - GDS2 auto-navigates to Data Display
+3. System periodically clicks Create Report and parses HTML
+4. Parameter changes are streamed to Web UI via SSE
+5. Click **Stop** - GDS2 auto-returns to Data List
 
 ### CLI Mode
 
@@ -206,6 +220,8 @@ RPA_demo/
 │   │   ├── base_workflow.py       # PyAutoGUI+OpenCV base
 │   │   ├── read_data_display.py   # Main workflow (keyboard+discovery)
 │   │   └── read_vehicle_dtc.py    # Legacy DTC workflow
+│   ├── streaming/           # Real-time data streaming
+│   │   └── realtime_collector.py  # Background data collection
 │   ├── vision/              # Vision features
 │   │   ├── vlm_finder.py         # VLM fallback (optional)
 │   │   └── screenshot_comparator.py
@@ -317,6 +333,9 @@ RPA_demo/
 - [x] Keyboard navigation for lists
 - [x] Automatic dialog handling
 - [x] **Flask Web UI with 3-step workflow**
+- [x] **Get DTCs with HTML parsing**
+- [x] **Real-time Data Monitoring via SSE**
+- [x] **Auto HTML report cleanup**
 - [ ] Clear Vehicle DTCs
 - [ ] Read Module-specific DTCs
 - [ ] VLM fallback for unknown elements
@@ -336,5 +355,5 @@ MIT License
 
 ---
 
-**Last Updated:** 2026-01-26
+**Last Updated:** 2026-01-28
 **Status:** Production Ready
