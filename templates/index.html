@@ -308,6 +308,154 @@
         .download-btn {
             margin-top: 20px;
         }
+
+        /* Real-time Streaming Styles */
+        .stream-panel {
+            margin-top: 30px;
+            padding: 20px;
+            border: 2px solid #9b59b6;
+            border-radius: 8px;
+            background: #faf5ff;
+        }
+
+        .stream-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 15px;
+        }
+
+        .stream-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #9b59b6;
+        }
+
+        .stream-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .stream-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #ccc;
+        }
+
+        .stream-indicator.active {
+            background: #27ae60;
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        .btn-stream {
+            background: #9b59b6;
+            color: white;
+        }
+
+        .btn-stream:hover:not(:disabled) {
+            background: #8e44ad;
+        }
+
+        .btn-stop {
+            background: #e74c3c;
+            color: white;
+        }
+
+        .btn-stop:hover:not(:disabled) {
+            background: #c0392b;
+        }
+
+        .stream-stats {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 15px;
+            font-size: 13px;
+        }
+
+        .stream-stat {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .stream-stat-label {
+            color: #7f8c8d;
+        }
+
+        .stream-stat-value {
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        .changes-log {
+            max-height: 200px;
+            overflow-y: auto;
+            background: white;
+            border: 1px solid #e1e8ed;
+            border-radius: 6px;
+            margin-bottom: 15px;
+        }
+
+        .change-item {
+            padding: 8px 12px;
+            border-bottom: 1px solid #f1f1f1;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .change-item:last-child {
+            border-bottom: none;
+        }
+
+        .change-time {
+            color: #95a5a6;
+            font-size: 11px;
+            min-width: 60px;
+        }
+
+        .change-param {
+            font-weight: 600;
+            color: #2c3e50;
+            min-width: 200px;
+        }
+
+        .change-old {
+            color: #e74c3c;
+            text-decoration: line-through;
+        }
+
+        .change-arrow {
+            color: #7f8c8d;
+        }
+
+        .change-new {
+            color: #27ae60;
+            font-weight: 600;
+        }
+
+        .stream-data-table {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .highlight-change {
+            animation: highlightRow 2s ease-out;
+        }
+
+        @keyframes highlightRow {
+            0% { background-color: #ffffcc; }
+            100% { background-color: transparent; }
+        }
     </style>
 </head>
 <body>
@@ -419,6 +567,62 @@
                 <div id="data-table-container">
                     <div class="no-data">
                         Complete the steps above to view data.
+                    </div>
+                </div>
+
+                <!-- Real-time Streaming Panel -->
+                <div id="stream-panel" class="stream-panel">
+                    <div class="stream-header">
+                        <div class="stream-title">Real-time Data Monitoring</div>
+                        <div class="stream-status">
+                            <div id="stream-indicator" class="stream-indicator"></div>
+                            <span id="stream-status-text">Stopped</span>
+                        </div>
+                    </div>
+
+                    <div class="step-description">
+                        GDS2 must be at <strong>Data Display</strong> page. This will periodically click Create Report and detect parameter changes.
+                    </div>
+
+                    <div class="control-row" style="margin-bottom: 15px;">
+                        <label>Interval:</label>
+                        <select id="stream-interval">
+                            <option value="2">2 seconds</option>
+                            <option value="3" selected>3 seconds</option>
+                            <option value="5">5 seconds</option>
+                            <option value="10">10 seconds</option>
+                        </select>
+                        <button id="start-stream-btn" class="btn-stream">Start Monitoring</button>
+                        <button id="stop-stream-btn" class="btn-stop" disabled>Stop</button>
+                    </div>
+
+                    <div class="stream-stats">
+                        <div class="stream-stat">
+                            <span class="stream-stat-label">Collections:</span>
+                            <span id="stream-collections" class="stream-stat-value">0</span>
+                        </div>
+                        <div class="stream-stat">
+                            <span class="stream-stat-label">Parameters:</span>
+                            <span id="stream-params" class="stream-stat-value">0</span>
+                        </div>
+                        <div class="stream-stat">
+                            <span class="stream-stat-label">Changes:</span>
+                            <span id="stream-changes" class="stream-stat-value">0</span>
+                        </div>
+                    </div>
+
+                    <div id="changes-log" class="changes-log" style="display: none;">
+                        <div class="change-item" style="background: #f8f9fa; font-weight: 600;">
+                            <span class="change-time">Time</span>
+                            <span class="change-param">Parameter</span>
+                            <span>Old Value</span>
+                            <span class="change-arrow">-></span>
+                            <span>New Value</span>
+                        </div>
+                    </div>
+
+                    <div id="stream-data-container" class="stream-data-table" style="display: none;">
+                        <!-- Real-time data table will be inserted here -->
                     </div>
                 </div>
             </main>
@@ -724,6 +928,232 @@
 
         // Initialize
         checkCachedData();
+
+        // =============================================================
+        // Real-time Streaming
+        // =============================================================
+
+        let eventSource = null;
+        let streamingActive = false;
+        let totalChanges = 0;
+        let currentStreamData = {};
+
+        // Start streaming
+        document.getElementById('start-stream-btn').addEventListener('click', async () => {
+            const interval = parseFloat(document.getElementById('stream-interval').value);
+
+            try {
+                // Start the collector on server
+                const response = await fetch('/api/stream/start', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ interval: interval })
+                });
+
+                const data = await response.json();
+
+                if (data.success || data.message) {
+                    // Connect to SSE
+                    connectSSE();
+
+                    // Update UI
+                    document.getElementById('start-stream-btn').disabled = true;
+                    document.getElementById('stop-stream-btn').disabled = false;
+                    document.getElementById('stream-interval').disabled = true;
+                    document.getElementById('stream-indicator').classList.add('active');
+                    document.getElementById('stream-status-text').textContent = 'Running';
+                    document.getElementById('changes-log').style.display = 'block';
+                    document.getElementById('stream-data-container').style.display = 'block';
+
+                    showSuccess('Real-time monitoring started!');
+                } else {
+                    showError(data.error || 'Failed to start streaming');
+                }
+            } catch (error) {
+                showError('Failed to start streaming: ' + error.message);
+            }
+        });
+
+        // Stop streaming
+        document.getElementById('stop-stream-btn').addEventListener('click', async () => {
+            try {
+                // Disconnect SSE
+                if (eventSource) {
+                    eventSource.close();
+                    eventSource = null;
+                }
+
+                // Stop the collector on server
+                await fetch('/api/stream/stop', { method: 'POST' });
+
+                // Update UI
+                streamingActive = false;
+                document.getElementById('start-stream-btn').disabled = false;
+                document.getElementById('stop-stream-btn').disabled = true;
+                document.getElementById('stream-interval').disabled = false;
+                document.getElementById('stream-indicator').classList.remove('active');
+                document.getElementById('stream-status-text').textContent = 'Stopped';
+
+                showSuccess('Real-time monitoring stopped.');
+            } catch (error) {
+                showError('Failed to stop streaming: ' + error.message);
+            }
+        });
+
+        // Connect to SSE endpoint
+        function connectSSE() {
+            if (eventSource) {
+                eventSource.close();
+            }
+
+            eventSource = new EventSource('/api/stream/events');
+            streamingActive = true;
+
+            eventSource.addEventListener('connected', (e) => {
+                console.log('SSE connected:', JSON.parse(e.data));
+            });
+
+            eventSource.addEventListener('data', (e) => {
+                const data = JSON.parse(e.data);
+                handleFullData(data);
+            });
+
+            eventSource.addEventListener('changes', (e) => {
+                const data = JSON.parse(e.data);
+                handleChanges(data);
+            });
+
+            eventSource.addEventListener('error', (e) => {
+                if (e.data) {
+                    const data = JSON.parse(e.data);
+                    console.error('Stream error:', data.message);
+                }
+            });
+
+            eventSource.onerror = (e) => {
+                console.error('SSE connection error');
+                if (streamingActive) {
+                    // Try to reconnect after 2 seconds
+                    setTimeout(() => {
+                        if (streamingActive) {
+                            connectSSE();
+                        }
+                    }, 2000);
+                }
+            };
+        }
+
+        // Handle full data update
+        function handleFullData(data) {
+            document.getElementById('stream-collections').textContent = data.count ?
+                document.getElementById('stream-collections').textContent : '0';
+
+            // Update collection count (we need to fetch status separately)
+            fetchStreamStatus();
+
+            // Store current data
+            if (data.parameters) {
+                document.getElementById('stream-params').textContent = data.parameters.length;
+
+                // Update data table
+                updateStreamDataTable(data.parameters);
+
+                // Store for reference
+                data.parameters.forEach(p => {
+                    currentStreamData[p.name] = p;
+                });
+            }
+        }
+
+        // Handle parameter changes
+        function handleChanges(data) {
+            if (!data.changes || data.changes.length === 0) return;
+
+            totalChanges += data.changes.length;
+            document.getElementById('stream-changes').textContent = totalChanges;
+
+            const log = document.getElementById('changes-log');
+
+            data.changes.forEach(change => {
+                const time = new Date(change.timestamp).toLocaleTimeString();
+
+                const item = document.createElement('div');
+                item.className = 'change-item';
+                item.innerHTML = `
+                    <span class="change-time">${time}</span>
+                    <span class="change-param">${change.parameter}</span>
+                    <span class="change-old">${change.old_value}</span>
+                    <span class="change-arrow">-></span>
+                    <span class="change-new">${change.new_value} ${change.unit || ''}</span>
+                `;
+
+                // Insert after header
+                if (log.children.length > 1) {
+                    log.insertBefore(item, log.children[1]);
+                } else {
+                    log.appendChild(item);
+                }
+
+                // Keep only last 50 changes
+                while (log.children.length > 51) {
+                    log.removeChild(log.lastChild);
+                }
+
+                // Highlight changed row in data table
+                highlightParameter(change.parameter);
+            });
+        }
+
+        // Update the streaming data table
+        function updateStreamDataTable(parameters) {
+            const container = document.getElementById('stream-data-container');
+
+            const rows = parameters.map(p => `
+                <tr id="stream-row-${p.name.replace(/[^a-zA-Z0-9]/g, '_')}">
+                    <td>${p.name}</td>
+                    <td>${p.value}</td>
+                    <td>${p.unit}</td>
+                </tr>
+            `).join('');
+
+            container.innerHTML = `
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Parameter</th>
+                            <th>Value</th>
+                            <th>Unit</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rows}
+                    </tbody>
+                </table>
+            `;
+        }
+
+        // Highlight a parameter row when it changes
+        function highlightParameter(paramName) {
+            const rowId = 'stream-row-' + paramName.replace(/[^a-zA-Z0-9]/g, '_');
+            const row = document.getElementById(rowId);
+            if (row) {
+                row.classList.remove('highlight-change');
+                // Trigger reflow
+                void row.offsetWidth;
+                row.classList.add('highlight-change');
+            }
+        }
+
+        // Fetch stream status
+        async function fetchStreamStatus() {
+            try {
+                const response = await fetch('/api/stream/status');
+                const data = await response.json();
+                document.getElementById('stream-collections').textContent = data.collection_count || 0;
+            } catch (error) {
+                console.error('Failed to fetch stream status:', error);
+            }
+        }
     </script>
 </body>
 </html>
