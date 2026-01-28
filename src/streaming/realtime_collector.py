@@ -189,21 +189,24 @@ class RealtimeDataCollector:
 
                 self._collection_count += 1
 
-                # Step 4: Detect changes
+                # Step 4: Clean up old reports (keep latest 50)
+                self._cleanup_old_reports(keep_latest=50)
+
+                # Step 5: Detect changes
                 changes = self._detect_changes(params)
 
-                # Step 5: Update stored values (use unique_key to handle duplicate names)
+                # Step 6: Update stored values (use unique_key to handle duplicate names)
                 for p in params:
                     self._last_values[p.unique_key] = p
 
-                # Step 6: Call callbacks
+                # Step 7: Call callbacks
                 if self.on_full_data:
                     self.on_full_data(params)
 
                 if changes and self.on_data_change:
                     self.on_data_change(changes)
 
-                # Step 7: Wait for next interval
+                # Step 8: Wait for next interval
                 # Subtract time already spent (~1.5s for file wait)
                 remaining_wait = max(0, self.interval_seconds - 1.5)
                 time.sleep(remaining_wait)
@@ -300,6 +303,43 @@ class RealtimeDataCollector:
         except Exception as e:
             logger.error(f"Error parsing HTML report: {e}")
             return []
+
+    def _cleanup_old_reports(self, keep_latest: int = 50):
+        """
+        Clean up old HTML reports to prevent disk space issues.
+
+        Keeps only the most recent N report files and deletes older ones.
+        This prevents disk space from filling up during long monitoring sessions.
+
+        Args:
+            keep_latest: Number of recent reports to keep (default: 50)
+        """
+        try:
+            # Get all HTML report files
+            reports = list(self._report_dir.glob('Data Display_*.html'))
+
+            if len(reports) <= keep_latest:
+                # No cleanup needed
+                return
+
+            # Sort by modification time (newest first)
+            reports.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+
+            # Delete old reports beyond keep_latest
+            deleted_count = 0
+            for old_report in reports[keep_latest:]:
+                try:
+                    old_report.unlink()
+                    deleted_count += 1
+                except Exception as e:
+                    # File might be locked by browser or other process
+                    logger.debug(f"Could not delete {old_report.name}: {e}")
+
+            if deleted_count > 0:
+                logger.info(f"Cleaned up {deleted_count} old report(s), kept latest {keep_latest}")
+
+        except Exception as e:
+            logger.error(f"Error cleaning up old reports: {e}")
 
     def _detect_changes(self, new_params: List[ParameterValue]) -> List[DataChange]:
         """Detect changes between new and previous parameter values."""
