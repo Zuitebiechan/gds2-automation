@@ -246,6 +246,10 @@ class RealtimeDataCollector:
 
                 pyautogui.click(center_x, center_y)
                 logger.debug(f"Clicked Create Report at ({center_x}, {center_y})")
+
+                # Close auto-opened browser window
+                self._close_auto_opened_browser()
+
                 return True
             else:
                 logger.warning(f"Create Report button not found (confidence: {max_val:.3f})")
@@ -254,6 +258,44 @@ class RealtimeDataCollector:
         except Exception as e:
             logger.error(f"Error clicking Create Report: {e}")
             return False
+
+    def _close_auto_opened_browser(self):
+        """
+        Close the browser window that GDS2 automatically opens after creating a report.
+
+        GDS2 automatically opens HTML reports in the default browser. This method
+        attempts to close the newly opened browser window to avoid clutter during
+        continuous monitoring.
+        """
+        try:
+            import time
+            from pywinauto import Application
+
+            # Wait a moment for browser to open
+            time.sleep(1.0)
+
+            # Try to find and close browser windows with "Data Display" in title
+            for browser_name in ["chrome.exe", "msedge.exe", "firefox.exe", "iexplore.exe"]:
+                try:
+                    app = Application(backend="uia").connect(path=browser_name, timeout=1)
+
+                    for window in app.windows():
+                        try:
+                            title = window.window_text()
+                            if "Data Display" in title:
+                                window.close()
+                                logger.debug(f"Closed auto-opened browser window: {title}")
+                                return
+                        except:
+                            continue
+
+                except:
+                    # Browser not running or no matching window
+                    continue
+
+        except Exception as e:
+            # Silently fail - this is a nice-to-have feature
+            logger.debug(f"Could not close browser window: {e}")
 
     def _parse_latest_report(self) -> List[ParameterValue]:
         """Parse the latest HTML report."""
