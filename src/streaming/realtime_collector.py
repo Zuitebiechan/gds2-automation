@@ -37,6 +37,19 @@ class ParameterValue:
     unit: str
     timestamp: datetime = field(default_factory=datetime.now)
 
+    @property
+    def unique_key(self) -> str:
+        """
+        Generate unique key for this parameter.
+
+        Some parameters have the same name but different units:
+        - Turbocharger Bypass Solenoid Valve Command (On/Off state)
+        - Turbocharger Bypass Solenoid Valve Command (0-100% value)
+
+        Using name + unit ensures these are tracked separately.
+        """
+        return f"{self.name}|{self.unit}"
+
     def __str__(self):
         return f"{self.name}: {self.value} {self.unit}"
 
@@ -179,9 +192,9 @@ class RealtimeDataCollector:
                 # Step 4: Detect changes
                 changes = self._detect_changes(params)
 
-                # Step 5: Update stored values
+                # Step 5: Update stored values (use unique_key to handle duplicate names)
                 for p in params:
-                    self._last_values[p.name] = p
+                    self._last_values[p.unique_key] = p
 
                 # Step 6: Call callbacks
                 if self.on_full_data:
@@ -293,8 +306,10 @@ class RealtimeDataCollector:
         changes = []
 
         for p in new_params:
-            if p.name in self._last_values:
-                old = self._last_values[p.name]
+            # Use unique_key (name + unit) to handle duplicate parameter names
+            key = p.unique_key
+            if key in self._last_values:
+                old = self._last_values[key]
                 if old.value != p.value:
                     changes.append(DataChange(
                         parameter=p.name,
