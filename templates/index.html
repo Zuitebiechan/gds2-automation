@@ -546,27 +546,28 @@
                     </div>
                 </div>
 
-                <!-- Step 3: Get DTCs -->
+                <!-- Step 3: Select Data & Search -->
                 <div id="step3" class="step-section">
                     <div class="step-header">
                         <div class="step-number">3</div>
-                        <div class="step-title">Get DTCs</div>
+                        <div class="step-title">Select Data & Search</div>
                     </div>
                     <div class="step-description">
-                        GDS2 must be at <strong>Data List</strong>. Click Get DTCs to read vehicle diagnostic trouble codes and basic information.
+                        GDS2 must be at <strong>Data List</strong>. Select a data category and click Search. GDS2 will fetch the data and return to Data List.
                     </div>
                     <div class="control-row">
-                        <button id="get-dtcs-btn" class="btn-primary" disabled>Get DTCs</button>
+                        <select id="data-select" disabled>
+                            <option value="">Complete Step 2 first</option>
+                        </select>
+                        <button id="search-btn" class="btn-primary" disabled>Search</button>
                     </div>
                 </div>
 
-                <!-- DTC Display -->
-                <div id="dtc-table-container" style="display:none;">
-                    <h3>Vehicle Information</h3>
-                    <div id="vehicle-info" class="info-section"></div>
-
-                    <h3>Diagnostic Trouble Codes</h3>
-                    <div id="dtc-table"></div>
+                <!-- Data Display -->
+                <div id="data-table-container">
+                    <div class="no-data">
+                        Complete the steps above to view data.
+                    </div>
                 </div>
 
                 <!-- Real-time Data Monitoring Panel -->
@@ -705,6 +706,13 @@
                     currentState = data.state;
                     updateState();
 
+                    // Update data select for Step 3
+                    const dataSelect = document.getElementById('data-select');
+                    dataSelect.disabled = false;
+                    dataSelect.innerHTML = currentDataCategories.map(d =>
+                        `<option value="${d}">${d}</option>`
+                    ).join('');
+
                     // Update monitoring data select
                     const streamSelect = document.getElementById('stream-data-select');
                     streamSelect.disabled = false;
@@ -713,7 +721,7 @@
                     ).join('');
 
                     // Enable step 3 and monitoring
-                    document.getElementById('get-dtcs-btn').disabled = false;
+                    document.getElementById('search-btn').disabled = false;
                     document.getElementById('start-stream-btn').disabled = false;
 
                     // Update step styling
@@ -732,14 +740,23 @@
             }
         });
 
-        // Step 3: Get DTCs
-        document.getElementById('get-dtcs-btn').addEventListener('click', async () => {
-            showLoading('Getting DTCs...');
+        // Step 3: Search
+        document.getElementById('search-btn').addEventListener('click', async () => {
+            const moduleName = document.getElementById('module-select').value;
+            const dataCategory = document.getElementById('data-select').value;
+
+            if (!moduleName || !dataCategory) return;
+
+            showLoading(`Searching ${dataCategory}...`);
 
             try {
-                const response = await fetch('/api/get_dtcs', {
+                const response = await fetch('/api/search_data', {
                     method: 'POST',
-                    headers: {'Content-Type': 'application/json'}
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        module: moduleName,
+                        data_category: dataCategory
+                    })
                 });
 
                 const data = await response.json();
@@ -747,17 +764,13 @@
                 if (data.success) {
                     currentState = data.state;
                     updateState();
-                    displayDTCData(data);
-                    showSuccess(`Found ${data.dtc_list.length} DTCs. GDS2 returned to Data List.`);
-
-                    // Mark step 3 as completed
-                    document.getElementById('step3').classList.remove('active');
-                    document.getElementById('step3').classList.add('completed');
+                    displayReportData(data.report_data);
+                    showSuccess(`Data fetched! GDS2 returned to Data List. You can search another data category.`);
                 } else {
-                    showError(data.error || 'Failed to get DTCs');
+                    showError(data.error || 'Failed to search data');
                 }
             } catch (error) {
-                showError('Failed to get DTCs: ' + error.message);
+                showError('Failed to search data: ' + error.message);
             } finally {
                 hideLoading();
             }
@@ -813,51 +826,6 @@
                 `;
             } else {
                 container.innerHTML = '<div class="no-data">No data items found in report</div>';
-            }
-        }
-
-        // Display DTC data
-        function displayDTCData(data) {
-            const container = document.getElementById('dtc-table-container');
-            container.style.display = 'block';
-
-            // Display vehicle info
-            const vehicleInfoHtml = `
-                <p><strong>VIN:</strong> ${data.vehicle_info.vin || '-'}</p>
-                <p><strong>Make:</strong> ${data.vehicle_info.make || '-'}</p>
-                <p><strong>Model:</strong> ${data.vehicle_info.model || '-'} (${data.vehicle_info.year || '-'})</p>
-                <p><strong>Engine:</strong> ${data.vehicle_info.engine || '-'}</p>
-            `;
-            document.getElementById('vehicle-info').innerHTML = vehicleInfoHtml;
-
-            // Display DTCs
-            if (data.dtc_list && data.dtc_list.length > 0) {
-                const rows = data.dtc_list.map(dtc => `
-                    <tr>
-                        <td>${dtc.code}</td>
-                        <td>${dtc.module}</td>
-                        <td>${dtc.description}</td>
-                        <td>${dtc.status}</td>
-                    </tr>
-                `).join('');
-
-                document.getElementById('dtc-table').innerHTML = `
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Code</th>
-                                <th>Module</th>
-                                <th>Description</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${rows}
-                        </tbody>
-                    </table>
-                `;
-            } else {
-                document.getElementById('dtc-table').innerHTML = '<div class="no-data">No DTCs found</div>';
             }
         }
 
