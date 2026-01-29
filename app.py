@@ -1627,17 +1627,39 @@ def get_latest_data():
 
 if __name__ == '__main__':
     import sys
+    import socket
+
     port = 8080
+    host = '0.0.0.0'  # Allow remote access (use '127.0.0.1' for local only)
+
     if '--port' in sys.argv:
         idx = sys.argv.index('--port')
         if idx + 1 < len(sys.argv):
             port = int(sys.argv[idx + 1])
 
+    if '--local' in sys.argv:
+        host = '127.0.0.1'  # Local only mode
+
+    # Get local IP address for display
+    local_ip = '127.0.0.1'
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+    except Exception:
+        pass
+
     print(f"\n{'='*60}")
     print(f"  GDS2 Automation Web UI")
     print(f"{'='*60}")
-    print(f"\n  Open in browser: http://localhost:{port}")
-    print(f"\n  If using proxy, add 'localhost' to bypass list")
+    if host == '0.0.0.0':
+        print(f"\n  Local access:  http://localhost:{port}")
+        print(f"  Remote access: http://{local_ip}:{port}")
+        print(f"\n  Note: Remote access enabled. Make sure firewall allows port {port}.")
+    else:
+        print(f"\n  Open in browser: http://localhost:{port}")
+        print(f"\n  (Local access only. Use without --local for remote access)")
     print(f"{'='*60}\n")
 
-    app.run(debug=True, host='127.0.0.1', port=port, use_reloader=False)
+    app.run(debug=True, host=host, port=port, use_reloader=False)
