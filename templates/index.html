@@ -5,636 +5,566 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GDS2 Automation Dashboard</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
 
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #f5f7fa;
+            background: #f0f2f5;
             color: #2c3e50;
-        }
-
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-
-        header {
-            background: white;
-            padding: 30px;
-            border-radius: 10px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            margin-bottom: 20px;
-        }
-
-        h1 {
-            font-size: 32px;
-            color: #2c3e50;
-            margin-bottom: 10px;
-        }
-
-        .subtitle {
-            color: #7f8c8d;
-            font-size: 16px;
-        }
-
-        .layout {
-            display: grid;
-            grid-template-columns: 300px 1fr;
-            gap: 20px;
-        }
-
-        .sidebar {
-            background: white;
-            padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            height: fit-content;
-        }
-
-        .sidebar h2 {
-            font-size: 18px;
-            margin-bottom: 15px;
-            color: #34495e;
-        }
-
-        .status-item {
-            margin-bottom: 15px;
-            padding: 10px;
-            background: #f8f9fa;
-            border-radius: 5px;
-        }
-
-        .status-label {
-            font-size: 12px;
-            color: #7f8c8d;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-bottom: 5px;
-        }
-
-        .status-value {
             font-size: 14px;
-            font-weight: 600;
-            color: #2c3e50;
         }
+
+        /* Top bar with state */
+        .top-bar {
+            background: #fff;
+            border-bottom: 1px solid #ddd;
+            padding: 12px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .top-bar h1 {
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .state-row {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            font-size: 13px;
+        }
+
+        .state-row .label { color: #888; }
 
         .state-badge {
             display: inline-block;
-            padding: 4px 12px;
-            border-radius: 20px;
+            padding: 3px 10px;
+            border-radius: 4px;
             font-size: 12px;
             font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
         }
-
         .state-main_menu { background: #d4edda; color: #155724; }
         .state-module_list { background: #e2e3e5; color: #383d41; }
         .state-data_list { background: #fff3cd; color: #856404; }
         .state-data_display { background: #cce5ff; color: #004085; }
         .state-unknown { background: #f8d7da; color: #721c24; }
 
-        .main-content {
-            background: white;
-            padding: 30px;
-            border-radius: 10px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        }
-
-        .step-section {
-            margin-bottom: 30px;
-            padding: 20px;
-            border: 2px solid #e1e8ed;
-            border-radius: 8px;
-        }
-
-        .step-section.active {
-            border-color: #3498db;
-            background: #f8fbff;
-        }
-
-        .step-section.completed {
-            border-color: #27ae60;
-            background: #f8fff8;
-        }
-
-        .step-header {
+        .info-item {
             display: flex;
             align-items: center;
-            margin-bottom: 15px;
+            gap: 4px;
         }
 
-        .step-number {
-            width: 30px;
-            height: 30px;
+        .info-item .val { font-weight: 600; color: #2c3e50; }
+
+        /* Tabs */
+        .tab-bar {
+            background: #fff;
+            border-bottom: 2px solid #e1e8ed;
+            padding: 0 24px;
+            display: flex;
+            gap: 0;
+        }
+
+        .tab {
+            padding: 12px 24px;
+            font-size: 14px;
+            font-weight: 600;
+            color: #888;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+            transition: color 0.15s;
+        }
+
+        .tab:hover { color: #555; }
+
+        .tab.active {
+            color: #2c3e50;
+            border-bottom-color: #3498db;
+        }
+
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        /* Main layout */
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px 24px;
+        }
+
+        /* Alerts */
+        .alert {
+            display: none;
+            padding: 10px 14px;
+            border-radius: 6px;
+            margin-bottom: 16px;
+            font-size: 13px;
+        }
+        .alert.show { display: block; }
+        .alert-loading { background: #fff3cd; border: 1px solid #ffc107; color: #856404; }
+        .alert-error { background: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; }
+        .alert-success { background: #d4edda; border: 1px solid #c3e6cb; color: #155724; }
+
+        /* Progress steps (horizontal) */
+        .progress-steps {
+            display: flex;
+            align-items: center;
+            gap: 0;
+            margin-bottom: 20px;
+            background: #fff;
+            border-radius: 8px;
+            padding: 16px 20px;
+            border: 1px solid #e1e8ed;
+        }
+
+        .step {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex: 1;
+        }
+
+        .step-connector {
+            width: 40px;
+            height: 2px;
+            background: #ddd;
+            margin: 0 8px;
+        }
+
+        .step-connector.done { background: #27ae60; }
+
+        .step .num {
+            width: 28px;
+            height: 28px;
             border-radius: 50%;
             background: #e1e8ed;
-            color: #7f8c8d;
+            color: #999;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-weight: bold;
-            margin-right: 10px;
-        }
-
-        .step-section.active .step-number {
-            background: #3498db;
-            color: white;
-        }
-
-        .step-section.completed .step-number {
-            background: #27ae60;
-            color: white;
-        }
-
-        .step-title {
-            font-size: 16px;
-            font-weight: 600;
-            color: #34495e;
-        }
-
-        .step-description {
+            font-weight: 700;
             font-size: 13px;
-            color: #7f8c8d;
-            margin-bottom: 15px;
+            flex-shrink: 0;
         }
 
-        .control-row {
+        .step.active .num { background: #3498db; color: #fff; }
+        .step.done .num { background: #27ae60; color: #fff; }
+
+        .step .text { font-size: 13px; color: #888; }
+        .step.active .text { color: #2c3e50; font-weight: 600; }
+        .step.done .text { color: #27ae60; font-weight: 600; }
+
+        /* Action panel */
+        .action-panel {
+            background: #fff;
+            border-radius: 8px;
+            border: 1px solid #e1e8ed;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .action-panel h3 {
+            font-size: 15px;
+            margin-bottom: 4px;
+        }
+
+        .action-panel .hint {
+            font-size: 12px;
+            color: #888;
+            margin-bottom: 14px;
+        }
+
+        .action-row {
             display: flex;
             align-items: center;
-            gap: 15px;
-        }
-
-        label {
-            font-size: 14px;
-            font-weight: 600;
-            color: #34495e;
+            gap: 12px;
+            flex-wrap: wrap;
         }
 
         select {
-            padding: 10px 15px;
-            border: 2px solid #e1e8ed;
-            border-radius: 6px;
-            font-size: 14px;
-            background: white;
-            cursor: pointer;
-            min-width: 300px;
+            padding: 8px 12px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            font-size: 13px;
+            background: #fff;
+            min-width: 280px;
         }
 
-        select:disabled {
-            background: #f5f5f5;
-            cursor: not-allowed;
-        }
-
-        select:hover:not(:disabled) {
-            border-color: #3498db;
-        }
+        select:disabled { background: #f5f5f5; cursor: not-allowed; }
 
         button {
-            padding: 10px 20px;
+            padding: 8px 18px;
             border: none;
-            border-radius: 6px;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-
-        button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        .btn-primary {
-            background: #3498db;
-            color: white;
-        }
-
-        .btn-primary:hover:not(:disabled) {
-            background: #2980b9;
-        }
-
-        .btn-success {
-            background: #27ae60;
-            color: white;
-        }
-
-        .btn-success:hover:not(:disabled) {
-            background: #229954;
-        }
-
-        .loading {
-            display: none;
-            padding: 15px;
-            background: #fff3cd;
-            border: 1px solid #ffc107;
-            border-radius: 6px;
-            margin-bottom: 20px;
-            color: #856404;
-        }
-
-        .loading.show {
-            display: block;
-        }
-
-        .error {
-            display: none;
-            padding: 15px;
-            background: #f8d7da;
-            border: 1px solid #f5c6cb;
-            border-radius: 6px;
-            margin-bottom: 20px;
-            color: #721c24;
-        }
-
-        .error.show {
-            display: block;
-        }
-
-        .success {
-            display: none;
-            padding: 15px;
-            background: #d4edda;
-            border: 1px solid #c3e6cb;
-            border-radius: 6px;
-            margin-bottom: 20px;
-            color: #155724;
-        }
-
-        .success.show {
-            display: block;
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 20px;
-        }
-
-        thead {
-            background: #f8f9fa;
-        }
-
-        th {
-            padding: 12px;
-            text-align: left;
+            border-radius: 5px;
             font-size: 13px;
             font-weight: 600;
-            color: #495057;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            border-bottom: 2px solid #dee2e6;
+            cursor: pointer;
+            transition: background 0.15s;
         }
 
-        td {
-            padding: 12px;
-            border-bottom: 1px solid #e9ecef;
-            font-size: 14px;
+        button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        .btn-primary { background: #3498db; color: #fff; }
+        .btn-primary:hover:not(:disabled) { background: #2980b9; }
+        .btn-success { background: #27ae60; color: #fff; }
+        .btn-success:hover:not(:disabled) { background: #229954; }
+        .btn-danger { background: #e74c3c; color: #fff; }
+        .btn-danger:hover:not(:disabled) { background: #c0392b; }
+        .btn-purple { background: #9b59b6; color: #fff; }
+        .btn-purple:hover:not(:disabled) { background: #8e44ad; }
+        .btn-outline {
+            background: #fff;
+            color: #555;
+            border: 1px solid #ccc;
+        }
+        .btn-outline:hover:not(:disabled) { background: #f5f5f5; }
+
+        /* Results section */
+        .results-panel {
+            background: #fff;
+            border-radius: 8px;
+            border: 1px solid #e1e8ed;
+            overflow: hidden;
         }
 
-        tr:hover {
-            background: #f8f9fa;
+        .results-header {
+            padding: 14px 20px;
+            border-bottom: 1px solid #e1e8ed;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
         }
+
+        .results-header h3 { font-size: 15px; }
+
+        .results-body { padding: 0; }
 
         .no-data {
             text-align: center;
             padding: 40px;
-            color: #7f8c8d;
+            color: #999;
+            font-size: 13px;
         }
 
-        .download-btn {
-            margin-top: 20px;
+        /* Vehicle info bar */
+        .vehicle-info-bar {
+            display: none;
+            background: #f8f9fa;
+            padding: 10px 20px;
+            border-bottom: 1px solid #e1e8ed;
+            font-size: 12px;
+            color: #666;
+        }
+        .vehicle-info-bar.show { display: flex; gap: 20px; flex-wrap: wrap; }
+        .vehicle-info-bar span { font-weight: 600; color: #333; }
+
+        /* Tables */
+        table {
+            width: 100%;
+            border-collapse: collapse;
         }
 
-        /* Real-time Streaming Styles */
-        .stream-panel {
-            margin-top: 30px;
-            padding: 20px;
-            border: 2px solid #9b59b6;
-            border-radius: 8px;
-            background: #faf5ff;
-        }
-
-        .stream-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 15px;
-        }
-
-        .stream-title {
-            font-size: 18px;
+        th {
+            padding: 10px 16px;
+            text-align: left;
+            font-size: 12px;
             font-weight: 600;
-            color: #9b59b6;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e1e8ed;
+            position: sticky;
+            top: 0;
         }
 
-        .stream-status {
+        td {
+            padding: 8px 16px;
+            border-bottom: 1px solid #f0f0f0;
+            font-size: 13px;
+        }
+
+        tr:hover { background: #fafbfc; }
+
+        .table-scroll {
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        /* Monitoring tab */
+        .monitor-controls {
+            background: #fff;
+            border-radius: 8px;
+            border: 1px solid #e1e8ed;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .monitor-controls h3 {
+            font-size: 15px;
+            margin-bottom: 4px;
+        }
+
+        .monitor-controls .hint {
+            font-size: 12px;
+            color: #888;
+            margin-bottom: 14px;
+        }
+
+        .monitor-status {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 8px;
+            margin-bottom: 14px;
         }
 
-        .stream-indicator {
-            width: 12px;
-            height: 12px;
+        .indicator {
+            width: 10px;
+            height: 10px;
             border-radius: 50%;
             background: #ccc;
         }
 
-        .stream-indicator.active {
+        .indicator.active {
             background: #27ae60;
             animation: pulse 1s infinite;
         }
 
         @keyframes pulse {
             0% { opacity: 1; }
-            50% { opacity: 0.5; }
+            50% { opacity: 0.4; }
             100% { opacity: 1; }
         }
 
-        .btn-stream {
-            background: #9b59b6;
-            color: white;
-        }
-
-        .btn-stream:hover:not(:disabled) {
-            background: #8e44ad;
-        }
-
-        .btn-stop {
-            background: #e74c3c;
-            color: white;
-        }
-
-        .btn-stop:hover:not(:disabled) {
-            background: #c0392b;
-        }
-
-        .stream-stats {
+        .monitor-stats {
             display: flex;
-            gap: 20px;
-            margin-bottom: 15px;
+            gap: 24px;
+            margin-bottom: 14px;
             font-size: 13px;
         }
 
-        .stream-stat {
-            display: flex;
-            align-items: center;
-            gap: 5px;
-        }
-
-        .stream-stat-label {
-            color: #7f8c8d;
-        }
-
-        .stream-stat-value {
-            font-weight: 600;
-            color: #2c3e50;
-        }
+        .monitor-stats .stat-label { color: #888; }
+        .monitor-stats .stat-value { font-weight: 600; }
 
         .changes-log {
-            max-height: 200px;
+            max-height: 180px;
             overflow-y: auto;
-            background: white;
+            background: #f8f9fa;
             border: 1px solid #e1e8ed;
             border-radius: 6px;
-            margin-bottom: 15px;
+            margin-bottom: 16px;
+            display: none;
         }
+
+        .changes-log.show { display: block; }
 
         .change-item {
-            padding: 8px 12px;
-            border-bottom: 1px solid #f1f1f1;
-            font-size: 13px;
+            padding: 6px 12px;
+            border-bottom: 1px solid #eee;
+            font-size: 12px;
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 8px;
         }
 
-        .change-item:last-child {
-            border-bottom: none;
-        }
+        .change-item:last-child { border-bottom: none; }
+        .change-time { color: #999; min-width: 55px; font-size: 11px; }
+        .change-param { font-weight: 600; color: #2c3e50; min-width: 180px; }
+        .change-old { color: #e74c3c; text-decoration: line-through; }
+        .change-arrow { color: #999; }
+        .change-new { color: #27ae60; font-weight: 600; }
 
-        .change-time {
-            color: #95a5a6;
-            font-size: 11px;
-            min-width: 60px;
-        }
-
-        .change-param {
-            font-weight: 600;
-            color: #2c3e50;
-            min-width: 200px;
-        }
-
-        .change-old {
-            color: #e74c3c;
-            text-decoration: line-through;
-        }
-
-        .change-arrow {
-            color: #7f8c8d;
-        }
-
-        .change-new {
-            color: #27ae60;
-            font-weight: 600;
-        }
-
-        .stream-data-table {
-            max-height: 400px;
-            overflow-y: auto;
-        }
-
-        .highlight-change {
-            animation: highlightRow 2s ease-out;
-        }
-
+        .highlight-change { animation: highlightRow 2s ease-out; }
         @keyframes highlightRow {
             0% { background-color: #ffffcc; }
             100% { background-color: transparent; }
         }
+
+        /* Prereq warning */
+        .prereq-warning {
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            border-radius: 6px;
+            padding: 12px 16px;
+            margin-bottom: 16px;
+            font-size: 13px;
+            color: #856404;
+        }
     </style>
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>GDS2 Automation Dashboard</h1>
-            <p class="subtitle">Vehicle Diagnostics Data Display - Engine Control Module</p>
-        </header>
+    <!-- Top Bar: Title + GDS2 State -->
+    <div class="top-bar">
+        <h1>GDS2 Automation</h1>
+        <div class="state-row">
+            <div class="info-item">
+                <span class="label">State:</span>
+                <span id="gds2-state" class="state-badge state-main_menu">MAIN MENU</span>
+            </div>
+            <div class="info-item">
+                <span class="label">Module:</span>
+                <span id="current-module" class="val">-</span>
+            </div>
+            <div class="info-item">
+                <span class="label">Data:</span>
+                <span id="current-data" class="val">-</span>
+            </div>
+        </div>
+    </div>
 
-        <div class="layout">
-            <aside class="sidebar">
-                <h2>Status</h2>
-                <div class="status-item">
-                    <div class="status-label">GDS2 State</div>
-                    <div class="status-value">
-                        <span id="gds2-state" class="state-badge state-main_menu">Main Menu</span>
-                    </div>
+    <!-- Tab Bar -->
+    <div class="tab-bar">
+        <div class="tab active" data-tab="collect" onclick="switchTab('collect')">Data Collection</div>
+        <div class="tab" data-tab="monitor" onclick="switchTab('monitor')">Real-time Monitoring</div>
+    </div>
+
+    <!-- ===== Data Collection Tab ===== -->
+    <div id="tab-collect" class="tab-content active">
+        <div class="container">
+            <!-- Alerts -->
+            <div id="loading" class="alert alert-loading"></div>
+            <div id="error" class="alert alert-error"></div>
+            <div id="success" class="alert alert-success"></div>
+
+            <!-- Progress Steps -->
+            <div class="progress-steps">
+                <div id="ps1" class="step active">
+                    <div class="num">1</div>
+                    <div class="text">Fetch Modules</div>
+                </div>
+                <div id="conn1" class="step-connector"></div>
+                <div id="ps2" class="step">
+                    <div class="num">2</div>
+                    <div class="text">Fetch Categories</div>
+                </div>
+                <div id="conn2" class="step-connector"></div>
+                <div id="ps3" class="step">
+                    <div class="num">3</div>
+                    <div class="text">Get DTCs</div>
+                </div>
+            </div>
+
+            <!-- Action Panel: changes based on current step -->
+            <div id="action-step1" class="action-panel">
+                <h3>Step 1: Fetch Modules</h3>
+                <div class="hint">GDS2 must be at Main Menu. This navigates to Module List and discovers all available modules.</div>
+                <div class="action-row">
+                    <button id="fetch-modules-btn" class="btn-success">Fetch Modules</button>
+                </div>
+            </div>
+
+            <div id="action-step2" class="action-panel" style="display:none;">
+                <h3>Step 2: Select Module & Fetch Data Categories</h3>
+                <div class="hint">GDS2 is at Module List. Select a module to navigate to its Data List.</div>
+                <div class="action-row">
+                    <select id="module-select">
+                        <option value="">-- Select Module --</option>
+                    </select>
+                    <button id="fetch-categories-btn" class="btn-success">Fetch Categories</button>
+                </div>
+            </div>
+
+            <div id="action-step3" class="action-panel" style="display:none;">
+                <h3>Step 3: Get DTCs</h3>
+                <div class="hint">GDS2 is at Data List. Select a data category, fetch report, parse DTCs, then return to Data List.</div>
+                <div class="action-row">
+                    <select id="data-select">
+                        <option value="">-- Select Data Category --</option>
+                    </select>
+                    <button id="search-btn" class="btn-primary">Search</button>
+                </div>
+            </div>
+
+            <!-- Results -->
+            <div id="results-panel" class="results-panel" style="display:none;">
+                <div class="results-header">
+                    <h3 id="results-title">Results</h3>
+                    <button class="btn-outline" onclick="downloadCSV()">Download CSV</button>
+                </div>
+                <div id="vehicle-info-bar" class="vehicle-info-bar">
+                    VIN: <span id="vehicle-vin">-</span>
+                    Make: <span id="vehicle-make">-</span>
+                    Model: <span id="vehicle-model">-</span>
+                    Year: <span id="vehicle-year">-</span>
+                </div>
+                <div class="results-body">
+                    <div id="data-table-container" class="table-scroll"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== Real-time Monitoring Tab ===== -->
+    <div id="tab-monitor" class="tab-content">
+        <div class="container">
+            <!-- Alerts for monitor tab -->
+            <div id="m-loading" class="alert alert-loading"></div>
+            <div id="m-error" class="alert alert-error"></div>
+            <div id="m-success" class="alert alert-success"></div>
+
+            <div id="monitor-prereq" class="prereq-warning" style="display:none;">
+                Complete Step 2 (Fetch Categories) in the Data Collection tab first to enable monitoring.
+            </div>
+
+            <div class="monitor-controls">
+                <div class="monitor-status">
+                    <div id="stream-indicator" class="indicator"></div>
+                    <span id="stream-status-text" style="font-weight:600;">Stopped</span>
                 </div>
 
-                <div class="status-item">
-                    <div class="status-label">Current Module</div>
-                    <div id="current-module" class="status-value">-</div>
+                <h3>Select Data Category to Monitor</h3>
+                <div class="hint">GDS2 must be at Data List. Will auto-navigate to Data Display and start periodic collection.</div>
+
+                <div class="action-row" style="margin-bottom:12px;">
+                    <select id="stream-data-select" disabled>
+                        <option value="">Complete Step 2 first</option>
+                    </select>
+                    <label style="font-size:13px;color:#666;">Interval:</label>
+                    <select id="stream-interval" style="min-width:140px;">
+                        <option value="0.5">0.5s (fastest)</option>
+                        <option value="1">1s</option>
+                        <option value="2" selected>2s</option>
+                        <option value="3">3s</option>
+                        <option value="5">5s</option>
+                        <option value="10">10s</option>
+                    </select>
+                    <button id="start-stream-btn" class="btn-purple" disabled>Start Monitoring</button>
+                    <button id="stop-stream-btn" class="btn-danger" disabled>Stop</button>
                 </div>
 
-                <div class="status-item">
-                    <div class="status-label">Current Data</div>
-                    <div id="current-data" class="status-value">-</div>
+                <div class="monitor-stats">
+                    <div><span class="stat-label">Collections:</span> <span id="stream-collections" class="stat-value">0</span></div>
+                    <div><span class="stat-label">Parameters:</span> <span id="stream-params" class="stat-value">0</span></div>
+                    <div><span class="stat-label">Changes:</span> <span id="stream-changes" class="stat-value">0</span></div>
                 </div>
+            </div>
 
-                <hr style="margin: 20px 0; border: none; border-top: 1px solid #e1e8ed;">
-
-                <h2>Vehicle Info</h2>
-                <div class="status-item">
-                    <div class="status-label">VIN</div>
-                    <div id="vehicle-vin" class="status-value">-</div>
+            <!-- Changes Log -->
+            <div id="changes-log" class="changes-log">
+                <div class="change-item" style="background:#f0f0f0;font-weight:600;">
+                    <span class="change-time">Time</span>
+                    <span class="change-param">Parameter</span>
+                    <span>Old Value</span>
+                    <span class="change-arrow">-></span>
+                    <span>New Value</span>
                 </div>
-                <div class="status-item">
-                    <div class="status-label">Make</div>
-                    <div id="vehicle-make" class="status-value">-</div>
+            </div>
+
+            <!-- Stream data table -->
+            <div id="stream-results" class="results-panel" style="display:none;">
+                <div class="results-header">
+                    <h3>Live Parameters</h3>
                 </div>
-                <div class="status-item">
-                    <div class="status-label">Model</div>
-                    <div id="vehicle-model" class="status-value">-</div>
+                <div class="results-body">
+                    <div id="stream-data-container" class="table-scroll"></div>
                 </div>
-                <div class="status-item">
-                    <div class="status-label">Year</div>
-                    <div id="vehicle-year" class="status-value">-</div>
-                </div>
-            </aside>
-
-            <main class="main-content">
-                <div id="loading" class="loading">
-                    Processing...
-                </div>
-
-                <div id="error" class="error"></div>
-
-                <div id="success" class="success"></div>
-
-                <!-- Step 1: Fetch Modules -->
-                <div id="step1" class="step-section active">
-                    <div class="step-header">
-                        <div class="step-number">1</div>
-                        <div class="step-title">Fetch Modules</div>
-                    </div>
-                    <div class="step-description">
-                        GDS2 must be at <strong>Main Menu</strong>. This will navigate to Module List and discover all modules.
-                    </div>
-                    <div class="control-row">
-                        <button id="fetch-modules-btn" class="btn-success">Fetch Modules</button>
-                    </div>
-                </div>
-
-                <!-- Step 2: Select Module & Fetch Data Categories -->
-                <div id="step2" class="step-section">
-                    <div class="step-header">
-                        <div class="step-number">2</div>
-                        <div class="step-title">Select Module & Fetch Data Categories</div>
-                    </div>
-                    <div class="step-description">
-                        GDS2 must be at <strong>Module List</strong>. Select a module, then fetch its data categories.
-                    </div>
-                    <div class="control-row">
-                        <select id="module-select" disabled>
-                            <option value="">Complete Step 1 first</option>
-                        </select>
-                        <button id="fetch-categories-btn" class="btn-success" disabled>Fetch Data Categories</button>
-                    </div>
-                </div>
-
-                <!-- Get DTCs -->
-                <div id="step3" class="step-section">
-                    <div class="step-header">
-                        <div class="step-number">3</div>
-                        <div class="step-title">Get DTCs</div>
-                    </div>
-                    <div class="step-description">
-                        GDS2 must be at <strong>Data List</strong>. Select a data category and click Search. GDS2 will fetch the data, parse DTCs from report, and return to Data List.
-                    </div>
-                    <div class="control-row">
-                        <select id="data-select" disabled>
-                            <option value="">Complete Step 2 first</option>
-                        </select>
-                        <button id="search-btn" class="btn-primary" disabled>Search</button>
-                    </div>
-                </div>
-
-                <!-- Data Display -->
-                <div id="data-table-container">
-                    <div class="no-data">
-                        Complete the steps above to view data.
-                    </div>
-                </div>
-
-                <!-- Real-time Data Monitoring Panel -->
-                <div id="stream-panel" class="stream-panel">
-                    <div class="stream-header">
-                        <div class="stream-title">Real-time Data Monitoring</div>
-                        <div class="stream-status">
-                            <div id="stream-indicator" class="stream-indicator"></div>
-                            <span id="stream-status-text">Stopped</span>
-                        </div>
-                    </div>
-
-                    <div class="step-description">
-                        Select a data category to monitor. GDS2 will automatically navigate from Data List to Data Display and start monitoring.
-                    </div>
-
-                    <div class="control-row" style="margin-bottom: 15px;">
-                        <label>Data Category:</label>
-                        <select id="stream-data-select" disabled>
-                            <option value="">Complete Step 2 first</option>
-                        </select>
-                    </div>
-
-                    <div class="control-row" style="margin-bottom: 15px;">
-                        <label>Interval:</label>
-                        <select id="stream-interval">
-                            <option value="0.5">0.5 seconds (fastest)</option>
-                            <option value="1">1 second</option>
-                            <option value="2" selected>2 seconds</option>
-                            <option value="3">3 seconds</option>
-                            <option value="5">5 seconds</option>
-                            <option value="10">10 seconds</option>
-                        </select>
-                        <button id="start-stream-btn" class="btn-stream" disabled>Start Monitoring</button>
-                        <button id="stop-stream-btn" class="btn-stop" disabled>Stop</button>
-                    </div>
-
-                    <div class="stream-stats">
-                        <div class="stream-stat">
-                            <span class="stream-stat-label">Collections:</span>
-                            <span id="stream-collections" class="stream-stat-value">0</span>
-                        </div>
-                        <div class="stream-stat">
-                            <span class="stream-stat-label">Parameters:</span>
-                            <span id="stream-params" class="stream-stat-value">0</span>
-                        </div>
-                        <div class="stream-stat">
-                            <span class="stream-stat-label">Changes:</span>
-                            <span id="stream-changes" class="stream-stat-value">0</span>
-                        </div>
-                    </div>
-
-                    <div id="changes-log" class="changes-log" style="display: none;">
-                        <div class="change-item" style="background: #f8f9fa; font-weight: 600;">
-                            <span class="change-time">Time</span>
-                            <span class="change-param">Parameter</span>
-                            <span>Old Value</span>
-                            <span class="change-arrow">-></span>
-                            <span>New Value</span>
-                        </div>
-                    </div>
-
-                    <div id="stream-data-container" class="stream-data-table" style="display: none;">
-                        <!-- Real-time data table will be inserted here -->
-                    </div>
-                </div>
-            </main>
+            </div>
         </div>
     </div>
 
@@ -642,8 +572,51 @@
         let currentModules = [];
         let currentDataCategories = [];
         let currentState = { gds2_state: 'main_menu' };
+        let currentStep = 1;
 
+        // =============================================================
+        // Tab switching
+        // =============================================================
+        function switchTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            document.querySelector(`.tab[data-tab="${tab}"]`).classList.add('active');
+            document.getElementById('tab-' + tab).classList.add('active');
+
+            // Show prereq warning if categories not loaded
+            if (tab === 'monitor') {
+                document.getElementById('monitor-prereq').style.display =
+                    currentDataCategories.length === 0 ? 'block' : 'none';
+            }
+        }
+
+        // =============================================================
+        // Step management
+        // =============================================================
+        function setStep(step) {
+            currentStep = step;
+
+            // Update progress indicators
+            for (let i = 1; i <= 3; i++) {
+                const ps = document.getElementById('ps' + i);
+                ps.classList.remove('active', 'done');
+                if (i < step) ps.classList.add('done');
+                else if (i === step) ps.classList.add('active');
+            }
+            for (let i = 1; i <= 2; i++) {
+                const conn = document.getElementById('conn' + i);
+                conn.classList.toggle('done', i < step);
+            }
+
+            // Show correct action panel
+            document.getElementById('action-step1').style.display = step === 1 ? 'block' : 'none';
+            document.getElementById('action-step2').style.display = step === 2 ? 'block' : 'none';
+            document.getElementById('action-step3').style.display = step >= 3 ? 'block' : 'none';
+        }
+
+        // =============================================================
         // Step 1: Fetch Modules
+        // =============================================================
         document.getElementById('fetch-modules-btn').addEventListener('click', async () => {
             showLoading('Navigating to Module List and discovering modules...');
 
@@ -661,22 +634,13 @@
                     currentState = data.state;
                     updateState();
 
-                    // Update module select
                     const select = document.getElementById('module-select');
-                    select.disabled = false;
                     select.innerHTML = currentModules.map(m =>
                         `<option value="${m}">${m}</option>`
                     ).join('');
 
-                    // Enable step 2
-                    document.getElementById('fetch-categories-btn').disabled = false;
-
-                    // Update step styling
-                    document.getElementById('step1').classList.remove('active');
-                    document.getElementById('step1').classList.add('completed');
-                    document.getElementById('step2').classList.add('active');
-
-                    showSuccess(`Found ${currentModules.length} modules! GDS2 is now at Module List.`);
+                    setStep(2);
+                    showSuccess(`Found ${currentModules.length} modules.`);
                 } else {
                     showError(data.error || 'Failed to fetch modules');
                 }
@@ -687,7 +651,9 @@
             }
         });
 
+        // =============================================================
         // Step 2: Fetch Data Categories
+        // =============================================================
         document.getElementById('fetch-categories-btn').addEventListener('click', async () => {
             const moduleName = document.getElementById('module-select').value;
             if (!moduleName) return;
@@ -708,30 +674,22 @@
                     currentState = data.state;
                     updateState();
 
-                    // Update data select for Step 3
                     const dataSelect = document.getElementById('data-select');
-                    dataSelect.disabled = false;
                     dataSelect.innerHTML = currentDataCategories.map(d =>
                         `<option value="${d}">${d}</option>`
                     ).join('');
 
-                    // Update monitoring data select
+                    // Also update monitoring dropdown
                     const streamSelect = document.getElementById('stream-data-select');
                     streamSelect.disabled = false;
                     streamSelect.innerHTML = currentDataCategories.map(d =>
                         `<option value="${d}">${d}</option>`
                     ).join('');
-
-                    // Enable step 3 and monitoring
-                    document.getElementById('search-btn').disabled = false;
                     document.getElementById('start-stream-btn').disabled = false;
+                    document.getElementById('monitor-prereq').style.display = 'none';
 
-                    // Update step styling
-                    document.getElementById('step2').classList.remove('active');
-                    document.getElementById('step2').classList.add('completed');
-                    document.getElementById('step3').classList.add('active');
-
-                    showSuccess(`Found ${currentDataCategories.length} data categories! GDS2 is now at Data List.`);
+                    setStep(3);
+                    showSuccess(`Found ${currentDataCategories.length} data categories.`);
                 } else {
                     showError(data.error || 'Failed to fetch data categories');
                 }
@@ -742,11 +700,12 @@
             }
         });
 
-        // Get DTCs: Search
+        // =============================================================
+        // Step 3: Get DTCs / Search
+        // =============================================================
         document.getElementById('search-btn').addEventListener('click', async () => {
             const moduleName = document.getElementById('module-select').value;
             const dataCategory = document.getElementById('data-select').value;
-
             if (!moduleName || !dataCategory) return;
 
             showLoading(`Getting DTCs from ${dataCategory}...`);
@@ -766,10 +725,10 @@
                 if (data.success) {
                     currentState = data.state;
                     updateState();
-                    // Pass full response including DTCs
                     displayReportData(data);
                     const dtcCount = data.dtc_list ? data.dtc_list.length : 0;
-                    showSuccess(`Found ${dtcCount} DTCs! GDS2 returned to Data List.`);
+                    const dataCount = data.report_data && data.report_data.data_items ? data.report_data.data_items.length : 0;
+                    showSuccess(`Found ${dtcCount} DTCs, ${dataCount} data items. GDS2 returned to Data List.`);
                 } else {
                     showError(data.error || 'Failed to get DTCs');
                 }
@@ -780,112 +739,97 @@
             }
         });
 
-        // Update state display
+        // =============================================================
+        // State display
+        // =============================================================
         function updateState() {
             const stateBadge = document.getElementById('gds2-state');
             const stateClass = 'state-' + currentState.gds2_state;
             stateBadge.className = 'state-badge ' + stateClass;
-            stateBadge.textContent = currentState.gds2_state.replace(/_/g, ' ');
+            stateBadge.textContent = currentState.gds2_state.replace(/_/g, ' ').toUpperCase();
 
             document.getElementById('current-module').textContent = currentState.current_module || '-';
             document.getElementById('current-data').textContent = currentState.current_data_category || '-';
         }
 
-        // Display report data with DTCs
+        // =============================================================
+        // Display results
+        // =============================================================
         function displayReportData(data) {
             const container = document.getElementById('data-table-container');
             const reportData = data.report_data || {};
+            const panel = document.getElementById('results-panel');
 
-            // Update vehicle info (from DTC parser)
+            // Vehicle info
             if (data.vehicle_info) {
                 document.getElementById('vehicle-vin').textContent = data.vehicle_info.vin || '-';
                 document.getElementById('vehicle-make').textContent = data.vehicle_info.make || '-';
                 document.getElementById('vehicle-model').textContent = data.vehicle_info.model || '-';
                 document.getElementById('vehicle-year').textContent = data.vehicle_info.year || '-';
+                document.getElementById('vehicle-info-bar').classList.add('show');
             }
 
             let html = '';
 
-            // Display DTCs if available
+            // DTCs
             if (data.dtc_list && data.dtc_list.length > 0) {
-                const dtcRows = data.dtc_list.map(dtc => `
-                    <tr>
-                        <td><strong>${dtc.code}</strong></td>
-                        <td>${dtc.module}</td>
-                        <td>${dtc.description}</td>
-                        <td>${dtc.status}</td>
-                    </tr>
-                `).join('');
-
-                html += `
-                    <h3 style="margin: 20px 0 10px 0; color: #333;">Diagnostic Trouble Codes (${data.dtc_list.length})</h3>
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Code</th>
-                                <th>Module</th>
-                                <th>Description</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${dtcRows}
-                        </tbody>
-                    </table>
-                `;
+                html += `<table>
+                    <thead><tr><th>Code</th><th>Module</th><th>Description</th><th>Status</th></tr></thead>
+                    <tbody>${data.dtc_list.map(dtc => `
+                        <tr>
+                            <td><strong>${dtc.code}</strong></td>
+                            <td>${dtc.module}</td>
+                            <td>${dtc.description}</td>
+                            <td>${dtc.status}</td>
+                        </tr>`).join('')}
+                    </tbody>
+                </table>`;
+                document.getElementById('results-title').textContent = `DTCs (${data.dtc_list.length})`;
             }
 
-            // Display data items if available
+            // Data items
             if (reportData.data_items && reportData.data_items.length > 0) {
-                const dataRows = reportData.data_items.map(item => `
-                    <tr>
-                        <td>${item.parameter}</td>
-                        <td>${item.value}</td>
-                        <td>${item.units}</td>
-                    </tr>
-                `).join('');
-
-                html += `
-                    <h3 style="margin: 20px 0 10px 0; color: #333;">Data Items (${reportData.data_items.length})</h3>
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Parameter</th>
-                                <th>Value</th>
-                                <th>Units</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${dataRows}
-                        </tbody>
-                    </table>
-                `;
+                if (html) html += '<div style="height:1px;background:#e1e8ed;"></div>';
+                html += `<table>
+                    <thead><tr><th>Parameter</th><th>Value</th><th>Units</th></tr></thead>
+                    <tbody>${reportData.data_items.map(item => `
+                        <tr>
+                            <td>${item.parameter}</td>
+                            <td>${item.value}</td>
+                            <td>${item.units}</td>
+                        </tr>`).join('')}
+                    </tbody>
+                </table>`;
+                if (!data.dtc_list || data.dtc_list.length === 0) {
+                    document.getElementById('results-title').textContent = `Data Items (${reportData.data_items.length})`;
+                }
             }
 
             if (html) {
-                html += '<button class="btn-success download-btn" onclick="downloadCSV()">Download CSV</button>';
                 container.innerHTML = html;
+                panel.style.display = 'block';
             } else {
                 container.innerHTML = '<div class="no-data">No data found in report</div>';
+                panel.style.display = 'block';
             }
         }
 
         // Download CSV
         function downloadCSV() {
-            const table = document.querySelector('table');
-            if (!table) return;
+            const tables = document.querySelectorAll('#data-table-container table');
+            if (!tables.length) return;
 
             let csv = [];
-            const rows = table.querySelectorAll('tr');
+            tables.forEach(table => {
+                const rows = table.querySelectorAll('tr');
+                for (let row of rows) {
+                    const cols = row.querySelectorAll('td, th');
+                    csv.push(Array.from(cols).map(col => `"${col.textContent}"`).join(','));
+                }
+                csv.push('');
+            });
 
-            for (let row of rows) {
-                const cols = row.querySelectorAll('td, th');
-                const csvRow = Array.from(cols).map(col => `"${col.textContent}"`).join(',');
-                csv.push(csvRow);
-            }
-
-            const csvContent = csv.join('\n');
-            const blob = new Blob([csvContent], { type: 'text/csv' });
+            const blob = new Blob([csv.join('\n')], { type: 'text/csv' });
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -893,48 +837,58 @@
             a.click();
         }
 
-        // Helper functions
-        function showLoading(message) {
-            const loading = document.getElementById('loading');
-            loading.textContent = message;
-            loading.classList.add('show');
-            hideError();
-            hideSuccess();
+        // =============================================================
+        // Alert helpers
+        // =============================================================
+        function showLoading(msg) {
+            const el = document.getElementById('loading');
+            el.textContent = msg;
+            el.classList.add('show');
+            hideError(); hideSuccess();
+        }
+        function hideLoading() { document.getElementById('loading').classList.remove('show'); }
+        function showError(msg) {
+            const el = document.getElementById('error');
+            el.textContent = msg;
+            el.classList.add('show');
+            hideLoading(); hideSuccess();
+        }
+        function hideError() { document.getElementById('error').classList.remove('show'); }
+        function showSuccess(msg) {
+            const el = document.getElementById('success');
+            el.textContent = msg;
+            el.classList.add('show');
+            hideLoading(); hideError();
+            setTimeout(hideSuccess, 5000);
+        }
+        function hideSuccess() { document.getElementById('success').classList.remove('show'); }
+
+        // Monitor tab alerts
+        function showMLoading(msg) {
+            const el = document.getElementById('m-loading');
+            el.textContent = msg;
+            el.classList.add('show');
+            document.getElementById('m-error').classList.remove('show');
+            document.getElementById('m-success').classList.remove('show');
+        }
+        function hideMLoading() { document.getElementById('m-loading').classList.remove('show'); }
+        function showMError(msg) {
+            const el = document.getElementById('m-error');
+            el.textContent = msg;
+            el.classList.add('show');
+            hideMLoading();
+        }
+        function showMSuccess(msg) {
+            const el = document.getElementById('m-success');
+            el.textContent = msg;
+            el.classList.add('show');
+            hideMLoading();
+            setTimeout(() => el.classList.remove('show'), 5000);
         }
 
-        function hideLoading() {
-            document.getElementById('loading').classList.remove('show');
-        }
-
-        function showError(message) {
-            const error = document.getElementById('error');
-            error.textContent = message;
-            error.classList.add('show');
-            hideLoading();
-            hideSuccess();
-        }
-
-        function hideError() {
-            document.getElementById('error').classList.remove('show');
-        }
-
-        function showSuccess(message) {
-            const success = document.getElementById('success');
-            success.textContent = message;
-            success.classList.add('show');
-            hideLoading();
-            hideError();
-
-            setTimeout(() => {
-                hideSuccess();
-            }, 5000);
-        }
-
-        function hideSuccess() {
-            document.getElementById('success').classList.remove('show');
-        }
-
-        // Check if we have cached data on load
+        // =============================================================
+        // Check cached data on load
+        // =============================================================
         async function checkCachedData() {
             try {
                 const modulesResponse = await fetch('/api/modules');
@@ -943,132 +897,105 @@
                 if (modulesData.modules && modulesData.modules.length > 0) {
                     currentModules = modulesData.modules;
 
-                    // Populate module select
                     const select = document.getElementById('module-select');
-                    select.disabled = false;
                     select.innerHTML = currentModules.map(m =>
                         `<option value="${m}">${m}</option>`
                     ).join('');
 
-                    // Mark step 1 as completed, step 2 as active
-                    document.getElementById('step1').classList.remove('active');
-                    document.getElementById('step1').classList.add('completed');
-                    document.getElementById('step2').classList.add('active');
-                    document.getElementById('fetch-categories-btn').disabled = false;
+                    setStep(2);
 
-                    // Check if first module has cached categories
+                    // Check categories
                     const firstModule = currentModules[0];
-                    const categoriesResponse = await fetch(`/api/data_categories?module=${encodeURIComponent(firstModule)}`);
-                    const categoriesData = await categoriesResponse.json();
+                    const catResp = await fetch(`/api/data_categories?module=${encodeURIComponent(firstModule)}`);
+                    const catData = await catResp.json();
 
-                    if (categoriesData.data_categories && categoriesData.data_categories.length > 0) {
-                        currentDataCategories = categoriesData.data_categories;
+                    if (catData.data_categories && catData.data_categories.length > 0) {
+                        currentDataCategories = catData.data_categories;
 
                         const dataSelect = document.getElementById('data-select');
-                        dataSelect.disabled = false;
                         dataSelect.innerHTML = currentDataCategories.map(d =>
                             `<option value="${d}">${d}</option>`
                         ).join('');
 
-                        // Mark step 2 as completed, step 3 as active
-                        document.getElementById('step2').classList.remove('active');
-                        document.getElementById('step2').classList.add('completed');
-                        document.getElementById('step3').classList.add('active');
-                        document.getElementById('search-btn').disabled = false;
+                        // Update monitoring dropdown
+                        const streamSelect = document.getElementById('stream-data-select');
+                        streamSelect.disabled = false;
+                        streamSelect.innerHTML = currentDataCategories.map(d =>
+                            `<option value="${d}">${d}</option>`
+                        ).join('');
+                        document.getElementById('start-stream-btn').disabled = false;
+
+                        setStep(3);
                     }
                 }
             } catch (error) {
-                console.error('Failed to check cached data:', error);
+                // Silently fail - fresh start
             }
         }
 
-        // Initialize
         checkCachedData();
 
         // =============================================================
         // Real-time Streaming
         // =============================================================
-
         let eventSource = null;
         let streamingActive = false;
         let totalChanges = 0;
-        let currentStreamData = {};
 
-        // Start streaming
         document.getElementById('start-stream-btn').addEventListener('click', async () => {
             const dataCategory = document.getElementById('stream-data-select').value;
             const interval = parseFloat(document.getElementById('stream-interval').value);
 
             if (!dataCategory) {
-                showError('Please select a data category to monitor');
+                showMError('Please select a data category to monitor');
                 return;
             }
 
-            showLoading('Starting monitoring...');
+            showMLoading('Starting monitoring...');
 
             try {
-                // Set the selected data category in backend state
-                // The backend will use this to navigate to the correct Data Display page
                 const response = await fetch('/api/stream/start', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        data_category: dataCategory,
-                        interval: interval
-                    })
+                    body: JSON.stringify({ data_category: dataCategory, interval: interval })
                 });
 
                 const data = await response.json();
 
                 if (data.success || data.message) {
-                    // Update current state
                     currentState = data.state;
                     updateState();
-
-                    // Connect to SSE
                     connectSSE();
 
-                    // Update UI
                     document.getElementById('start-stream-btn').disabled = true;
                     document.getElementById('stop-stream-btn').disabled = false;
                     document.getElementById('stream-interval').disabled = true;
                     document.getElementById('stream-data-select').disabled = true;
                     document.getElementById('stream-indicator').classList.add('active');
                     document.getElementById('stream-status-text').textContent = 'Running';
-                    document.getElementById('changes-log').style.display = 'block';
-                    document.getElementById('stream-data-container').style.display = 'block';
+                    document.getElementById('changes-log').classList.add('show');
+                    document.getElementById('stream-results').style.display = 'block';
 
-                    showSuccess(`Monitoring "${dataCategory}" - GDS2 navigated to Data Display`);
+                    showMSuccess(`Monitoring "${dataCategory}"`);
                 } else {
-                    showError(data.error || 'Failed to start streaming');
+                    showMError(data.error || 'Failed to start streaming');
                 }
             } catch (error) {
-                showError('Failed to start streaming: ' + error.message);
+                showMError('Failed to start streaming: ' + error.message);
             }
         });
 
-        // Stop streaming
         document.getElementById('stop-stream-btn').addEventListener('click', async () => {
-            showLoading('Stopping monitoring...');
+            showMLoading('Stopping monitoring...');
 
             try {
-                // Disconnect SSE
-                if (eventSource) {
-                    eventSource.close();
-                    eventSource = null;
-                }
+                if (eventSource) { eventSource.close(); eventSource = null; }
 
-                // Stop the collector on server (backend will click Back button)
                 const response = await fetch('/api/stream/stop', { method: 'POST' });
                 const data = await response.json();
 
-                // Update current state
-                if (data.state) {
-                    currentState = data.state;
-                    updateState();
-                }
+                if (data.state) { currentState = data.state; updateState(); }
 
-                // Update UI
                 streamingActive = false;
                 document.getElementById('start-stream-btn').disabled = false;
                 document.getElementById('stop-stream-btn').disabled = true;
@@ -1077,24 +1004,18 @@
                 document.getElementById('stream-indicator').classList.remove('active');
                 document.getElementById('stream-status-text').textContent = 'Stopped';
 
-                showSuccess('Monitoring stopped - GDS2 returned to Data List');
+                showMSuccess('Monitoring stopped - GDS2 returned to Data List');
             } catch (error) {
-                showError('Failed to stop streaming: ' + error.message);
+                showMError('Failed to stop streaming: ' + error.message);
             }
         });
 
-        // Connect to SSE endpoint
         function connectSSE() {
-            if (eventSource) {
-                eventSource.close();
-            }
-
+            if (eventSource) eventSource.close();
             eventSource = new EventSource('/api/stream/events');
             streamingActive = true;
 
-            eventSource.addEventListener('connected', (e) => {
-                console.log('SSE connected:', JSON.parse(e.data));
-            });
+            eventSource.addEventListener('connected', (e) => {});
 
             eventSource.addEventListener('data', (e) => {
                 const data = JSON.parse(e.data);
@@ -1107,59 +1028,32 @@
             });
 
             eventSource.addEventListener('error', (e) => {
-                if (e.data) {
-                    const data = JSON.parse(e.data);
-                    console.error('Stream error:', data.message);
-                }
+                if (e.data) console.error('Stream error:', JSON.parse(e.data).message);
             });
 
-            eventSource.onerror = (e) => {
-                console.error('SSE connection error');
+            eventSource.onerror = () => {
                 if (streamingActive) {
-                    // Try to reconnect after 2 seconds
-                    setTimeout(() => {
-                        if (streamingActive) {
-                            connectSSE();
-                        }
-                    }, 2000);
+                    setTimeout(() => { if (streamingActive) connectSSE(); }, 2000);
                 }
             };
         }
 
-        // Handle full data update
         function handleFullData(data) {
-            document.getElementById('stream-collections').textContent = data.count ?
-                document.getElementById('stream-collections').textContent : '0';
-
-            // Update collection count (we need to fetch status separately)
             fetchStreamStatus();
-
-            // Store current data
             if (data.parameters) {
                 document.getElementById('stream-params').textContent = data.parameters.length;
-
-                // Update data table
                 updateStreamDataTable(data.parameters);
-
-                // Store for reference
-                data.parameters.forEach(p => {
-                    currentStreamData[p.name] = p;
-                });
             }
         }
 
-        // Handle parameter changes
         function handleChanges(data) {
             if (!data.changes || data.changes.length === 0) return;
-
             totalChanges += data.changes.length;
             document.getElementById('stream-changes').textContent = totalChanges;
 
             const log = document.getElementById('changes-log');
-
             data.changes.forEach(change => {
                 const time = new Date(change.timestamp).toLocaleTimeString();
-
                 const item = document.createElement('div');
                 item.className = 'change-item';
                 item.innerHTML = `
@@ -1169,73 +1063,41 @@
                     <span class="change-arrow">-></span>
                     <span class="change-new">${change.new_value} ${change.unit || ''}</span>
                 `;
-
-                // Insert after header
-                if (log.children.length > 1) {
-                    log.insertBefore(item, log.children[1]);
-                } else {
-                    log.appendChild(item);
-                }
-
-                // Keep only last 50 changes
-                while (log.children.length > 51) {
-                    log.removeChild(log.lastChild);
-                }
-
-                // Highlight changed row in data table
+                if (log.children.length > 1) log.insertBefore(item, log.children[1]);
+                else log.appendChild(item);
+                while (log.children.length > 51) log.removeChild(log.lastChild);
                 highlightParameter(change.parameter);
             });
         }
 
-        // Update the streaming data table
         function updateStreamDataTable(parameters) {
             const container = document.getElementById('stream-data-container');
-
-            const rows = parameters.map(p => `
-                <tr id="stream-row-${p.name.replace(/[^a-zA-Z0-9]/g, '_')}">
-                    <td>${p.name}</td>
-                    <td>${p.value}</td>
-                    <td>${p.unit}</td>
-                </tr>
-            `).join('');
-
-            container.innerHTML = `
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Parameter</th>
-                            <th>Value</th>
-                            <th>Unit</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${rows}
-                    </tbody>
-                </table>
-            `;
+            container.innerHTML = `<table>
+                <thead><tr><th>Parameter</th><th>Value</th><th>Unit</th></tr></thead>
+                <tbody>${parameters.map(p => `
+                    <tr id="stream-row-${p.name.replace(/[^a-zA-Z0-9]/g, '_')}">
+                        <td>${p.name}</td><td>${p.value}</td><td>${p.unit}</td>
+                    </tr>`).join('')}
+                </tbody>
+            </table>`;
         }
 
-        // Highlight a parameter row when it changes
         function highlightParameter(paramName) {
             const rowId = 'stream-row-' + paramName.replace(/[^a-zA-Z0-9]/g, '_');
             const row = document.getElementById(rowId);
             if (row) {
                 row.classList.remove('highlight-change');
-                // Trigger reflow
                 void row.offsetWidth;
                 row.classList.add('highlight-change');
             }
         }
 
-        // Fetch stream status
         async function fetchStreamStatus() {
             try {
                 const response = await fetch('/api/stream/status');
                 const data = await response.json();
                 document.getElementById('stream-collections').textContent = data.collection_count || 0;
-            } catch (error) {
-                console.error('Failed to fetch stream status:', error);
-            }
+            } catch (error) {}
         }
     </script>
 </body>
