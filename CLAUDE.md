@@ -1,7 +1,7 @@
 # RPA_demo Project Memory
 
-**Last Updated:** 2026-01-28
-**Status:** Production Ready - Web UI + CLI with Hybrid Automation + Real-time Monitoring
+**Last Updated:** 2026-01-30
+**Status:** Production Ready - Web UI + CLI + Java Agent Integration
 
 ---
 
@@ -114,79 +114,92 @@ RPA_demo/
 │   │   ├── __init__.py
 │   │   ├── driver.py             # GDS2Driver - pywinauto wrapper
 │   │   ├── locators.py           # Centralized UI element definitions
-│   │   ├── exceptions.py         # Custom exception hierarchy
-│   │   └── interfaces/           # Abstract interfaces
-│   │       ├── __init__.py
-│   │       └── screenshot.py     # Screenshot comparison interface
+│   │   └── template_matcher.py   # Multi-scale template matching
 │   │
 │   ├── discovery/                # Discovery system
 │   │   ├── __init__.py
 │   │   └── vehicle_mapping.py    # VehicleDiscovery & VehicleMapping
 │   │
-│   ├── pages/                    # Page Object classes (legacy DTC workflow)
+│   ├── native/                   # Windows API integration
 │   │   ├── __init__.py
-│   │   ├── base_page.py
-│   │   ├── main_menu_page.py
-│   │   ├── device_explorer_page.py
-│   │   ├── vehicle_selection_page.py
-│   │   ├── diagnostics_menu_page.py
-│   │   ├── vehicle_diagnostics_page.py
-│   │   └── dtc_page.py
-│   │
-│   ├── workflows/                # Business workflows
-│   │   ├── __init__.py
-│   │   ├── base_workflow.py      # BaseWorkflow with PyAutoGUI+OpenCV
-│   │   ├── read_vehicle_dtc.py   # Read DTC workflow (Page Objects)
-│   │   └── read_data_display.py  # Read Data Display (Keyboard+Discovery)
+│   │   └── device_explorer.py    # Device Explorer automation
 │   │
 │   ├── streaming/                # Real-time data streaming
 │   │   ├── __init__.py
-│   │   └── realtime_collector.py # Background data collection via HTML reports
+│   │   ├── agent_navigator.py    # Java Agent communication
+│   │   ├── agent_data_collector.py  # Agent-based data collection
+│   │   └── realtime_collector.py # HTML report-based collection (legacy)
 │   │
-│   ├── vision/                   # Vision features
+│   ├── ui/                       # UI components
 │   │   ├── __init__.py
-│   │   ├── screenshot_comparator.py  # OpenCV screenshot comparison
-│   │   └── vlm_finder.py         # VLM-based element finding (fallback)
+│   │   └── module_selector.py    # Module selection UI
 │   │
-│   └── utils/                    # Utilities
+│   ├── utils/                    # Utilities
+│   │   ├── __init__.py
+│   │   └── report_parser.py      # HTML report parsing
+│   │
+│   └── workflows/                # Business workflows
 │       ├── __init__.py
-│       └── report_parser.py      # HTML report parsing
+│       ├── read_data_display_agent.py  # Main workflow (Java Agent)
+│       ├── read_data_display.py        # Legacy workflow (PyAutoGUI)
+│       ├── base_workflow.py            # Legacy base class
+│       ├── module_data_display.py      # Module data display
+│       └── module_discovery.py         # Module discovery
 │
-├── templates/                    # Web UI templates (NEW)
+├── templates/                    # Web UI templates
 │   └── index.html                # Main Web UI page
 │
 ├── scripts/                      # Utility scripts
-│   ├── run_demo.py               # Legacy demo execution script
+│   ├── run_demo.py               # Demo execution script
 │   ├── run_discovery.py          # Manual discovery utility
+│   ├── run_module_data.py        # Module data script
 │   ├── inspect_gds2.py           # UI inspection tool
-│   └── test_connection.py        # Connection testing
+│   ├── inspect_agent.py          # Agent inspection tool
+│   ├── inspect_data_display.py   # Data display inspection
+│   ├── test_connection.py        # Connection testing
+│   ├── test_import.py            # Import verification
+│   ├── test_agent_collector.py   # Agent collector tests
+│   ├── test_agent_navigation.py  # Agent navigation tests
+│   ├── test_e2e_agent_flow.py    # E2E agent flow tests
+│   ├── test_e2e_full.py          # Full E2E tests
+│   ├── test_e2e_module_data.py   # Module data E2E tests
+│   ├── check_windows.py          # Windows check utility
+│   ├── setup_tesseract.py        # Tesseract setup
+│   ├── setup_scenic_view.py      # Scenic View setup
+│   ├── legacy/                   # Legacy test scripts
+│   │   └── ...
+│   └── exploration/              # Exploration scripts
+│       └── ...
 │
 ├── mappings/                     # Auto-generated discovery data
 │   └── current_vehicle.json      # Module and data category mappings
 │
 ├── images/                       # Template images for PyAutoGUI
 │   ├── buttons/                  # Button templates
-│   │   ├── diagnostics.png
-│   │   ├── module_diagnostics.png
-│   │   ├── data_display.png
-│   │   ├── enter.png
-│   │   ├── create_report.png
-│   │   └── ok.png
-│   └── devices/                  # Device templates
-│       └── sm2_usb.png
+│   ├── devices/                  # Device templates
+│   ├── list_items/               # List item templates
+│   └── pages/                    # Page header templates
 │
 ├── docs/                         # Documentation
 │   ├── SCROLLING_SUPPORT.md      # Scrolling implementation notes
 │   ├── GDS2_CONTROL_MAPPING.md   # UI control mapping
+│   ├── REALTIME_DATA_STREAMING.md # Streaming documentation
 │   └── WORKFLOW_DIAGRAM.md       # Navigation diagrams
+│
+├── tests/                        # pytest tests
+│   ├── __init__.py
+│   ├── conftest.py
+│   └── test_navigation_to_data_display.py
 │
 ├── res/                          # Resources
 │   └── GM-GDS2-User-Guide.pdf    # Official GDS2 User Guide
 │
 ├── main.py                       # CLI entry point (web, demo, inspect, discover)
-├── app.py                        # Flask Web UI backend (NEW)
+├── app.py                        # Flask Web UI backend
 ├── CLAUDE.md                     # This file
-├── requirements-minimal.txt      # Dependencies
+├── README.md                     # Project README
+├── requirements.txt              # Full dependencies
+├── requirements-minimal.txt      # Minimal dependencies
 └── venv/                         # Virtual environment
 ```
 
@@ -198,11 +211,14 @@ RPA_demo/
 | `app.py` | Flask Web UI backend with REST API |
 | `templates/index.html` | Web UI frontend with 3-step workflow |
 | `src/core/driver.py` | Low-level UI automation (pywinauto wrapper) |
+| `src/core/template_matcher.py` | Multi-scale template matching for buttons/devices |
 | `src/discovery/vehicle_mapping.py` | Discovery system for module/data lists |
-| `src/workflows/base_workflow.py` | PyAutoGUI+OpenCV button/device clicking |
-| `src/workflows/read_data_display.py` | Main workflow with keyboard navigation |
-| `src/workflows/read_vehicle_dtc.py` | Legacy DTC reading (Page Objects) |
-| `src/streaming/realtime_collector.py` | Real-time data streaming via HTML reports |
+| `src/native/device_explorer.py` | Windows API-based Device Explorer automation |
+| `src/workflows/read_data_display_agent.py` | Main workflow using Java Agent |
+| `src/workflows/read_data_display.py` | Legacy workflow (PyAutoGUI+OpenCV) |
+| `src/streaming/agent_navigator.py` | Java Agent communication |
+| `src/streaming/agent_data_collector.py` | Agent-based real-time data collection |
+| `src/streaming/realtime_collector.py` | HTML report-based data collection (legacy) |
 | `src/utils/report_parser.py` | HTML report parsing (data items + DTCs) |
 | `mappings/current_vehicle.json` | Auto-generated module/data mappings |
 | `images/buttons/*.png` | Template images for button detection |
@@ -347,18 +363,19 @@ Create Report (PyAutoGUI)
   - [x] GDS2Driver with pywinauto
   - [x] PyAutoGUI + OpenCV integration
   - [x] Template matching for buttons/devices
-  - [x] Custom exception hierarchy
+  - [x] Multi-scale template matching
 
-- [x] **Web UI** (NEW)
+- [x] **Web UI**
   - [x] Flask backend with REST API
   - [x] 3-step workflow interface (Fetch Modules → Fetch Categories → Get DTCs)
   - [x] Real-time state tracking
   - [x] Data table display with CSV download
   - [x] DTC parsing and display from HTML reports
 
-- [x] **Real-time Data Monitoring** (NEW)
+- [x] **Real-time Data Monitoring**
   - [x] Server-Sent Events (SSE) for real-time updates
-  - [x] Background data collection via Create Report + HTML parsing
+  - [x] Agent-based data collection (100ms interval)
+  - [x] HTML report-based collection (legacy, 3s interval)
   - [x] Parameter change detection with unique key (name + unit)
   - [x] Automatic HTML report cleanup (keeps latest 50)
   - [x] Auto-navigate from Data List to Data Display on start
@@ -376,16 +393,18 @@ Create Report (PyAutoGUI)
   - [x] Automatic discovery integration
 
 - [x] **Workflows**
-  - [x] ReadDataDisplayWorkflow - Keyboard + Discovery
-  - [x] ReadVehicleDTCWorkflow - Page Objects (legacy)
+  - [x] ReadDataDisplayAgentWorkflow - Java Agent based (recommended)
+  - [x] ReadDataDisplayWorkflow - Keyboard + Discovery (legacy)
   - [x] Automatic warning dialog handling
 
-- [x] **Page Objects** (Legacy DTC Workflow)
-  - [x] MainMenuPage, DeviceExplorerPage, VehicleSelectionPage
-  - [x] DiagnosticsMenuPage, VehicleDiagnosticsPage, DTCPage
+- [x] **Java Agent Integration**
+  - [x] AgentNavigator - Agent communication
+  - [x] AgentDataCollector - High-frequency data collection
+  - [x] 100ms collection interval
+  - [x] DTC auto-extraction
 
 - [x] **Utilities**
-  - [x] DTCReportParser for HTML reports
+  - [x] GDS2ReportParser for HTML reports
   - [x] Template matching utilities
   - [x] Discovery scripts
 
@@ -393,8 +412,6 @@ Create Report (PyAutoGUI)
 
 - [ ] ClearDTCWorkflow
 - [ ] ReadModuleDTCWorkflow (specific module)
-- [ ] VLM fallback for unknown elements
-- [ ] OCR verification for data values
 - [ ] Multi-vehicle session handling
 
 ---
@@ -530,24 +547,6 @@ class GDS2Locators:
         CREATE_REPORT_BTN = Locator("Create Report", "Button", "Generate HTML report")
 ```
 
-### Page Objects (`src/pages/`)
-
-Each page class handles one GDS2 screen.
-
-**BasePage methods:**
-- `is_displayed()` - Check if page is active
-- `has_home_button()` / `has_back_button()` - Check navigation
-- `click_home()` / `click_back()` - Navigate
-
-**Page-specific methods return next page:**
-```python
-class DiagnosticsMenuPage(BasePage):
-    def select_vehicle_diagnostics(self) -> 'VehicleDiagnosticsPage':
-        self.driver.click_list_item(Loc.DiagnosticsMenu.VEHICLE_DIAGNOSTICS)
-        self.driver.click_button(Loc.DiagnosticsMenu.ENTER_BTN)
-        return VehicleDiagnosticsPage(self.driver)
-```
-
 ---
 
 ## GDS2 Integration Details
@@ -660,9 +659,9 @@ python main.py inspect
 
 **Python code:**
 ```python
-from src.workflows import ReadDataDisplayWorkflow
+from src.workflows import ReadDataDisplayAgentWorkflow
 
-workflow = ReadDataDisplayWorkflow(vehicle_id="current_vehicle")
+workflow = ReadDataDisplayAgentWorkflow()
 result = workflow.execute(
     vci_device="SM2 USB",
     target_module="[K20] Engine Control Module",
@@ -787,9 +786,10 @@ python main.py demo --module "New Module" --data "New Data Category"
 
 ### Test Imports
 ```bash
-python -c "from src.workflows import ReadDataDisplayWorkflow; print('OK')"
+python -c "from src.workflows import ReadDataDisplayAgentWorkflow; print('OK')"
+python -c "from src.streaming import AgentNavigator, AgentDataCollector; print('OK')"
+python -c "from src.native import handle_device_explorer; print('OK')"
 python -c "from src.discovery import VehicleDiscovery, VehicleMapping; print('OK')"
-python -c "from src.workflows.base_workflow import BaseWorkflow; print('OK')"
 ```
 
 ### Troubleshooting
@@ -824,7 +824,90 @@ python -c "from src.workflows.base_workflow import BaseWorkflow; print('OK')"
 
 ---
 
-## Recent Changes (2026-01-28)
+## Recent Changes (2026-01-30)
+
+### Code Cleanup & Optimization
+1. **Fixed Hardcoded Paths** - All paths now use relative `Path(__file__)` references
+   - `src/core/template_matcher.py` - IMAGES_DIR
+   - `src/workflows/base_workflow.py` - IMAGES_DIR
+   - `src/streaming/realtime_collector.py` - template_dir
+   - `scripts/test_import.py` - sys.path
+
+2. **Deleted Unused Modules**
+   - `src/core/ocr.py` - Never imported
+   - `src/core/exceptions.py` - Never imported
+   - `src/core/interfaces/` - Empty directory
+   - `src/vision/` - VLM and screenshot comparator (unused)
+   - `src/config/` - Empty directory
+   - `src/pages/` - Unused Page Objects (module_list_page.py, etc.)
+
+3. **Organized Scripts**
+   - Created `scripts/legacy/` for old test scripts
+   - Created `scripts/exploration/` for exploration scripts
+   - Moved 7 legacy tests and 5 exploration scripts
+
+4. **Cleaned Misc Files**
+   - Removed `nul`, `scenicView.properties`, `templates/index.html.backup`
+
+### Major Updates: Java Agent Integration
+1. **High-Frequency Agent Monitoring** - Direct JVM data extraction
+   - 100ms collection interval (vs 3000ms with HTML parsing)
+   - ~50ms latency (vs ~1500ms waiting for file writes)
+   - No UI interaction required (no Create Report clicking)
+   - DTCs automatically included in every snapshot
+
+2. **Enhanced Java Agent (v2.0)**
+   - Table type detection: `dtc`, `data_display`, `unknown`
+   - Page context detection from window titles and labels
+   - Compact JSON output for high-frequency writes
+   - Extraction duration metrics
+   - Default 100ms interval (minimum 50ms)
+
+3. **New AgentDataCollector Class**
+   - Polls `%USERPROFILE%\gds2-data\latest.json`
+   - Parses both v1 and v2 Agent JSON formats
+   - Parameter change detection with unique keys (name|unit)
+   - DTC change detection (added/removed)
+   - Callbacks: `on_snapshot`, `on_param_change`, `on_dtc_change`
+
+4. **Web UI: Agent Monitor Tab**
+   - Real-time Agent status indicator
+   - High-frequency interval options: 100ms, 200ms, 500ms, 1s, 2s
+   - Live DTC panel with count badge
+   - Parameter changes log
+   - Extraction latency display
+
+5. **New API Endpoints**
+   - `/api/agent/status` - Check Agent availability
+   - `/api/agent/stream/start` - Start Agent streaming
+   - `/api/agent/stream/stop` - Stop Agent streaming
+   - `/api/agent/stream/events` - SSE endpoint
+   - `/api/agent/snapshot` - Get latest snapshot
+
+### Files Added (2026-01-30)
+- `src/streaming/agent_data_collector.py` - New Agent-based collector
+- `scripts/test_agent_collector.py` - Agent collector tests
+
+### Files Modified (2026-01-30)
+- `src/streaming/__init__.py` - Export new classes
+- `app.py` - Agent streaming endpoints
+- `templates/index.html` - Agent Monitor tab
+- Java: `DataExtractor.java` - Table type detection, page context, compact JSON
+- Java: `GDS2Agent.java` - 100ms default interval, validation
+
+### Performance Comparison
+
+| Metric | HTML Method | Agent Method |
+|--------|-------------|--------------|
+| Min Interval | 3000ms | 100ms |
+| Latency | ~1500ms | ~50ms |
+| CPU Usage | High (template matching) | Low (JSON parse) |
+| UI Interaction | Click Create Report | None |
+| DTC Extraction | Separate step | Auto-included |
+
+---
+
+## Previous Changes (2026-01-28)
 
 ### Major Updates
 1. **Real-time Data Monitoring** - Background data streaming via SSE
@@ -863,7 +946,6 @@ python -c "from src.workflows.base_workflow import BaseWorkflow; print('OK')"
 - `app.py` - Flask Web UI backend
 - `templates/index.html` - Web UI frontend
 - `src/discovery/vehicle_mapping.py` - Discovery system
-- `src/vision/vlm_finder.py` - VLM fallback (optional)
 - `scripts/run_discovery.py` - Discovery utility
 - `images/buttons/*.png` - Button templates
 - `images/devices/*.png` - Device templates

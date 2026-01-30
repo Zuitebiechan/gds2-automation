@@ -22,8 +22,8 @@ from PIL import ImageGrab
 
 logger = logging.getLogger(__name__)
 
-# Image directories - absolute path to shared images
-IMAGES_DIR = Path(r"C:\Users\shsww\projects\RPA_demo\images")
+# Image directories (relative to this file's location)
+IMAGES_DIR = Path(__file__).parent.parent.parent / "images"
 BUTTONS_DIR = IMAGES_DIR / "buttons"
 LIST_ITEMS_DIR = IMAGES_DIR / "list_items"
 DEVICES_DIR = IMAGES_DIR / "devices"

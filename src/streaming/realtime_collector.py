@@ -97,7 +97,7 @@ class RealtimeDataCollector:
         on_full_data: Optional[Callable[[List[ParameterValue]], None]] = None,
         on_error: Optional[Callable[[str], None]] = None,
         interval_seconds: float = 3.0,
-        template_dir: Path = Path(r"C:\Users\shsww\projects\RPA_demo\images\buttons"),
+        template_dir: Path = Path(__file__).parent.parent.parent / "images" / "buttons",
     ):
         """
         Initialize the collector.
