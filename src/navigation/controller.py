@@ -1,0 +1,1079 @@
+"""
+Navigation Controller for GDS2.
+
+Manages GDS2 application state and provides state-aware navigation.
+Infers current page from visible buttons and list items via Java Agent.
+
+No Java Agent changes required - page detection uses existing Agent APIs.
+"""
+
+import logging
+import time
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Dict, List, Optional, Any
+
+logger = logging.getLogger(__name__)
+
+
+class GDS2Page(Enum):
+    """All known pages in GDS2 application."""
+    UNKNOWN = "unknown"
+    MAIN_MENU = "main_menu"
+    DEVICE_EXPLORER = "device_explorer"     # Win32 dialog (not JavaFX)
+    VEHICLE_SELECTION = "vehicle_selection"
+    DIAGNOSTICS_MENU = "diagnostics_menu"
+    MODULE_LIST = "module_list"
+    MODULE_SUBMENU = "module_submenu"
+    DATA_LIST = "data_list"
+    SUB_DATA_LIST = "sub_data_list"         # Sub-categories for some data
+    DATA_DISPLAY = "data_display"
+
+
+@dataclass
+class NavigationResult:
+    """Result of a navigation action."""
+    success: bool
+    page: GDS2Page
+    choices: Optional[List[str]] = None     # Available items to select
+    selected: Optional[str] = None          # What was just selected
+    error: Optional[str] = None             # Error message if failed
+    context: Dict[str, Any] = field(default_factory=dict)  # module, data_category, etc.
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "success": self.success,
+            "page": self.page.value,
+            "choices": self.choices,
+            "selected": self.selected,
+            "error": self.error,
+            "context": self.context,
+        }
+
+
+class NavigationController:
+    """
+    State-aware navigation controller for GDS2.
+
+    Manages navigation history and provides intelligent page detection
+    using the Java Agent's button and list enumeration capabilities.
+    """
+
+    def __init__(self, nav=None):
+        """
+        Initialize navigation controller.
+
+        Args:
+            nav: AgentNavigator instance. If None, will create one.
+        """
+        self._nav = nav
+        self._history: List[GDS2Page] = []
+        self._current_page = GDS2Page.UNKNOWN
+        self._context: Dict[str, Any] = {
+            "module": None,
+            "data_category": None,
+            "sub_category": None,
+            "device": None,
+        }
+
+    @property
+    def nav(self):
+        """Lazy-load AgentNavigator."""
+        if self._nav is None:
+            from ..streaming import AgentNavigator
+            self._nav = AgentNavigator(timeout_sec=15.0)
+        return self._nav
+
+    @property
+    def current_page(self) -> GDS2Page:
+        """Get current page (cached)."""
+        return self._current_page
+
+    @property
+    def current_module(self) -> Optional[str]:
+        """Get currently selected module."""
+        return self._context.get("module")
+
+    @property
+    def current_data_category(self) -> Optional[str]:
+        """Get currently selected data category."""
+        return self._context.get("data_category")
+
+    @property
+    def current_sub_category(self) -> Optional[str]:
+        """Get currently selected sub-category."""
+        return self._context.get("sub_category")
+
+    @property
+    def history(self) -> List[GDS2Page]:
+        """Get navigation history (breadcrumb)."""
+        return self._history.copy()
+
+    def check_agent(self) -> bool:
+        """Check if Java Agent is available."""
+        return self.nav.check_agent()
+
+    # =========================================================================
+    # Page Detection
+    # =========================================================================
+
+    def detect_current_page(self, retries: int = 1, retry_delay: float = 1.5) -> GDS2Page:
+        """
+        Detect current page from visible buttons and list items.
+
+        Uses heuristics based on button combinations and list contents.
+        Does NOT require any Java Agent changes - uses existing APIs.
+
+        Args:
+            retries: Number of additional attempts if UNKNOWN (default: 1)
+            retry_delay: Delay between retries in seconds
+
+        Returns:
+            Detected GDS2Page
+        """
+        for attempt in range(1 + retries):
+            try:
+                buttons = self.nav.get_buttons()
+                button_texts = {b.get('text', '') for b in buttons if b.get('text')}
+
+                items = self.nav.get_list_items(0)
+
+                logger.debug(f"Page detection attempt {attempt + 1} - Buttons: {button_texts}")
+                logger.debug(f"Page detection attempt {attempt + 1} - List items count: {len(items)}, items: {items[:5] if items else []}")
+
+                # Detection rules - ORDER MATTERS!
+                # More specific rules (with list content checks) come FIRST
+                # Generic button-only rules come LAST
+
+                # 1. DATA_DISPLAY: Has "Create Report" button (most specific)
+                if "Create Report" in button_texts:
+                    self._current_page = GDS2Page.DATA_DISPLAY
+                    return self._current_page
+
+                # 2. MAIN_MENU: Has "Diagnostics" and "Update" buttons
+                if "Diagnostics" in button_texts and "Update" in button_texts:
+                    self._current_page = GDS2Page.MAIN_MENU
+                    return self._current_page
+
+                # 3. MODULE_SUBMENU: List contains "Data Display"
+                if items and any("Data Display" in item for item in items):
+                    self._current_page = GDS2Page.MODULE_SUBMENU
+                    return self._current_page
+
+                # 4. DIAGNOSTICS_MENU: List contains "Module Diagnostics"
+                if items and any("Module Diagnostics" in item for item in items):
+                    self._current_page = GDS2Page.DIAGNOSTICS_MENU
+                    return self._current_page
+
+                # 5. MODULE_LIST: List items look like modules (contain brackets like [K20])
+                if items and any("[" in item and "]" in item for item in items):
+                    self._current_page = GDS2Page.MODULE_LIST
+                    return self._current_page
+
+                # 6. DATA_LIST: Has list items and Back button (but not specific markers above)
+                if items and "Back" in button_texts:
+                    self._current_page = GDS2Page.DATA_LIST
+                    return self._current_page
+
+                # 7. VEHICLE_SELECTION: Has "Enter" button but NO list items
+                #    (Important: must come AFTER list-based checks)
+                if "Enter" in button_texts and not items:
+                    self._current_page = GDS2Page.VEHICLE_SELECTION
+                    return self._current_page
+
+                # 8. Also check for "Disconnect" or "Select Device" buttons for VEHICLE_SELECTION
+                if "Disconnect" in button_texts or "Select Device" in button_texts:
+                    self._current_page = GDS2Page.VEHICLE_SELECTION
+                    return self._current_page
+
+                # If UNKNOWN and we have retries left, wait and try again
+                if attempt < retries:
+                    logger.info(f"Page detection returned UNKNOWN, retrying in {retry_delay}s...")
+                    time.sleep(retry_delay)
+                    continue
+
+                self._current_page = GDS2Page.UNKNOWN
+                return self._current_page
+
+            except Exception as e:
+                logger.error(f"Page detection failed: {e}")
+                if attempt < retries:
+                    time.sleep(retry_delay)
+                    continue
+                self._current_page = GDS2Page.UNKNOWN
+                return GDS2Page.UNKNOWN
+
+        self._current_page = GDS2Page.UNKNOWN
+        return GDS2Page.UNKNOWN
+
+    def refresh_state(self) -> GDS2Page:
+        """Refresh and return current page state."""
+        return self.detect_current_page()
+
+    # =========================================================================
+    # Navigation Actions
+    # =========================================================================
+
+    def go_back(self) -> NavigationResult:
+        """
+        Click Back button and update state.
+
+        Returns:
+            NavigationResult with new page info
+        """
+        try:
+            result = self.nav.click_button("Back")
+            if not result.get('success'):
+                return NavigationResult(
+                    success=False,
+                    page=self._current_page,
+                    error=f"Failed to click Back: {result.get('message')}",
+                    context=self._context.copy(),
+                )
+
+            time.sleep(1.5)
+
+            # Pop from history if possible
+            if self._history:
+                self._history.pop()
+
+            # Detect new page
+            new_page = self.detect_current_page()
+
+            # Update context based on navigation
+            if new_page == GDS2Page.DATA_LIST:
+                self._context["sub_category"] = None
+            elif new_page == GDS2Page.MODULE_SUBMENU:
+                self._context["data_category"] = None
+                self._context["sub_category"] = None
+            elif new_page == GDS2Page.MODULE_LIST:
+                self._context["module"] = None
+                self._context["data_category"] = None
+                self._context["sub_category"] = None
+
+            return NavigationResult(
+                success=True,
+                page=new_page,
+                context=self._context.copy(),
+            )
+
+        except Exception as e:
+            logger.exception(f"go_back failed: {e}")
+            return NavigationResult(
+                success=False,
+                page=self._current_page,
+                error=str(e),
+                context=self._context.copy(),
+            )
+
+    def go_home(self) -> NavigationResult:
+        """
+        Click Home button to return to Main Menu.
+
+        Returns:
+            NavigationResult with Main Menu page
+        """
+        try:
+            result = self.nav.click_button("Home")
+            if not result.get('success'):
+                return NavigationResult(
+                    success=False,
+                    page=self._current_page,
+                    error=f"Failed to click Home: {result.get('message')}",
+                    context=self._context.copy(),
+                )
+
+            time.sleep(2)
+
+            # Clear history and context
+            self._history.clear()
+            self._context = {
+                "module": None,
+                "data_category": None,
+                "sub_category": None,
+                "device": self._context.get("device"),  # Keep device selection
+            }
+
+            self._current_page = GDS2Page.MAIN_MENU
+
+            return NavigationResult(
+                success=True,
+                page=GDS2Page.MAIN_MENU,
+                context=self._context.copy(),
+            )
+
+        except Exception as e:
+            logger.exception(f"go_home failed: {e}")
+            return NavigationResult(
+                success=False,
+                page=self._current_page,
+                error=str(e),
+                context=self._context.copy(),
+            )
+
+    def navigate_to(self, target: GDS2Page) -> NavigationResult:
+        """
+        Navigate from current page to target page.
+
+        Clicks Back button as needed to reach the target page.
+        Only supports navigating "back" (up the hierarchy).
+
+        Args:
+            target: Target page to navigate to
+
+        Returns:
+            NavigationResult with target page info or error
+        """
+        # Page hierarchy (depth from Main Menu)
+        page_depth = {
+            GDS2Page.MAIN_MENU: 0,
+            GDS2Page.DIAGNOSTICS_MENU: 1,
+            GDS2Page.MODULE_LIST: 2,
+            GDS2Page.MODULE_SUBMENU: 3,
+            GDS2Page.DATA_LIST: 4,
+            GDS2Page.SUB_DATA_LIST: 5,
+            GDS2Page.DATA_DISPLAY: 5,  # Same depth as SUB_DATA_LIST
+        }
+
+        current = self.detect_current_page()
+        current_depth = page_depth.get(current, 0)
+        target_depth = page_depth.get(target, 0)
+
+        if target_depth > current_depth:
+            return NavigationResult(
+                success=False,
+                page=current,
+                error=f"Cannot navigate forward to {target.value}. Use specific selection methods.",
+                context=self._context.copy(),
+            )
+
+        # Navigate back until we reach target
+        max_attempts = 10
+        for _ in range(max_attempts):
+            current = self.detect_current_page()
+            if current == target:
+                return NavigationResult(
+                    success=True,
+                    page=current,
+                    context=self._context.copy(),
+                )
+
+            # Special case: Home for Main Menu
+            if target == GDS2Page.MAIN_MENU:
+                return self.go_home()
+
+            result = self.go_back()
+            if not result.success:
+                return result
+
+        return NavigationResult(
+            success=False,
+            page=self._current_page,
+            error=f"Could not reach {target.value} after {max_attempts} attempts",
+            context=self._context.copy(),
+        )
+
+    # =========================================================================
+    # State Queries
+    # =========================================================================
+
+    def get_visible_buttons(self) -> List[str]:
+        """Get list of visible button texts."""
+        buttons = self.nav.get_buttons()
+        return [b.get('text', '') for b in buttons if b.get('text')]
+
+    def get_list_items(self, list_index: int = 0) -> List[str]:
+        """Get list items from current page."""
+        return self.nav.get_list_items(list_index)
+
+    def wait_for_list(self, list_index: int = 0, max_attempts: int = 15) -> List[str]:
+        """Wait for list items to load."""
+        for attempt in range(max_attempts):
+            items = self.nav.get_list_items(list_index)
+            if items:
+                return items
+            logger.debug(f"Waiting for list... ({attempt + 1}/{max_attempts})")
+            time.sleep(1)
+        return []
+
+    # =========================================================================
+    # Selection Methods
+    # =========================================================================
+
+    def select_list_item(
+        self,
+        item_text: str,
+        list_index: int = 0,
+        double_click: bool = True
+    ) -> NavigationResult:
+        """
+        Select a list item by text (partial match).
+
+        Args:
+            item_text: Text to search for
+            list_index: Index of the list (0 = first)
+            double_click: Whether to double-click
+
+        Returns:
+            NavigationResult
+        """
+        items = self.wait_for_list(list_index)
+        if not items:
+            return NavigationResult(
+                success=False,
+                page=self._current_page,
+                error="No list items found",
+                choices=items,
+                context=self._context.copy(),
+            )
+
+        # Find matching item
+        target_index = None
+        matched_item = None
+        for i, item in enumerate(items):
+            if item_text in item or item in item_text:
+                target_index = i
+                matched_item = item
+                break
+
+        if target_index is None:
+            return NavigationResult(
+                success=False,
+                page=self._current_page,
+                error=f"Item '{item_text}' not found",
+                choices=items,
+                context=self._context.copy(),
+            )
+
+        result = self.nav.select_list_item(list_index, target_index, double_click=double_click)
+        if not result.get('success'):
+            return NavigationResult(
+                success=False,
+                page=self._current_page,
+                error=f"Failed to select item: {result.get('message')}",
+                selected=matched_item,
+                context=self._context.copy(),
+            )
+
+        time.sleep(2)
+
+        # Update history
+        self._history.append(self._current_page)
+
+        # Detect new page
+        new_page = self.detect_current_page()
+
+        return NavigationResult(
+            success=True,
+            page=new_page,
+            selected=matched_item,
+            context=self._context.copy(),
+        )
+
+    def click_button(self, button_text: str) -> NavigationResult:
+        """
+        Click a button by text.
+
+        Args:
+            button_text: Button text to click
+
+        Returns:
+            NavigationResult
+        """
+        result = self.nav.click_button(button_text)
+        if not result.get('success'):
+            return NavigationResult(
+                success=False,
+                page=self._current_page,
+                error=f"Failed to click '{button_text}': {result.get('message')}",
+                context=self._context.copy(),
+            )
+
+        time.sleep(1.5)
+
+        # Detect new page
+        new_page = self.detect_current_page()
+
+        return NavigationResult(
+            success=True,
+            page=new_page,
+            context=self._context.copy(),
+        )
+
+    def dismiss_warning_dialog(self) -> bool:
+        """Dismiss warning dialog if present (OK button)."""
+        for _ in range(3):
+            buttons = self.nav.get_buttons()
+            button_texts = [b.get('text', '') for b in buttons]
+            if "OK" in button_texts:
+                logger.info("Warning dialog detected, clicking OK...")
+                result = self.nav.click_button("OK")
+                if result.get('success'):
+                    time.sleep(1)
+                    return True
+            time.sleep(0.3)
+        return False
+
+    # =========================================================================
+    # Device Explorer Integration (Phase 2)
+    # =========================================================================
+
+    def start_diagnostics(self) -> NavigationResult:
+        """
+        Click Diagnostics button from Main Menu.
+
+        If Device Explorer appears, returns the list of available devices.
+        Otherwise, returns the current page for user to proceed manually.
+
+        Returns:
+            NavigationResult with:
+            - page: DEVICE_EXPLORER if dialog appears, or detected page
+            - choices: List of device names if DEVICE_EXPLORER, or menu items
+        """
+        try:
+            result = self.nav.click_button("Diagnostics")
+            if not result.get('success'):
+                return NavigationResult(
+                    success=False,
+                    page=self._current_page,
+                    error=f"Failed to click Diagnostics: {result.get('message')}",
+                    context=self._context.copy(),
+                )
+
+            time.sleep(3)  # Wait for Device Explorer or next page
+
+            # Check if Device Explorer appeared
+            from ..native import DeviceExplorerController
+            device_controller = DeviceExplorerController()
+
+            if device_controller.find_dialog(timeout_sec=2.0):
+                # Device Explorer appeared - get device list
+                devices = device_controller.get_device_names()
+                self._current_page = GDS2Page.DEVICE_EXPLORER
+
+                return NavigationResult(
+                    success=True,
+                    page=GDS2Page.DEVICE_EXPLORER,
+                    choices=devices,
+                    context=self._context.copy(),
+                )
+            else:
+                # No Device Explorer - detect current page
+                # Do NOT auto-click Enter, let user decide
+                new_page = self.detect_current_page(retries=3, retry_delay=1.5)
+                logger.info(f"After Diagnostics click, detected page: {new_page.value}")
+
+                self._history.append(GDS2Page.MAIN_MENU)
+
+                # Get choices for the current page
+                choices = None
+                if new_page in (GDS2Page.DIAGNOSTICS_MENU, GDS2Page.MODULE_LIST, GDS2Page.DATA_LIST, GDS2Page.VEHICLE_SELECTION):
+                    choices = self.get_list_items()
+
+                return NavigationResult(
+                    success=True,
+                    page=new_page,
+                    choices=choices,
+                    context=self._context.copy(),
+                )
+
+        except Exception as e:
+            logger.exception(f"start_diagnostics failed: {e}")
+            return NavigationResult(
+                success=False,
+                page=self._current_page,
+                error=str(e),
+                context=self._context.copy(),
+            )
+
+    def select_device(self, device_name: str) -> NavigationResult:
+        """
+        Select a device in Device Explorer and click Continue.
+
+        After device selection, returns Vehicle Selection page for user to proceed.
+
+        Args:
+            device_name: Name of device to select (e.g., "SM2 USB")
+
+        Returns:
+            NavigationResult with VEHICLE_SELECTION page
+        """
+        try:
+            from ..native import DeviceExplorerController
+            device_controller = DeviceExplorerController()
+
+            if not device_controller.find_dialog(timeout_sec=2.0):
+                return NavigationResult(
+                    success=False,
+                    page=self._current_page,
+                    error="Device Explorer not found",
+                    context=self._context.copy(),
+                )
+
+            # Select device
+            if not device_controller.select_device_by_name(device_name):
+                devices = device_controller.get_device_names()
+                return NavigationResult(
+                    success=False,
+                    page=GDS2Page.DEVICE_EXPLORER,
+                    error=f"Device '{device_name}' not found",
+                    choices=devices,
+                    context=self._context.copy(),
+                )
+
+            time.sleep(0.3)
+
+            # Click Continue
+            if not device_controller.click_continue():
+                return NavigationResult(
+                    success=False,
+                    page=GDS2Page.DEVICE_EXPLORER,
+                    error="Failed to click Continue",
+                    context=self._context.copy(),
+                )
+
+            time.sleep(3)
+
+            # Update context
+            self._context["device"] = device_name
+
+            # Detect current page - do NOT auto-click Enter
+            new_page = self.detect_current_page(retries=3, retry_delay=1.5)
+            logger.info(f"After device selection, detected page: {new_page.value}")
+
+            self._history.append(GDS2Page.DEVICE_EXPLORER)
+
+            # Get choices for the new page
+            choices = None
+            if new_page in (GDS2Page.DIAGNOSTICS_MENU, GDS2Page.MODULE_LIST, GDS2Page.VEHICLE_SELECTION):
+                choices = self.get_list_items()
+
+            return NavigationResult(
+                success=True,
+                page=new_page,
+                selected=device_name,
+                choices=choices,
+                context=self._context.copy(),
+            )
+
+        except Exception as e:
+            logger.exception(f"select_device failed: {e}")
+            return NavigationResult(
+                success=False,
+                page=self._current_page,
+                error=str(e),
+                context=self._context.copy(),
+            )
+
+    def disconnect_device(self) -> NavigationResult:
+        """
+        Disconnect current device from Vehicle Selection page.
+
+        Click the "Disconnect" button to disconnect from VCI device.
+        Must be at Vehicle Selection page.
+
+        Returns:
+            NavigationResult with success status
+        """
+        try:
+            # First check if we're at Vehicle Selection
+            current = self.detect_current_page()
+            if current != GDS2Page.VEHICLE_SELECTION:
+                return NavigationResult(
+                    success=False,
+                    page=current,
+                    error=f"Must be at Vehicle Selection page to disconnect. Current: {current.value}",
+                    context=self._context.copy(),
+                )
+
+            # Click Disconnect button
+            result = self.nav.click_button("Disconnect")
+            if not result.get('success'):
+                return NavigationResult(
+                    success=False,
+                    page=current,
+                    error=f"Failed to click Disconnect: {result.get('message')}",
+                    context=self._context.copy(),
+                )
+
+            time.sleep(2)
+
+            # Clear device from context
+            self._context["device"] = None
+
+            logger.info("Device disconnected successfully")
+
+            return NavigationResult(
+                success=True,
+                page=GDS2Page.VEHICLE_SELECTION,
+                context=self._context.copy(),
+            )
+
+        except Exception as e:
+            logger.exception(f"disconnect_device failed: {e}")
+            return NavigationResult(
+                success=False,
+                page=self._current_page,
+                error=str(e),
+                context=self._context.copy(),
+            )
+
+    def open_device_selector(self) -> NavigationResult:
+        """
+        Open Device Explorer from Vehicle Selection page.
+
+        Click "Select Device" button to re-open Device Explorer dialog.
+        Must be at Vehicle Selection page after disconnecting.
+
+        Returns:
+            NavigationResult with:
+            - page: DEVICE_EXPLORER
+            - choices: List of available devices
+        """
+        try:
+            # First check if we're at Vehicle Selection
+            current = self.detect_current_page()
+            if current != GDS2Page.VEHICLE_SELECTION:
+                return NavigationResult(
+                    success=False,
+                    page=current,
+                    error=f"Must be at Vehicle Selection page. Current: {current.value}",
+                    context=self._context.copy(),
+                )
+
+            # Click Select Device button
+            result = self.nav.click_button("Select Device")
+            if not result.get('success'):
+                return NavigationResult(
+                    success=False,
+                    page=current,
+                    error=f"Failed to click Select Device: {result.get('message')}",
+                    context=self._context.copy(),
+                )
+
+            time.sleep(2)
+
+            # Check if Device Explorer appeared
+            from ..native import DeviceExplorerController
+            device_controller = DeviceExplorerController()
+
+            if device_controller.find_dialog(timeout_sec=5.0):
+                devices = device_controller.get_device_names()
+                self._current_page = GDS2Page.DEVICE_EXPLORER
+
+                return NavigationResult(
+                    success=True,
+                    page=GDS2Page.DEVICE_EXPLORER,
+                    choices=devices,
+                    context=self._context.copy(),
+                )
+            else:
+                return NavigationResult(
+                    success=False,
+                    page=GDS2Page.VEHICLE_SELECTION,
+                    error="Device Explorer dialog did not appear",
+                    context=self._context.copy(),
+                )
+
+        except Exception as e:
+            logger.exception(f"open_device_selector failed: {e}")
+            return NavigationResult(
+                success=False,
+                page=self._current_page,
+                error=str(e),
+                context=self._context.copy(),
+            )
+
+    def click_enter(self) -> NavigationResult:
+        """
+        Click Enter button (typically at Vehicle Selection page).
+
+        Retries page detection if still at Vehicle Selection after clicking.
+        If GDS2 auto-navigates to Module List (skipping Diagnostics Menu),
+        clicks Back to return to Diagnostics Menu.
+
+        Returns:
+            NavigationResult with next page after clicking Enter
+        """
+        try:
+            result = self.nav.click_button("Enter")
+            if not result.get('success'):
+                return NavigationResult(
+                    success=False,
+                    page=self._current_page,
+                    error=f"Failed to click Enter: {result.get('message')}",
+                    context=self._context.copy(),
+                )
+
+            time.sleep(3)
+
+            # Dismiss any warning dialogs
+            self.dismiss_warning_dialog()
+
+            # Detect new page with retries - GDS2 may take time to transition
+            for attempt in range(3):
+                new_page = self.detect_current_page(retries=2, retry_delay=1.5)
+                logger.info(f"After Enter attempt {attempt + 1}, detected page: {new_page.value}")
+
+                # If we've left Vehicle Selection, we're done
+                if new_page != GDS2Page.VEHICLE_SELECTION:
+                    break
+
+                # Still at Vehicle Selection - try clicking Enter again
+                logger.info("Still at Vehicle Selection, retrying Enter...")
+                self.nav.click_button("Enter")
+                time.sleep(3)
+                self.dismiss_warning_dialog()
+
+            # If GDS2 auto-navigated to Module List (skipping Diagnostics Menu),
+            # click Back to return to Diagnostics Menu so user can choose
+            if new_page == GDS2Page.MODULE_LIST:
+                logger.info("GDS2 auto-navigated to Module List, clicking Back to return to Diagnostics Menu...")
+                back_result = self.nav.click_button("Back")
+                if back_result.get('success'):
+                    time.sleep(2)
+                    new_page = self.detect_current_page(retries=2, retry_delay=1.0)
+                    logger.info(f"After Back, detected page: {new_page.value}")
+
+            # Get choices for the new page
+            choices = None
+            if new_page in (GDS2Page.DIAGNOSTICS_MENU, GDS2Page.MODULE_LIST, GDS2Page.DATA_LIST):
+                choices = self.get_list_items()
+
+            return NavigationResult(
+                success=True,
+                page=new_page,
+                choices=choices,
+                context=self._context.copy(),
+            )
+
+        except Exception as e:
+            logger.exception(f"click_enter failed: {e}")
+            return NavigationResult(
+                success=False,
+                page=self._current_page,
+                error=str(e),
+                context=self._context.copy(),
+            )
+
+    def get_available_buttons(self) -> Dict[str, bool]:
+        """
+        Get available buttons and their enabled status for the current page.
+
+        Returns:
+            Dict mapping button name to enabled status
+        """
+        try:
+            buttons = self.nav.get_buttons()
+            button_states = {}
+
+            for btn in buttons:
+                name = btn.get('text', '')
+                if name:
+                    # Assume all visible buttons are enabled
+                    # (Agent doesn't provide enabled state, so we infer from visibility)
+                    button_states[name] = True
+
+            return button_states
+
+        except Exception as e:
+            logger.error(f"Failed to get button states: {e}")
+            return {}
+
+    # =========================================================================
+    # Context Management
+    # =========================================================================
+
+    # =========================================================================
+    # Sub-category Support (Phase 3)
+    # =========================================================================
+
+    def select_data_category(self, data_category: str) -> NavigationResult:
+        """
+        Select a data category from the Data List.
+
+        After selection, detects whether the page transitions to:
+        - DATA_DISPLAY: Category has no sub-categories (Create Report visible)
+        - SUB_DATA_LIST: Category has sub-categories (new list appears)
+
+        Args:
+            data_category: Name of data category to select
+
+        Returns:
+            NavigationResult with:
+            - page: DATA_DISPLAY or SUB_DATA_LIST
+            - choices: Sub-category list if SUB_DATA_LIST
+        """
+        items = self.wait_for_list()
+        if not items:
+            return NavigationResult(
+                success=False,
+                page=self._current_page,
+                error="No data categories found",
+                context=self._context.copy(),
+            )
+
+        # Find matching item
+        target_index = None
+        matched_item = None
+        for i, item in enumerate(items):
+            if data_category in item or item in data_category:
+                target_index = i
+                matched_item = item
+                break
+
+        if target_index is None:
+            return NavigationResult(
+                success=False,
+                page=self._current_page,
+                error=f"Data category '{data_category}' not found",
+                choices=items,
+                context=self._context.copy(),
+            )
+
+        # Select the item
+        result = self.nav.select_list_item(0, target_index, double_click=True)
+        if not result.get('success'):
+            return NavigationResult(
+                success=False,
+                page=self._current_page,
+                error=f"Failed to select data category: {result.get('message')}",
+                context=self._context.copy(),
+            )
+
+        time.sleep(3)
+
+        # Update context
+        self._context["data_category"] = matched_item
+        self._context["sub_category"] = None
+
+        # Detect what appeared: Data Display or Sub-category list
+        new_page = self.detect_current_page()
+
+        if new_page == GDS2Page.DATA_DISPLAY:
+            self._history.append(self._current_page)
+            self._current_page = GDS2Page.DATA_DISPLAY
+            return NavigationResult(
+                success=True,
+                page=GDS2Page.DATA_DISPLAY,
+                selected=matched_item,
+                context=self._context.copy(),
+            )
+
+        # Check for sub-categories (list items but no Create Report)
+        sub_items = self.nav.get_list_items(0)
+        if sub_items:
+            self._history.append(self._current_page)
+            self._current_page = GDS2Page.SUB_DATA_LIST
+            return NavigationResult(
+                success=True,
+                page=GDS2Page.SUB_DATA_LIST,
+                selected=matched_item,
+                choices=sub_items,
+                context=self._context.copy(),
+            )
+
+        # Fallback
+        self._history.append(self._current_page)
+        return NavigationResult(
+            success=True,
+            page=new_page,
+            selected=matched_item,
+            context=self._context.copy(),
+        )
+
+    def select_sub_category(self, sub_category: str) -> NavigationResult:
+        """
+        Select a sub-category from the Sub Data List.
+
+        Args:
+            sub_category: Name of sub-category to select
+
+        Returns:
+            NavigationResult with page info (should be DATA_DISPLAY)
+        """
+        items = self.wait_for_list()
+        if not items:
+            return NavigationResult(
+                success=False,
+                page=self._current_page,
+                error="No sub-categories found",
+                context=self._context.copy(),
+            )
+
+        # Find matching item
+        target_index = None
+        matched_item = None
+        for i, item in enumerate(items):
+            if sub_category in item or item in sub_category:
+                target_index = i
+                matched_item = item
+                break
+
+        if target_index is None:
+            return NavigationResult(
+                success=False,
+                page=self._current_page,
+                error=f"Sub-category '{sub_category}' not found",
+                choices=items,
+                context=self._context.copy(),
+            )
+
+        result = self.nav.select_list_item(0, target_index, double_click=True)
+        if not result.get('success'):
+            return NavigationResult(
+                success=False,
+                page=self._current_page,
+                error=f"Failed to select sub-category: {result.get('message')}",
+                context=self._context.copy(),
+            )
+
+        time.sleep(3)
+
+        # Update context
+        self._context["sub_category"] = matched_item
+
+        # Detect new page (should be Data Display)
+        new_page = self.detect_current_page()
+        self._history.append(self._current_page)
+        self._current_page = new_page
+
+        return NavigationResult(
+            success=True,
+            page=new_page,
+            selected=matched_item,
+            context=self._context.copy(),
+        )
+
+    def set_context(self, **kwargs):
+        """Update navigation context."""
+        for key, value in kwargs.items():
+            if key in self._context:
+                self._context[key] = value
+
+    def clear_context(self):
+        """Clear all context except device."""
+        device = self._context.get("device")
+        self._context = {
+            "module": None,
+            "data_category": None,
+            "sub_category": None,
+            "device": device,
+        }
+
+    def get_context(self) -> Dict[str, Any]:
+        """Get current navigation context."""
+        return self._context.copy()
+
+    # =========================================================================
+    # String Representation
+    # =========================================================================
+
+    def __repr__(self) -> str:
+        return (
+            f"NavigationController("
+            f"page={self._current_page.value}, "
+            f"module={self._context.get('module')}, "
+            f"data_category={self._context.get('data_category')})"
+        )

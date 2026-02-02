@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GDS2 Automation Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>GDS2 Automation</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -12,203 +12,110 @@
             background: #f0f2f5;
             color: #2c3e50;
             font-size: 14px;
+            -webkit-tap-highlight-color: transparent;
         }
 
-        /* Top bar with state */
         .top-bar {
             background: #fff;
             border-bottom: 1px solid #ddd;
-            padding: 12px 24px;
+            padding: 10px 16px;
             display: flex;
-            align-items: center;
-            justify-content: space-between;
+            flex-direction: column;
+            gap: 8px;
         }
 
-        .top-bar h1 {
-            font-size: 18px;
-            font-weight: 600;
+        @media (min-width: 768px) {
+            .top-bar {
+                flex-direction: row;
+                align-items: center;
+                justify-content: space-between;
+                padding: 12px 24px;
+            }
         }
+
+        .top-bar h1 { font-size: 16px; font-weight: 600; }
 
         .state-row {
             display: flex;
             align-items: center;
-            gap: 16px;
-            font-size: 13px;
+            gap: 12px;
+            font-size: 12px;
+            flex-wrap: wrap;
         }
 
         .state-row .label { color: #888; }
 
         .state-badge {
             display: inline-block;
-            padding: 3px 10px;
+            padding: 3px 8px;
             border-radius: 4px;
-            font-size: 12px;
+            font-size: 11px;
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.3px;
         }
         .state-main_menu { background: #d4edda; color: #155724; }
         .state-module_list { background: #e2e3e5; color: #383d41; }
+        .state-module_submenu { background: #d1ecf1; color: #0c5460; }
         .state-data_list { background: #fff3cd; color: #856404; }
+        .state-sub_data_list { background: #ffeeba; color: #856404; }
         .state-data_display { background: #cce5ff; color: #004085; }
+        .state-device_explorer { background: #e2d5f3; color: #5a3d8a; }
+        .state-vehicle_selection { background: #f5c6cb; color: #721c24; }
+        .state-diagnostics_menu { background: #bee5eb; color: #0c5460; }
         .state-unknown { background: #f8d7da; color: #721c24; }
 
-        .info-item {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-        }
+        .info-item { display: flex; align-items: center; gap: 4px; }
+        .info-item .val { font-weight: 600; color: #2c3e50; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-        .info-item .val { font-weight: 600; color: #2c3e50; }
-
-        /* Tabs */
         .tab-bar {
             background: #fff;
             border-bottom: 2px solid #e1e8ed;
-            padding: 0 24px;
+            padding: 0 8px;
             display: flex;
             gap: 0;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
         }
 
         .tab {
-            padding: 12px 24px;
-            font-size: 14px;
+            padding: 10px 16px;
+            font-size: 13px;
             font-weight: 600;
             color: #888;
             cursor: pointer;
             border-bottom: 2px solid transparent;
             margin-bottom: -2px;
             transition: color 0.15s;
+            white-space: nowrap;
+            flex-shrink: 0;
         }
 
         .tab:hover { color: #555; }
-
-        .tab.active {
-            color: #2c3e50;
-            border-bottom-color: #3498db;
-        }
+        .tab.active { color: #2c3e50; border-bottom-color: #3498db; }
 
         .tab-content { display: none; }
         .tab-content.active { display: block; }
 
-        /* Main layout */
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 20px 24px;
-        }
+        .container { max-width: 1200px; margin: 0 auto; padding: 12px; }
+        @media (min-width: 768px) { .container { padding: 20px 24px; } }
 
-        /* Alerts */
-        .alert {
-            display: none;
-            padding: 10px 14px;
-            border-radius: 6px;
-            margin-bottom: 16px;
-            font-size: 13px;
-        }
+        .alert { display: none; padding: 10px 14px; border-radius: 6px; margin-bottom: 12px; font-size: 13px; }
         .alert.show { display: block; }
         .alert-loading { background: #fff3cd; border: 1px solid #ffc107; color: #856404; }
         .alert-error { background: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; }
         .alert-success { background: #d4edda; border: 1px solid #c3e6cb; color: #155724; }
 
-        /* Progress steps (horizontal) */
-        .progress-steps {
-            display: flex;
-            align-items: center;
-            gap: 0;
-            margin-bottom: 20px;
-            background: #fff;
-            border-radius: 8px;
-            padding: 16px 20px;
-            border: 1px solid #e1e8ed;
-        }
-
-        .step {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            flex: 1;
-        }
-
-        .step-connector {
-            width: 40px;
-            height: 2px;
-            background: #ddd;
-            margin: 0 8px;
-        }
-
-        .step-connector.done { background: #27ae60; }
-
-        .step .num {
-            width: 28px;
-            height: 28px;
-            border-radius: 50%;
-            background: #e1e8ed;
-            color: #999;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: 700;
-            font-size: 13px;
-            flex-shrink: 0;
-        }
-
-        .step.active .num { background: #3498db; color: #fff; }
-        .step.done .num { background: #27ae60; color: #fff; }
-
-        .step .text { font-size: 13px; color: #888; }
-        .step.active .text { color: #2c3e50; font-weight: 600; }
-        .step.done .text { color: #27ae60; font-weight: 600; }
-
-        /* Action panel */
-        .action-panel {
-            background: #fff;
-            border-radius: 8px;
-            border: 1px solid #e1e8ed;
-            padding: 20px;
-            margin-bottom: 20px;
-        }
-
-        .action-panel h3 {
-            font-size: 15px;
-            margin-bottom: 4px;
-        }
-
-        .action-panel .hint {
-            font-size: 12px;
-            color: #888;
-            margin-bottom: 14px;
-        }
-
-        .action-row {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
-        }
-
-        select {
-            padding: 8px 12px;
-            border: 1px solid #ccc;
-            border-radius: 5px;
-            font-size: 13px;
-            background: #fff;
-            min-width: 280px;
-        }
-
-        select:disabled { background: #f5f5f5; cursor: not-allowed; }
+        .panel { background: #fff; border-radius: 8px; border: 1px solid #e1e8ed; padding: 16px; margin-bottom: 12px; }
+        .panel h3 { font-size: 14px; margin-bottom: 4px; }
+        .panel .hint { font-size: 12px; color: #888; margin-bottom: 12px; }
 
         button {
-            padding: 8px 18px;
-            border: none;
-            border-radius: 5px;
-            font-size: 13px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: background 0.15s;
+            padding: 10px 18px; border: none; border-radius: 6px; font-size: 14px; font-weight: 600;
+            cursor: pointer; transition: background 0.15s, transform 0.1s; touch-action: manipulation;
         }
-
-        button:disabled { opacity: 0.4; cursor: not-allowed; }
+        button:active { transform: scale(0.98); }
+        button:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
 
         .btn-primary { background: #3498db; color: #fff; }
         .btn-primary:hover:not(:disabled) { background: #2980b9; }
@@ -218,194 +125,101 @@
         .btn-danger:hover:not(:disabled) { background: #c0392b; }
         .btn-purple { background: #9b59b6; color: #fff; }
         .btn-purple:hover:not(:disabled) { background: #8e44ad; }
-        .btn-outline {
-            background: #fff;
-            color: #555;
-            border: 1px solid #ccc;
-        }
+        .btn-orange { background: #e67e22; color: #fff; }
+        .btn-orange:hover:not(:disabled) { background: #d35400; }
+        .btn-outline { background: #fff; color: #555; border: 1px solid #ccc; }
         .btn-outline:hover:not(:disabled) { background: #f5f5f5; }
+        .btn-small { padding: 6px 12px; font-size: 12px; }
+        .btn-warning { background: #f39c12; color: #fff; }
+        .btn-warning:hover:not(:disabled) { background: #d68910; }
 
-        /* Results section */
-        .results-panel {
-            background: #fff;
-            border-radius: 8px;
-            border: 1px solid #e1e8ed;
-            overflow: hidden;
+        select { padding: 10px 12px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; background: #fff; width: 100%; }
+        select:disabled { background: #f5f5f5; cursor: not-allowed; }
+
+        .action-row { display: flex; flex-direction: column; gap: 10px; }
+        @media (min-width: 600px) {
+            .action-row { flex-direction: row; align-items: center; flex-wrap: wrap; }
+            .action-row select { width: auto; min-width: 280px; }
         }
 
-        .results-header {
-            padding: 14px 20px;
-            border-bottom: 1px solid #e1e8ed;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
+        .choice-grid { display: grid; grid-template-columns: 1fr; gap: 8px; margin: 12px 0; }
+        @media (min-width: 600px) { .choice-grid { grid-template-columns: repeat(2, 1fr); } }
+        @media (min-width: 900px) { .choice-grid { grid-template-columns: repeat(3, 1fr); } }
+
+        .choice-btn {
+            padding: 12px 16px; background: #f8f9fa; border: 2px solid #e1e8ed; border-radius: 8px;
+            font-size: 13px; text-align: left; cursor: pointer; transition: all 0.15s; word-break: break-word;
         }
+        .choice-btn:hover { border-color: #3498db; background: #e8f4fd; }
+        .choice-btn:active { transform: scale(0.98); }
 
-        .results-header h3 { font-size: 15px; }
+        .nav-buttons { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 
-        .results-body { padding: 0; }
-
-        .no-data {
-            text-align: center;
-            padding: 40px;
-            color: #999;
-            font-size: 13px;
-        }
-
-        /* Vehicle info bar */
-        .vehicle-info-bar {
-            display: none;
-            background: #f8f9fa;
-            padding: 10px 20px;
-            border-bottom: 1px solid #e1e8ed;
-            font-size: 12px;
-            color: #666;
-        }
-        .vehicle-info-bar.show { display: flex; gap: 20px; flex-wrap: wrap; }
-        .vehicle-info-bar span { font-weight: 600; color: #333; }
-
-        /* Tables */
-        table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-
-        th {
-            padding: 10px 16px;
-            text-align: left;
-            font-size: 12px;
-            font-weight: 600;
-            color: #666;
-            text-transform: uppercase;
-            letter-spacing: 0.3px;
-            background: #f8f9fa;
-            border-bottom: 1px solid #e1e8ed;
-            position: sticky;
-            top: 0;
-        }
-
-        td {
-            padding: 8px 16px;
-            border-bottom: 1px solid #f0f0f0;
-            font-size: 13px;
-        }
-
+        .table-container { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+        table { width: 100%; border-collapse: collapse; min-width: 400px; }
+        th { padding: 10px 12px; text-align: left; font-size: 11px; font-weight: 600; color: #666; text-transform: uppercase; background: #f8f9fa; border-bottom: 1px solid #e1e8ed; position: sticky; top: 0; }
+        td { padding: 8px 12px; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
         tr:hover { background: #fafbfc; }
+        .table-scroll { max-height: 400px; overflow-y: auto; }
 
-        .table-scroll {
-            max-height: 500px;
-            overflow-y: auto;
-        }
+        .indicator { width: 10px; height: 10px; border-radius: 50%; background: #ccc; display: inline-block; }
+        .indicator.active { background: #27ae60; animation: pulse 1s infinite; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }
 
-        /* Monitoring tab */
-        .monitor-controls {
-            background: #fff;
-            border-radius: 8px;
-            border: 1px solid #e1e8ed;
-            padding: 20px;
-            margin-bottom: 20px;
-        }
-
-        .monitor-controls h3 {
-            font-size: 15px;
-            margin-bottom: 4px;
-        }
-
-        .monitor-controls .hint {
-            font-size: 12px;
-            color: #888;
-            margin-bottom: 14px;
-        }
-
-        .monitor-status {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin-bottom: 14px;
-        }
-
-        .indicator {
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            background: #ccc;
-        }
-
-        .indicator.active {
-            background: #27ae60;
-            animation: pulse 1s infinite;
-        }
-
-        @keyframes pulse {
-            0% { opacity: 1; }
-            50% { opacity: 0.4; }
-            100% { opacity: 1; }
-        }
-
-        .monitor-stats {
-            display: flex;
-            gap: 24px;
-            margin-bottom: 14px;
-            font-size: 13px;
-        }
-
-        .monitor-stats .stat-label { color: #888; }
-        .monitor-stats .stat-value { font-weight: 600; }
-
-        .changes-log {
-            max-height: 180px;
-            overflow-y: auto;
-            background: #f8f9fa;
-            border: 1px solid #e1e8ed;
-            border-radius: 6px;
-            margin-bottom: 16px;
-            display: none;
-        }
-
-        .changes-log.show { display: block; }
-
-        .change-item {
-            padding: 6px 12px;
-            border-bottom: 1px solid #eee;
-            font-size: 12px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
+        .changes-log { max-height: 200px; overflow-y: auto; background: #f8f9fa; border: 1px solid #e1e8ed; border-radius: 6px; margin-bottom: 12px; font-size: 12px; }
+        .change-item { padding: 6px 12px; border-bottom: 1px solid #eee; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
         .change-item:last-child { border-bottom: none; }
-        .change-time { color: #999; min-width: 55px; font-size: 11px; }
-        .change-param { font-weight: 600; color: #2c3e50; min-width: 180px; }
+        .change-time { color: #999; min-width: 50px; font-size: 11px; }
+        .change-param { font-weight: 600; color: #2c3e50; }
         .change-old { color: #e74c3c; text-decoration: line-through; }
         .change-arrow { color: #999; }
         .change-new { color: #27ae60; font-weight: 600; }
 
-        .highlight-change { animation: highlightRow 2s ease-out; }
-        @keyframes highlightRow {
-            0% { background-color: #ffffcc; }
-            100% { background-color: transparent; }
-        }
+        .vehicle-info-bar { display: none; background: #f8f9fa; padding: 10px 16px; border-bottom: 1px solid #e1e8ed; font-size: 12px; color: #666; flex-wrap: wrap; gap: 16px; }
+        .vehicle-info-bar.show { display: flex; }
+        .vehicle-info-bar span { font-weight: 600; color: #333; }
 
-        /* Prereq warning */
-        .prereq-warning {
-            background: #fff3cd;
-            border: 1px solid #ffc107;
-            border-radius: 6px;
-            padding: 12px 16px;
-            margin-bottom: 16px;
-            font-size: 13px;
-            color: #856404;
+        .context-panel { background: #f0f8ff; border: 1px solid #b8daff; border-radius: 8px; padding: 12px 16px; margin-bottom: 12px; }
+        .context-panel .context-title { font-weight: 600; color: #004085; margin-bottom: 8px; }
+        .context-panel .context-item { display: flex; gap: 8px; font-size: 13px; margin-bottom: 4px; }
+        .context-panel .context-label { color: #666; }
+        .context-panel .context-value { font-weight: 600; color: #2c3e50; }
+
+        .agent-badge { display: inline-block; padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; }
+        .agent-badge.available { background: #d4edda; color: #155724; }
+        .agent-badge.unavailable { background: #f8d7da; color: #721c24; }
+        .agent-badge.streaming { background: #cce5ff; color: #004085; }
+
+        .dtc-count-badge { background: #e74c3c; color: #fff; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 700; }
+        .dtc-count-badge.zero { background: #27ae60; }
+
+        .stats-row { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; margin-bottom: 12px; }
+        .stats-row .stat { display: flex; gap: 4px; align-items: center; }
+        .stats-row .stat-label { color: #888; }
+        .stats-row .stat-value { font-weight: 600; color: #2c3e50; }
+        .stats-row .stat-value.fast { color: #27ae60; }
+
+        .results-panel { background: #fff; border-radius: 8px; border: 1px solid #e1e8ed; overflow: hidden; }
+        .results-header { padding: 12px 16px; border-bottom: 1px solid #e1e8ed; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+        .results-header h3 { font-size: 14px; }
+
+        @media print {
+            .top-bar, .tab-bar, .nav-buttons, button { display: none !important; }
+            .container { padding: 0; }
         }
     </style>
 </head>
 <body>
-    <!-- Top Bar: Title + GDS2 State -->
     <div class="top-bar">
         <h1>GDS2 Automation</h1>
         <div class="state-row">
             <div class="info-item">
-                <span class="label">State:</span>
-                <span id="gds2-state" class="state-badge state-main_menu">MAIN MENU</span>
+                <span class="label">Page:</span>
+                <span id="gds2-state" class="state-badge state-unknown">UNKNOWN</span>
+            </div>
+            <div class="info-item">
+                <span class="label">Device:</span>
+                <span id="current-device" class="val">-</span>
             </div>
             <div class="info-item">
                 <span class="label">Module:</span>
@@ -418,687 +232,602 @@
         </div>
     </div>
 
-    <!-- Tab Bar -->
     <div class="tab-bar">
-        <div class="tab active" data-tab="collect" onclick="switchTab('collect')">Data Collection</div>
-        <div class="tab" data-tab="monitor" onclick="switchTab('monitor')">Real-time Monitoring</div>
+        <div class="tab active" data-tab="nav" onclick="switchTab('nav')">Navigation</div>
+        <div class="tab" data-tab="agent" onclick="switchTab('agent')">Agent</div>
     </div>
 
-    <!-- ===== Data Collection Tab ===== -->
-    <div id="tab-collect" class="tab-content active">
+    <!-- ===== Interactive Navigation Tab ===== -->
+    <div id="tab-nav" class="tab-content active">
         <div class="container">
-            <!-- Alerts -->
-            <div id="loading" class="alert alert-loading"></div>
-            <div id="error" class="alert alert-error"></div>
-            <div id="success" class="alert alert-success"></div>
+            <div id="nav-loading" class="alert alert-loading"></div>
+            <div id="nav-error" class="alert alert-error"></div>
+            <div id="nav-success" class="alert alert-success"></div>
 
-            <!-- Progress Steps -->
-            <div class="progress-steps">
-                <div id="ps1" class="step active">
-                    <div class="num">1</div>
-                    <div class="text">Fetch Modules</div>
-                </div>
-                <div id="conn1" class="step-connector"></div>
-                <div id="ps2" class="step">
-                    <div class="num">2</div>
-                    <div class="text">Fetch Categories</div>
-                </div>
-                <div id="conn2" class="step-connector"></div>
-                <div id="ps3" class="step">
-                    <div class="num">3</div>
-                    <div class="text">Get DTCs</div>
-                </div>
+            <div id="nav-context" class="context-panel">
+                <div class="context-title">Navigation Context</div>
+                <div class="context-item"><span class="context-label">Page:</span><span id="nav-page" class="context-value">-</span></div>
+                <div class="context-item"><span class="context-label">Device:</span><span id="nav-device" class="context-value">-</span></div>
+                <div class="context-item"><span class="context-label">Module:</span><span id="nav-module" class="context-value">-</span></div>
+                <div class="context-item"><span class="context-label">Category:</span><span id="nav-category" class="context-value">-</span></div>
             </div>
 
-            <!-- Action Panel: changes based on current step -->
-            <div id="action-step1" class="action-panel">
-                <h3>Step 1: Fetch Modules</h3>
-                <div class="hint">GDS2 must be at Main Menu. This navigates to Module List and discovers all available modules.</div>
-                <div class="action-row">
-                    <button id="fetch-modules-btn" class="btn-success">Fetch Modules</button>
-                </div>
+            <div class="nav-buttons">
+                <button id="nav-start-btn" class="btn-success" onclick="navStart()">Start</button>
+                <button id="nav-back-btn" class="btn-outline" onclick="navBack()" disabled>Back</button>
+                <button id="nav-home-btn" class="btn-outline" onclick="navHome()" disabled>Home</button>
+                <button id="nav-refresh-btn" class="btn-outline" onclick="navRefresh()">Refresh</button>
             </div>
 
-            <div id="action-step2" class="action-panel" style="display:none;">
-                <h3>Step 2: Select Module & Fetch Data Categories</h3>
-                <div class="hint">GDS2 is at Module List. Select a module to navigate to its Data List.</div>
-                <div class="action-row">
-                    <select id="module-select">
-                        <option value="">-- Select Module --</option>
-                    </select>
-                    <button id="fetch-categories-btn" class="btn-success">Fetch Categories</button>
-                </div>
+            <div id="nav-action-panel" class="panel">
+                <h3 id="nav-action-title">Step-by-Step Navigation</h3>
+                <div id="nav-action-hint" class="hint">Click "Start" to begin interactive navigation.</div>
+                <div id="nav-action-content"></div>
             </div>
 
-            <div id="action-step3" class="action-panel" style="display:none;">
-                <h3>Step 3: Get DTCs</h3>
-                <div class="hint">GDS2 is at Data List. Select a data category, fetch report, parse DTCs, then return to Data List.</div>
-                <div class="action-row">
-                    <select id="data-select">
-                        <option value="">-- Select Data Category --</option>
-                    </select>
-                    <button id="search-btn" class="btn-primary">Search</button>
-                </div>
+            <div id="nav-choices-panel" class="panel" style="display:none;">
+                <h3 id="nav-choices-title">Available Choices</h3>
+                <div id="nav-choices-grid" class="choice-grid"></div>
             </div>
 
-            <!-- Results -->
-            <div id="results-panel" class="results-panel" style="display:none;">
+            <div id="nav-report-panel" class="results-panel" style="display:none;">
                 <div class="results-header">
-                    <h3 id="results-title">Results</h3>
-                    <button class="btn-outline" onclick="downloadCSV()">Download CSV</button>
+                    <h3 id="nav-report-title">Report Data</h3>
+                    <button class="btn-outline btn-small" onclick="downloadNavCSV()">Download CSV</button>
                 </div>
-                <div id="vehicle-info-bar" class="vehicle-info-bar">
-                    VIN: <span id="vehicle-vin">-</span>
-                    Make: <span id="vehicle-make">-</span>
-                    Model: <span id="vehicle-model">-</span>
-                    Year: <span id="vehicle-year">-</span>
-                </div>
-                <div class="results-body">
-                    <div id="data-table-container" class="table-scroll"></div>
-                </div>
+                <div id="nav-vehicle-info" class="vehicle-info-bar"></div>
+                <div class="table-container"><div id="nav-report-data" class="table-scroll"></div></div>
             </div>
         </div>
     </div>
 
-    <!-- ===== Real-time Monitoring Tab ===== -->
-    <div id="tab-monitor" class="tab-content">
+    <!-- ===== Agent Tab ===== -->
+    <div id="tab-agent" class="tab-content">
         <div class="container">
-            <!-- Alerts for monitor tab -->
-            <div id="m-loading" class="alert alert-loading"></div>
-            <div id="m-error" class="alert alert-error"></div>
-            <div id="m-success" class="alert alert-success"></div>
+            <div id="a-loading" class="alert alert-loading"></div>
+            <div id="a-error" class="alert alert-error"></div>
+            <div id="a-success" class="alert alert-success"></div>
 
-            <div id="monitor-prereq" class="prereq-warning" style="display:none;">
-                Complete Step 2 (Fetch Categories) in the Data Collection tab first to enable monitoring.
+            <div class="panel" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+                <span style="font-weight:600;">Agent:</span>
+                <span id="agent-badge" class="agent-badge unavailable">CHECKING...</span>
+                <span id="agent-path" style="color:#888;font-size:12px;flex:1;"></span>
+                <button class="btn-outline btn-small" onclick="checkAgentStatus()">Refresh</button>
+                <button class="btn-danger btn-small" onclick="resetAgent()">Reset</button>
             </div>
-
-            <div class="monitor-controls">
-                <div class="monitor-status">
-                    <div id="stream-indicator" class="indicator"></div>
-                    <span id="stream-status-text" style="font-weight:600;">Stopped</span>
+            <div class="panel">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+                    <span id="agent-indicator" class="indicator"></span>
+                    <span id="agent-status-text" style="font-weight:600;">Stopped</span>
                 </div>
-
-                <h3>Select Data Category to Monitor</h3>
-                <div class="hint">GDS2 must be at Data List. Will auto-navigate to Data Display and start periodic collection.</div>
-
+                <h3>Agent-based High-Frequency Monitoring</h3>
+                <div class="hint">Navigate to Data Display page first, then start monitoring.</div>
+                <div id="agent-page-hint" class="hint" style="color:#e74c3c;display:none;">Current page is not Data Display. Please navigate there first.</div>
                 <div class="action-row" style="margin-bottom:12px;">
-                    <select id="stream-data-select" disabled>
-                        <option value="">Complete Step 2 first</option>
+                    <select id="agent-interval" style="width:auto;min-width:140px;">
+                        <option value="100" selected>100ms</option><option value="200">200ms</option><option value="500">500ms</option><option value="1000">1s</option>
                     </select>
-                    <label style="font-size:13px;color:#666;">Interval:</label>
-                    <select id="stream-interval" style="min-width:140px;">
-                        <option value="0.5">0.5s (fastest)</option>
-                        <option value="1">1s</option>
-                        <option value="2" selected>2s</option>
-                        <option value="3">3s</option>
-                        <option value="5">5s</option>
-                        <option value="10">10s</option>
-                    </select>
-                    <button id="start-stream-btn" class="btn-purple" disabled>Start Monitoring</button>
-                    <button id="stop-stream-btn" class="btn-danger" disabled>Stop</button>
+                    <button id="agent-start-btn" class="btn-orange" disabled>Start Monitoring</button>
+                    <button id="agent-stop-btn" class="btn-danger" disabled>Stop</button>
                 </div>
-
-                <div class="monitor-stats">
-                    <div><span class="stat-label">Collections:</span> <span id="stream-collections" class="stat-value">0</span></div>
-                    <div><span class="stat-label">Parameters:</span> <span id="stream-params" class="stat-value">0</span></div>
-                    <div><span class="stat-label">Changes:</span> <span id="stream-changes" class="stat-value">0</span></div>
+                <div class="stats-row">
+                    <div class="stat"><span class="stat-label">Snapshots:</span><span id="agent-snapshots" class="stat-value">0</span></div>
+                    <div class="stat"><span class="stat-label">Params:</span><span id="agent-param-count" class="stat-value">0</span></div>
+                    <div class="stat"><span class="stat-label">Changes:</span><span id="agent-change-count" class="stat-value">0</span></div>
+                    <div class="stat"><span class="stat-label">Latency:</span><span id="agent-latency" class="stat-value fast">-</span></div>
                 </div>
             </div>
-
-            <!-- Changes Log -->
-            <div id="changes-log" class="changes-log">
-                <div class="change-item" style="background:#f0f0f0;font-weight:600;">
-                    <span class="change-time">Time</span>
-                    <span class="change-param">Parameter</span>
-                    <span>Old Value</span>
-                    <span class="change-arrow">-></span>
-                    <span>New Value</span>
-                </div>
+            <div id="agent-changes-log" class="changes-log" style="display:none;">
+                <div class="change-item" style="background:#f0f0f0;font-weight:600;"><span class="change-time">Time</span><span class="change-param">Parameter</span><span>Old → New</span></div>
             </div>
-
-            <!-- Stream data table -->
-            <div id="stream-results" class="results-panel" style="display:none;">
-                <div class="results-header">
-                    <h3>Live Parameters</h3>
-                </div>
-                <div class="results-body">
-                    <div id="stream-data-container" class="table-scroll"></div>
-                </div>
+            <div id="agent-results" class="results-panel" style="display:none;">
+                <div class="results-header"><h3>Live Parameters</h3><span id="agent-page-context" style="font-size:12px;color:#888;"></span></div>
+                <div class="table-container"><div id="agent-data-container" class="table-scroll"></div></div>
             </div>
         </div>
     </div>
 
     <script>
-        let currentModules = [];
-        let currentDataCategories = [];
-        let currentState = { gds2_state: 'main_menu' };
-        let currentStep = 1;
+    let navState = { page: 'unknown', choices: [], context: {} };
 
-        // =============================================================
-        // Tab switching
-        // =============================================================
-        function switchTab(tab) {
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-            document.querySelector(`.tab[data-tab="${tab}"]`).classList.add('active');
-            document.getElementById('tab-' + tab).classList.add('active');
+    function switchTab(tab) {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        document.querySelector(`.tab[data-tab="${tab}"]`).classList.add('active');
+        document.getElementById('tab-' + tab).classList.add('active');
+        if (tab === 'agent') checkAgentStatus();
+    }
 
-            // Show prereq warning if categories not loaded
-            if (tab === 'monitor') {
-                document.getElementById('monitor-prereq').style.display =
-                    currentDataCategories.length === 0 ? 'block' : 'none';
-            }
+    function updateStateDisplay(page, context) {
+        const b = document.getElementById('gds2-state');
+        b.className = 'state-badge state-' + (page || 'unknown');
+        b.textContent = (page || 'unknown').replace(/_/g, ' ').toUpperCase();
+        document.getElementById('current-device').textContent = context?.device || '-';
+        document.getElementById('current-module').textContent = context?.module || '-';
+        document.getElementById('current-data').textContent = context?.data_category || '-';
+    }
+
+    // ===== Navigation API calls =====
+    async function navCall(url, opts) {
+        try {
+            const response = await fetch(url, opts || { method: 'POST' });
+            return await response.json();
+        } catch (e) {
+            return { success: false, error: e.message };
         }
+    }
 
-        // =============================================================
-        // Step management
-        // =============================================================
-        function setStep(step) {
-            currentStep = step;
+    async function navStart() {
+        showNavLoading('Checking agent connection...');
+        handleNavResult(await navCall('/api/nav/start'), 'Started');
+    }
 
-            // Update progress indicators
-            for (let i = 1; i <= 3; i++) {
-                const ps = document.getElementById('ps' + i);
-                ps.classList.remove('active', 'done');
-                if (i < step) ps.classList.add('done');
-                else if (i === step) ps.classList.add('active');
-            }
-            for (let i = 1; i <= 2; i++) {
-                const conn = document.getElementById('conn' + i);
-                conn.classList.toggle('done', i < step);
-            }
+    async function navBack() {
+        showNavLoading('Going back...');
+        handleNavResult(await navCall('/api/nav/back'), 'Went back');
+    }
 
-            // Show correct action panel
-            document.getElementById('action-step1').style.display = step === 1 ? 'block' : 'none';
-            document.getElementById('action-step2').style.display = step === 2 ? 'block' : 'none';
-            document.getElementById('action-step3').style.display = step >= 3 ? 'block' : 'none';
+    async function navHome() {
+        showNavLoading('Going to Main Menu...');
+        handleNavResult(await navCall('/api/nav/home'), 'Returned to Main Menu');
+    }
+
+    async function navRefresh() {
+        showNavLoading('Refreshing...');
+        handleNavResult(await navCall('/api/nav/choices', { method: 'GET' }), 'Refreshed');
+    }
+
+    async function navDiagnostics() {
+        showNavLoading('Clicking Diagnostics...');
+        handleNavResult(await navCall('/api/nav/diagnostics'), 'Clicked Diagnostics');
+    }
+
+    async function navSelectDevice(device) {
+        showNavLoading('Selecting device: ' + device);
+        handleNavResult(await navCall('/api/nav/select_device', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ device })
+        }), 'Selected device: ' + device);
+    }
+
+    async function navDisconnectDevice() {
+        showNavLoading('Disconnecting device...');
+        handleNavResult(await navCall('/api/nav/disconnect_device'), 'Device disconnected');
+    }
+
+    async function navOpenDeviceSelector() {
+        showNavLoading('Opening Device Explorer...');
+        handleNavResult(await navCall('/api/nav/open_device_selector'), 'Device Explorer opened');
+    }
+
+    async function navEnter() {
+        showNavLoading('Clicking Enter...');
+        handleNavResult(await navCall('/api/nav/enter'), 'Entered');
+    }
+
+    async function navModuleDiagnostics() {
+        showNavLoading('Selecting Module Diagnostics...');
+        handleNavResult(await navCall('/api/nav/module_diagnostics'), 'Selected Module Diagnostics');
+    }
+
+    async function navSelectModule(module) {
+        showNavLoading('Selecting module...');
+        handleNavResult(await navCall('/api/nav/select_module', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ module })
+        }), 'Selected: ' + module);
+    }
+
+    function navSelectModuleFromDropdown() {
+        const select = document.getElementById('module-select');
+        if (select && select.value) {
+            navSelectModule(select.value);
+        } else {
+            showNavError('Please select a module');
         }
+    }
 
-        // =============================================================
-        // Step 1: Fetch Modules
-        // =============================================================
-        document.getElementById('fetch-modules-btn').addEventListener('click', async () => {
-            showLoading('Navigating to Module List and discovering modules...');
+    async function navDataDisplay() {
+        showNavLoading('Selecting Data Display...');
+        handleNavResult(await navCall('/api/nav/data_display'), 'Selected Data Display');
+    }
 
-            try {
-                const response = await fetch('/api/fetch_modules', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({})
-                });
+    async function navSelectDataCategory(category) {
+        showNavLoading('Selecting: ' + category);
+        handleNavResult(await navCall('/api/nav/select_data_category', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ data_category: category })
+        }), 'Selected: ' + category);
+    }
 
-                const data = await response.json();
+    function navSelectDataCategoryFromDropdown() {
+        const select = document.getElementById('data-category-select');
+        if (select && select.value) {
+            navSelectDataCategory(select.value);
+        } else {
+            showNavError('Please select a data category');
+        }
+    }
 
-                if (data.success) {
-                    currentModules = data.modules;
-                    currentState = data.state;
-                    updateState();
+    async function navSelectSubCategory(sub) {
+        showNavLoading('Selecting: ' + sub);
+        handleNavResult(await navCall('/api/nav/select_sub_category', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ sub_category: sub })
+        }), 'Selected: ' + sub);
+    }
 
-                    const select = document.getElementById('module-select');
-                    select.innerHTML = currentModules.map(m =>
-                        `<option value="${m}">${m}</option>`
-                    ).join('');
+    function navSelectSubCategoryFromDropdown() {
+        const select = document.getElementById('sub-category-select');
+        if (select && select.value) {
+            navSelectSubCategory(select.value);
+        } else {
+            showNavError('Please select a sub-category');
+        }
+    }
 
-                    setStep(2);
-                    showSuccess(`Found ${currentModules.length} modules.`);
-                } else {
-                    showError(data.error || 'Failed to fetch modules');
-                }
-            } catch (error) {
-                showError('Failed to fetch modules: ' + error.message);
-            } finally {
-                hideLoading();
-            }
+    async function navGetDTCs() {
+        showNavLoading('Fetching DTCs from Agent...');
+        const data = await navCall('/api/agent/dtcs', { method: 'GET' });
+        hideNavLoading();
+        if (data.success) {
+            showNavSuccess('DTCs fetched: ' + (data.dtcs?.length || 0) + ' found');
+            displayAgentDTCs(data);
+        } else {
+            showNavError(data.error || 'Failed to fetch DTCs');
+        }
+    }
+
+    async function navStartMonitoring() {
+        showNavLoading('Starting Agent monitoring...');
+        const interval_ms = 100;
+        const data = await navCall('/api/agent/monitor/start', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ interval_ms })
         });
-
-        // =============================================================
-        // Step 2: Fetch Data Categories
-        // =============================================================
-        document.getElementById('fetch-categories-btn').addEventListener('click', async () => {
-            const moduleName = document.getElementById('module-select').value;
-            if (!moduleName) return;
-
-            showLoading(`Selecting ${moduleName} and discovering data categories...`);
-
-            try {
-                const response = await fetch('/api/fetch_categories', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({module: moduleName})
-                });
-
-                const data = await response.json();
-
-                if (data.success) {
-                    currentDataCategories = data.data_categories;
-                    currentState = data.state;
-                    updateState();
-
-                    const dataSelect = document.getElementById('data-select');
-                    dataSelect.innerHTML = currentDataCategories.map(d =>
-                        `<option value="${d}">${d}</option>`
-                    ).join('');
-
-                    // Also update monitoring dropdown
-                    const streamSelect = document.getElementById('stream-data-select');
-                    streamSelect.disabled = false;
-                    streamSelect.innerHTML = currentDataCategories.map(d =>
-                        `<option value="${d}">${d}</option>`
-                    ).join('');
-                    document.getElementById('start-stream-btn').disabled = false;
-                    document.getElementById('monitor-prereq').style.display = 'none';
-
-                    setStep(3);
-                    showSuccess(`Found ${currentDataCategories.length} data categories.`);
-                } else {
-                    showError(data.error || 'Failed to fetch data categories');
-                }
-            } catch (error) {
-                showError('Failed to fetch data categories: ' + error.message);
-            } finally {
-                hideLoading();
-            }
-        });
-
-        // =============================================================
-        // Step 3: Get DTCs / Search
-        // =============================================================
-        document.getElementById('search-btn').addEventListener('click', async () => {
-            const moduleName = document.getElementById('module-select').value;
-            const dataCategory = document.getElementById('data-select').value;
-            if (!moduleName || !dataCategory) return;
-
-            showLoading(`Getting DTCs from ${dataCategory}...`);
-
-            try {
-                const response = await fetch('/api/search_data', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        module: moduleName,
-                        data_category: dataCategory
-                    })
-                });
-
-                const data = await response.json();
-
-                if (data.success) {
-                    currentState = data.state;
-                    updateState();
-                    displayReportData(data);
-                    const dtcCount = data.dtc_list ? data.dtc_list.length : 0;
-                    const dataCount = data.report_data && data.report_data.data_items ? data.report_data.data_items.length : 0;
-                    showSuccess(`Found ${dtcCount} DTCs, ${dataCount} data items. GDS2 returned to Data List.`);
-                } else {
-                    showError(data.error || 'Failed to get DTCs');
-                }
-            } catch (error) {
-                showError('Failed to get DTCs: ' + error.message);
-            } finally {
-                hideLoading();
-            }
-        });
-
-        // =============================================================
-        // State display
-        // =============================================================
-        function updateState() {
-            const stateBadge = document.getElementById('gds2-state');
-            const stateClass = 'state-' + currentState.gds2_state;
-            stateBadge.className = 'state-badge ' + stateClass;
-            stateBadge.textContent = currentState.gds2_state.replace(/_/g, ' ').toUpperCase();
-
-            document.getElementById('current-module').textContent = currentState.current_module || '-';
-            document.getElementById('current-data').textContent = currentState.current_data_category || '-';
+        hideNavLoading();
+        if (data.success) {
+            showNavSuccess('Monitoring started');
+            // Switch to Agent tab to see live data
+            switchTab('agent');
+        } else {
+            showNavError(data.error || 'Failed to start monitoring');
         }
+    }
 
-        // =============================================================
-        // Display results
-        // =============================================================
-        function displayReportData(data) {
-            const container = document.getElementById('data-table-container');
-            const reportData = data.report_data || {};
-            const panel = document.getElementById('results-panel');
-
-            // Vehicle info
-            if (data.vehicle_info) {
-                document.getElementById('vehicle-vin').textContent = data.vehicle_info.vin || '-';
-                document.getElementById('vehicle-make').textContent = data.vehicle_info.make || '-';
-                document.getElementById('vehicle-model').textContent = data.vehicle_info.model || '-';
-                document.getElementById('vehicle-year').textContent = data.vehicle_info.year || '-';
-                document.getElementById('vehicle-info-bar').classList.add('show');
-            }
-
-            let html = '';
-
-            // DTCs
-            if (data.dtc_list && data.dtc_list.length > 0) {
-                html += `<table>
-                    <thead><tr><th>Code</th><th>Module</th><th>Description</th><th>Status</th></tr></thead>
-                    <tbody>${data.dtc_list.map(dtc => `
-                        <tr>
-                            <td><strong>${dtc.code}</strong></td>
-                            <td>${dtc.module}</td>
-                            <td>${dtc.description}</td>
-                            <td>${dtc.status}</td>
-                        </tr>`).join('')}
-                    </tbody>
-                </table>`;
-                document.getElementById('results-title').textContent = `DTCs (${data.dtc_list.length})`;
-            }
-
-            // Data items
-            if (reportData.data_items && reportData.data_items.length > 0) {
-                if (html) html += '<div style="height:1px;background:#e1e8ed;"></div>';
-                html += `<table>
-                    <thead><tr><th>Parameter</th><th>Value</th><th>Units</th></tr></thead>
-                    <tbody>${reportData.data_items.map(item => `
-                        <tr>
-                            <td>${item.parameter}</td>
-                            <td>${item.value}</td>
-                            <td>${item.units}</td>
-                        </tr>`).join('')}
-                    </tbody>
-                </table>`;
-                if (!data.dtc_list || data.dtc_list.length === 0) {
-                    document.getElementById('results-title').textContent = `Data Items (${reportData.data_items.length})`;
-                }
-            }
-
-            if (html) {
-                container.innerHTML = html;
-                panel.style.display = 'block';
-            } else {
-                container.innerHTML = '<div class="no-data">No data found in report</div>';
-                panel.style.display = 'block';
-            }
-        }
-
-        // Download CSV
-        function downloadCSV() {
-            const tables = document.querySelectorAll('#data-table-container table');
-            if (!tables.length) return;
-
-            let csv = [];
-            tables.forEach(table => {
-                const rows = table.querySelectorAll('tr');
-                for (let row of rows) {
-                    const cols = row.querySelectorAll('td, th');
-                    csv.push(Array.from(cols).map(col => `"${col.textContent}"`).join(','));
-                }
-                csv.push('');
-            });
-
-            const blob = new Blob([csv.join('\n')], { type: 'text/csv' });
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'gds2_data.csv';
-            a.click();
-        }
-
-        // =============================================================
-        // Alert helpers
-        // =============================================================
-        function showLoading(msg) {
-            const el = document.getElementById('loading');
-            el.textContent = msg;
-            el.classList.add('show');
-            hideError(); hideSuccess();
-        }
-        function hideLoading() { document.getElementById('loading').classList.remove('show'); }
-        function showError(msg) {
-            const el = document.getElementById('error');
-            el.textContent = msg;
-            el.classList.add('show');
-            hideLoading(); hideSuccess();
-        }
-        function hideError() { document.getElementById('error').classList.remove('show'); }
-        function showSuccess(msg) {
-            const el = document.getElementById('success');
-            el.textContent = msg;
-            el.classList.add('show');
-            hideLoading(); hideError();
-            setTimeout(hideSuccess, 5000);
-        }
-        function hideSuccess() { document.getElementById('success').classList.remove('show'); }
-
-        // Monitor tab alerts
-        function showMLoading(msg) {
-            const el = document.getElementById('m-loading');
-            el.textContent = msg;
-            el.classList.add('show');
-            document.getElementById('m-error').classList.remove('show');
-            document.getElementById('m-success').classList.remove('show');
-        }
-        function hideMLoading() { document.getElementById('m-loading').classList.remove('show'); }
-        function showMError(msg) {
-            const el = document.getElementById('m-error');
-            el.textContent = msg;
-            el.classList.add('show');
-            hideMLoading();
-        }
-        function showMSuccess(msg) {
-            const el = document.getElementById('m-success');
-            el.textContent = msg;
-            el.classList.add('show');
-            hideMLoading();
-            setTimeout(() => el.classList.remove('show'), 5000);
-        }
-
-        // =============================================================
-        // Check cached data on load
-        // =============================================================
-        async function checkCachedData() {
-            try {
-                const modulesResponse = await fetch('/api/modules');
-                const modulesData = await modulesResponse.json();
-
-                if (modulesData.modules && modulesData.modules.length > 0) {
-                    currentModules = modulesData.modules;
-
-                    const select = document.getElementById('module-select');
-                    select.innerHTML = currentModules.map(m =>
-                        `<option value="${m}">${m}</option>`
-                    ).join('');
-
-                    setStep(2);
-
-                    // Check categories
-                    const firstModule = currentModules[0];
-                    const catResp = await fetch(`/api/data_categories?module=${encodeURIComponent(firstModule)}`);
-                    const catData = await catResp.json();
-
-                    if (catData.data_categories && catData.data_categories.length > 0) {
-                        currentDataCategories = catData.data_categories;
-
-                        const dataSelect = document.getElementById('data-select');
-                        dataSelect.innerHTML = currentDataCategories.map(d =>
-                            `<option value="${d}">${d}</option>`
-                        ).join('');
-
-                        // Update monitoring dropdown
-                        const streamSelect = document.getElementById('stream-data-select');
-                        streamSelect.disabled = false;
-                        streamSelect.innerHTML = currentDataCategories.map(d =>
-                            `<option value="${d}">${d}</option>`
-                        ).join('');
-                        document.getElementById('start-stream-btn').disabled = false;
-
-                        setStep(3);
+    function autoStartAgentIfNeeded() {
+        // Check if agent is available and auto-fetch initial data
+        fetch('/api/agent/status').then(r => r.json()).then(d => {
+            if (d.agent && d.agent.available) {
+                // Agent is available, fetch initial DTCs
+                fetch('/api/agent/dtcs').then(r => r.json()).then(data => {
+                    if (data.success && data.dtcs && data.dtcs.length > 0) {
+                        displayAgentDTCs(data);
                     }
-                }
-            } catch (error) {
-                // Silently fail - fresh start
+                }).catch(() => {});
             }
+        }).catch(() => {});
+    }
+
+    function displayAgentDTCs(data) {
+        const panel = document.getElementById('nav-report-panel');
+        const title = document.getElementById('nav-report-title');
+        const vi = document.getElementById('nav-vehicle-info');
+        const rd = document.getElementById('nav-report-data');
+
+        vi.classList.remove('show');
+
+        if (data.dtcs && data.dtcs.length > 0) {
+            title.textContent = 'DTCs (' + data.dtcs.length + ')';
+            rd.innerHTML = '<table><thead><tr><th>Code</th><th>Module</th><th>Description</th><th>Status</th></tr></thead><tbody>' +
+                data.dtcs.map(d => '<tr><td><strong>'+(d.code||'')+'</strong></td><td>'+(d.control_module||d.module||'')+'</td><td>'+(d.description||'')+'</td><td>'+(d.status||'')+'</td></tr>').join('') +
+                '</tbody></table>';
+            panel.style.display = 'block';
+        } else {
+            title.textContent = 'DTCs';
+            rd.innerHTML = '<div style="text-align:center;padding:40px;color:#27ae60;font-weight:600;">No DTCs found</div>';
+            panel.style.display = 'block';
         }
+    }
 
-        checkCachedData();
+    function handleNavResult(data, successMsg) {
+        hideNavLoading();
+        if (data.success) {
+            navState = { page: data.page, choices: data.choices || [], context: data.context || {}, selected: data.selected };
+            updateStateDisplay(data.page, data.context);
+            updateNavUI();
+            showNavSuccess(successMsg);
+        } else {
+            showNavError(data.error || 'Operation failed');
+            if (data.choices) { navState.choices = data.choices; updateNavUI(); }
+        }
+    }
 
-        // =============================================================
-        // Real-time Streaming
-        // =============================================================
-        let eventSource = null;
-        let streamingActive = false;
-        let totalChanges = 0;
+    function escapeAttr(str) {
+        return String(str).replace(/&/g,'&amp;').replace(/'/g,'&#39;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
 
-        document.getElementById('start-stream-btn').addEventListener('click', async () => {
-            const dataCategory = document.getElementById('stream-data-select').value;
-            const interval = parseFloat(document.getElementById('stream-interval').value);
+    function updateNavUI() {
+        const page = navState.page;
+        const choices = navState.choices || [];
+        const ctx = navState.context || {};
 
-            if (!dataCategory) {
-                showMError('Please select a data category to monitor');
-                return;
-            }
+        document.getElementById('nav-page').textContent = page ? page.replace(/_/g, ' ') : '-';
+        document.getElementById('nav-device').textContent = ctx.device || '-';
+        document.getElementById('nav-module').textContent = ctx.module || '-';
+        document.getElementById('nav-category').textContent = ctx.data_category || '-';
 
-            showMLoading('Starting monitoring...');
+        document.getElementById('nav-back-btn').disabled = (page === 'main_menu' || page === 'unknown');
+        document.getElementById('nav-home-btn').disabled = (page === 'main_menu' || page === 'unknown');
 
-            try {
-                const response = await fetch('/api/stream/start', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ data_category: dataCategory, interval: interval })
-                });
+        const aTitle = document.getElementById('nav-action-title');
+        const aHint = document.getElementById('nav-action-hint');
+        const aCont = document.getElementById('nav-action-content');
+        const cPanel = document.getElementById('nav-choices-panel');
+        const cTitle = document.getElementById('nav-choices-title');
+        const cGrid = document.getElementById('nav-choices-grid');
 
-                const data = await response.json();
+        aCont.innerHTML = '';
+        cGrid.innerHTML = '';
+        cPanel.style.display = 'none';
 
-                if (data.success || data.message) {
-                    currentState = data.state;
-                    updateState();
-                    connectSSE();
+        switch (page) {
+            case 'main_menu':
+                aTitle.textContent = 'Main Menu';
+                aHint.textContent = 'Click Diagnostics to begin.';
+                aCont.innerHTML = '<button class="btn-primary" onclick="navDiagnostics()">Diagnostics</button>';
+                break;
 
-                    document.getElementById('start-stream-btn').disabled = true;
-                    document.getElementById('stop-stream-btn').disabled = false;
-                    document.getElementById('stream-interval').disabled = true;
-                    document.getElementById('stream-data-select').disabled = true;
-                    document.getElementById('stream-indicator').classList.add('active');
-                    document.getElementById('stream-status-text').textContent = 'Running';
-                    document.getElementById('changes-log').classList.add('show');
-                    document.getElementById('stream-results').style.display = 'block';
+            case 'device_explorer':
+                aTitle.textContent = 'Device Explorer';
+                aHint.textContent = 'Select a VCI device to connect.';
+                if (choices.length > 0) {
+                    cTitle.textContent = 'Available Devices';
+                    cGrid.innerHTML = choices.map(d =>
+                        `<button class="choice-btn" onclick="navSelectDevice('${escapeAttr(d)}')">${d}</button>`
+                    ).join('');
+                    cPanel.style.display = 'block';
+                }
+                break;
 
-                    showMSuccess(`Monitoring "${dataCategory}"`);
+            case 'vehicle_selection':
+                aTitle.textContent = 'Vehicle Selection';
+                aHint.textContent = 'Device: ' + (ctx.device || 'Not connected') + '. Click Enter to proceed.';
+                aCont.innerHTML = '<button class="btn-success" onclick="navEnter()">Enter</button> ' +
+                    '<button class="btn-warning" onclick="navDisconnectDevice()">Disconnect</button> ' +
+                    '<button class="btn-outline" onclick="navOpenDeviceSelector()">Select Device</button>';
+                break;
+
+            case 'diagnostics_menu':
+                aTitle.textContent = 'Diagnostics Menu';
+                aHint.textContent = 'Select Module Diagnostics to view modules.';
+                aCont.innerHTML = '<button class="btn-primary" onclick="navModuleDiagnostics()">Module Diagnostics</button>';
+                break;
+
+            case 'module_list':
+                aTitle.textContent = 'Module List';
+                aHint.textContent = 'Select a module to diagnose.';
+                if (choices.length > 0) {
+                    aCont.innerHTML = '<div class="action-row">' +
+                        '<select id="module-select" style="flex:1;max-width:400px;">' +
+                        '<option value="">-- Select Module (' + choices.length + ') --</option>' +
+                        choices.map(m => `<option value="${escapeAttr(m)}">${m}</option>`).join('') +
+                        '</select>' +
+                        '<button class="btn-primary" onclick="navSelectModuleFromDropdown()">Select</button>' +
+                        '</div>';
+                }
+                break;
+
+            case 'module_submenu':
+                aTitle.textContent = 'Module Submenu';
+                aHint.textContent = 'Module: ' + (ctx.module || '-') + '. Select Data Display.';
+                aCont.innerHTML = '<button class="btn-primary" onclick="navDataDisplay()">Data Display</button>';
+                break;
+
+            case 'data_list':
+                aTitle.textContent = 'Data Categories';
+                aHint.textContent = 'Module: ' + (ctx.module || '-') + '. Select a data category.';
+                if (choices.length > 0) {
+                    aCont.innerHTML = '<div class="action-row">' +
+                        '<select id="data-category-select" style="flex:1;max-width:400px;">' +
+                        '<option value="">-- Select Data Category (' + choices.length + ') --</option>' +
+                        choices.map(c => `<option value="${escapeAttr(c)}">${c}</option>`).join('') +
+                        '</select>' +
+                        '<button class="btn-primary" onclick="navSelectDataCategoryFromDropdown()">Select</button>' +
+                        '</div>';
+                }
+                break;
+
+            case 'sub_data_list':
+                aTitle.textContent = 'Sub-Categories';
+                aHint.textContent = 'Category: ' + (ctx.data_category || '-') + '. Select a sub-category.';
+                if (choices.length > 0) {
+                    aCont.innerHTML = '<div class="action-row">' +
+                        '<select id="sub-category-select" style="flex:1;max-width:400px;">' +
+                        '<option value="">-- Select Sub-Category (' + choices.length + ') --</option>' +
+                        choices.map(s => `<option value="${escapeAttr(s)}">${s}</option>`).join('') +
+                        '</select>' +
+                        '<button class="btn-primary" onclick="navSelectSubCategoryFromDropdown()">Select</button>' +
+                        '</div>';
+                }
+                break;
+
+            case 'data_display':
+                aTitle.textContent = 'Data Display';
+                aHint.textContent = 'Viewing: ' + (ctx.data_category || '-') + '. Java Agent is monitoring data.';
+                aCont.innerHTML = '<button class="btn-success" onclick="navGetDTCs()">Get DTCs</button> <button class="btn-purple" onclick="navStartMonitoring()">Start Monitoring</button>';
+                // Auto-start agent monitoring when arriving at data_display
+                autoStartAgentIfNeeded();
+                break;
+
+            default:
+                aTitle.textContent = 'Navigation';
+                aHint.textContent = 'Click Start to begin or Refresh to detect current page.';
+        }
+    }
+
+    function displayNavReport(data) {
+        const panel = document.getElementById('nav-report-panel');
+        const title = document.getElementById('nav-report-title');
+        const vi = document.getElementById('nav-vehicle-info');
+        const rd = document.getElementById('nav-report-data');
+        let html = '';
+
+        if (data.vehicle_info) {
+            vi.innerHTML = 'VIN: <span>' + (data.vehicle_info.vin||'-') + '</span> Make: <span>' + (data.vehicle_info.make||'-') + '</span> Model: <span>' + (data.vehicle_info.model||'-') + '</span> Year: <span>' + (data.vehicle_info.year||'-') + '</span>';
+            vi.classList.add('show');
+        } else { vi.classList.remove('show'); }
+
+        if (data.dtc_list && data.dtc_list.length > 0) {
+            title.textContent = 'DTCs (' + data.dtc_list.length + ')';
+            html += '<table><thead><tr><th>Code</th><th>Module</th><th>Description</th><th>Status</th></tr></thead><tbody>' +
+                data.dtc_list.map(d => '<tr><td><strong>'+d.code+'</strong></td><td>'+d.module+'</td><td>'+d.description+'</td><td>'+d.status+'</td></tr>').join('') +
+                '</tbody></table>';
+        }
+        if (data.report_data && data.report_data.data_items && data.report_data.data_items.length > 0) {
+            if (!data.dtc_list || !data.dtc_list.length) title.textContent = 'Data Items (' + data.report_data.data_items.length + ')';
+            if (html) html += '<div style="height:16px;"></div>';
+            html += '<table><thead><tr><th>Parameter</th><th>Value</th><th>Units</th></tr></thead><tbody>' +
+                data.report_data.data_items.map(i => '<tr><td>'+i.parameter+'</td><td><strong>'+i.value+'</strong></td><td>'+i.units+'</td></tr>').join('') +
+                '</tbody></table>';
+        }
+        rd.innerHTML = html || '<div style="text-align:center;padding:40px;color:#999;">No data in report</div>';
+        panel.style.display = 'block';
+    }
+
+    function downloadNavCSV() {
+        const tables = document.querySelectorAll('#nav-report-data table');
+        if (!tables.length) return;
+        let csv = [];
+        tables.forEach(t => { for (let r of t.querySelectorAll('tr')) csv.push(Array.from(r.querySelectorAll('td,th')).map(c => '"'+c.textContent+'"').join(',')); csv.push(''); });
+        const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv.join('\n')], {type:'text/csv'})); a.download = 'gds2_report.csv'; a.click();
+    }
+
+    function showNavLoading(m) { const e=document.getElementById('nav-loading'); e.textContent=m; e.classList.add('show'); document.getElementById('nav-error').classList.remove('show'); document.getElementById('nav-success').classList.remove('show'); }
+    function hideNavLoading() { document.getElementById('nav-loading').classList.remove('show'); }
+    function showNavError(m) { const e=document.getElementById('nav-error'); e.textContent=m; e.classList.add('show'); hideNavLoading(); }
+    function showNavSuccess(m) { const e=document.getElementById('nav-success'); e.textContent=m; e.classList.add('show'); hideNavLoading(); setTimeout(()=>e.classList.remove('show'), 3000); }
+
+    // ===== Agent Tab =====
+    let agentES=null, agentActive=false;
+
+    async function resetAgent() {
+        try {
+            await fetch('/api/agent/reset', { method: 'POST' });
+            if (agentES) { agentES.close(); agentES = null; }
+            agentActive = false;
+            document.getElementById('agent-indicator').classList.remove('active');
+            document.getElementById('agent-status-text').textContent = 'Stopped';
+            document.getElementById('agent-start-btn').disabled = false;
+            document.getElementById('agent-stop-btn').disabled = true;
+            checkAgentStatus();
+        } catch (e) {
+            console.error('Reset failed:', e);
+        }
+    }
+
+    async function checkAgentStatus() {
+        try {
+            const [agentData, stateData] = await Promise.all([
+                fetch('/api/agent/status').then(r => r.json()),
+                fetch('/api/state').then(r => r.json())
+            ]);
+
+            const b = document.getElementById('agent-badge'), p = document.getElementById('agent-path');
+            const pageHint = document.getElementById('agent-page-hint');
+            const startBtn = document.getElementById('agent-start-btn');
+
+            const isDataDisplay = stateData.page === 'data_display';
+            const agentAvailable = agentData.agent && agentData.agent.available;
+            const isStreaming = agentData.streaming && agentData.streaming.running;
+
+            if (isStreaming) {
+                b.className = 'agent-badge streaming';
+                b.textContent = 'STREAMING';
+                startBtn.disabled = true;
+                pageHint.style.display = 'none';
+            } else if (agentAvailable) {
+                b.className = 'agent-badge available';
+                b.textContent = 'AVAILABLE';
+                p.textContent = 'v' + (agentData.agent.version || '1.0') + ' | ' + agentData.agent.age_seconds + 's ago';
+
+                if (isDataDisplay) {
+                    startBtn.disabled = false;
+                    pageHint.style.display = 'none';
                 } else {
-                    showMError(data.error || 'Failed to start streaming');
+                    startBtn.disabled = true;
+                    pageHint.textContent = 'Current page: ' + (stateData.page || 'unknown').replace(/_/g, ' ') + '. Navigate to Data Display first.';
+                    pageHint.style.display = 'block';
                 }
-            } catch (error) {
-                showMError('Failed to start streaming: ' + error.message);
+            } else {
+                b.className = 'agent-badge unavailable';
+                b.textContent = 'NOT AVAILABLE';
+                startBtn.disabled = true;
+                p.textContent = agentData.agent?.path || '';
+                pageHint.style.display = 'none';
             }
-        });
-
-        document.getElementById('stop-stream-btn').addEventListener('click', async () => {
-            showMLoading('Stopping monitoring...');
-
-            try {
-                if (eventSource) { eventSource.close(); eventSource = null; }
-
-                const response = await fetch('/api/stream/stop', { method: 'POST' });
-                const data = await response.json();
-
-                if (data.state) { currentState = data.state; updateState(); }
-
-                streamingActive = false;
-                document.getElementById('start-stream-btn').disabled = false;
-                document.getElementById('stop-stream-btn').disabled = true;
-                document.getElementById('stream-interval').disabled = false;
-                document.getElementById('stream-data-select').disabled = false;
-                document.getElementById('stream-indicator').classList.remove('active');
-                document.getElementById('stream-status-text').textContent = 'Stopped';
-
-                showMSuccess('Monitoring stopped - GDS2 returned to Data List');
-            } catch (error) {
-                showMError('Failed to stop streaming: ' + error.message);
-            }
-        });
-
-        function connectSSE() {
-            if (eventSource) eventSource.close();
-            eventSource = new EventSource('/api/stream/events');
-            streamingActive = true;
-
-            eventSource.addEventListener('connected', (e) => {});
-
-            eventSource.addEventListener('data', (e) => {
-                const data = JSON.parse(e.data);
-                handleFullData(data);
-            });
-
-            eventSource.addEventListener('changes', (e) => {
-                const data = JSON.parse(e.data);
-                handleChanges(data);
-            });
-
-            eventSource.addEventListener('error', (e) => {
-                if (e.data) console.error('Stream error:', JSON.parse(e.data).message);
-            });
-
-            eventSource.onerror = () => {
-                if (streamingActive) {
-                    setTimeout(() => { if (streamingActive) connectSSE(); }, 2000);
-                }
-            };
+        } catch(e) {
+            document.getElementById('agent-badge').className = 'agent-badge unavailable';
+            document.getElementById('agent-badge').textContent = 'ERROR';
+            document.getElementById('agent-start-btn').disabled = true;
         }
+    }
 
-        function handleFullData(data) {
-            fetchStreamStatus();
-            if (data.parameters) {
-                document.getElementById('stream-params').textContent = data.parameters.length;
-                updateStreamDataTable(data.parameters);
-            }
-        }
+    document.getElementById('agent-start-btn').addEventListener('click', async () => {
+        const ms = parseInt(document.getElementById('agent-interval').value);
+        document.getElementById('a-loading').textContent='Starting monitoring...'; document.getElementById('a-loading').classList.add('show');
+        try {
+            const d = await (await fetch('/api/agent/monitor/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({interval_ms:ms})})).json();
+            if (d.success) {
+                if(agentES)agentES.close(); agentES=new EventSource('/api/stream/events'); agentActive=true;
+                let totalChanges = 0;
+                agentES.addEventListener('snapshot', e => {
+                    const d=JSON.parse(e.data);
+                    document.getElementById('agent-snapshots').textContent=d.extraction_count||0;
+                    document.getElementById('agent-param-count').textContent=d.param_count||0;
+                    if(d.extraction_duration_ms!==undefined){
+                        const el=document.getElementById('agent-latency');
+                        el.textContent=d.extraction_duration_ms+'ms';
+                        el.className=d.extraction_duration_ms<50?'stat-value fast':'stat-value';
+                    }
+                    if(d.parameters){
+                        document.getElementById('agent-data-container').innerHTML='<table><thead><tr><th>Module</th><th>Parameter</th><th>Value</th><th>Unit</th></tr></thead><tbody>'+d.parameters.map(p=>'<tr><td>'+(p.module||'')+'</td><td>'+(p.name||'')+'</td><td><strong>'+(p.value||'')+'</strong></td><td>'+(p.unit||'')+'</td></tr>').join('')+'</tbody></table>';
+                    }
+                    // Handle param changes embedded in snapshot
+                    if(d.param_changes && d.param_changes.length > 0){
+                        totalChanges += d.param_changes.length;
+                        document.getElementById('agent-change-count').textContent = totalChanges;
+                        const log=document.getElementById('agent-changes-log');
+                        d.param_changes.forEach(c=>{
+                            const i=document.createElement('div');
+                            i.className='change-item';
+                            i.innerHTML='<span class="change-time">'+new Date(c.timestamp).toLocaleTimeString()+'</span><span class="change-param">'+c.parameter+'</span><span class="change-old">'+c.old_value+'</span><span class="change-arrow">→</span><span class="change-new">'+c.new_value+'</span>';
+                            // Insert after header (children[0]), or append if no header
+                            log.insertBefore(i, log.children[1] || null);
+                            while(log.children.length>101) log.removeChild(log.lastChild);
+                        });
+                    }
+                });
+                agentES.onerror = () => { if(agentActive) setTimeout(()=>{if(agentActive){if(agentES)agentES.close();agentES=new EventSource('/api/stream/events');}},2000); };
+                document.getElementById('agent-start-btn').disabled=true; document.getElementById('agent-stop-btn').disabled=false;
+                document.getElementById('agent-indicator').classList.add('active'); document.getElementById('agent-status-text').textContent='Running';
+                document.getElementById('agent-changes-log').style.display='block'; document.getElementById('agent-results').style.display='block';
+                document.getElementById('agent-badge').className='agent-badge streaming'; document.getElementById('agent-badge').textContent='STREAMING';
+                document.getElementById('agent-page-hint').style.display='none';
+                document.getElementById('a-loading').classList.remove('show');
+            } else { document.getElementById('a-error').textContent=d.error||'Failed'; document.getElementById('a-error').classList.add('show'); document.getElementById('a-loading').classList.remove('show'); }
+        } catch(e) { document.getElementById('a-error').textContent=e.message; document.getElementById('a-error').classList.add('show'); document.getElementById('a-loading').classList.remove('show'); }
+    });
 
-        function handleChanges(data) {
-            if (!data.changes || data.changes.length === 0) return;
-            totalChanges += data.changes.length;
-            document.getElementById('stream-changes').textContent = totalChanges;
+    document.getElementById('agent-stop-btn').addEventListener('click', async () => {
+        if(agentES){agentES.close();agentES=null;} agentActive=false;
+        await fetch('/api/stream/stop',{method:'POST'});
+        document.getElementById('agent-start-btn').disabled=false; document.getElementById('agent-stop-btn').disabled=true;
+        document.getElementById('agent-indicator').classList.remove('active'); document.getElementById('agent-status-text').textContent='Stopped';
+        checkAgentStatus();
+    });
 
-            const log = document.getElementById('changes-log');
-            data.changes.forEach(change => {
-                const time = new Date(change.timestamp).toLocaleTimeString();
-                const item = document.createElement('div');
-                item.className = 'change-item';
-                item.innerHTML = `
-                    <span class="change-time">${time}</span>
-                    <span class="change-param">${change.parameter}</span>
-                    <span class="change-old">${change.old_value}</span>
-                    <span class="change-arrow">-></span>
-                    <span class="change-new">${change.new_value} ${change.unit || ''}</span>
-                `;
-                if (log.children.length > 1) log.insertBefore(item, log.children[1]);
-                else log.appendChild(item);
-                while (log.children.length > 51) log.removeChild(log.lastChild);
-                highlightParameter(change.parameter);
-            });
-        }
-
-        function updateStreamDataTable(parameters) {
-            const container = document.getElementById('stream-data-container');
-            container.innerHTML = `<table>
-                <thead><tr><th>Parameter</th><th>Value</th><th>Unit</th></tr></thead>
-                <tbody>${parameters.map(p => `
-                    <tr id="stream-row-${p.name.replace(/[^a-zA-Z0-9]/g, '_')}">
-                        <td>${p.name}</td><td>${p.value}</td><td>${p.unit}</td>
-                    </tr>`).join('')}
-                </tbody>
-            </table>`;
-        }
-
-        function highlightParameter(paramName) {
-            const rowId = 'stream-row-' + paramName.replace(/[^a-zA-Z0-9]/g, '_');
-            const row = document.getElementById(rowId);
-            if (row) {
-                row.classList.remove('highlight-change');
-                void row.offsetWidth;
-                row.classList.add('highlight-change');
-            }
-        }
-
-        async function fetchStreamStatus() {
-            try {
-                const response = await fetch('/api/stream/status');
-                const data = await response.json();
-                document.getElementById('stream-collections').textContent = data.collection_count || 0;
-            } catch (error) {}
-        }
+    updateNavUI();
     </script>
 </body>
 </html>

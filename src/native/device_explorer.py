@@ -13,8 +13,10 @@ This allows controlling Device Explorer WITHOUT:
 
 import ctypes
 from ctypes import wintypes
+import struct
 import time
 import logging
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +34,23 @@ WM_CLOSE = 0x0010
 # ListView messages
 LVM_FIRST = 0x1000
 LVM_GETITEMCOUNT = LVM_FIRST + 4
-LVM_GETITEMTEXT = LVM_FIRST + 45
+LVM_GETITEMTEXT = LVM_FIRST + 45   # LVM_GETITEMTEXTW
 LVM_SETITEMSTATE = LVM_FIRST + 43
 LVM_GETITEMSTATE = LVM_FIRST + 44
 LVM_ENSUREVISIBLE = LVM_FIRST + 19
 LVIS_SELECTED = 0x0002
 LVIS_FOCUSED = 0x0001
+
+# Process access rights
+PROCESS_VM_OPERATION = 0x0008
+PROCESS_VM_READ = 0x0010
+PROCESS_VM_WRITE = 0x0020
+PROCESS_QUERY_INFORMATION = 0x0400
+
+# Memory allocation
+MEM_COMMIT = 0x1000
+MEM_RELEASE = 0x8000
+PAGE_READWRITE = 0x04
 
 # Callback type
 EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -92,18 +105,211 @@ class DeviceExplorerController:
             return 0
         return user32.SendMessageW(self._listview_hwnd, LVM_GETITEMCOUNT, 0, 0)
 
-    def get_device_names(self) -> list:
+    def get_device_names(self) -> List[str]:
         """
-        Get all device names from the list.
+        Get all device names from the list using cross-process memory reading.
 
-        Note: This is a simplified version - getting text from ListView
-        in another process requires memory allocation in that process.
-        For now, we'll use the known device indices.
+        Uses Windows API to allocate memory in the target process and
+        read the ListView item text.
+
+        Returns:
+            List of device name strings
+        """
+        if not self._listview_hwnd:
+            logger.warning("ListView not found, cannot get device names")
+            return []
+
+        count = self.get_device_count()
+        if count == 0:
+            return []
+
+        logger.info(f"ListView has {count} items, reading names...")
+
+        # Get the process ID for the dialog
+        process_id = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(self._dialog_hwnd, ctypes.byref(process_id))
+
+        if not process_id.value:
+            logger.warning("Could not get process ID, falling back to known devices")
+            return self._get_known_device_names()
+
+        # Open the process with required permissions
+        process_handle = kernel32.OpenProcess(
+            PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_QUERY_INFORMATION,
+            False,
+            process_id.value
+        )
+
+        if not process_handle:
+            logger.warning(f"Could not open process {process_id.value}, falling back to known devices")
+            return self._get_known_device_names()
+
+        try:
+            device_names = []
+            all_read_failed = True
+            for i in range(count):
+                name = self._read_listview_item_text(process_handle, i)
+                if name:
+                    device_names.append(name)
+                    all_read_failed = False
+                else:
+                    device_names.append(None)  # Placeholder
+
+            # If all reads failed, use known device names
+            if all_read_failed:
+                logger.warning("Cross-process reading failed for all items, using known device names")
+                return self._get_known_device_names()
+
+            # Fill in any failed reads with known names or fallback
+            known_names = ["MDI", "MDI 2", "SM2 USB", "SM3 USB"]
+            for i in range(len(device_names)):
+                if device_names[i] is None:
+                    if i < len(known_names):
+                        device_names[i] = known_names[i]
+                    else:
+                        device_names[i] = f"Device {i}"
+
+            logger.info(f"Read device names: {device_names}")
+            return device_names
+
+        finally:
+            kernel32.CloseHandle(process_handle)
+
+    def _read_listview_item_text(self, process_handle, item_index: int, subitem: int = 0) -> Optional[str]:
+        """
+        Read text from a ListView item in another process.
+
+        Uses cross-process memory allocation to get the item text.
+
+        Args:
+            process_handle: Handle to the target process
+            item_index: Index of the item
+            subitem: Subitem index (0 for main text)
+
+        Returns:
+            Item text or None if failed
+        """
+        # LVITEM structure size (for 64-bit: need to handle both 32/64 bit)
+        # We'll use a simplified approach with fixed buffer size
+        MAX_TEXT_LENGTH = 256
+        LVITEM_SIZE = 72  # Size on 64-bit Windows
+
+        # Allocate memory in target process for LVITEM structure + text buffer
+        total_size = LVITEM_SIZE + (MAX_TEXT_LENGTH * 2)  # Unicode chars
+        remote_buffer = kernel32.VirtualAllocEx(
+            process_handle,
+            None,
+            total_size,
+            MEM_COMMIT,
+            PAGE_READWRITE
+        )
+
+        if not remote_buffer:
+            logger.debug(f"Failed to allocate memory for item {item_index}")
+            return None
+
+        try:
+            # Build LVITEM structure
+            # struct LVITEMW {
+            #   UINT   mask;          // 0
+            #   int    iItem;         // 4
+            #   int    iSubItem;      // 8
+            #   UINT   state;         // 12
+            #   UINT   stateMask;     // 16
+            #   LPWSTR pszText;       // 20 (32-bit) or 24 (64-bit)
+            #   int    cchTextMax;    // 24 (32-bit) or 32 (64-bit)
+            #   ...
+            # }
+
+            text_buffer_addr = remote_buffer + LVITEM_SIZE
+
+            # Create LVITEM structure (64-bit layout)
+            # We use pack to create the structure
+            # mask = LVIF_TEXT = 0x0001
+            lvitem = struct.pack(
+                "IiiII" + "Q" + "i" + "xxxx" + "Q" * 4,  # Simplified 64-bit layout
+                0x0001,          # mask (LVIF_TEXT)
+                item_index,      # iItem
+                subitem,         # iSubItem
+                0,               # state
+                0,               # stateMask
+                text_buffer_addr,  # pszText (pointer to text buffer)
+                MAX_TEXT_LENGTH,   # cchTextMax
+                0, 0, 0, 0       # padding/other fields
+            )
+
+            # Write LVITEM to remote process
+            bytes_written = ctypes.c_size_t()
+            success = kernel32.WriteProcessMemory(
+                process_handle,
+                remote_buffer,
+                lvitem,
+                len(lvitem),
+                ctypes.byref(bytes_written)
+            )
+
+            if not success:
+                logger.debug(f"Failed to write LVITEM for item {item_index}")
+                return None
+
+            # Send LVM_GETITEMTEXT message
+            result = user32.SendMessageW(
+                self._listview_hwnd,
+                LVM_GETITEMTEXT,
+                item_index,
+                remote_buffer
+            )
+
+            if result == 0:
+                logger.debug(f"LVM_GETITEMTEXT returned 0 for item {item_index}")
+                return None
+
+            # Read the text from remote process
+            text_buffer = ctypes.create_unicode_buffer(MAX_TEXT_LENGTH)
+            bytes_read = ctypes.c_size_t()
+            success = kernel32.ReadProcessMemory(
+                process_handle,
+                text_buffer_addr,
+                text_buffer,
+                MAX_TEXT_LENGTH * 2,
+                ctypes.byref(bytes_read)
+            )
+
+            if success and bytes_read.value > 0:
+                return text_buffer.value
+            else:
+                logger.debug(f"Failed to read text for item {item_index}")
+                return None
+
+        finally:
+            kernel32.VirtualFreeEx(process_handle, remote_buffer, 0, MEM_RELEASE)
+
+    def _get_known_device_names(self) -> List[str]:
+        """
+        Fallback: Return known device names based on count.
+
+        This is a fallback when cross-process reading fails.
         """
         count = self.get_device_count()
-        logger.info(f"ListView has {count} items")
-        # Device names are typically: MDI, MDI 2, SM2 USB, SM3 USB
-        return [f"Device {i}" for i in range(count)]
+        # Known device order in GDS2 Device Explorer
+        known_devices = ["MDI", "MDI 2", "SM2 USB", "SM3 USB"]
+        return known_devices[:count] if count <= len(known_devices) else [f"Device {i}" for i in range(count)]
+
+    def get_available_devices(self) -> List[str]:
+        """
+        Public API: Find dialog and enumerate all available devices.
+
+        This is the main entry point for device discovery.
+        Does not require the dialog to be already found.
+
+        Returns:
+            List of device names, or empty list if dialog not found
+        """
+        if not self._dialog_hwnd:
+            if not self.find_dialog(timeout_sec=3.0):
+                return []
+
+        return self.get_device_names()
 
     def select_device(self, index: int) -> bool:
         """
@@ -149,22 +355,33 @@ class DeviceExplorerController:
         """
         Select device by name (partial match).
 
-        Known devices: MDI, MDI 2, SM2 USB, SM3 USB
+        Dynamically reads device names from the list and selects by match.
 
         Args:
-            name: Device name to search for (e.g., "SM2")
+            name: Device name to search for (e.g., "SM2", "SM2 USB")
 
         Returns:
             True if found and selected
         """
-        # Known device order in GDS2 Device Explorer
-        known_devices = ["MDI", "MDI 2", "SM2 USB", "SM3 USB"]
+        device_names = self.get_device_names()
 
-        for i, device in enumerate(known_devices):
-            if name.upper() in device.upper():
+        if not device_names:
+            logger.warning("No devices found in list")
+            return False
+
+        # Try exact match first
+        for i, device in enumerate(device_names):
+            if name.upper() == device.upper():
+                logger.info(f"Exact match: '{device}' at index {i}")
                 return self.select_device(i)
 
-        logger.warning(f"Device '{name}' not found in known devices")
+        # Try partial match (case-insensitive)
+        for i, device in enumerate(device_names):
+            if name.upper() in device.upper():
+                logger.info(f"Partial match: '{device}' at index {i}")
+                return self.select_device(i)
+
+        logger.warning(f"Device '{name}' not found in {device_names}")
         return False
 
     def click_continue(self) -> bool:
