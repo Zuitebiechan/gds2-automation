@@ -7,12 +7,24 @@ Uses keyboard navigation (UP/DOWN/ENTER) instead of coordinate-based clicking.
 Strategy:
 - Module list: Discovered once when entering Module List page
 - Data list: On-demand discovery when first accessing a module's data
+- Sub-categories: Discovered when a data category has nested items
+
+Data Format (v2):
+- Old format: "data_categories": {"Engine Data": 0}
+- New format: "data_categories": {
+    "Engine Data": {"index": 0, "has_sub": false},
+    "Fuel System Data": {
+        "index": 12,
+        "has_sub": true,
+        "sub_categories": {"Fuel Injector Data": 0, "Fuel Pump Data": 1}
+    }
+}
 """
 
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union
 from pywinauto import Application
 
 logger = logging.getLogger(__name__)
@@ -72,7 +84,11 @@ class VehicleMapping:
     def get_data_category_index(
         self, vehicle_id: str, module_name: str, data_category: str
     ) -> Optional[int]:
-        """Get DOWN key presses needed to select a data category."""
+        """
+        Get DOWN key presses needed to select a data category.
+
+        Handles both old format (int) and new format (dict with index).
+        """
         mapping = self.load_mapping(vehicle_id)
         if not mapping:
             return None
@@ -83,7 +99,17 @@ class VehicleMapping:
             return None
 
         data_categories = module_info.get("data_categories", {})
-        return data_categories.get(data_category)
+        category_info = data_categories.get(data_category)
+
+        if category_info is None:
+            return None
+
+        # Handle both old format (int) and new format (dict)
+        if isinstance(category_info, int):
+            return category_info
+        elif isinstance(category_info, dict):
+            return category_info.get("index")
+        return None
 
     def has_module_list(self, vehicle_id: str) -> bool:
         """Check if module list has been discovered for this vehicle."""
@@ -104,6 +130,92 @@ class VehicleMapping:
             return False
 
         return "data_categories" in module_info and len(module_info["data_categories"]) > 0
+
+    def has_sub_categories(self, vehicle_id: str, module_name: str, data_category: str) -> bool:
+        """
+        Check if a data category has sub-categories.
+
+        Args:
+            vehicle_id: Vehicle identifier
+            module_name: Module name
+            data_category: Data category name
+
+        Returns:
+            True if has sub-categories, False otherwise
+        """
+        mapping = self.load_mapping(vehicle_id)
+        if not mapping:
+            return False
+
+        modules = mapping.get("modules", {})
+        module_info = modules.get(module_name)
+        if not module_info:
+            return False
+
+        data_categories = module_info.get("data_categories", {})
+        category_info = data_categories.get(data_category)
+
+        if category_info is None:
+            return False
+
+        # Only new format supports sub-categories
+        if isinstance(category_info, dict):
+            return category_info.get("has_sub", False)
+        return False
+
+    def get_sub_categories(
+        self, vehicle_id: str, module_name: str, data_category: str
+    ) -> Optional[Dict[str, int]]:
+        """
+        Get sub-categories for a data category.
+
+        Args:
+            vehicle_id: Vehicle identifier
+            module_name: Module name
+            data_category: Data category name
+
+        Returns:
+            Dict mapping sub-category name to index, or None if not found
+        """
+        mapping = self.load_mapping(vehicle_id)
+        if not mapping:
+            return None
+
+        modules = mapping.get("modules", {})
+        module_info = modules.get(module_name)
+        if not module_info:
+            return None
+
+        data_categories = module_info.get("data_categories", {})
+        category_info = data_categories.get(data_category)
+
+        if category_info is None:
+            return None
+
+        # Only new format supports sub-categories
+        if isinstance(category_info, dict):
+            return category_info.get("sub_categories")
+        return None
+
+    def get_sub_category_index(
+        self, vehicle_id: str, module_name: str, data_category: str, sub_category: str
+    ) -> Optional[int]:
+        """
+        Get index of a sub-category within its parent data category.
+
+        Args:
+            vehicle_id: Vehicle identifier
+            module_name: Module name
+            data_category: Parent data category name
+            sub_category: Sub-category name
+
+        Returns:
+            Index (DOWN key presses) for the sub-category, or None
+        """
+        sub_cats = self.get_sub_categories(vehicle_id, module_name, data_category)
+        if sub_cats is None:
+            return None
+        return sub_cats.get(sub_category)
 
     def update_module_list(self, vehicle_id: str, modules: Dict[str, int]):
         """
@@ -127,15 +239,17 @@ class VehicleMapping:
         self.save_mapping(vehicle_id, mapping)
 
     def update_data_categories(
-        self, vehicle_id: str, module_name: str, data_categories: Dict[str, int]
+        self, vehicle_id: str, module_name: str, data_categories: Dict[str, Union[int, Dict]]
     ):
         """
         Update data categories for a specific module.
 
+        Accepts both old format (name -> int) and new format (name -> dict).
+
         Args:
             vehicle_id: Vehicle identifier
             module_name: Module name
-            data_categories: Dict mapping data category name to index
+            data_categories: Dict mapping data category name to index or info dict
         """
         mapping = self.load_mapping(vehicle_id) or {
             "vehicle_id": vehicle_id,
@@ -146,6 +260,58 @@ class VehicleMapping:
             mapping["modules"][module_name] = {"index": 0}
 
         mapping["modules"][module_name]["data_categories"] = data_categories
+        self.save_mapping(vehicle_id, mapping)
+
+    def update_sub_categories(
+        self, vehicle_id: str, module_name: str, data_category: str,
+        sub_categories: Dict[str, int]
+    ):
+        """
+        Update sub-categories for a specific data category.
+
+        Converts old format (int) to new format (dict) if needed.
+
+        Args:
+            vehicle_id: Vehicle identifier
+            module_name: Module name
+            data_category: Parent data category name
+            sub_categories: Dict mapping sub-category name to index
+        """
+        mapping = self.load_mapping(vehicle_id) or {
+            "vehicle_id": vehicle_id,
+            "modules": {}
+        }
+
+        if module_name not in mapping["modules"]:
+            mapping["modules"][module_name] = {"index": 0}
+
+        module_info = mapping["modules"][module_name]
+        data_cats = module_info.setdefault("data_categories", {})
+
+        category_info = data_cats.get(data_category)
+
+        if category_info is None:
+            # Category not yet registered
+            data_cats[data_category] = {
+                "index": 0,
+                "has_sub": True,
+                "sub_categories": sub_categories
+            }
+        elif isinstance(category_info, int):
+            # Upgrade from old format (int) to new format (dict)
+            data_cats[data_category] = {
+                "index": category_info,
+                "has_sub": True,
+                "sub_categories": sub_categories
+            }
+        elif isinstance(category_info, dict):
+            # Update existing new-format entry
+            category_info["has_sub"] = True
+            category_info["sub_categories"] = sub_categories
+        else:
+            logger.warning(f"Unexpected category info type: {type(category_info)}")
+            return
+
         self.save_mapping(vehicle_id, mapping)
 
 

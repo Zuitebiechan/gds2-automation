@@ -375,7 +375,7 @@ class AgentDataCollector:
 
                     # Fire callbacks
                     if self.on_snapshot:
-                        self.on_snapshot(snapshot)
+                        self.on_snapshot(snapshot, param_changes)
 
                     if param_changes and self.on_param_change:
                         self.on_param_change(param_changes)

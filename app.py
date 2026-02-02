@@ -3,18 +3,21 @@ GDS2 Automation Web UI - Flask Version (Agent-based)
 
 Simple web interface for GDS2 vehicle diagnostics automation.
 Uses Java Agent for all navigation - no PyAutoGUI dependency.
+
+API Endpoints:
+- New Interactive API: /api/nav/* - Step-by-step navigation
+- Legacy API: /api/fetch_modules, /api/fetch_categories, /api/search_data
+- Streaming API: /api/stream/* - Real-time data monitoring
 """
 
 from flask import Flask, render_template, jsonify, request, Response
 from flask_cors import CORS
 import logging
-import re
 import time
 import json
 import queue
 import threading
 from pathlib import Path
-from enum import Enum
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, asdict
 
@@ -34,424 +37,24 @@ CORS(app)
 
 
 # =============================================================================
-# State Machine
+# Interactive Workflow Controller
 # =============================================================================
 
-class GDS2State(Enum):
-    """GDS2 application state."""
-    UNKNOWN = "unknown"
-    MAIN_MENU = "main_menu"
-    DIAGNOSTICS_MENU = "diagnostics_menu"
-    MODULE_LIST = "module_list"
-    MODULE_SUBMENU = "module_submenu"
-    DATA_LIST = "data_list"
-    DATA_DISPLAY = "data_display"
+# Global workflow instance
+_workflow = None
 
 
-@dataclass
-class AppState:
-    """Application state container."""
-    gds2_state: str = GDS2State.MAIN_MENU.value
-    current_module: Optional[str] = None
-    current_data_category: Optional[str] = None
-    data_list_focus_index: int = 0
-
-
-# Global state
-app_state = AppState()
+def get_workflow():
+    """Get or create the global InteractiveWorkflow instance."""
+    global _workflow
+    if _workflow is None:
+        from src.workflows import InteractiveWorkflow
+        _workflow = InteractiveWorkflow()
+    return _workflow
 
 
 # =============================================================================
-# GDS2 Controller (Agent-based)
-# =============================================================================
-
-class GDS2Controller:
-    """Controller for GDS2 automation using Java Agent."""
-
-    def __init__(self):
-        """Initialize controller."""
-        self._mapping = None
-        self._nav = None
-
-    @property
-    def mapping(self):
-        """Lazy-load vehicle mapping."""
-        if self._mapping is None:
-            from src.discovery import VehicleMapping
-            self._mapping = VehicleMapping()
-        return self._mapping
-
-    @property
-    def nav(self):
-        """Lazy-load Agent Navigator."""
-        if self._nav is None:
-            from src.streaming import AgentNavigator
-            self._nav = AgentNavigator(timeout_sec=15.0)
-        return self._nav
-
-    def check_agent(self) -> bool:
-        """Check if Java Agent is available."""
-        return self.nav.check_agent()
-
-    def get_module_list(self, vehicle_id: str = "current_vehicle") -> List[str]:
-        """Get list of available modules from cache."""
-        mapping = self.mapping.load_mapping(vehicle_id)
-        if mapping and "modules" in mapping:
-            return list(mapping["modules"].keys())
-        return []
-
-    def get_data_categories(self, vehicle_id: str, module_name: str) -> List[str]:
-        """Get data categories for a module from cache."""
-        mapping = self.mapping.load_mapping(vehicle_id)
-        if not mapping:
-            return []
-
-        modules = mapping.get("modules", {})
-        module_info = modules.get(module_name, {})
-        data_categories = module_info.get("data_categories", {})
-        return list(data_categories.keys())
-
-    def _wait_for_list(self, list_index: int = 0, max_attempts: int = 15) -> List[str]:
-        """Wait for list items to load."""
-        for attempt in range(max_attempts):
-            items = self.nav.get_list_items(list_index)
-            if items:
-                return items
-            logger.info(f"  Waiting for list to load... ({attempt+1})")
-            time.sleep(1)
-        return []
-
-    def _dismiss_warning_dialog(self):
-        """Dismiss warning dialog if present."""
-        for _ in range(3):
-            buttons = self.nav.get_buttons()
-            button_texts = [b.get('text') for b in buttons]
-            if "OK" in button_texts:
-                logger.info("  Warning dialog detected, clicking OK...")
-                result = self.nav.click_button("OK")
-                if result.get('success'):
-                    time.sleep(1)
-                    return
-            time.sleep(0.3)
-
-    def discover_modules(self, vehicle_id: str = "current_vehicle") -> List[str]:
-        """
-        Discover all modules by navigating to Module List page.
-        Uses Java Agent for navigation.
-        """
-        from src.native import handle_device_explorer
-
-        try:
-            logger.info("=== Discovering Modules (Agent) ===")
-
-            # Step 1: Click Diagnostics
-            logger.info("Step 1: Clicking Diagnostics...")
-            result = self.nav.click_button("Diagnostics")
-            if not result.get('success'):
-                logger.error(f"Failed to click Diagnostics: {result.get('message')}")
-                return []
-            time.sleep(3)
-
-            # Step 2: Handle Device Explorer (Windows API)
-            logger.info("Step 2: Handling Device Explorer...")
-            handle_device_explorer(device_name="SM2 USB", timeout=5.0)
-            time.sleep(3)
-
-            # Step 3: Click Enter for vehicle selection
-            logger.info("Step 3: Clicking Enter...")
-            for _ in range(10):
-                buttons = self.nav.get_buttons()
-                if any(b.get('text') == 'Enter' for b in buttons):
-                    result = self.nav.click_button("Enter")
-                    if result.get('success'):
-                        break
-                time.sleep(0.5)
-            time.sleep(3)
-
-            # Step 4: Handle warning dialog
-            self._dismiss_warning_dialog()
-
-            # Step 5: Select Module Diagnostics
-            logger.info("Step 4: Selecting Module Diagnostics...")
-            items = self._wait_for_list(0)
-            logger.info(f"  Menu items: {items}")
-
-            for i, item in enumerate(items):
-                if "Module Diagnostics" in item:
-                    result = self.nav.select_list_item(0, i, double_click=True)
-                    if result.get('success'):
-                        logger.info(f"  [OK] Selected Module Diagnostics at index {i}")
-                        break
-            time.sleep(3)
-
-            # Step 6: Discover modules using Agent
-            logger.info("Step 5: Enumerating modules...")
-            items = self._wait_for_list(0)
-            logger.info(f"  Found {len(items)} modules")
-
-            # Save to mapping
-            module_indices = {name: idx for idx, name in enumerate(items)}
-            self.mapping.update_module_list(vehicle_id, module_indices)
-
-            logger.info("=== Module Discovery Complete ===")
-            return items
-
-        except Exception as e:
-            logger.exception(f"Module discovery failed: {e}")
-            return []
-
-    def discover_data_categories(self, vehicle_id: str, module_name: str) -> List[str]:
-        """Discover data categories using Agent."""
-        logger.info(f"Discovering data categories for {module_name}...")
-
-        items = self._wait_for_list(0)
-        logger.info(f"  Found {len(items)} data categories")
-
-        # Save to mapping
-        data_categories = {name: idx for idx, name in enumerate(items)}
-        self.mapping.update_data_categories(vehicle_id, module_name, data_categories)
-
-        return items
-
-    def navigate_to_module_list_from_main_menu(self) -> bool:
-        """Navigate from Main Menu to Module List page using Agent."""
-        from src.native import handle_device_explorer
-
-        try:
-            logger.info("=== Navigating to Module List (Agent) ===")
-
-            # Step 1: Click Diagnostics
-            logger.info("Step 1: Clicking Diagnostics...")
-            result = self.nav.click_button("Diagnostics")
-            if not result.get('success'):
-                logger.error(f"Failed: {result.get('message')}")
-                return False
-            time.sleep(3)
-
-            # Step 2: Handle Device Explorer
-            logger.info("Step 2: Handling Device Explorer...")
-            handle_device_explorer(device_name="SM2 USB", timeout=5.0)
-            time.sleep(3)
-
-            # Step 3: Click Enter
-            logger.info("Step 3: Clicking Enter...")
-            for _ in range(10):
-                buttons = self.nav.get_buttons()
-                if any(b.get('text') == 'Enter' for b in buttons):
-                    result = self.nav.click_button("Enter")
-                    if result.get('success'):
-                        break
-                time.sleep(0.5)
-            time.sleep(3)
-
-            # Handle warning dialog
-            self._dismiss_warning_dialog()
-
-            # Step 4: Select Module Diagnostics
-            logger.info("Step 4: Selecting Module Diagnostics...")
-            items = self._wait_for_list(0)
-            for i, item in enumerate(items):
-                if "Module Diagnostics" in item:
-                    result = self.nav.select_list_item(0, i, double_click=True)
-                    if result.get('success'):
-                        logger.info(f"  [OK] Selected Module Diagnostics")
-                        break
-            time.sleep(3)
-
-            logger.info("=== Navigation to Module List Complete ===")
-            return True
-
-        except Exception as e:
-            logger.exception(f"Navigation failed: {e}")
-            return False
-
-    def navigate_to_data_list_from_module_list(self, module_name: str) -> bool:
-        """Navigate from Module List to Data List using Agent."""
-        try:
-            logger.info(f"=== Navigating to Data List (Agent) ===")
-            logger.info(f"Target module: {module_name}")
-
-            # Step 1: Select module
-            items = self._wait_for_list(0)
-            logger.info(f"  Found {len(items)} modules")
-
-            module_index = None
-            for i, item in enumerate(items):
-                if module_name in item or item in module_name:
-                    module_index = i
-                    break
-
-            if module_index is None:
-                # Try partial match
-                module_key = module_name.split("]")[-1].strip() if "]" in module_name else module_name
-                for i, item in enumerate(items):
-                    if module_key in item:
-                        module_index = i
-                        break
-
-            if module_index is None:
-                logger.error(f"Module '{module_name}' not found")
-                return False
-
-            logger.info(f"Step 1: Selecting module at index {module_index}...")
-            result = self.nav.select_list_item(0, module_index, double_click=True)
-            if not result.get('success'):
-                logger.error(f"Failed to select module: {result.get('message')}")
-                return False
-            time.sleep(3)
-
-            # Step 2: Select Data Display from submenu
-            logger.info("Step 2: Selecting Data Display...")
-            items = self._wait_for_list(0)
-            logger.info(f"  Submenu items: {items}")
-
-            for i, item in enumerate(items):
-                if "Data Display" in item:
-                    result = self.nav.select_list_item(0, i, double_click=True)
-                    if result.get('success'):
-                        logger.info(f"  [OK] Selected Data Display at index {i}")
-                        break
-            time.sleep(3)
-
-            # Handle warning dialog
-            self._dismiss_warning_dialog()
-
-            logger.info("=== Navigation to Data List Complete ===")
-            return True
-
-        except Exception as e:
-            logger.exception(f"Navigation failed: {e}")
-            return False
-
-    def navigate_to_data_list(self, module_name: str) -> bool:
-        """Navigate from Main Menu to Data List using Agent."""
-        if not self.navigate_to_module_list_from_main_menu():
-            return False
-        return self.navigate_to_data_list_from_module_list(module_name)
-
-    def navigate_to_data_display(self, module_name: str, data_category: str, current_focus: int) -> Optional[str]:
-        """Navigate from Data List to Data Display and create report using Agent."""
-        try:
-            # Get target index
-            target_index = self.mapping.get_data_category_index("current_vehicle", module_name, data_category)
-            if target_index is None:
-                # Try to find it in current list
-                items = self.nav.get_list_items(0)
-                for i, item in enumerate(items):
-                    if data_category in item or item in data_category:
-                        target_index = i
-                        break
-
-            if target_index is None:
-                logger.error(f"Data category '{data_category}' not found")
-                return None
-
-            logger.info(f"Selecting data category '{data_category}' at index {target_index}...")
-            result = self.nav.select_list_item(0, target_index, double_click=True)
-            if not result.get('success'):
-                logger.error(f"Failed to select data category: {result.get('message')}")
-                return None
-            time.sleep(5)
-
-            # Click Create Report
-            logger.info("Clicking Create Report...")
-            for _ in range(30):
-                buttons = self.nav.get_buttons()
-                if any(b.get('text') == 'Create Report' for b in buttons):
-                    result = self.nav.click_button("Create Report")
-                    if result.get('success'):
-                        logger.info("  [OK] Clicked Create Report")
-                        break
-                time.sleep(1)
-            time.sleep(2)
-
-            # Find latest report
-            report_dir = Path.home() / "AppData" / "Local" / "Temp" / "GDS 2"
-            if report_dir.exists():
-                reports = list(report_dir.glob("Data Display_*.html"))
-                if reports:
-                    latest_report = max(reports, key=lambda p: p.stat().st_mtime)
-                    return str(latest_report)
-
-            return None
-
-        except Exception as e:
-            logger.exception(f"Navigation failed: {e}")
-            return None
-
-    def click_back_button(self) -> bool:
-        """Click Back button using Agent."""
-        try:
-            result = self.nav.click_button("Back")
-            if result.get('success'):
-                time.sleep(1.5)
-                return True
-            logger.error(f"Failed to click Back: {result.get('message')}")
-            return False
-        except Exception as e:
-            logger.exception(f"Back button failed: {e}")
-            return False
-
-    def click_home_button(self) -> bool:
-        """Click Home button using Agent to return to Main Menu."""
-        try:
-            result = self.nav.click_button("Home")
-            if result.get('success'):
-                time.sleep(2)
-                return True
-            return False
-        except Exception as e:
-            logger.exception(f"Home button failed: {e}")
-            return False
-
-    def parse_report(self, report_path: str) -> Dict[str, Any]:
-        """Parse HTML report."""
-        result = {"vehicle_info": {}, "data_items": []}
-
-        try:
-            with open(report_path, 'r', encoding='iso-8859-1') as f:
-                html_content = f.read()
-
-            vin_match = re.search(r'Vehicle Identification Number \(VIN\)</td><td>([^<]+)</td>', html_content)
-            if vin_match:
-                result["vehicle_info"]["vin"] = vin_match.group(1)
-
-            make_match = re.search(r'<td>Make</td><td>([^<]+)</td>', html_content)
-            if make_match:
-                result["vehicle_info"]["make"] = make_match.group(1)
-
-            model_match = re.search(r'<td>Model</td><td>([^<]+)</td>', html_content)
-            if model_match:
-                result["vehicle_info"]["model"] = model_match.group(1)
-
-            year_match = re.search(r'<td>Model Year</td><td>([^<]+)</td>', html_content)
-            if year_match:
-                result["vehicle_info"]["year"] = year_match.group(1)
-
-            data_pattern = r'<tr><td>([^<]+)</td><td>([^<]*)</td><td>([^<]*)</td></tr>'
-            matches = re.findall(data_pattern, html_content)
-
-            for match in matches:
-                parameter, value, units = match
-                if parameter not in ["Parameter", "Control Module", "DTC Type"]:
-                    result["data_items"].append({
-                        "parameter": parameter.strip(),
-                        "value": value.strip(),
-                        "units": units.strip(),
-                    })
-
-        except Exception as e:
-            logger.error(f"Error parsing report: {e}")
-
-        return result
-
-
-# Global controller
-controller = GDS2Controller()
-
-
-# =============================================================================
-# Flask Routes
+# Flask Routes - Basic
 # =============================================================================
 
 @app.route('/test')
@@ -469,166 +72,338 @@ def index():
 @app.route('/api/agent/check')
 def check_agent():
     """Check if Java Agent is available."""
-    available = controller.check_agent()
+    workflow = get_workflow()
+    available = workflow.check_agent()
     return jsonify({
         "available": available,
         "message": "Agent connected" if available else "Agent not available. Start GDS2 with agent."
     })
 
 
-@app.route('/api/fetch_modules', methods=['POST'])
-def fetch_modules():
+# =============================================================================
+# New Interactive Navigation API
+# =============================================================================
+
+@app.route('/api/nav/start', methods=['POST'])
+def nav_start():
     """
-    Step 1: Fetch all modules.
-    Assumes GDS2 is at Main Menu.
+    Start interactive navigation workflow.
+
+    Returns current page and available choices.
     """
     try:
-        logger.info("=== Step 1: Fetch Modules ===")
-
-        # Check agent first
-        if not controller.check_agent():
-            return jsonify({"error": "Java Agent not available. Start GDS2 with agent."}), 400
-
-        # Check if we have cached modules
-        cached_modules = controller.get_module_list()
-
-        if cached_modules:
-            logger.info(f"Found {len(cached_modules)} cached modules. Navigating...")
-            success = controller.navigate_to_module_list_from_main_menu()
-            if not success:
-                return jsonify({"error": "Failed to navigate to Module List"}), 500
-
-            app_state.gds2_state = GDS2State.MODULE_LIST.value
-            app_state.current_module = None
-            app_state.current_data_category = None
-
-            return jsonify({
-                "success": True,
-                "modules": cached_modules,
-                "from_cache": True,
-                "state": asdict(app_state)
-            })
-        else:
-            logger.info("No cached modules. Discovering...")
-            modules = controller.discover_modules("current_vehicle")
-
-            if modules:
-                app_state.gds2_state = GDS2State.MODULE_LIST.value
-                app_state.current_module = None
-                app_state.current_data_category = None
-
-                return jsonify({
-                    "success": True,
-                    "modules": modules,
-                    "from_cache": False,
-                    "state": asdict(app_state)
-                })
-            else:
-                return jsonify({"error": "Failed to discover modules"}), 500
+        workflow = get_workflow()
+        result = workflow.start()
+        return jsonify(result.to_dict())
 
     except Exception as e:
-        logger.exception("Fetch modules failed")
-        return jsonify({"error": str(e)}), 500
+        logger.exception("nav_start failed")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
-@app.route('/api/fetch_categories', methods=['POST'])
-def fetch_categories():
+@app.route('/api/nav/diagnostics', methods=['POST'])
+def nav_diagnostics():
     """
-    Step 2: Fetch data categories for selected module.
-    Assumes GDS2 is at Module List.
-    """
-    data = request.json
-    module_name = data.get('module')
+    Click Diagnostics from Main Menu.
 
-    if not module_name:
-        return jsonify({"error": "Module name required"}), 400
+    If Device Explorer appears, returns device list.
+    """
+    try:
+        workflow = get_workflow()
+        result = workflow.step_diagnostics()
+        return jsonify(result.to_dict())
+
+    except Exception as e:
+        logger.exception("nav_diagnostics failed")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/nav/select_device', methods=['POST'])
+def nav_select_device():
+    """
+    Select device in Device Explorer.
+
+    Request body: {"device": "SM2 USB"}
+    """
+    data = request.json or {}
+    device = data.get('device')
+
+    if not device:
+        return jsonify({"success": False, "error": "Device name required"}), 400
 
     try:
-        logger.info(f"=== Step 2: Fetch Categories for {module_name} ===")
-
-        cached_categories = controller.get_data_categories("current_vehicle", module_name)
-
-        # Navigate from Module List to Data List
-        success = controller.navigate_to_data_list_from_module_list(module_name)
-        if not success:
-            return jsonify({"error": "Failed to navigate to data list"}), 500
-
-        if cached_categories:
-            logger.info(f"Using {len(cached_categories)} cached categories")
-            app_state.gds2_state = GDS2State.DATA_LIST.value
-            app_state.current_module = module_name
-            app_state.data_list_focus_index = 0
-
-            return jsonify({
-                "success": True,
-                "data_categories": cached_categories,
-                "from_cache": True,
-                "state": asdict(app_state)
-            })
-        else:
-            logger.info("Discovering data categories...")
-            categories = controller.discover_data_categories("current_vehicle", module_name)
-
-            if not categories:
-                return jsonify({"error": "Failed to discover data categories"}), 500
-
-            app_state.gds2_state = GDS2State.DATA_LIST.value
-            app_state.current_module = module_name
-            app_state.data_list_focus_index = 0
-
-            return jsonify({
-                "success": True,
-                "data_categories": categories,
-                "from_cache": False,
-                "state": asdict(app_state)
-            })
+        workflow = get_workflow()
+        result = workflow.step_select_device(device)
+        return jsonify(result.to_dict())
 
     except Exception as e:
-        logger.exception("Fetch categories failed")
-        return jsonify({"error": str(e)}), 500
+        logger.exception("nav_select_device failed")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
-@app.route('/api/search_data', methods=['POST'])
-def search_data():
+@app.route('/api/nav/disconnect_device', methods=['POST'])
+def nav_disconnect_device():
     """
-    Step 3: Search data for selected category.
-    Assumes GDS2 is at Data List.
+    Disconnect from current VCI device.
+
+    Must be at Vehicle Selection page.
+    After disconnect, use /api/nav/open_device_selector to select a different device.
     """
-    data = request.json
-    module_name = data.get('module')
+    try:
+        workflow = get_workflow()
+        result = workflow.step_disconnect_device()
+        return jsonify(result.to_dict())
+
+    except Exception as e:
+        logger.exception("nav_disconnect_device failed")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/nav/open_device_selector', methods=['POST'])
+def nav_open_device_selector():
+    """
+    Open Device Explorer to select a different device.
+
+    Must be at Vehicle Selection page after disconnecting.
+    Returns list of available devices.
+    """
+    try:
+        workflow = get_workflow()
+        result = workflow.step_open_device_selector()
+        return jsonify(result.to_dict())
+
+    except Exception as e:
+        logger.exception("nav_open_device_selector failed")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/nav/enter', methods=['POST'])
+def nav_enter():
+    """
+    Click Enter button (typically at Vehicle Selection page).
+
+    Returns next page after clicking Enter.
+    """
+    try:
+        workflow = get_workflow()
+        result = workflow.step_click_enter()
+        return jsonify(result.to_dict())
+
+    except Exception as e:
+        logger.exception("nav_enter failed")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/nav/module_diagnostics', methods=['POST'])
+def nav_module_diagnostics():
+    """
+    Select Module Diagnostics from Diagnostics Menu.
+
+    Returns list of available modules.
+    """
+    try:
+        workflow = get_workflow()
+        result = workflow.step_module_diagnostics()
+        return jsonify(result.to_dict())
+
+    except Exception as e:
+        logger.exception("nav_module_diagnostics failed")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/nav/select_module', methods=['POST'])
+def nav_select_module():
+    """
+    Select a module from Module List.
+
+    Request body: {"module": "[K20] Engine Control Module"}
+    """
+    data = request.json or {}
+    module = data.get('module')
+
+    if not module:
+        return jsonify({"success": False, "error": "Module name required"}), 400
+
+    try:
+        workflow = get_workflow()
+        result = workflow.step_select_module(module)
+        return jsonify(result.to_dict())
+
+    except Exception as e:
+        logger.exception("nav_select_module failed")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/nav/data_display', methods=['POST'])
+def nav_data_display():
+    """
+    Select Data Display from Module Submenu.
+
+    Returns list of available data categories.
+    """
+    try:
+        workflow = get_workflow()
+        result = workflow.step_data_display()
+        return jsonify(result.to_dict())
+
+    except Exception as e:
+        logger.exception("nav_data_display failed")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/nav/select_data_category', methods=['POST'])
+def nav_select_data_category():
+    """
+    Select a data category from Data List.
+
+    May return DATA_DISPLAY or SUB_DATA_LIST if category has sub-categories.
+
+    Request body: {"data_category": "Engine Data"}
+    """
+    data = request.json or {}
     data_category = data.get('data_category')
 
-    if not module_name or not data_category:
-        return jsonify({"error": "Module and data category required"}), 400
+    if not data_category:
+        return jsonify({"success": False, "error": "Data category required"}), 400
 
     try:
-        logger.info(f"=== Search: {data_category} ===")
+        workflow = get_workflow()
+        result = workflow.step_select_data_category(data_category)
+        return jsonify(result.to_dict())
 
-        # Navigate to data display
-        report_path = controller.navigate_to_data_display(
-            module_name, data_category, app_state.data_list_focus_index
-        )
+    except Exception as e:
+        logger.exception("nav_select_data_category failed")
+        return jsonify({"success": False, "error": str(e)}), 500
 
+
+@app.route('/api/nav/select_sub_category', methods=['POST'])
+def nav_select_sub_category():
+    """
+    Select a sub-category from Sub Data List.
+
+    Request body: {"sub_category": "Fuel Injector Data"}
+    """
+    data = request.json or {}
+    sub_category = data.get('sub_category')
+
+    if not sub_category:
+        return jsonify({"success": False, "error": "Sub-category required"}), 400
+
+    try:
+        workflow = get_workflow()
+        result = workflow.step_select_sub_category(sub_category)
+        return jsonify(result.to_dict())
+
+    except Exception as e:
+        logger.exception("nav_select_sub_category failed")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/nav/back', methods=['POST'])
+def nav_back():
+    """Go back one page."""
+    try:
+        workflow = get_workflow()
+        result = workflow.step_go_back()
+        return jsonify(result.to_dict())
+
+    except Exception as e:
+        logger.exception("nav_back failed")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/nav/home', methods=['POST'])
+def nav_home():
+    """Go to Main Menu."""
+    try:
+        workflow = get_workflow()
+        result = workflow.step_go_home()
+        return jsonify(result.to_dict())
+
+    except Exception as e:
+        logger.exception("nav_home failed")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/nav/change_module', methods=['POST'])
+def nav_change_module():
+    """
+    Navigate back to Module List and select a different module.
+
+    Request body: {"module": "[T42] Body Control Module"}
+    """
+    data = request.json or {}
+    module = data.get('module')
+
+    if not module:
+        return jsonify({"success": False, "error": "Module name required"}), 400
+
+    try:
+        workflow = get_workflow()
+        result = workflow.step_change_module(module)
+        return jsonify(result.to_dict())
+
+    except Exception as e:
+        logger.exception("nav_change_module failed")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/nav/change_data_category', methods=['POST'])
+def nav_change_data_category():
+    """
+    Navigate back to Data List and select a different data category.
+
+    Request body: {"data_category": "Misfire Data"}
+    """
+    data = request.json or {}
+    data_category = data.get('data_category')
+
+    if not data_category:
+        return jsonify({"success": False, "error": "Data category required"}), 400
+
+    try:
+        workflow = get_workflow()
+        result = workflow.step_change_data_category(data_category)
+        return jsonify(result.to_dict())
+
+    except Exception as e:
+        logger.exception("nav_change_data_category failed")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/nav/choices')
+def nav_choices():
+    """Get available choices at current page without navigation."""
+    try:
+        workflow = get_workflow()
+        result = workflow.get_current_choices()
+        return jsonify(result.to_dict())
+
+    except Exception as e:
+        logger.exception("nav_choices failed")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/nav/create_report', methods=['POST'])
+def nav_create_report():
+    """
+    Create report at Data Display page.
+
+    Returns report path and parsed data.
+    """
+    try:
+        workflow = get_workflow()
+
+        report_path = workflow.create_report()
         if not report_path:
-            return jsonify({"error": "Failed to create report"}), 500
+            return jsonify({"success": False, "error": "Failed to create report"}), 500
 
-        # Parse report
-        report_data = controller.parse_report(report_path)
+        report_data = workflow.parse_report(report_path)
 
-        # Parse for DTCs
+        # Also parse for DTCs
         from src.utils.report_parser import GDS2ReportParser
         dtc_parser = GDS2ReportParser()
         dtc_data = dtc_parser.parse_dtc_report(report_path)
-
-        # Click Back to return to Data List
-        logger.info("Clicking Back...")
-        controller.click_back_button()
-
-        # Update state
-        target_index = controller.mapping.get_data_category_index("current_vehicle", module_name, data_category) or 0
-        app_state.gds2_state = GDS2State.DATA_LIST.value
-        app_state.current_data_category = data_category
-        app_state.data_list_focus_index = target_index
 
         return jsonify({
             "success": True,
@@ -637,72 +412,22 @@ def search_data():
             "vehicle_info": dtc_data.get("vehicle_info", {}),
             "dtc_list": dtc_data.get("dtc_list", []),
             "module_status": dtc_data.get("module_status", []),
-            "state": asdict(app_state)
         })
 
     except Exception as e:
-        logger.exception("Search data failed")
-        return jsonify({"error": str(e)}), 500
+        logger.exception("nav_create_report failed")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
-@app.route('/api/get_dtcs', methods=['POST'])
-def get_dtcs():
-    """Get DTCs from Vehicle DTC Information category."""
-    try:
-        logger.info("=== Get DTCs ===")
-
-        if not app_state.current_module:
-            return jsonify({"error": "No module selected"}), 400
-
-        module_name = app_state.current_module
-
-        # Find DTC category
-        dtc_category = "Vehicle DTC Information"
-        target_index = controller.mapping.get_data_category_index("current_vehicle", module_name, dtc_category)
-
-        if target_index is None:
-            for alt in ["Vehicle DTC and ID Information", "DTC Information"]:
-                target_index = controller.mapping.get_data_category_index("current_vehicle", module_name, alt)
-                if target_index is not None:
-                    dtc_category = alt
-                    break
-
-        if target_index is None:
-            return jsonify({"error": "DTC category not found"}), 400
-
-        report_path = controller.navigate_to_data_display(
-            module_name, dtc_category, app_state.data_list_focus_index
-        )
-
-        if not report_path:
-            return jsonify({"error": "Failed to create DTC report"}), 500
-
-        from src.utils.report_parser import GDS2ReportParser
-        parser = GDS2ReportParser()
-        dtc_data = parser.parse_dtc_report(report_path)
-
-        controller.click_back_button()
-
-        app_state.gds2_state = GDS2State.DATA_LIST.value
-        app_state.data_list_focus_index = target_index
-
-        return jsonify({
-            "success": True,
-            "vehicle_info": dtc_data.get("vehicle_info", {}),
-            "dtc_list": dtc_data.get("dtc_list", []),
-            "module_status": dtc_data.get("module_status", []),
-            "state": asdict(app_state)
-        })
-
-    except Exception as e:
-        logger.exception("Get DTCs failed")
-        return jsonify({"error": str(e)}), 500
-
+# =============================================================================
+# Cache Access API
+# =============================================================================
 
 @app.route('/api/modules')
 def get_modules():
     """Get list of modules from cache."""
-    modules = controller.get_module_list()
+    workflow = get_workflow()
+    modules = workflow.get_cached_modules()
     return jsonify({"modules": modules})
 
 
@@ -713,26 +438,273 @@ def get_data_categories():
     if not module_name:
         return jsonify({"error": "Module name required"}), 400
 
-    categories = controller.get_data_categories("current_vehicle", module_name)
+    workflow = get_workflow()
+    categories = workflow.get_cached_data_categories(module_name)
     return jsonify({"data_categories": categories})
+
+
+@app.route('/api/sub_categories')
+def get_sub_categories():
+    """Get sub-categories for a data category from cache."""
+    module_name = request.args.get('module')
+    data_category = request.args.get('data_category')
+
+    if not module_name or not data_category:
+        return jsonify({"error": "Module and data category required"}), 400
+
+    workflow = get_workflow()
+    sub_cats = workflow.get_cached_sub_categories(module_name, data_category)
+    return jsonify({"sub_categories": sub_cats})
+
+
+@app.route('/api/state')
+def get_state():
+    """Get current navigation state with button info."""
+    workflow = get_workflow()
+    result = workflow.get_current_choices()
+    buttons = workflow.get_available_buttons()
+    return jsonify({
+        "page": result.page.value,
+        "context": result.context,
+        "choices": result.choices,
+        "buttons": buttons,
+    })
+
+
+# =============================================================================
+# Legacy API (Backward Compatibility)
+# =============================================================================
+
+@app.route('/api/fetch_modules', methods=['POST'])
+def fetch_modules():
+    """
+    Legacy Step 1: Fetch all modules.
+    Assumes GDS2 is at Main Menu.
+    """
+    try:
+        logger.info("=== Legacy Step 1: Fetch Modules ===")
+        workflow = get_workflow()
+
+        # Check agent
+        if not workflow.check_agent():
+            return jsonify({"error": "Java Agent not available. Start GDS2 with agent."}), 400
+
+        # Check cache
+        cached_modules = workflow.get_cached_modules()
+
+        # Start workflow
+        result = workflow.start()
+        if not result.success:
+            return jsonify({"error": result.error}), 500
+
+        # Click Diagnostics
+        result = workflow.step_diagnostics()
+        if not result.success:
+            return jsonify({"error": result.error}), 500
+
+        # Handle Device Explorer if present
+        if result.page.value == "device_explorer":
+            result = workflow.step_select_device("SM2 USB")
+            if not result.success:
+                return jsonify({"error": result.error}), 500
+
+        # Select Module Diagnostics
+        result = workflow.step_module_diagnostics()
+        if not result.success:
+            return jsonify({"error": result.error}), 500
+
+        modules = result.choices or []
+
+        return jsonify({
+            "success": True,
+            "modules": modules,
+            "from_cache": len(cached_modules) > 0,
+            "state": {
+                "gds2_state": result.page.value,
+                "current_module": result.context.get("module"),
+                "current_data_category": result.context.get("data_category"),
+            }
+        })
+
+    except Exception as e:
+        logger.exception("Fetch modules failed")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/fetch_categories', methods=['POST'])
+def fetch_categories():
+    """
+    Legacy Step 2: Fetch data categories for selected module.
+    Assumes GDS2 is at Module List.
+    """
+    data = request.json or {}
+    module_name = data.get('module')
+
+    if not module_name:
+        return jsonify({"error": "Module name required"}), 400
+
+    try:
+        logger.info(f"=== Legacy Step 2: Fetch Categories for {module_name} ===")
+        workflow = get_workflow()
+
+        # Check cache
+        cached_categories = workflow.get_cached_data_categories(module_name)
+
+        # Select module
+        result = workflow.step_select_module(module_name)
+        if not result.success:
+            return jsonify({"error": result.error}), 500
+
+        # Select Data Display
+        result = workflow.step_data_display()
+        if not result.success:
+            return jsonify({"error": result.error}), 500
+
+        categories = result.choices or []
+
+        return jsonify({
+            "success": True,
+            "data_categories": categories,
+            "from_cache": len(cached_categories) > 0,
+            "state": {
+                "gds2_state": result.page.value,
+                "current_module": result.context.get("module"),
+                "current_data_category": result.context.get("data_category"),
+            }
+        })
+
+    except Exception as e:
+        logger.exception("Fetch categories failed")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/search_data', methods=['POST'])
+def search_data():
+    """
+    Legacy Step 3: Search data for selected category.
+    Assumes GDS2 is at Data List.
+    """
+    data = request.json or {}
+    module_name = data.get('module')
+    data_category = data.get('data_category')
+
+    if not module_name or not data_category:
+        return jsonify({"error": "Module and data category required"}), 400
+
+    try:
+        logger.info(f"=== Legacy Search: {data_category} ===")
+        workflow = get_workflow()
+
+        # Select data category
+        result = workflow.step_select_data_category(data_category)
+        if not result.success:
+            return jsonify({"error": result.error}), 500
+
+        # Handle sub-categories if present
+        if result.page.value == "sub_data_list":
+            # For legacy API, auto-select first sub-category
+            if result.choices:
+                result = workflow.step_select_sub_category(result.choices[0])
+                if not result.success:
+                    return jsonify({"error": result.error}), 500
+
+        # Create report
+        report_path = workflow.create_report()
+        if not report_path:
+            return jsonify({"error": "Failed to create report"}), 500
+
+        report_data = workflow.parse_report(report_path)
+
+        # Parse for DTCs
+        from src.utils.report_parser import GDS2ReportParser
+        dtc_parser = GDS2ReportParser()
+        dtc_data = dtc_parser.parse_dtc_report(report_path)
+
+        # Go back to Data List
+        workflow.step_go_back()
+
+        return jsonify({
+            "success": True,
+            "report_path": report_path,
+            "report_data": report_data,
+            "vehicle_info": dtc_data.get("vehicle_info", {}),
+            "dtc_list": dtc_data.get("dtc_list", []),
+            "module_status": dtc_data.get("module_status", []),
+            "state": {
+                "gds2_state": "data_list",
+                "current_module": module_name,
+                "current_data_category": data_category,
+            }
+        })
+
+    except Exception as e:
+        logger.exception("Search data failed")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/get_dtcs', methods=['POST'])
+def get_dtcs():
+    """Legacy: Get DTCs from Vehicle DTC Information category."""
+    try:
+        logger.info("=== Legacy Get DTCs ===")
+        workflow = get_workflow()
+
+        module = workflow.current_module
+        if not module:
+            return jsonify({"error": "No module selected"}), 400
+
+        # Try to find DTC category
+        categories = workflow.get_cached_data_categories(module)
+        dtc_category = None
+        for cat in categories:
+            if "DTC" in cat:
+                dtc_category = cat
+                break
+
+        if not dtc_category:
+            return jsonify({"error": "DTC category not found"}), 400
+
+        # Navigate and create report
+        result = workflow.step_select_data_category(dtc_category)
+        if not result.success:
+            return jsonify({"error": result.error}), 500
+
+        report_path = workflow.create_report()
+        if not report_path:
+            return jsonify({"error": "Failed to create DTC report"}), 500
+
+        from src.utils.report_parser import GDS2ReportParser
+        parser = GDS2ReportParser()
+        dtc_data = parser.parse_dtc_report(report_path)
+
+        workflow.step_go_back()
+
+        return jsonify({
+            "success": True,
+            "vehicle_info": dtc_data.get("vehicle_info", {}),
+            "dtc_list": dtc_data.get("dtc_list", []),
+            "module_status": dtc_data.get("module_status", []),
+        })
+
+    except Exception as e:
+        logger.exception("Get DTCs failed")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route('/api/back', methods=['POST'])
 def back():
-    """Click back button."""
+    """Legacy: Click back button."""
     try:
-        success = controller.click_back_button()
-        if success:
-            # Update state based on current state
-            if app_state.gds2_state == GDS2State.DATA_DISPLAY.value:
-                app_state.gds2_state = GDS2State.DATA_LIST.value
-            elif app_state.gds2_state == GDS2State.DATA_LIST.value:
-                app_state.gds2_state = GDS2State.MODULE_SUBMENU.value
-            elif app_state.gds2_state == GDS2State.MODULE_SUBMENU.value:
-                app_state.gds2_state = GDS2State.MODULE_LIST.value
-
-            return jsonify({"success": True, "state": asdict(app_state)})
-        return jsonify({"error": "Failed to click back"}), 500
+        workflow = get_workflow()
+        result = workflow.step_go_back()
+        return jsonify({
+            "success": result.success,
+            "state": {
+                "gds2_state": result.page.value,
+                "current_module": result.context.get("module"),
+                "current_data_category": result.context.get("data_category"),
+            }
+        })
 
     except Exception as e:
         logger.exception("Back button failed")
@@ -741,39 +713,32 @@ def back():
 
 @app.route('/api/home', methods=['POST'])
 def home():
-    """Click Home button to return to Main Menu."""
+    """Legacy: Click Home button to return to Main Menu."""
     try:
-        success = controller.click_home_button()
-        if success:
-            app_state.gds2_state = GDS2State.MAIN_MENU.value
-            app_state.current_module = None
-            app_state.current_data_category = None
-            app_state.data_list_focus_index = 0
-            return jsonify({"success": True, "state": asdict(app_state)})
-        return jsonify({"error": "Failed to click Home"}), 500
+        workflow = get_workflow()
+        result = workflow.step_go_home()
+        return jsonify({
+            "success": result.success,
+            "state": {
+                "gds2_state": result.page.value,
+                "current_module": result.context.get("module"),
+                "current_data_category": result.context.get("data_category"),
+            }
+        })
 
     except Exception as e:
         logger.exception("Home button failed")
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/state')
-def get_state():
-    """Get current application state."""
-    return jsonify(asdict(app_state))
-
-
 @app.route('/api/reset', methods=['POST'])
 def reset_state():
-    """Reset state to Main Menu."""
+    """Reset workflow state."""
+    global _workflow
     try:
-        app_state.gds2_state = GDS2State.MAIN_MENU.value
-        app_state.current_module = None
-        app_state.current_data_category = None
-        app_state.data_list_focus_index = 0
-
-        logger.info("State reset to MAIN_MENU")
-        return jsonify({"success": True, "state": asdict(app_state)})
+        _workflow = None
+        logger.info("Workflow reset")
+        return jsonify({"success": True})
 
     except Exception as e:
         logger.exception("Reset failed")
@@ -803,7 +768,7 @@ def broadcast_to_agent_clients(event_type: str, data: dict):
             agent_clients.remove(dead)
 
 
-def on_agent_snapshot(snapshot):
+def on_agent_snapshot(snapshot, param_changes=None):
     """Callback when Agent produces a new snapshot."""
     broadcast_to_agent_clients("snapshot", {
         "type": "snapshot",
@@ -814,18 +779,14 @@ def on_agent_snapshot(snapshot):
         "dtc_count": len(snapshot.dtcs),
         "parameters": snapshot.parameters,
         "dtcs": [d.to_dict() for d in snapshot.dtcs],
+        "param_changes": param_changes or [],
         "timestamp": time.time(),
     })
 
 
 def on_agent_param_change(changes):
     """Callback when Agent detects parameter changes."""
-    broadcast_to_agent_clients("param_changes", {
-        "type": "param_changes",
-        "count": len(changes),
-        "changes": changes,
-        "timestamp": time.time(),
-    })
+    logger.info(f"Agent detected {len(changes)} parameter change(s)")
 
 
 def on_agent_dtc_change(added, removed):
@@ -851,14 +812,30 @@ def on_agent_error(error):
 @app.route('/api/agent/status')
 def agent_status():
     """Check Agent availability and status."""
+    global agent_collector
+
     from src.streaming import AgentDataCollector
 
     checker = AgentDataCollector()
     availability = checker.check_agent_available()
 
-    is_running = agent_collector is not None and agent_collector.is_running
-    collection_count = agent_collector.collection_count if agent_collector else 0
+    # Check if streaming is actually running
+    is_running = False
+    collection_count = 0
+
+    if agent_collector is not None:
+        try:
+            # Check both the flag and if the thread is actually alive
+            is_running = agent_collector._running and agent_collector._thread and agent_collector._thread.is_alive()
+            collection_count = agent_collector.collection_count
+        except Exception as e:
+            logger.warning(f"Error checking agent_collector status: {e}")
+            is_running = False
+            collection_count = 0
+
     client_count = len(agent_clients)
+
+    logger.debug(f"Agent status: available={availability.get('available')}, running={is_running}, collector={agent_collector is not None}")
 
     return jsonify({
         "agent": availability,
@@ -870,9 +847,136 @@ def agent_status():
     })
 
 
+@app.route('/api/agent/reset', methods=['POST'])
+def reset_agent():
+    """Reset the agent collector state."""
+    global agent_collector
+
+    try:
+        if agent_collector:
+            try:
+                agent_collector.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping agent_collector: {e}")
+            agent_collector = None
+
+        # Clear clients
+        with agent_lock:
+            agent_clients.clear()
+
+        logger.info("Agent collector reset")
+        return jsonify({"success": True, "message": "Agent reset"})
+
+    except Exception as e:
+        logger.exception("Failed to reset agent")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/agent/dtcs')
+def get_agent_dtcs():
+    """Get DTCs directly from Agent (single read, no streaming)."""
+    try:
+        from src.streaming import AgentDataCollector
+        from src.streaming.agent_data_collector import _parse_agent_json
+
+        collector = AgentDataCollector()
+        status = collector.check_agent_available()
+
+        if not status.get('available'):
+            return jsonify({
+                "success": False,
+                "error": "Agent not available",
+                "dtcs": []
+            })
+
+        # Read latest data from Agent - try multiple encodings
+        try:
+            raw = None
+            for encoding in ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252']:
+                try:
+                    with open(collector.json_path, 'r', encoding=encoding) as f:
+                        raw = json.load(f)
+                    break
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+
+            if raw is None:
+                return jsonify({
+                    "success": False,
+                    "error": "Failed to decode Agent JSON file",
+                    "dtcs": []
+                })
+
+            snapshot = _parse_agent_json(raw)
+
+            return jsonify({
+                "success": True,
+                "dtcs": [d.to_dict() for d in snapshot.dtcs],
+                "dtc_count": len(snapshot.dtcs),
+                "page_context": snapshot.page_context,
+            })
+        except Exception as e:
+            logger.error(f"Failed to read Agent data: {e}")
+            return jsonify({
+                "success": False,
+                "error": str(e),
+                "dtcs": []
+            })
+
+    except Exception as e:
+        logger.exception("get_agent_dtcs failed")
+        return jsonify({"success": False, "error": str(e), "dtcs": []}), 500
+
+
+@app.route('/api/agent/monitor/start', methods=['POST'])
+def start_agent_monitor():
+    """Start Agent monitoring without navigation (when already at Data Display)."""
+    global agent_collector
+
+    data = request.json or {}
+    interval_ms = data.get('interval_ms', 100)
+
+    try:
+        if agent_collector and agent_collector.is_running:
+            return jsonify({"success": True, "message": "Monitoring already running"})
+
+        # Check if we're at Data Display page
+        workflow = get_workflow()
+        current_page = workflow.controller.detect_current_page()
+
+        if current_page.value != "data_display":
+            return jsonify({
+                "success": False,
+                "error": f"Must be at Data Display page. Current: {current_page.value}"
+            }), 400
+
+        # Start Agent collector
+        from src.streaming import AgentDataCollector
+
+        agent_collector = AgentDataCollector(
+            on_snapshot=on_agent_snapshot,
+            on_param_change=on_agent_param_change,
+            on_dtc_change=on_agent_dtc_change,
+            on_error=on_agent_error,
+            interval_ms=interval_ms,
+        )
+        agent_collector.start()
+
+        logger.info(f"Started Agent monitoring at Data Display ({interval_ms}ms interval)")
+        return jsonify({
+            "success": True,
+            "message": "Monitoring started",
+            "interval_ms": interval_ms,
+        })
+
+    except Exception as e:
+        logger.exception("Failed to start agent monitor")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route('/api/stream/start', methods=['POST'])
 def start_streaming():
-    """Start Agent-based data streaming with navigation."""
+    """Start Agent-based data streaming (requires being at Data Display page)."""
     global agent_collector
 
     data = request.json or {}
@@ -883,32 +987,27 @@ def start_streaming():
         if agent_collector and agent_collector.is_running:
             return jsonify({"error": "Streaming already running"}), 400
 
-        if not data_category:
-            return jsonify({"error": "Please select a data category"}), 400
+        workflow = get_workflow()
+        current_page = workflow.controller.detect_current_page()
 
-        if not app_state.current_module:
-            return jsonify({"error": "Please complete Step 2 first"}), 400
+        # Check if at Data Display page
+        if current_page.value != "data_display":
+            # If at data_list and data_category provided, navigate to data_display
+            if current_page.value == "data_list" and data_category:
+                logger.info(f"=== Navigating to Data Display for {data_category} ===")
+                result = workflow.step_select_data_category(data_category)
+                if not result.success:
+                    return jsonify({"error": result.error}), 500
 
-        if app_state.gds2_state != GDS2State.DATA_LIST.value:
-            return jsonify({"error": f"GDS2 must be at Data List. Current: {app_state.gds2_state}"}), 400
-
-        logger.info(f"=== Starting Monitoring for {data_category} ===")
-
-        # Navigate to Data Display using Agent
-        target_index = controller.mapping.get_data_category_index(
-            "current_vehicle", app_state.current_module, data_category
-        )
-        if target_index is None:
-            return jsonify({"error": f"Data category '{data_category}' not found"}), 400
-
-        result = controller.nav.select_list_item(0, target_index, double_click=True)
-        if not result.get('success'):
-            return jsonify({"error": "Failed to select data category"}), 500
-        time.sleep(3)
-
-        app_state.gds2_state = GDS2State.DATA_DISPLAY.value
-        app_state.current_data_category = data_category
-        app_state.data_list_focus_index = target_index
+                # Handle sub-categories
+                if result.page.value == "sub_data_list" and result.choices:
+                    result = workflow.step_select_sub_category(result.choices[0])
+                    if not result.success:
+                        return jsonify({"error": result.error}), 500
+            else:
+                return jsonify({
+                    "error": f"Must be at Data Display page. Current: {current_page.value}"
+                }), 400
 
         # Start Agent collector
         from src.streaming import AgentDataCollector
@@ -923,11 +1022,17 @@ def start_streaming():
         agent_collector.start()
 
         logger.info(f"Started Agent streaming ({interval_ms}ms interval)")
+
+        result = workflow.get_current_choices()
         return jsonify({
             "success": True,
-            "message": f"Monitoring started for {data_category}",
+            "message": f"Monitoring started",
             "interval_ms": interval_ms,
-            "state": asdict(app_state)
+            "state": {
+                "gds2_state": result.page.value,
+                "current_module": result.context.get("module"),
+                "current_data_category": result.context.get("data_category"),
+            }
         })
 
     except Exception as e:
@@ -946,14 +1051,22 @@ def stop_streaming():
             agent_collector = None
             logger.info("Stopped Agent streaming")
 
-            if app_state.gds2_state == GDS2State.DATA_DISPLAY.value:
-                controller.click_back_button()
-                app_state.gds2_state = GDS2State.DATA_LIST.value
+            workflow = get_workflow()
+            current_page = workflow.controller.detect_current_page()
+
+            if current_page.value == "data_display":
+                workflow.step_go_back()
+
+            result = workflow.get_current_choices()
 
             return jsonify({
                 "success": True,
                 "message": "Streaming stopped",
-                "state": asdict(app_state)
+                "state": {
+                    "gds2_state": result.page.value,
+                    "current_module": result.context.get("module"),
+                    "current_data_category": result.context.get("data_category"),
+                }
             })
         return jsonify({"message": "Streaming was not running"})
 
@@ -1073,6 +1186,8 @@ if __name__ == '__main__':
         print(f"  Remote: http://{local_ip}:{port}")
     else:
         print(f"\n  http://localhost:{port}")
+    print(f"\n  New API: /api/nav/*")
+    print(f"  Legacy:  /api/fetch_modules, /api/fetch_categories, etc.")
     print(f"{'='*60}\n")
 
     app.run(debug=True, host=host, port=port, use_reloader=False)

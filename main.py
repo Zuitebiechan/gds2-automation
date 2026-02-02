@@ -35,15 +35,10 @@ def run_web(args):
     print()
 
     # Import and run Flask app
-    from app import app, app_state, GDS2State
+    from app import app
 
-    # Reset state on startup
-    app_state.gds2_state = GDS2State.MAIN_MENU.value
-    app_state.current_module = None
-    app_state.current_data_category = None
-    app_state.data_list_focus_index = 0
-
-    app.run(debug=args.debug, host='127.0.0.1', port=args.port, use_reloader=False)
+    # Use 0.0.0.0 to allow access from other devices (e.g., phone)
+    app.run(debug=args.debug, host='0.0.0.0', port=args.port, use_reloader=False)
     return 0
 
 
