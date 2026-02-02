@@ -2,6 +2,7 @@
 Pytest Configuration for GDS2 RPA Tests
 
 This file contains shared fixtures and configuration for all tests.
+Note: Fixtures for archived PyAutoGUI-based code have been removed.
 """
 
 import pytest
@@ -61,130 +62,38 @@ def pytest_collection_modifyitems(config, items):
 # ============================================================================
 
 @pytest.fixture
-def mock_driver():
-    """
-    Create a mock GDS2Driver for unit testing.
-
-    This fixture provides a mock driver that simulates GDS2 behavior
-    without requiring actual GDS2 hardware.
-    """
-    driver = Mock()
-    driver.is_connected = True
-    driver.default_timeout = 30
-
-    # Mock all common methods
-    driver.element_exists = Mock(return_value=True)
-    driver.click_button = Mock(return_value=True)
-    driver.click_list_item = Mock(return_value=True)
-    driver.wait_for_element = Mock(return_value=True)
-    driver.wait_for_element_enabled = Mock(return_value=True)
-    driver.wait_for_ui_stable = Mock(return_value=True)
-    driver.find_element = Mock(return_value=Mock())
-    driver.get_window = Mock(return_value=Mock())
-    driver.send_keys = Mock()
-
-    return driver
-
-
-@pytest.fixture
-def live_driver(request):
-    """
-    Create a real GDS2Driver for integration testing.
-
-    This fixture only activates when --live flag is passed.
-    Requires GDS2 to be running at Main Menu.
-    """
-    if not request.config.getoption("--live"):
-        pytest.skip("Live test requires --live flag")
-
-    from src.core.driver import GDS2Driver
-
-    driver = GDS2Driver()
-    try:
-        driver.connect()
-    except Exception as e:
-        pytest.skip(f"Could not connect to GDS2: {e}")
-
-    yield driver
-
-    driver.disconnect()
-
-
-@pytest.fixture
 def vci_device(request):
     """Get VCI device name from command line or use default."""
     return request.config.getoption("--vci-device")
 
 
 @pytest.fixture
-def main_menu_page(mock_driver):
-    """Create a MainMenuPage with mock driver."""
-    from src.pages import MainMenuPage
-    return MainMenuPage(mock_driver)
+def mock_agent_navigator():
+    """Create a mock AgentNavigator for unit testing."""
+    nav = Mock()
+    nav.check_agent = Mock(return_value=True)
+    nav.click_button = Mock(return_value={'success': True})
+    nav.get_buttons = Mock(return_value=[{'text': 'Diagnostics', 'enabled': True}])
+    nav.get_list_items = Mock(return_value=['Item 1', 'Item 2'])
+    nav.select_list_item = Mock(return_value={'success': True})
+    return nav
 
 
 @pytest.fixture
-def diagnostics_menu_page(mock_driver):
-    """Create a DiagnosticsMenuPage with mock driver."""
-    from src.pages import DiagnosticsMenuPage
-    return DiagnosticsMenuPage(mock_driver)
+def live_agent_navigator(request):
+    """
+    Create a real AgentNavigator for integration testing.
 
+    This fixture only activates when --live flag is passed.
+    Requires GDS2 with Agent to be running.
+    """
+    if not request.config.getoption("--live"):
+        pytest.skip("Live test requires --live flag")
 
-@pytest.fixture
-def vehicle_selection_page(mock_driver):
-    """Create a VehicleSelectionPage with mock driver."""
-    from src.pages import VehicleSelectionPage
-    return VehicleSelectionPage(mock_driver)
+    from src.streaming import AgentNavigator
 
+    nav = AgentNavigator()
+    if not nav.check_agent():
+        pytest.skip("Agent not available - start GDS2 with agent")
 
-# ============================================================================
-# Test Utilities
-# ============================================================================
-
-class NavigationTestHelper:
-    """Helper class for navigation tests."""
-
-    @staticmethod
-    def setup_mock_for_page(mock_driver, page_name: str):
-        """Configure mock driver to simulate a specific page."""
-        from src.core.locators import Loc
-
-        page_configs = {
-            "main_menu": {
-                "exists": [Loc.MainMenu.DIAGNOSTICS_BTN],
-                "not_exists": []
-            },
-            "device_explorer": {
-                "exists": [Loc.DeviceExplorer.CONTINUE_BTN],
-                "not_exists": []
-            },
-            "vehicle_selection": {
-                "exists": [Loc.VehicleSelection.ENTER_BTN],
-                "not_exists": [Loc.DiagnosticsMenu.MODULE_DIAGNOSTICS]
-            },
-            "diagnostics_menu": {
-                "exists": [Loc.DiagnosticsMenu.MODULE_DIAGNOSTICS],
-                "not_exists": []
-            },
-            "data_display": {
-                "exists": [Loc.DataDisplay.CREATE_REPORT_BTN],
-                "not_exists": []
-            },
-        }
-
-        config = page_configs.get(page_name, {"exists": [], "not_exists": []})
-
-        def mock_element_exists(locator, **kwargs):
-            if locator in config["exists"]:
-                return True
-            if locator in config["not_exists"]:
-                return False
-            return True  # Default to True for other elements
-
-        mock_driver.element_exists = Mock(side_effect=mock_element_exists)
-
-
-@pytest.fixture
-def navigation_helper():
-    """Provide navigation test helper."""
-    return NavigationTestHelper()
+    yield nav

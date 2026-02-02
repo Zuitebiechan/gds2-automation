@@ -1,7 +1,8 @@
 """
-GDS2 Automation Web UI - Flask Version
+GDS2 Automation Web UI - Flask Version (Agent-based)
 
 Simple web interface for GDS2 vehicle diagnostics automation.
+Uses Java Agent for all navigation - no PyAutoGUI dependency.
 """
 
 from flask import Flask, render_template, jsonify, request, Response
@@ -40,7 +41,9 @@ class GDS2State(Enum):
     """GDS2 application state."""
     UNKNOWN = "unknown"
     MAIN_MENU = "main_menu"
+    DIAGNOSTICS_MENU = "diagnostics_menu"
     MODULE_LIST = "module_list"
+    MODULE_SUBMENU = "module_submenu"
     DATA_LIST = "data_list"
     DATA_DISPLAY = "data_display"
 
@@ -59,16 +62,16 @@ app_state = AppState()
 
 
 # =============================================================================
-# GDS2 Controller
+# GDS2 Controller (Agent-based)
 # =============================================================================
 
 class GDS2Controller:
-    """Controller for GDS2 automation."""
+    """Controller for GDS2 automation using Java Agent."""
 
     def __init__(self):
         """Initialize controller."""
         self._mapping = None
-        self._discovery = None
+        self._nav = None
 
     @property
     def mapping(self):
@@ -79,22 +82,26 @@ class GDS2Controller:
         return self._mapping
 
     @property
-    def discovery(self):
-        """Lazy-load vehicle discovery."""
-        if self._discovery is None:
-            from src.discovery import VehicleDiscovery
-            self._discovery = VehicleDiscovery()
-        return self._discovery
+    def nav(self):
+        """Lazy-load Agent Navigator."""
+        if self._nav is None:
+            from src.streaming import AgentNavigator
+            self._nav = AgentNavigator(timeout_sec=15.0)
+        return self._nav
+
+    def check_agent(self) -> bool:
+        """Check if Java Agent is available."""
+        return self.nav.check_agent()
 
     def get_module_list(self, vehicle_id: str = "current_vehicle") -> List[str]:
-        """Get list of available modules."""
+        """Get list of available modules from cache."""
         mapping = self.mapping.load_mapping(vehicle_id)
         if mapping and "modules" in mapping:
             return list(mapping["modules"].keys())
         return []
 
     def get_data_categories(self, vehicle_id: str, module_name: str) -> List[str]:
-        """Get data categories for a module."""
+        """Get data categories for a module from cache."""
         mapping = self.mapping.load_mapping(vehicle_id)
         if not mapping:
             return []
@@ -104,248 +111,210 @@ class GDS2Controller:
         data_categories = module_info.get("data_categories", {})
         return list(data_categories.keys())
 
-    def discover_data_categories(self, vehicle_id: str, module_name: str) -> List[str]:
-        """Discover data categories for a module."""
-        logger.info(f"Discovering data categories for {module_name}...")
-
-        if self.discovery.connect():
-            data_categories = self.discovery.discover_data_categories()
-            logger.info(f"Found {len(data_categories)} data categories")
-            self.mapping.update_data_categories(vehicle_id, module_name, data_categories)
-            return list(data_categories.keys())
-
+    def _wait_for_list(self, list_index: int = 0, max_attempts: int = 15) -> List[str]:
+        """Wait for list items to load."""
+        for attempt in range(max_attempts):
+            items = self.nav.get_list_items(list_index)
+            if items:
+                return items
+            logger.info(f"  Waiting for list to load... ({attempt+1})")
+            time.sleep(1)
         return []
+
+    def _dismiss_warning_dialog(self):
+        """Dismiss warning dialog if present."""
+        for _ in range(3):
+            buttons = self.nav.get_buttons()
+            button_texts = [b.get('text') for b in buttons]
+            if "OK" in button_texts:
+                logger.info("  Warning dialog detected, clicking OK...")
+                result = self.nav.click_button("OK")
+                if result.get('success'):
+                    time.sleep(1)
+                    return
+            time.sleep(0.3)
 
     def discover_modules(self, vehicle_id: str = "current_vehicle") -> List[str]:
         """
         Discover all modules by navigating to Module List page.
-
-        Returns list of discovered module names.
+        Uses Java Agent for navigation.
         """
-        import pyautogui
-        import cv2
-        import numpy as np
-        from PIL import ImageGrab
-
-        IMAGES_DIR = Path(r"C:\Users\shsww\projects\RPA_demo\images")
-        BUTTONS_DIR = IMAGES_DIR / "buttons"
-        LIST_ITEMS_DIR = IMAGES_DIR / "list_items"
-        DEVICES_DIR = IMAGES_DIR / "devices"
-
-        def find_and_click(button_name: str, confidence: float = 0.8, timeout: float = 10) -> bool:
-            image_path = BUTTONS_DIR / f"{button_name}.png"
-            if not image_path.exists():
-                image_path = LIST_ITEMS_DIR / f"{button_name}.png"
-            if not image_path.exists():
-                logger.error(f"Template not found: {button_name}")
-                return False
-
-            start_time = time.time()
-            while time.time() - start_time < timeout:
-                template = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
-                if template is None:
-                    return False
-
-                screenshot = ImageGrab.grab()
-                screenshot_gray = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2GRAY)
-                result = cv2.matchTemplate(screenshot_gray, template, cv2.TM_CCOEFF_NORMED)
-                _, max_val, _, max_loc = cv2.minMaxLoc(result)
-
-                if max_val >= confidence:
-                    h, w = template.shape
-                    x, y = max_loc[0] + w // 2, max_loc[1] + h // 2
-                    pyautogui.click(x, y)
-                    return True
-                time.sleep(0.5)
-            return False
-
-        def find_button(button_name: str, confidence: float = 0.8) -> bool:
-            image_path = BUTTONS_DIR / f"{button_name}.png"
-            if not image_path.exists():
-                return False
-
-            template = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
-            if template is None:
-                return False
-
-            screenshot = ImageGrab.grab()
-            screenshot_gray = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2GRAY)
-            result = cv2.matchTemplate(screenshot_gray, template, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, _ = cv2.minMaxLoc(result)
-            return max_val >= confidence
-
-        def focus_gds2():
-            try:
-                from pywinauto import Application
-                app = Application(backend="uia").connect(title_re=".*GDS 2.*")
-                window = app.top_window()
-                window.set_focus()
-                time.sleep(0.3)
-            except Exception as e:
-                logger.warning(f"Could not focus GDS2: {e}")
+        from src.native import handle_device_explorer
 
         try:
-            logger.info("=== Discovering Modules ===")
+            logger.info("=== Discovering Modules (Agent) ===")
 
             # Step 1: Click Diagnostics
             logger.info("Step 1: Clicking Diagnostics...")
-            if not find_and_click("diagnostics", confidence=0.8, timeout=10):
-                logger.error("Failed to click Diagnostics")
+            result = self.nav.click_button("Diagnostics")
+            if not result.get('success'):
+                logger.error(f"Failed to click Diagnostics: {result.get('message')}")
                 return []
             time.sleep(3)
 
-            # Step 2: Handle Device Explorer (if appears)
-            logger.info("Step 2: Checking Device Explorer...")
-            if find_button("continue", confidence=0.9):
-                logger.info("  Device Explorer popup detected")
-
-                # Try to click SM2 USB device using template matching
-                # First try highlighted version, then normal version
-                screenshot = ImageGrab.grab()
-                screenshot_gray = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2GRAY)
-
-                device_matched = False
-                for device_name in ["sm2_usb_highlight", "sm2_usb"]:
-                    device_path = DEVICES_DIR / f"{device_name}.png"
-                    if device_path.exists():
-                        template = cv2.imread(str(device_path), cv2.IMREAD_GRAYSCALE)
-                        result = cv2.matchTemplate(screenshot_gray, template, cv2.TM_CCOEFF_NORMED)
-                        _, max_val, _, max_loc = cv2.minMaxLoc(result)
-                        logger.info(f"  {device_name} template match confidence: {max_val:.3f}")
-
-                        if max_val >= 0.85:
-                            h, w = template.shape
-                            x, y = max_loc[0] + w // 2, max_loc[1] + h // 2
-                            pyautogui.click(x, y)
-                            time.sleep(1)
-                            device_matched = True
-                            logger.info(f"  Successfully matched {device_name}")
-                            break
-
-                if not device_matched:
-                    logger.warning("  Failed to match any SM2 USB template")
-
-                find_and_click("continue", confidence=0.9, timeout=5)
-                time.sleep(3)
-            else:
-                logger.info("  No Device Explorer popup")
+            # Step 2: Handle Device Explorer (Windows API)
+            logger.info("Step 2: Handling Device Explorer...")
+            handle_device_explorer(device_name="SM2 USB", timeout=5.0)
+            time.sleep(3)
 
             # Step 3: Click Enter for vehicle selection
             logger.info("Step 3: Clicking Enter...")
-            if not find_and_click("enter", confidence=0.85, timeout=10):
-                logger.error("Failed to click Enter")
-                return []
+            for _ in range(10):
+                buttons = self.nav.get_buttons()
+                if any(b.get('text') == 'Enter' for b in buttons):
+                    result = self.nav.click_button("Enter")
+                    if result.get('success'):
+                        break
+                time.sleep(0.5)
             time.sleep(3)
 
-            # Handle warning dialog
-            if find_button("ok", confidence=0.85):
-                find_and_click("ok", confidence=0.85, timeout=5)
-                time.sleep(1)
+            # Step 4: Handle warning dialog
+            self._dismiss_warning_dialog()
 
-            # Step 4: Click Module Diagnostics
-            logger.info("Step 4: Clicking Module Diagnostics...")
-            if not find_and_click("module_diagnostics", confidence=0.85, timeout=10):
-                logger.error("Failed to click Module Diagnostics")
-                return []
-            time.sleep(2)
+            # Step 5: Select Module Diagnostics
+            logger.info("Step 4: Selecting Module Diagnostics...")
+            items = self._wait_for_list(0)
+            logger.info(f"  Menu items: {items}")
 
-            # Step 5: Discover modules using pywinauto
-            logger.info("Step 5: Discovering modules with pywinauto...")
-            if self.discovery.connect():
-                modules = self.discovery.discover_modules()
-                logger.info(f"Found {len(modules)} modules")
+            for i, item in enumerate(items):
+                if "Module Diagnostics" in item:
+                    result = self.nav.select_list_item(0, i, double_click=True)
+                    if result.get('success'):
+                        logger.info(f"  [OK] Selected Module Diagnostics at index {i}")
+                        break
+            time.sleep(3)
 
-                # Save to mapping
-                module_indices = {name: idx for name, idx in modules.items()}
-                self.mapping.update_module_list(vehicle_id, module_indices)
+            # Step 6: Discover modules using Agent
+            logger.info("Step 5: Enumerating modules...")
+            items = self._wait_for_list(0)
+            logger.info(f"  Found {len(items)} modules")
 
-                logger.info("=== Module Discovery Complete ===")
-                return list(modules.keys())
-            else:
-                logger.error("Failed to connect to GDS2 for discovery")
-                return []
+            # Save to mapping
+            module_indices = {name: idx for idx, name in enumerate(items)}
+            self.mapping.update_module_list(vehicle_id, module_indices)
+
+            logger.info("=== Module Discovery Complete ===")
+            return items
 
         except Exception as e:
             logger.exception(f"Module discovery failed: {e}")
             return []
 
-    def navigate_to_data_list_from_module_list(self, module_name: str) -> bool:
-        """
-        Navigate from Module List page to Data List page.
-        Assumes GDS2 is already at Module List page.
-        """
-        import pyautogui
-        import cv2
-        import numpy as np
-        from PIL import ImageGrab
+    def discover_data_categories(self, vehicle_id: str, module_name: str) -> List[str]:
+        """Discover data categories using Agent."""
+        logger.info(f"Discovering data categories for {module_name}...")
 
-        IMAGES_DIR = Path(r"C:\Users\shsww\projects\RPA_demo\images")
-        BUTTONS_DIR = IMAGES_DIR / "buttons"
-        LIST_ITEMS_DIR = IMAGES_DIR / "list_items"
+        items = self._wait_for_list(0)
+        logger.info(f"  Found {len(items)} data categories")
 
-        def find_and_click(button_name: str, confidence: float = 0.8, timeout: float = 10) -> bool:
-            image_path = BUTTONS_DIR / f"{button_name}.png"
-            if not image_path.exists():
-                image_path = LIST_ITEMS_DIR / f"{button_name}.png"
-            if not image_path.exists():
-                logger.error(f"Template not found: {button_name}")
-                return False
+        # Save to mapping
+        data_categories = {name: idx for idx, name in enumerate(items)}
+        self.mapping.update_data_categories(vehicle_id, module_name, data_categories)
 
-            start_time = time.time()
-            while time.time() - start_time < timeout:
-                template = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
-                if template is None:
-                    return False
+        return items
 
-                screenshot = ImageGrab.grab()
-                screenshot_gray = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2GRAY)
-                result = cv2.matchTemplate(screenshot_gray, template, cv2.TM_CCOEFF_NORMED)
-                _, max_val, _, max_loc = cv2.minMaxLoc(result)
-
-                if max_val >= confidence:
-                    h, w = template.shape
-                    x, y = max_loc[0] + w // 2, max_loc[1] + h // 2
-                    pyautogui.click(x, y)
-                    return True
-                time.sleep(0.5)
-            return False
-
-        def focus_gds2():
-            try:
-                from pywinauto import Application
-                app = Application(backend="uia").connect(title_re=".*GDS 2.*")
-                window = app.top_window()
-                window.set_focus()
-                time.sleep(0.3)
-            except Exception as e:
-                logger.warning(f"Could not focus GDS2: {e}")
+    def navigate_to_module_list_from_main_menu(self) -> bool:
+        """Navigate from Main Menu to Module List page using Agent."""
+        from src.native import handle_device_explorer
 
         try:
-            logger.info(f"=== Navigating from Module List to Data List ===")
+            logger.info("=== Navigating to Module List (Agent) ===")
+
+            # Step 1: Click Diagnostics
+            logger.info("Step 1: Clicking Diagnostics...")
+            result = self.nav.click_button("Diagnostics")
+            if not result.get('success'):
+                logger.error(f"Failed: {result.get('message')}")
+                return False
+            time.sleep(3)
+
+            # Step 2: Handle Device Explorer
+            logger.info("Step 2: Handling Device Explorer...")
+            handle_device_explorer(device_name="SM2 USB", timeout=5.0)
+            time.sleep(3)
+
+            # Step 3: Click Enter
+            logger.info("Step 3: Clicking Enter...")
+            for _ in range(10):
+                buttons = self.nav.get_buttons()
+                if any(b.get('text') == 'Enter' for b in buttons):
+                    result = self.nav.click_button("Enter")
+                    if result.get('success'):
+                        break
+                time.sleep(0.5)
+            time.sleep(3)
+
+            # Handle warning dialog
+            self._dismiss_warning_dialog()
+
+            # Step 4: Select Module Diagnostics
+            logger.info("Step 4: Selecting Module Diagnostics...")
+            items = self._wait_for_list(0)
+            for i, item in enumerate(items):
+                if "Module Diagnostics" in item:
+                    result = self.nav.select_list_item(0, i, double_click=True)
+                    if result.get('success'):
+                        logger.info(f"  [OK] Selected Module Diagnostics")
+                        break
+            time.sleep(3)
+
+            logger.info("=== Navigation to Module List Complete ===")
+            return True
+
+        except Exception as e:
+            logger.exception(f"Navigation failed: {e}")
+            return False
+
+    def navigate_to_data_list_from_module_list(self, module_name: str) -> bool:
+        """Navigate from Module List to Data List using Agent."""
+        try:
+            logger.info(f"=== Navigating to Data List (Agent) ===")
             logger.info(f"Target module: {module_name}")
 
-            # Step 1: Select module using keyboard
-            module_index = self.mapping.get_module_index("current_vehicle", module_name)
+            # Step 1: Select module
+            items = self._wait_for_list(0)
+            logger.info(f"  Found {len(items)} modules")
+
+            module_index = None
+            for i, item in enumerate(items):
+                if module_name in item or item in module_name:
+                    module_index = i
+                    break
+
             if module_index is None:
-                logger.error(f"Module {module_name} not found in mapping")
+                # Try partial match
+                module_key = module_name.split("]")[-1].strip() if "]" in module_name else module_name
+                for i, item in enumerate(items):
+                    if module_key in item:
+                        module_index = i
+                        break
+
+            if module_index is None:
+                logger.error(f"Module '{module_name}' not found")
                 return False
 
             logger.info(f"Step 1: Selecting module at index {module_index}...")
-            focus_gds2()
-            if module_index > 0:
-                for _ in range(module_index):
-                    pyautogui.press('down')
-                    time.sleep(0.1)
-            time.sleep(0.5)
-            pyautogui.press('enter')
-            time.sleep(3)
-
-            # Step 2: Click Data Display
-            logger.info("Step 2: Clicking Data Display...")
-            if not find_and_click("data_display", confidence=0.90, timeout=10):
-                logger.error("Failed to click Data Display")
+            result = self.nav.select_list_item(0, module_index, double_click=True)
+            if not result.get('success'):
+                logger.error(f"Failed to select module: {result.get('message')}")
                 return False
             time.sleep(3)
+
+            # Step 2: Select Data Display from submenu
+            logger.info("Step 2: Selecting Data Display...")
+            items = self._wait_for_list(0)
+            logger.info(f"  Submenu items: {items}")
+
+            for i, item in enumerate(items):
+                if "Data Display" in item:
+                    result = self.nav.select_list_item(0, i, double_click=True)
+                    if result.get('success'):
+                        logger.info(f"  [OK] Selected Data Display at index {i}")
+                        break
+            time.sleep(3)
+
+            # Handle warning dialog
+            self._dismiss_warning_dialog()
 
             logger.info("=== Navigation to Data List Complete ===")
             return True
@@ -355,225 +324,48 @@ class GDS2Controller:
             return False
 
     def navigate_to_data_list(self, module_name: str) -> bool:
-        """Navigate from Main Menu to Data List page."""
-        import pyautogui
-        import cv2
-        import numpy as np
-        from PIL import ImageGrab
-
-        IMAGES_DIR = Path(r"C:\Users\shsww\projects\RPA_demo\images")
-        BUTTONS_DIR = IMAGES_DIR / "buttons"
-        LIST_ITEMS_DIR = IMAGES_DIR / "list_items"
-        DEVICES_DIR = IMAGES_DIR / "devices"
-
-        def find_and_click(button_name: str, confidence: float = 0.8, timeout: float = 10) -> bool:
-            # Try buttons directory first
-            image_path = BUTTONS_DIR / f"{button_name}.png"
-
-            # If not found, try list_items directory
-            if not image_path.exists():
-                image_path = LIST_ITEMS_DIR / f"{button_name}.png"
-
-            if not image_path.exists():
-                logger.error(f"Template not found: {button_name}")
-                return False
-
-            start_time = time.time()
-            while time.time() - start_time < timeout:
-                template = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
-                if template is None:
-                    return False
-
-                screenshot = ImageGrab.grab()
-                screenshot_gray = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2GRAY)
-                result = cv2.matchTemplate(screenshot_gray, template, cv2.TM_CCOEFF_NORMED)
-                _, max_val, _, max_loc = cv2.minMaxLoc(result)
-
-                if max_val >= confidence:
-                    h, w = template.shape
-                    x, y = max_loc[0] + w // 2, max_loc[1] + h // 2
-                    pyautogui.click(x, y)
-                    return True
-                time.sleep(0.5)
+        """Navigate from Main Menu to Data List using Agent."""
+        if not self.navigate_to_module_list_from_main_menu():
             return False
-
-        def find_button(button_name: str, confidence: float = 0.8) -> bool:
-            image_path = BUTTONS_DIR / f"{button_name}.png"
-            if not image_path.exists():
-                return False
-
-            template = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
-            if template is None:
-                return False
-
-            screenshot = ImageGrab.grab()
-            screenshot_gray = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2GRAY)
-            result = cv2.matchTemplate(screenshot_gray, template, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, _ = cv2.minMaxLoc(result)
-            return max_val >= confidence
-
-        def focus_gds2():
-            try:
-                from pywinauto import Application
-                app = Application(backend="uia").connect(title_re=".*GDS 2.*")
-                window = app.top_window()
-                window.set_focus()
-                time.sleep(0.3)
-            except Exception as e:
-                logger.warning(f"Could not focus GDS2: {e}")
-
-        try:
-            logger.info("Step 1: Clicking Diagnostics...")
-            if not find_and_click("diagnostics", confidence=0.8, timeout=10):
-                return False
-            time.sleep(3)
-
-            logger.info("Step 2: Checking Device Explorer...")
-            if find_button("continue", confidence=0.9):
-                # Try to click SM2 USB device using template matching
-                # First try highlighted version, then normal version
-                screenshot = ImageGrab.grab()
-                screenshot_gray = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2GRAY)
-
-                device_matched = False
-                for device_name in ["sm2_usb_highlight", "sm2_usb"]:
-                    device_path = DEVICES_DIR / f"{device_name}.png"
-                    if device_path.exists():
-                        template = cv2.imread(str(device_path), cv2.IMREAD_GRAYSCALE)
-                        result = cv2.matchTemplate(screenshot_gray, template, cv2.TM_CCOEFF_NORMED)
-                        _, max_val, _, max_loc = cv2.minMaxLoc(result)
-
-                        if max_val >= 0.85:
-                            h, w = template.shape
-                            x, y = max_loc[0] + w // 2, max_loc[1] + h // 2
-                            pyautogui.click(x, y)
-                            time.sleep(1)
-                            device_matched = True
-                            break
-
-                find_and_click("continue", confidence=0.9, timeout=5)
-                time.sleep(3)
-
-            logger.info("Step 3: Clicking Enter...")
-            if not find_and_click("enter", confidence=0.85, timeout=10):
-                return False
-            time.sleep(3)
-
-            if find_button("ok", confidence=0.85):
-                find_and_click("ok", confidence=0.85, timeout=5)
-                time.sleep(1)
-
-            logger.info("Step 4: Clicking Module Diagnostics...")
-            if not find_and_click("module_diagnostics", confidence=0.85, timeout=10):
-                return False
-            time.sleep(2)
-
-            logger.info(f"Step 5: Selecting module {module_name}...")
-            module_index = self.mapping.get_module_index("current_vehicle", module_name)
-            if module_index is None:
-                return False
-
-            focus_gds2()
-            if module_index > 0:
-                for _ in range(module_index):
-                    pyautogui.press('down')
-                    time.sleep(0.1)
-            time.sleep(0.5)
-            pyautogui.press('enter')
-            time.sleep(3)
-
-            logger.info("Step 6: Clicking Data Display...")
-            if not find_and_click("data_display", confidence=0.90, timeout=10):
-                return False
-            time.sleep(3)
-
-            return True
-
-        except Exception as e:
-            logger.exception(f"Navigation failed: {e}")
-            return False
+        return self.navigate_to_data_list_from_module_list(module_name)
 
     def navigate_to_data_display(self, module_name: str, data_category: str, current_focus: int) -> Optional[str]:
-        """Navigate from Data List to Data Display and create report."""
-        import pyautogui
-        import cv2
-        import numpy as np
-        from PIL import ImageGrab
-
-        IMAGES_DIR = Path(r"C:\Users\shsww\projects\RPA_demo\images")
-        BUTTONS_DIR = IMAGES_DIR / "buttons"
-        LIST_ITEMS_DIR = IMAGES_DIR / "list_items"
-
-        def find_and_click(button_name: str, confidence: float = 0.8, timeout: float = 10) -> bool:
-            # Try buttons directory first
-            image_path = BUTTONS_DIR / f"{button_name}.png"
-
-            # If not found, try list_items directory
-            if not image_path.exists():
-                image_path = LIST_ITEMS_DIR / f"{button_name}.png"
-
-            if not image_path.exists():
-                logger.error(f"Template not found: {button_name}")
-                return False
-
-            start_time = time.time()
-            while time.time() - start_time < timeout:
-                template = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
-                if template is None:
-                    return False
-
-                screenshot = ImageGrab.grab()
-                screenshot_gray = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2GRAY)
-                result = cv2.matchTemplate(screenshot_gray, template, cv2.TM_CCOEFF_NORMED)
-                _, max_val, _, max_loc = cv2.minMaxLoc(result)
-
-                if max_val >= confidence:
-                    h, w = template.shape
-                    x, y = max_loc[0] + w // 2, max_loc[1] + h // 2
-                    pyautogui.click(x, y)
-                    return True
-                time.sleep(0.5)
-            return False
-
-        def focus_gds2():
-            try:
-                from pywinauto import Application
-                app = Application(backend="uia").connect(title_re=".*GDS 2.*")
-                window = app.top_window()
-                window.set_focus()
-                time.sleep(0.3)
-            except:
-                pass
-
+        """Navigate from Data List to Data Display and create report using Agent."""
         try:
+            # Get target index
             target_index = self.mapping.get_data_category_index("current_vehicle", module_name, data_category)
             if target_index is None:
+                # Try to find it in current list
+                items = self.nav.get_list_items(0)
+                for i, item in enumerate(items):
+                    if data_category in item or item in data_category:
+                        target_index = i
+                        break
+
+            if target_index is None:
+                logger.error(f"Data category '{data_category}' not found")
                 return None
 
-            relative_steps = target_index - current_focus
-
-            logger.info(f"Navigating to {data_category} (target={target_index}, current={current_focus}, relative={relative_steps})")
-
-            focus_gds2()
-            if relative_steps > 0:
-                for _ in range(relative_steps):
-                    pyautogui.press('down')
-                    time.sleep(0.1)
-            elif relative_steps < 0:
-                for _ in range(abs(relative_steps)):
-                    pyautogui.press('up')
-                    time.sleep(0.1)
-
-            time.sleep(0.5)
-            pyautogui.press('enter')
+            logger.info(f"Selecting data category '{data_category}' at index {target_index}...")
+            result = self.nav.select_list_item(0, target_index, double_click=True)
+            if not result.get('success'):
+                logger.error(f"Failed to select data category: {result.get('message')}")
+                return None
             time.sleep(5)
 
+            # Click Create Report
             logger.info("Clicking Create Report...")
-            if not find_and_click("create_report", confidence=0.7, timeout=30):
-                return None
-
+            for _ in range(30):
+                buttons = self.nav.get_buttons()
+                if any(b.get('text') == 'Create Report' for b in buttons):
+                    result = self.nav.click_button("Create Report")
+                    if result.get('success'):
+                        logger.info("  [OK] Clicked Create Report")
+                        break
+                time.sleep(1)
             time.sleep(2)
 
+            # Find latest report
             report_dir = Path.home() / "AppData" / "Local" / "Temp" / "GDS 2"
             if report_dir.exists():
                 reports = list(report_dir.glob("Data Display_*.html"))
@@ -588,42 +380,28 @@ class GDS2Controller:
             return None
 
     def click_back_button(self) -> bool:
-        """Click Back button."""
-        import pyautogui
-        import cv2
-        import numpy as np
-        from PIL import ImageGrab
-
-        BUTTONS_DIR = Path(r"C:\Users\shsww\projects\RPA_demo\images\buttons")
-        image_path = BUTTONS_DIR / "back.png"
-
-        if not image_path.exists():
-            return False
-
+        """Click Back button using Agent."""
         try:
-            template = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
-            if template is None:
-                return False
-
-            start_time = time.time()
-            while time.time() - start_time < 10:
-                screenshot = ImageGrab.grab()
-                screenshot_gray = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2GRAY)
-                result = cv2.matchTemplate(screenshot_gray, template, cv2.TM_CCOEFF_NORMED)
-                _, max_val, _, max_loc = cv2.minMaxLoc(result)
-
-                if max_val >= 0.8:
-                    h, w = template.shape
-                    x, y = max_loc[0] + w // 2, max_loc[1] + h // 2
-                    pyautogui.click(x, y)
-                    time.sleep(1.5)
-                    return True
-                time.sleep(0.5)
-
+            result = self.nav.click_button("Back")
+            if result.get('success'):
+                time.sleep(1.5)
+                return True
+            logger.error(f"Failed to click Back: {result.get('message')}")
             return False
-
         except Exception as e:
             logger.exception(f"Back button failed: {e}")
+            return False
+
+    def click_home_button(self) -> bool:
+        """Click Home button using Agent to return to Main Menu."""
+        try:
+            result = self.nav.click_button("Home")
+            if result.get('success'):
+                time.sleep(2)
+                return True
+            return False
+        except Exception as e:
+            logger.exception(f"Home button failed: {e}")
             return False
 
     def parse_report(self, report_path: str) -> Dict[str, Any]:
@@ -679,7 +457,7 @@ controller = GDS2Controller()
 @app.route('/test')
 def test():
     """Simple test endpoint."""
-    return "<h1>Flask is working!</h1><p>If you see this, the server is running correctly.</p>"
+    return "<h1>Flask is working!</h1><p>Agent-based GDS2 Automation</p>"
 
 
 @app.route('/')
@@ -688,35 +466,65 @@ def index():
     return render_template('index.html')
 
 
+@app.route('/api/agent/check')
+def check_agent():
+    """Check if Java Agent is available."""
+    available = controller.check_agent()
+    return jsonify({
+        "available": available,
+        "message": "Agent connected" if available else "Agent not available. Start GDS2 with agent."
+    })
+
+
 @app.route('/api/fetch_modules', methods=['POST'])
 def fetch_modules():
     """
     Step 1: Fetch all modules.
     Assumes GDS2 is at Main Menu.
-    Navigates to Module List and discovers all modules.
     """
     try:
         logger.info("=== Step 1: Fetch Modules ===")
-        logger.info("Assumption: GDS2 is at Main Menu")
 
-        # Discover modules (navigates from Main Menu to Module List)
-        modules = controller.discover_modules("current_vehicle")
+        # Check agent first
+        if not controller.check_agent():
+            return jsonify({"error": "Java Agent not available. Start GDS2 with agent."}), 400
 
-        if modules:
-            # Update state
+        # Check if we have cached modules
+        cached_modules = controller.get_module_list()
+
+        if cached_modules:
+            logger.info(f"Found {len(cached_modules)} cached modules. Navigating...")
+            success = controller.navigate_to_module_list_from_main_menu()
+            if not success:
+                return jsonify({"error": "Failed to navigate to Module List"}), 500
+
             app_state.gds2_state = GDS2State.MODULE_LIST.value
             app_state.current_module = None
             app_state.current_data_category = None
 
-            logger.info(f"Found {len(modules)} modules. GDS2 is now at Module List.")
-
             return jsonify({
                 "success": True,
-                "modules": modules,
+                "modules": cached_modules,
+                "from_cache": True,
                 "state": asdict(app_state)
             })
         else:
-            return jsonify({"error": "Failed to discover modules"}), 500
+            logger.info("No cached modules. Discovering...")
+            modules = controller.discover_modules("current_vehicle")
+
+            if modules:
+                app_state.gds2_state = GDS2State.MODULE_LIST.value
+                app_state.current_module = None
+                app_state.current_data_category = None
+
+                return jsonify({
+                    "success": True,
+                    "modules": modules,
+                    "from_cache": False,
+                    "state": asdict(app_state)
+                })
+            else:
+                return jsonify({"error": "Failed to discover modules"}), 500
 
     except Exception as e:
         logger.exception("Fetch modules failed")
@@ -728,7 +536,6 @@ def fetch_categories():
     """
     Step 2: Fetch data categories for selected module.
     Assumes GDS2 is at Module List.
-    Selects module, navigates to Data List, and discovers all data categories.
     """
     data = request.json
     module_name = data.get('module')
@@ -738,123 +545,54 @@ def fetch_categories():
 
     try:
         logger.info(f"=== Step 2: Fetch Categories for {module_name} ===")
-        logger.info("Assumption: GDS2 is at Module List")
+
+        cached_categories = controller.get_data_categories("current_vehicle", module_name)
 
         # Navigate from Module List to Data List
         success = controller.navigate_to_data_list_from_module_list(module_name)
         if not success:
             return jsonify({"error": "Failed to navigate to data list"}), 500
 
-        # Discover data categories
-        categories = controller.discover_data_categories("current_vehicle", module_name)
+        if cached_categories:
+            logger.info(f"Using {len(cached_categories)} cached categories")
+            app_state.gds2_state = GDS2State.DATA_LIST.value
+            app_state.current_module = module_name
+            app_state.data_list_focus_index = 0
 
-        if not categories:
-            return jsonify({"error": "Failed to discover data categories"}), 500
+            return jsonify({
+                "success": True,
+                "data_categories": cached_categories,
+                "from_cache": True,
+                "state": asdict(app_state)
+            })
+        else:
+            logger.info("Discovering data categories...")
+            categories = controller.discover_data_categories("current_vehicle", module_name)
 
-        # Update state
-        app_state.gds2_state = GDS2State.DATA_LIST.value
-        app_state.current_module = module_name
-        app_state.data_list_focus_index = 0
+            if not categories:
+                return jsonify({"error": "Failed to discover data categories"}), 500
 
-        logger.info(f"Found {len(categories)} data categories. GDS2 is now at Data List.")
+            app_state.gds2_state = GDS2State.DATA_LIST.value
+            app_state.current_module = module_name
+            app_state.data_list_focus_index = 0
 
-        return jsonify({
-            "success": True,
-            "data_categories": categories,
-            "state": asdict(app_state)
-        })
+            return jsonify({
+                "success": True,
+                "data_categories": categories,
+                "from_cache": False,
+                "state": asdict(app_state)
+            })
 
     except Exception as e:
         logger.exception("Fetch categories failed")
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/get_dtcs', methods=['POST'])
-def get_dtcs():
-    """
-    Step 3: Get DTCs (Diagnostic Trouble Codes).
-    Assumes GDS2 is at Data List.
-    Selects "Vehicle DTC Information", creates report, parses DTCs, clicks Back.
-    """
-    try:
-        logger.info("=== Step 3: Get DTCs ===")
-        logger.info("Assumption: GDS2 is at Data List")
-
-        if app_state.gds2_state != GDS2State.DATA_LIST.value:
-            return jsonify({
-                "error": f"GDS2 must be at Data List page. Current state: {app_state.gds2_state}"
-            }), 400
-
-        if not app_state.current_module:
-            return jsonify({"error": "No module selected. Please complete Step 2 first."}), 400
-
-        module_name = app_state.current_module
-
-        # Find "Vehicle DTC Information" data category
-        # This is the standard data category for reading DTCs
-        dtc_category = "Vehicle DTC Information"
-        target_index = controller.mapping.get_data_category_index("current_vehicle", module_name, dtc_category)
-
-        if target_index is None:
-            # Try alternative names
-            for alt_name in ["Vehicle DTC and ID Information", "DTC Information", "Vehicle DTCs"]:
-                target_index = controller.mapping.get_data_category_index("current_vehicle", module_name, alt_name)
-                if target_index is not None:
-                    dtc_category = alt_name
-                    break
-
-        if target_index is None:
-            return jsonify({"error": "Could not find DTC data category. Please ensure vehicle supports DTC reading."}), 400
-
-        logger.info(f"Found DTC category: {dtc_category} at index {target_index}")
-
-        # Navigate to DTC display
-        report_path = controller.navigate_to_data_display(
-            module_name, dtc_category, app_state.data_list_focus_index
-        )
-
-        if not report_path:
-            return jsonify({"error": "Failed to create DTC report"}), 500
-
-        # Parse DTC report
-        from src.utils.report_parser import GDS2ReportParser
-        parser = GDS2ReportParser()
-        dtc_data = parser.parse_dtc_report(report_path)
-
-        # Click Back to return to Data List
-        logger.info("Clicking Back to return to Data List...")
-        success = controller.click_back_button()
-        if not success:
-            return jsonify({"error": "Failed to click Back button"}), 500
-
-        time.sleep(1.5)
-
-        # Update state
-        app_state.gds2_state = GDS2State.DATA_LIST.value
-        app_state.data_list_focus_index = target_index
-
-        logger.info(f"Get DTCs complete. Found {len(dtc_data['dtc_list'])} DTCs. GDS2 returned to Data List.")
-
-        return jsonify({
-            "success": True,
-            "vehicle_info": dtc_data.get("vehicle_info", {}),
-            "dtc_list": dtc_data.get("dtc_list", []),
-            "module_status": dtc_data.get("module_status", []),
-            "report_path": report_path,
-            "state": asdict(app_state)
-        })
-
-    except Exception as e:
-        logger.exception("Get DTCs failed")
-        return jsonify({"error": str(e)}), 500
-
-
 @app.route('/api/search_data', methods=['POST'])
 def search_data():
     """
-    Get DTCs: Search data for selected category.
+    Step 3: Search data for selected category.
     Assumes GDS2 is at Data List.
-    Selects data category, creates report, parses DTCs, clicks Back to return to Data List.
     """
     data = request.json
     module_name = data.get('module')
@@ -864,15 +602,9 @@ def search_data():
         return jsonify({"error": "Module and data category required"}), 400
 
     try:
-        logger.info(f"=== Get DTCs: Search {data_category} ===")
-        logger.info("Assumption: GDS2 is at Data List")
+        logger.info(f"=== Search: {data_category} ===")
 
-        # Get target index
-        target_index = controller.mapping.get_data_category_index("current_vehicle", module_name, data_category)
-        if target_index is None:
-            return jsonify({"error": f"Data category {data_category} not found"}), 400
-
-        # Navigate to data display (from current focus position)
+        # Navigate to data display
         report_path = controller.navigate_to_data_display(
             module_name, data_category, app_state.data_list_focus_index
         )
@@ -880,29 +612,23 @@ def search_data():
         if not report_path:
             return jsonify({"error": "Failed to create report"}), 500
 
-        # Parse report for regular data
+        # Parse report
         report_data = controller.parse_report(report_path)
 
-        # Also parse for DTCs
+        # Parse for DTCs
         from src.utils.report_parser import GDS2ReportParser
         dtc_parser = GDS2ReportParser()
         dtc_data = dtc_parser.parse_dtc_report(report_path)
 
         # Click Back to return to Data List
-        logger.info("Clicking Back to return to Data List...")
-        success = controller.click_back_button()
-        if not success:
-            return jsonify({"error": "Failed to click Back button"}), 500
+        logger.info("Clicking Back...")
+        controller.click_back_button()
 
-        time.sleep(1.5)
-
-        # Update state - back at Data List with focus on the item we just viewed
+        # Update state
+        target_index = controller.mapping.get_data_category_index("current_vehicle", module_name, data_category) or 0
         app_state.gds2_state = GDS2State.DATA_LIST.value
         app_state.current_data_category = data_category
         app_state.data_list_focus_index = target_index
-
-        logger.info(f"Search complete. GDS2 returned to Data List (focus at index {target_index}).")
-        logger.info(f"Parsed {len(dtc_data.get('dtc_list', []))} DTCs from report.")
 
         return jsonify({
             "success": True,
@@ -919,44 +645,70 @@ def search_data():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/discover_modules', methods=['POST'])
-def discover_modules():
-    """Discover all modules from GDS2."""
+@app.route('/api/get_dtcs', methods=['POST'])
+def get_dtcs():
+    """Get DTCs from Vehicle DTC Information category."""
     try:
-        logger.info("Starting module discovery...")
+        logger.info("=== Get DTCs ===")
 
-        # Discover modules
-        modules = controller.discover_modules("current_vehicle")
+        if not app_state.current_module:
+            return jsonify({"error": "No module selected"}), 400
 
-        if modules:
-            # Update state
-            app_state.gds2_state = GDS2State.MODULE_LIST.value
-            app_state.current_module = None
-            app_state.current_data_category = None
+        module_name = app_state.current_module
 
-            return jsonify({
-                "success": True,
-                "modules": modules,
-                "state": asdict(app_state)
-            })
-        else:
-            return jsonify({"error": "Failed to discover modules"}), 500
+        # Find DTC category
+        dtc_category = "Vehicle DTC Information"
+        target_index = controller.mapping.get_data_category_index("current_vehicle", module_name, dtc_category)
+
+        if target_index is None:
+            for alt in ["Vehicle DTC and ID Information", "DTC Information"]:
+                target_index = controller.mapping.get_data_category_index("current_vehicle", module_name, alt)
+                if target_index is not None:
+                    dtc_category = alt
+                    break
+
+        if target_index is None:
+            return jsonify({"error": "DTC category not found"}), 400
+
+        report_path = controller.navigate_to_data_display(
+            module_name, dtc_category, app_state.data_list_focus_index
+        )
+
+        if not report_path:
+            return jsonify({"error": "Failed to create DTC report"}), 500
+
+        from src.utils.report_parser import GDS2ReportParser
+        parser = GDS2ReportParser()
+        dtc_data = parser.parse_dtc_report(report_path)
+
+        controller.click_back_button()
+
+        app_state.gds2_state = GDS2State.DATA_LIST.value
+        app_state.data_list_focus_index = target_index
+
+        return jsonify({
+            "success": True,
+            "vehicle_info": dtc_data.get("vehicle_info", {}),
+            "dtc_list": dtc_data.get("dtc_list", []),
+            "module_status": dtc_data.get("module_status", []),
+            "state": asdict(app_state)
+        })
 
     except Exception as e:
-        logger.exception("Module discovery failed")
+        logger.exception("Get DTCs failed")
         return jsonify({"error": str(e)}), 500
 
 
 @app.route('/api/modules')
 def get_modules():
-    """Get list of modules."""
+    """Get list of modules from cache."""
     modules = controller.get_module_list()
     return jsonify({"modules": modules})
 
 
 @app.route('/api/data_categories')
 def get_data_categories():
-    """Get data categories for a module."""
+    """Get data categories for a module from cache."""
     module_name = request.args.get('module')
     if not module_name:
         return jsonify({"error": "Module name required"}), 400
@@ -965,359 +717,43 @@ def get_data_categories():
     return jsonify({"data_categories": categories})
 
 
-@app.route('/api/fetch_and_discover', methods=['POST'])
-def fetch_and_discover():
-    """
-    Fetch first data (Engine Data at index 0) then discover all categories.
-    Assumes GDS2 is at Main Menu.
-    """
-    data = request.json
-    module_name = data.get('module')
-
-    if not module_name:
-        return jsonify({"error": "Module name required"}), 400
-
-    try:
-        logger.info(f"=== Fetch & Discover: {module_name} ===")
-        logger.info("Assumption: GDS2 is at Main Menu")
-
-        # Step 1: Navigate to Data List (full path from Main Menu)
-        logger.info("Step 1: Navigating from Main Menu to Data List...")
-        success = controller.navigate_to_data_list(module_name)
-        if not success:
-            return jsonify({"error": "Failed to navigate to data list"}), 500
-
-        app_state.gds2_state = GDS2State.DATA_LIST.value
-        app_state.current_module = module_name
-        app_state.data_list_focus_index = 0
-
-        # Step 2: Select first item (Engine Data at index 0) and create report
-        logger.info("Step 2: Selecting Engine Data (index 0) and creating report...")
-        report_path = controller.navigate_to_data_display(
-            module_name, "Engine Data", 0  # Always index 0 for first item
-        )
-
-        if not report_path:
-            return jsonify({"error": "Failed to create report"}), 500
-
-        # Update state
-        app_state.gds2_state = GDS2State.DATA_DISPLAY.value
-        app_state.current_data_category = "Engine Data"
-
-        # Parse report
-        report_data = controller.parse_report(report_path)
-
-        # Step 3: Click Back to return to Data List
-        logger.info("Step 3: Clicking Back to return to Data List...")
-        success = controller.click_back_button()
-        if not success:
-            return jsonify({"error": "Failed to click Back button"}), 500
-
-        time.sleep(2)
-
-        # Step 4: Discover all data categories
-        logger.info("Step 4: Discovering all data categories...")
-        categories = controller.discover_data_categories("current_vehicle", module_name)
-
-        if not categories:
-            return jsonify({"error": "Failed to discover data categories"}), 500
-
-        # Update state
-        app_state.gds2_state = GDS2State.DATA_LIST.value
-        app_state.data_list_focus_index = 0
-
-        logger.info(f"=== Fetch & Discover Complete: {len(categories)} categories ===")
-
-        return jsonify({
-            "success": True,
-            "data_categories": categories,
-            "report_data": report_data,
-            "state": asdict(app_state)
-        })
-
-    except Exception as e:
-        logger.exception("Fetch & Discover failed")
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route('/api/discover_data_simple', methods=['POST'])
-def discover_data_simple():
-    """
-    Simplified: Discover data categories assuming GDS2 is at Data Display page.
-    Just click Back once, then discover.
-    """
-    data = request.json
-    module_name = data.get('module')
-
-    if not module_name:
-        return jsonify({"error": "Module name required"}), 400
-
-    try:
-        logger.info(f"=== Simple Discovery: {module_name} ===")
-        logger.info("Assumption: GDS2 is at Data Display page")
-
-        # Step 1: Click Back to return to Data List
-        logger.info("Step 1: Clicking Back button...")
-        success = controller.click_back_button()
-        if not success:
-            return jsonify({"error": "Failed to click Back button"}), 500
-
-        time.sleep(2)
-
-        # Step 2: Discover data categories using pywinauto
-        logger.info("Step 2: Discovering data categories...")
-        categories = controller.discover_data_categories("current_vehicle", module_name)
-
-        if not categories:
-            return jsonify({"error": "Failed to discover data categories"}), 500
-
-        # Update state
-        app_state.gds2_state = GDS2State.DATA_LIST.value
-        app_state.current_module = module_name
-        app_state.data_list_focus_index = 0
-
-        logger.info(f"Discovered {len(categories)} data categories")
-
-        return jsonify({
-            "success": True,
-            "data_categories": categories,
-            "state": asdict(app_state)
-        })
-
-    except Exception as e:
-        logger.exception("Simple discovery failed")
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route('/api/fetch_data_simple', methods=['POST'])
-def fetch_data_simple():
-    """
-    Simplified: Fetch data assuming GDS2 is at Main Menu.
-    Always do full navigation from Main Menu.
-    """
-    data = request.json
-    module_name = data.get('module')
-    data_category = data.get('data_category')
-
-    if not module_name or not data_category:
-        return jsonify({"error": "Module and data category required"}), 400
-
-    try:
-        logger.info(f"=== Simple Fetch: {module_name} -> {data_category} ===")
-        logger.info("Assumption: GDS2 is at Main Menu")
-
-        # Step 1: Navigate to Data List (full path from Main Menu)
-        logger.info("Step 1: Navigating from Main Menu to Data List...")
-        success = controller.navigate_to_data_list(module_name)
-        if not success:
-            return jsonify({"error": "Failed to navigate to data list"}), 500
-
-        app_state.gds2_state = GDS2State.DATA_LIST.value
-        app_state.current_module = module_name
-        app_state.data_list_focus_index = 0
-
-        # Step 2: Navigate to Data Display and create report
-        logger.info("Step 2: Selecting data category and creating report...")
-        report_path = controller.navigate_to_data_display(
-            module_name, data_category, app_state.data_list_focus_index
-        )
-
-        if not report_path:
-            return jsonify({"error": "Failed to create report"}), 500
-
-        # Update state
-        app_state.gds2_state = GDS2State.DATA_DISPLAY.value
-        app_state.current_data_category = data_category
-
-        # Parse report
-        report_data = controller.parse_report(report_path)
-
-        logger.info("=== Fetch Complete ===")
-
-        return jsonify({
-            "success": True,
-            "report_path": report_path,
-            "report_data": report_data,
-            "state": asdict(app_state)
-        })
-
-    except Exception as e:
-        logger.exception("Simple fetch failed")
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route('/api/discover_data', methods=['POST'])
-def discover_data():
-    """Discover data categories for a module using smart navigation."""
-    data = request.json
-    module_name = data.get('module')
-
-    if not module_name:
-        return jsonify({"error": "Module name required"}), 400
-
-    try:
-        logger.info(f"=== Discovering data categories for {module_name} ===")
-        logger.info(f"Current GDS2 state: {app_state.gds2_state}")
-
-        # Smart navigation based on current state
-        if app_state.gds2_state == GDS2State.MAIN_MENU.value:
-            # Full navigation from Main Menu
-            logger.info("State: MAIN_MENU -> navigating full path")
-            success = controller.navigate_to_data_list(module_name)
-            if not success:
-                return jsonify({"error": "Failed to navigate to data list"}), 500
-
-        elif app_state.gds2_state == GDS2State.MODULE_LIST.value:
-            # Already at Module List -> just select module and go to Data Display
-            logger.info("State: MODULE_LIST -> navigating from module list")
-            success = controller.navigate_to_data_list_from_module_list(module_name)
-            if not success:
-                return jsonify({"error": "Failed to navigate from module list"}), 500
-
-        elif app_state.gds2_state == GDS2State.DATA_LIST.value:
-            # Already at Data List
-            if app_state.current_module == module_name:
-                # Same module, already in correct place
-                logger.info("State: DATA_LIST (same module) -> already at correct location")
-            else:
-                # Different module, need to go back and navigate
-                logger.info("State: DATA_LIST (different module) -> clicking Back twice")
-                controller.click_back_button()  # Back to module submenu
-                time.sleep(1)
-                controller.click_back_button()  # Back to module list
-                time.sleep(1)
-                app_state.gds2_state = GDS2State.MODULE_LIST.value
-                success = controller.navigate_to_data_list_from_module_list(module_name)
-                if not success:
-                    return jsonify({"error": "Failed to navigate to different module"}), 500
-
-        elif app_state.gds2_state == GDS2State.DATA_DISPLAY.value:
-            # At Data Display -> click Back to get to Data List
-            if app_state.current_module == module_name:
-                logger.info("State: DATA_DISPLAY (same module) -> clicking Back")
-                controller.click_back_button()
-                time.sleep(1)
-            else:
-                # Different module, need multiple backs
-                logger.info("State: DATA_DISPLAY (different module) -> clicking Back multiple times")
-                controller.click_back_button()  # Back to data list
-                time.sleep(1)
-                controller.click_back_button()  # Back to module submenu
-                time.sleep(1)
-                controller.click_back_button()  # Back to module list
-                time.sleep(1)
-                app_state.gds2_state = GDS2State.MODULE_LIST.value
-                success = controller.navigate_to_data_list_from_module_list(module_name)
-                if not success:
-                    return jsonify({"error": "Failed to navigate to different module"}), 500
-
-        # Discover data categories
-        categories = controller.discover_data_categories("current_vehicle", module_name)
-
-        # Update state
-        app_state.gds2_state = GDS2State.DATA_LIST.value
-        app_state.current_module = module_name
-        app_state.data_list_focus_index = 0
-
-        logger.info(f"Discovered {len(categories)} data categories")
-
-        return jsonify({
-            "success": True,
-            "data_categories": categories,
-            "state": asdict(app_state)
-        })
-
-    except Exception as e:
-        logger.exception("Discovery failed")
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route('/api/fetch_data', methods=['POST'])
-def fetch_data():
-    """Fetch data for a module/category."""
-    data = request.json
-    module_name = data.get('module')
-    data_category = data.get('data_category')
-
-    if not module_name or not data_category:
-        return jsonify({"error": "Module and data category required"}), 400
-
-    try:
-        # Handle navigation based on current state
-        if app_state.gds2_state == GDS2State.MAIN_MENU.value:
-            # Navigate to data list
-            success = controller.navigate_to_data_list(module_name)
-            if not success:
-                return jsonify({"error": "Failed to navigate to data list"}), 500
-
-            app_state.gds2_state = GDS2State.DATA_LIST.value
-            app_state.current_module = module_name
-            app_state.data_list_focus_index = 0
-
-        elif app_state.gds2_state == GDS2State.DATA_DISPLAY.value:
-            # Click back to return to data list
-            success = controller.click_back_button()
-            if not success:
-                return jsonify({"error": "Failed to click back"}), 500
-
-            # Update focus index
-            prev_index = controller.mapping.get_data_category_index(
-                "current_vehicle", app_state.current_module, app_state.current_data_category
-            )
-            if prev_index is not None:
-                app_state.data_list_focus_index = prev_index
-
-            app_state.gds2_state = GDS2State.DATA_LIST.value
-
-        # Navigate to data display
-        report_path = controller.navigate_to_data_display(
-            module_name, data_category, app_state.data_list_focus_index
-        )
-
-        if not report_path:
-            return jsonify({"error": "Failed to create report"}), 500
-
-        # Update state
-        app_state.gds2_state = GDS2State.DATA_DISPLAY.value
-        app_state.current_data_category = data_category
-
-        # Parse report
-        report_data = controller.parse_report(report_path)
-
-        return jsonify({
-            "success": True,
-            "report_path": report_path,
-            "report_data": report_data,
-            "state": asdict(app_state)
-        })
-
-    except Exception as e:
-        logger.exception("Fetch data failed")
-        return jsonify({"error": str(e)}), 500
-
-
 @app.route('/api/back', methods=['POST'])
 def back():
     """Click back button."""
     try:
         success = controller.click_back_button()
-
         if success:
+            # Update state based on current state
             if app_state.gds2_state == GDS2State.DATA_DISPLAY.value:
-                prev_index = controller.mapping.get_data_category_index(
-                    "current_vehicle", app_state.current_module, app_state.current_data_category
-                )
-                if prev_index is not None:
-                    app_state.data_list_focus_index = prev_index
-
                 app_state.gds2_state = GDS2State.DATA_LIST.value
+            elif app_state.gds2_state == GDS2State.DATA_LIST.value:
+                app_state.gds2_state = GDS2State.MODULE_SUBMENU.value
+            elif app_state.gds2_state == GDS2State.MODULE_SUBMENU.value:
+                app_state.gds2_state = GDS2State.MODULE_LIST.value
 
             return jsonify({"success": True, "state": asdict(app_state)})
-        else:
-            return jsonify({"error": "Failed to click back"}), 500
+        return jsonify({"error": "Failed to click back"}), 500
 
     except Exception as e:
         logger.exception("Back button failed")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/home', methods=['POST'])
+def home():
+    """Click Home button to return to Main Menu."""
+    try:
+        success = controller.click_home_button()
+        if success:
+            app_state.gds2_state = GDS2State.MAIN_MENU.value
+            app_state.current_module = None
+            app_state.current_data_category = None
+            app_state.data_list_focus_index = 0
+            return jsonify({"success": True, "state": asdict(app_state)})
+        return jsonify({"error": "Failed to click Home"}), 500
+
+    except Exception as e:
+        logger.exception("Home button failed")
         return jsonify({"error": str(e)}), 500
 
 
@@ -1329,7 +765,7 @@ def get_state():
 
 @app.route('/api/reset', methods=['POST'])
 def reset_state():
-    """Reset state to Main Menu (when user manually navigated GDS2 back to main menu)."""
+    """Reset state to Main Menu."""
     try:
         app_state.gds2_state = GDS2State.MAIN_MENU.value
         app_state.current_module = None
@@ -1345,165 +781,152 @@ def reset_state():
 
 
 # =============================================================================
-# Real-time Data Streaming (SSE)
+# Agent-based Data Streaming (High-frequency)
 # =============================================================================
 
-# Global streaming state
-streaming_collector = None
-streaming_clients: List[queue.Queue] = []
-streaming_lock = threading.Lock()
+agent_collector = None
+agent_clients: List[queue.Queue] = []
+agent_lock = threading.Lock()
 
 
-def broadcast_to_clients(event_type: str, data: dict):
-    """Broadcast data to all connected SSE clients."""
+def broadcast_to_agent_clients(event_type: str, data: dict):
+    """Broadcast data to all connected Agent SSE clients."""
     message = f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
-    with streaming_lock:
+    with agent_lock:
         dead_clients = []
-        for client_queue in streaming_clients:
+        for client_queue in agent_clients:
             try:
                 client_queue.put_nowait(message)
             except queue.Full:
                 dead_clients.append(client_queue)
-        # Remove dead clients
         for dead in dead_clients:
-            streaming_clients.remove(dead)
+            agent_clients.remove(dead)
 
 
-def on_realtime_data_change(changes):
-    """Callback when parameter values change."""
-    change_data = [c.to_dict() for c in changes]
-    broadcast_to_clients("changes", {
-        "type": "changes",
+def on_agent_snapshot(snapshot):
+    """Callback when Agent produces a new snapshot."""
+    broadcast_to_agent_clients("snapshot", {
+        "type": "snapshot",
+        "extraction_count": snapshot.extraction_count,
+        "extraction_duration_ms": snapshot.extraction_duration_ms,
+        "page_context": snapshot.page_context,
+        "param_count": len(snapshot.parameters),
+        "dtc_count": len(snapshot.dtcs),
+        "parameters": snapshot.parameters,
+        "dtcs": [d.to_dict() for d in snapshot.dtcs],
+        "timestamp": time.time(),
+    })
+
+
+def on_agent_param_change(changes):
+    """Callback when Agent detects parameter changes."""
+    broadcast_to_agent_clients("param_changes", {
+        "type": "param_changes",
         "count": len(changes),
-        "changes": change_data,
-        "timestamp": time.time()
+        "changes": changes,
+        "timestamp": time.time(),
     })
-    logger.info(f"Broadcast {len(changes)} parameter changes")
 
 
-def on_realtime_full_data(params):
-    """Callback with all parameters on each collection."""
-    param_data = [p.to_dict() for p in params]
-    broadcast_to_clients("data", {
-        "type": "full_data",
-        "count": len(params),
-        "parameters": param_data,
-        "timestamp": time.time()
+def on_agent_dtc_change(added, removed):
+    """Callback when Agent detects DTC changes."""
+    broadcast_to_agent_clients("dtc_changes", {
+        "type": "dtc_changes",
+        "added": [d.to_dict() for d in added],
+        "removed": [d.to_dict() for d in removed],
+        "timestamp": time.time(),
     })
-    logger.debug(f"Broadcast {len(params)} parameters")
 
 
-def on_realtime_error(error):
-    """Callback when an error occurs."""
-    broadcast_to_clients("error", {
+def on_agent_error(error):
+    """Callback when Agent encounters an error."""
+    broadcast_to_agent_clients("error", {
         "type": "error",
         "message": error,
-        "timestamp": time.time()
+        "timestamp": time.time(),
     })
-    logger.error(f"Streaming error: {error}")
+    logger.error(f"Agent streaming error: {error}")
+
+
+@app.route('/api/agent/status')
+def agent_status():
+    """Check Agent availability and status."""
+    from src.streaming import AgentDataCollector
+
+    checker = AgentDataCollector()
+    availability = checker.check_agent_available()
+
+    is_running = agent_collector is not None and agent_collector.is_running
+    collection_count = agent_collector.collection_count if agent_collector else 0
+    client_count = len(agent_clients)
+
+    return jsonify({
+        "agent": availability,
+        "streaming": {
+            "running": is_running,
+            "collection_count": collection_count,
+            "connected_clients": client_count,
+        }
+    })
 
 
 @app.route('/api/stream/start', methods=['POST'])
 def start_streaming():
-    """Start real-time data streaming."""
-    global streaming_collector
+    """Start Agent-based data streaming with navigation."""
+    global agent_collector
 
     data = request.json or {}
-    interval = data.get('interval', 3.0)
-    data_category = data.get('data_category')  # Get data category from frontend
+    interval_ms = data.get('interval_ms', 100)
+    data_category = data.get('data_category')
 
     try:
-        if streaming_collector and streaming_collector.is_running:
+        if agent_collector and agent_collector.is_running:
             return jsonify({"error": "Streaming already running"}), 400
 
-        # Check if data category is provided
         if not data_category:
-            return jsonify({
-                "error": "Please select a data category to monitor"
-            }), 400
+            return jsonify({"error": "Please select a data category"}), 400
 
-        # Check if we have module info from Step 2
         if not app_state.current_module:
-            return jsonify({
-                "error": "Please complete Step 2 first: fetch categories"
-            }), 400
+            return jsonify({"error": "Please complete Step 2 first"}), 400
 
-        # Update app state with selected data category
-        app_state.current_data_category = data_category
-
-        # Check current GDS2 state
         if app_state.gds2_state != GDS2State.DATA_LIST.value:
-            return jsonify({
-                "error": f"GDS2 must be at Data List page. Current state: {app_state.gds2_state}"
-            }), 400
+            return jsonify({"error": f"GDS2 must be at Data List. Current: {app_state.gds2_state}"}), 400
 
-        logger.info(f"=== Starting Monitoring for {app_state.current_data_category} ===")
+        logger.info(f"=== Starting Monitoring for {data_category} ===")
 
-        # Navigate from Data List to Data Display
-        # Get target index for the data category
+        # Navigate to Data Display using Agent
         target_index = controller.mapping.get_data_category_index(
-            "current_vehicle", app_state.current_module, app_state.current_data_category
+            "current_vehicle", app_state.current_module, data_category
         )
         if target_index is None:
-            return jsonify({
-                "error": f"Data category '{app_state.current_data_category}' not found"
-            }), 400
+            return jsonify({"error": f"Data category '{data_category}' not found"}), 400
 
-        # Navigate using keyboard (from current focus position)
-        import pyautogui
+        result = controller.nav.select_list_item(0, target_index, double_click=True)
+        if not result.get('success'):
+            return jsonify({"error": "Failed to select data category"}), 500
+        time.sleep(3)
 
-        def focus_gds2():
-            try:
-                from pywinauto import Application
-                app_conn = Application(backend="uia").connect(title_re=".*GDS 2.*")
-                window = app_conn.top_window()
-                window.set_focus()
-                time.sleep(0.3)
-            except Exception as e:
-                logger.warning(f"Could not focus GDS2: {e}")
-
-        focus_gds2()
-
-        # Calculate relative steps from current focus position
-        relative_steps = target_index - app_state.data_list_focus_index
-        logger.info(f"Navigating to {app_state.current_data_category} (target={target_index}, current={app_state.data_list_focus_index}, steps={relative_steps})")
-
-        if relative_steps > 0:
-            for _ in range(relative_steps):
-                pyautogui.press('down')
-                time.sleep(0.1)
-        elif relative_steps < 0:
-            for _ in range(abs(relative_steps)):
-                pyautogui.press('up')
-                time.sleep(0.1)
-
-        time.sleep(0.5)
-        pyautogui.press('enter')
-        time.sleep(3)  # Wait for Data Display page to load
-
-        # Update state
         app_state.gds2_state = GDS2State.DATA_DISPLAY.value
+        app_state.current_data_category = data_category
         app_state.data_list_focus_index = target_index
 
-        logger.info("Now at Data Display page, starting collector...")
+        # Start Agent collector
+        from src.streaming import AgentDataCollector
 
-        # Start the collector
-        from src.streaming import RealtimeDataCollector
-
-        streaming_collector = RealtimeDataCollector(
-            on_data_change=on_realtime_data_change,
-            on_full_data=on_realtime_full_data,
-            on_error=on_realtime_error,
-            interval_seconds=interval
+        agent_collector = AgentDataCollector(
+            on_snapshot=on_agent_snapshot,
+            on_param_change=on_agent_param_change,
+            on_dtc_change=on_agent_dtc_change,
+            on_error=on_agent_error,
+            interval_ms=interval_ms,
         )
-        streaming_collector.start()
+        agent_collector.start()
 
-        logger.info(f"Started real-time streaming with interval {interval}s")
+        logger.info(f"Started Agent streaming ({interval_ms}ms interval)")
         return jsonify({
             "success": True,
-            "message": f"Monitoring started for {app_state.current_data_category}",
-            "interval": interval,
-            "data_category": app_state.current_data_category,
+            "message": f"Monitoring started for {data_category}",
+            "interval_ms": interval_ms,
             "state": asdict(app_state)
         })
 
@@ -1514,33 +937,25 @@ def start_streaming():
 
 @app.route('/api/stream/stop', methods=['POST'])
 def stop_streaming():
-    """Stop real-time data streaming and navigate back to Data List."""
-    global streaming_collector
+    """Stop Agent-based streaming and return to Data List."""
+    global agent_collector
 
     try:
-        if streaming_collector:
-            streaming_collector.stop()
-            streaming_collector = None
-            logger.info("Stopped real-time streaming")
+        if agent_collector:
+            agent_collector.stop()
+            agent_collector = None
+            logger.info("Stopped Agent streaming")
 
-            # Click Back button to return to Data List
             if app_state.gds2_state == GDS2State.DATA_DISPLAY.value:
-                logger.info("Clicking Back to return to Data List...")
-                success = controller.click_back_button()
-                if success:
-                    time.sleep(1.5)
-                    app_state.gds2_state = GDS2State.DATA_LIST.value
-                    logger.info("Returned to Data List")
-                else:
-                    logger.warning("Failed to click Back button")
+                controller.click_back_button()
+                app_state.gds2_state = GDS2State.DATA_LIST.value
 
             return jsonify({
                 "success": True,
-                "message": "Streaming stopped and returned to Data List",
+                "message": "Streaming stopped",
                 "state": asdict(app_state)
             })
-        else:
-            return jsonify({"message": "Streaming was not running"})
+        return jsonify({"message": "Streaming was not running"})
 
     except Exception as e:
         logger.exception("Failed to stop streaming")
@@ -1550,16 +965,13 @@ def stop_streaming():
 @app.route('/api/stream/status')
 def streaming_status():
     """Get streaming status."""
-    global streaming_collector
-
-    is_running = streaming_collector is not None and streaming_collector.is_running
-    collection_count = streaming_collector.collection_count if streaming_collector else 0
-    client_count = len(streaming_clients)
+    is_running = agent_collector is not None and agent_collector.is_running
+    collection_count = agent_collector.collection_count if agent_collector else 0
 
     return jsonify({
         "running": is_running,
         "collection_count": collection_count,
-        "connected_clients": client_count
+        "connected_clients": len(agent_clients)
     })
 
 
@@ -1567,34 +979,30 @@ def streaming_status():
 def stream_events():
     """SSE endpoint for real-time data streaming."""
     def generate():
-        # Create a queue for this client
-        client_queue = queue.Queue(maxsize=100)
+        client_queue = queue.Queue(maxsize=200)
 
-        with streaming_lock:
-            streaming_clients.append(client_queue)
+        with agent_lock:
+            agent_clients.append(client_queue)
 
-        logger.info(f"SSE client connected. Total clients: {len(streaming_clients)}")
+        logger.info(f"SSE client connected. Total: {len(agent_clients)}")
 
         try:
-            # Send initial connection message
-            yield f"event: connected\ndata: {json.dumps({'message': 'Connected to real-time stream'})}\n\n"
+            yield f"event: connected\ndata: {json.dumps({'message': 'Connected to stream'})}\n\n"
 
             while True:
                 try:
-                    # Wait for data with timeout (allows for connection check)
                     message = client_queue.get(timeout=30)
                     yield message
                 except queue.Empty:
-                    # Send keepalive
                     yield f": keepalive\n\n"
 
         except GeneratorExit:
             pass
         finally:
-            with streaming_lock:
-                if client_queue in streaming_clients:
-                    streaming_clients.remove(client_queue)
-            logger.info(f"SSE client disconnected. Total clients: {len(streaming_clients)}")
+            with agent_lock:
+                if client_queue in agent_clients:
+                    agent_clients.remove(client_queue)
+            logger.info(f"SSE client disconnected. Total: {len(agent_clients)}")
 
     return Response(
         generate(),
@@ -1602,27 +1010,35 @@ def stream_events():
         headers={
             'Cache-Control': 'no-cache',
             'Connection': 'keep-alive',
-            'X-Accel-Buffering': 'no'
+            'X-Accel-Buffering': 'no',
         }
     )
 
 
-@app.route('/api/stream/latest')
-def get_latest_data():
-    """Get the latest collected data (non-streaming)."""
-    global streaming_collector
+@app.route('/api/agent/snapshot')
+def agent_latest_snapshot():
+    """Get the latest Agent snapshot."""
+    global agent_collector
 
-    if not streaming_collector:
-        return jsonify({"error": "Streaming not started"}), 400
+    if agent_collector and agent_collector.last_snapshot:
+        return jsonify(agent_collector.last_snapshot.to_dict())
 
-    last_values = streaming_collector.last_values
-    data = [v.to_dict() for v in last_values.values()]
+    # Try to read directly from file
+    from src.streaming import AgentDataCollector
+    from src.streaming.agent_data_collector import _parse_agent_json
 
-    return jsonify({
-        "count": len(data),
-        "parameters": data,
-        "collection_count": streaming_collector.collection_count
-    })
+    temp = AgentDataCollector()
+    status = temp.check_agent_available()
+    if not status['available']:
+        return jsonify({"error": "Agent not available"}), 400
+
+    try:
+        with open(temp.json_path, 'r', encoding='utf-8') as f:
+            raw = json.load(f)
+        snapshot = _parse_agent_json(raw)
+        return jsonify(snapshot.to_dict())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == '__main__':
@@ -1630,7 +1046,7 @@ if __name__ == '__main__':
     import socket
 
     port = 8080
-    host = '0.0.0.0'  # Allow remote access (use '127.0.0.1' for local only)
+    host = '0.0.0.0'
 
     if '--port' in sys.argv:
         idx = sys.argv.index('--port')
@@ -1638,9 +1054,8 @@ if __name__ == '__main__':
             port = int(sys.argv[idx + 1])
 
     if '--local' in sys.argv:
-        host = '127.0.0.1'  # Local only mode
+        host = '127.0.0.1'
 
-    # Get local IP address for display
     local_ip = '127.0.0.1'
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -1651,15 +1066,13 @@ if __name__ == '__main__':
         pass
 
     print(f"\n{'='*60}")
-    print(f"  GDS2 Automation Web UI")
+    print(f"  GDS2 Automation Web UI (Agent-based)")
     print(f"{'='*60}")
     if host == '0.0.0.0':
-        print(f"\n  Local access:  http://localhost:{port}")
-        print(f"  Remote access: http://{local_ip}:{port}")
-        print(f"\n  Note: Remote access enabled. Make sure firewall allows port {port}.")
+        print(f"\n  Local:  http://localhost:{port}")
+        print(f"  Remote: http://{local_ip}:{port}")
     else:
-        print(f"\n  Open in browser: http://localhost:{port}")
-        print(f"\n  (Local access only. Use without --local for remote access)")
+        print(f"\n  http://localhost:{port}")
     print(f"{'='*60}\n")
 
     app.run(debug=True, host=host, port=port, use_reloader=False)

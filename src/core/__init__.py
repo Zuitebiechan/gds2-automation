@@ -1,17 +1,9 @@
 """
 Core module.
 
-Contains the low-level driver, locators, and exceptions.
+Contains utility functions and exceptions.
+Note: PyAutoGUI/OpenCV-based driver and template_matcher have been archived.
 """
 
-from .driver import GDS2Driver, ElementNotFoundError
-from .locators import Locator, GDS2Locators, Loc
-from .exceptions import *
-
-__all__ = [
-    "GDS2Driver",
-    "ElementNotFoundError",
-    "Locator",
-    "GDS2Locators",
-    "Loc",
-]
+# Only export what's still in use
+__all__ = []

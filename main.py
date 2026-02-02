@@ -48,19 +48,19 @@ def run_web(args):
 
 
 def run_demo(args):
-    """Run the GDS2 RPA demo workflow."""
+    """Run the GDS2 RPA demo workflow using Java Agent."""
     # Setup logging
     log_level = logging.INFO if args.verbose else logging.WARNING
-    logging.basicConfig(level=log_level, format='%(message)s')
+    logging.basicConfig(level=log_level, format='%(asctime)s - %(levelname)s - %(message)s')
 
     print("=" * 60)
-    print("GDS2 RPA Demo")
+    print("GDS2 RPA Demo (Agent-based)")
     print("=" * 60)
     print()
     print("Architecture:")
-    print("  - PyAutoGUI+OpenCV: buttons and fixed list items")
-    print("  - pywinauto: list item discovery")
-    print("  - Keyboard navigation: module and data list selection")
+    print("  - Java Agent: UI navigation and data extraction")
+    print("  - Windows API: Device Explorer handling")
+    print("  - No PyAutoGUI or screen dependency")
     print()
     print(f"VCI Device: {args.vci}")
     print(f"Target Module: {args.module}")
@@ -69,9 +69,9 @@ def run_demo(args):
     print("=" * 60)
     print()
 
-    from src.workflows import ReadDataDisplayWorkflow
+    from src.workflows import ReadDataDisplayAgentWorkflow
 
-    workflow = ReadDataDisplayWorkflow(vehicle_id=args.vehicle)
+    workflow = ReadDataDisplayAgentWorkflow(vehicle_id=args.vehicle)
     result = workflow.execute(
         vci_device=args.vci,
         target_module=args.module,
@@ -85,8 +85,8 @@ def run_demo(args):
 
     if result["success"]:
         print("[OK] Success!")
-        if result.get("report_path"):
-            print(f"Report: {result['report_path']}")
+        print(f"Module: {result.get('module')}")
+        print(f"Data Category: {result.get('data_category')}")
         return 0
     else:
         print(f"[FAILED] {result.get('error', 'Unknown error')}")

@@ -1,24 +1,22 @@
 """
 GDS2 Workflows
 
-Architecture:
-- PyAutoGUI+OpenCV: for buttons and fixed list items (template matching)
-- pywinauto: for discovering list items and checking button state
-- Keyboard navigation: for selecting items in lists (DOWN + ENTER)
+Agent-based navigation: Java Agent for GDS2 main window + Windows API for Device Explorer
+- No PyAutoGUI, OpenCV, or screen dependency
+
+Note: Legacy PyAutoGUI-based workflows have been archived to archive/src/workflows/
 """
 
-from .base_workflow import BaseWorkflow
-from .read_data_display import ReadDataDisplayWorkflow
+from .read_data_display_agent import ReadDataDisplayAgentWorkflow
 
 __all__ = [
-    "BaseWorkflow",
-    "ReadDataDisplayWorkflow",
+    "ReadDataDisplayAgentWorkflow",
 ]
 
 
 # Workflow registry for easy access
 WORKFLOW_REGISTRY = {
-    "read_data_display": ReadDataDisplayWorkflow,
+    "read_data_display": ReadDataDisplayAgentWorkflow,
 }
 
 

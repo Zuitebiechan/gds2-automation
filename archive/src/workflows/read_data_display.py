@@ -12,8 +12,7 @@ Features:
 
 import logging
 import time
-from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 import pyautogui
 
@@ -54,7 +53,10 @@ class ReadDataDisplayWorkflow(BaseWorkflow):
         **kwargs,
     ) -> Dict[str, Any]:
         """
-        Execute the workflow.
+        Execute the workflow: Navigate from Main Menu to Data Display page.
+
+        Note: This workflow only navigates to the Data Display page.
+        Use Java Agent (AgentDataCollector) to collect data - no Create Report needed.
 
         Args:
             target_module: Module to select (e.g., "[K20] Engine Control Module")
@@ -62,7 +64,7 @@ class ReadDataDisplayWorkflow(BaseWorkflow):
             vci_device: VCI device name
 
         Returns:
-            Dictionary with success status and report path
+            Dictionary with success status
         """
         logger.info(f"=== Starting {self.name} Workflow ===")
         logger.info(f"Vehicle ID: {self.vehicle_id}")
@@ -103,15 +105,14 @@ class ReadDataDisplayWorkflow(BaseWorkflow):
             if not self._select_data_category_keyboard(data_category):
                 return self._error_result(f"Could not select data category: {data_category}")
 
-            # Step 9: Create Report
-            report_path = self._create_report()
-            if not report_path:
-                return self._error_result("Could not create report")
-
+            # Done - now at Data Display page
+            # Use Java Agent (AgentDataCollector) to collect data
             logger.info(f"=== {self.name} Workflow Complete ===")
+            logger.info("Now at Data Display page. Use AgentDataCollector for data collection.")
             return {
                 "success": True,
-                "report_path": str(report_path) if report_path else None,
+                "module": target_module,
+                "data_category": data_category,
             }
 
         except Exception as e:
@@ -324,29 +325,6 @@ class ReadDataDisplayWorkflow(BaseWorkflow):
         else:
             logger.error("  [ERROR] Could not find 'Data Display'")
             return False
-
-    def _create_report(self) -> Optional[Path]:
-        """Wait for data and create report."""
-        logger.info("Step 9: Clicking Create Report...")
-        self.wait(2)
-
-        # Try to find and click Create Report button directly with PyAutoGUI
-        if self.click_button("create_report", confidence=0.8, timeout=30):
-            logger.info("  [OK] Clicked Create Report!")
-            self.wait(2)
-
-            report_dir = Path.home() / "AppData" / "Local" / "Temp" / "GDS 2"
-            if report_dir.exists():
-                reports = list(report_dir.glob("Data Display_*.html"))
-                if reports:
-                    latest_report = max(reports, key=lambda p: p.stat().st_mtime)
-                    logger.info(f"  Report created: {latest_report}")
-                    return latest_report
-        else:
-            logger.error("  [ERROR] Could not find Create Report button")
-
-        logger.warning("  [WARN] Could not locate report file")
-        return None
 
     def _error_result(self, message: str) -> Dict[str, Any]:
         """Create error result dictionary."""
