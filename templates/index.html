@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>GDS2 Automation</title>
+    <title>GDS2 Data Viewer</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -68,35 +68,6 @@
         .info-item { display: flex; align-items: center; gap: 4px; }
         .info-item .val { font-weight: 600; color: #2c3e50; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-        .tab-bar {
-            background: #fff;
-            border-bottom: 2px solid #e1e8ed;
-            padding: 0 8px;
-            display: flex;
-            gap: 0;
-            overflow-x: auto;
-            -webkit-overflow-scrolling: touch;
-        }
-
-        .tab {
-            padding: 10px 16px;
-            font-size: 13px;
-            font-weight: 600;
-            color: #888;
-            cursor: pointer;
-            border-bottom: 2px solid transparent;
-            margin-bottom: -2px;
-            transition: color 0.15s;
-            white-space: nowrap;
-            flex-shrink: 0;
-        }
-
-        .tab:hover { color: #555; }
-        .tab.active { color: #2c3e50; border-bottom-color: #3498db; }
-
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
-
         .container { max-width: 1200px; margin: 0 auto; padding: 12px; }
         @media (min-width: 768px) { .container { padding: 20px 24px; } }
 
@@ -123,37 +94,10 @@
         .btn-success:hover:not(:disabled) { background: #229954; }
         .btn-danger { background: #e74c3c; color: #fff; }
         .btn-danger:hover:not(:disabled) { background: #c0392b; }
-        .btn-purple { background: #9b59b6; color: #fff; }
-        .btn-purple:hover:not(:disabled) { background: #8e44ad; }
-        .btn-orange { background: #e67e22; color: #fff; }
-        .btn-orange:hover:not(:disabled) { background: #d35400; }
-        .btn-outline { background: #fff; color: #555; border: 1px solid #ccc; }
-        .btn-outline:hover:not(:disabled) { background: #f5f5f5; }
         .btn-small { padding: 6px 12px; font-size: 12px; }
-        .btn-warning { background: #f39c12; color: #fff; }
-        .btn-warning:hover:not(:disabled) { background: #d68910; }
 
         select { padding: 10px 12px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; background: #fff; width: 100%; }
         select:disabled { background: #f5f5f5; cursor: not-allowed; }
-
-        .action-row { display: flex; flex-direction: column; gap: 10px; }
-        @media (min-width: 600px) {
-            .action-row { flex-direction: row; align-items: center; flex-wrap: wrap; }
-            .action-row select { width: auto; min-width: 280px; }
-        }
-
-        .choice-grid { display: grid; grid-template-columns: 1fr; gap: 8px; margin: 12px 0; }
-        @media (min-width: 600px) { .choice-grid { grid-template-columns: repeat(2, 1fr); } }
-        @media (min-width: 900px) { .choice-grid { grid-template-columns: repeat(3, 1fr); } }
-
-        .choice-btn {
-            padding: 12px 16px; background: #f8f9fa; border: 2px solid #e1e8ed; border-radius: 8px;
-            font-size: 13px; text-align: left; cursor: pointer; transition: all 0.15s; word-break: break-word;
-        }
-        .choice-btn:hover { border-color: #3498db; background: #e8f4fd; }
-        .choice-btn:active { transform: scale(0.98); }
-
-        .nav-buttons { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 
         .table-container { overflow-x: auto; -webkit-overflow-scrolling: touch; }
         table { width: 100%; border-collapse: collapse; min-width: 400px; }
@@ -161,10 +105,6 @@
         td { padding: 8px 12px; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
         tr:hover { background: #fafbfc; }
         .table-scroll { max-height: 400px; overflow-y: auto; }
-
-        .indicator { width: 10px; height: 10px; border-radius: 50%; background: #ccc; display: inline-block; }
-        .indicator.active { background: #27ae60; animation: pulse 1s infinite; }
-        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }
 
         .changes-log { max-height: 200px; overflow-y: auto; background: #f8f9fa; border: 1px solid #e1e8ed; border-radius: 6px; margin-bottom: 12px; font-size: 12px; }
         .change-item { padding: 6px 12px; border-bottom: 1px solid #eee; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -175,16 +115,6 @@
         .change-arrow { color: #999; }
         .change-new { color: #27ae60; font-weight: 600; }
 
-        .vehicle-info-bar { display: none; background: #f8f9fa; padding: 10px 16px; border-bottom: 1px solid #e1e8ed; font-size: 12px; color: #666; flex-wrap: wrap; gap: 16px; }
-        .vehicle-info-bar.show { display: flex; }
-        .vehicle-info-bar span { font-weight: 600; color: #333; }
-
-        .context-panel { background: #f0f8ff; border: 1px solid #b8daff; border-radius: 8px; padding: 12px 16px; margin-bottom: 12px; }
-        .context-panel .context-title { font-weight: 600; color: #004085; margin-bottom: 8px; }
-        .context-panel .context-item { display: flex; gap: 8px; font-size: 13px; margin-bottom: 4px; }
-        .context-panel .context-label { color: #666; }
-        .context-panel .context-value { font-weight: 600; color: #2c3e50; }
-
         .agent-badge { display: inline-block; padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; }
         .agent-badge.available { background: #d4edda; color: #155724; }
         .agent-badge.unavailable { background: #f8d7da; color: #721c24; }
@@ -193,25 +123,17 @@
         .dtc-count-badge { background: #e74c3c; color: #fff; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 700; }
         .dtc-count-badge.zero { background: #27ae60; }
 
-        .stats-row { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; margin-bottom: 12px; }
-        .stats-row .stat { display: flex; gap: 4px; align-items: center; }
-        .stats-row .stat-label { color: #888; }
-        .stats-row .stat-value { font-weight: 600; color: #2c3e50; }
-        .stats-row .stat-value.fast { color: #27ae60; }
-
         .results-panel { background: #fff; border-radius: 8px; border: 1px solid #e1e8ed; overflow: hidden; }
         .results-header { padding: 12px 16px; border-bottom: 1px solid #e1e8ed; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
         .results-header h3 { font-size: 14px; }
 
-        @media print {
-            .top-bar, .tab-bar, .nav-buttons, button { display: none !important; }
-            .container { padding: 0; }
-        }
+        .start-section { text-align: center; padding: 20px; }
+        .start-section .hint { margin-bottom: 16px; }
     </style>
 </head>
 <body>
     <div class="top-bar">
-        <h1>GDS2 Automation</h1>
+        <h1>GDS2 Data Viewer</h1>
         <div class="state-row">
             <div class="info-item">
                 <span class="label">Page:</span>
@@ -232,110 +154,85 @@
         </div>
     </div>
 
-    <div class="tab-bar">
-        <div class="tab active" data-tab="nav" onclick="switchTab('nav')">Navigation</div>
-        <div class="tab" data-tab="agent" onclick="switchTab('agent')">Agent</div>
-    </div>
+    <div class="container">
+        <div id="v-loading" class="alert alert-loading"></div>
+        <div id="v-error" class="alert alert-error"></div>
+        <div id="v-success" class="alert alert-success"></div>
 
-    <!-- ===== Interactive Navigation Tab ===== -->
-    <div id="tab-nav" class="tab-content active">
-        <div class="container">
-            <div id="nav-loading" class="alert alert-loading"></div>
-            <div id="nav-error" class="alert alert-error"></div>
-            <div id="nav-success" class="alert alert-success"></div>
-
-            <div id="nav-context" class="context-panel">
-                <div class="context-title">Navigation Context</div>
-                <div class="context-item"><span class="context-label">Page:</span><span id="nav-page" class="context-value">-</span></div>
-                <div class="context-item"><span class="context-label">Device:</span><span id="nav-device" class="context-value">-</span></div>
-                <div class="context-item"><span class="context-label">Module:</span><span id="nav-module" class="context-value">-</span></div>
-                <div class="context-item"><span class="context-label">Category:</span><span id="nav-category" class="context-value">-</span></div>
+        <div class="panel">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+                <h3 style="margin:0;">Connection</h3>
+                <span id="v-agent-badge" class="agent-badge unavailable">CHECKING</span>
             </div>
 
-            <div class="nav-buttons">
-                <button id="nav-start-btn" class="btn-success" onclick="navStart()">Start</button>
-                <button id="nav-back-btn" class="btn-outline" onclick="navBack()" disabled>Back</button>
-                <button id="nav-home-btn" class="btn-outline" onclick="navHome()" disabled>Home</button>
-                <button id="nav-refresh-btn" class="btn-outline" onclick="navRefresh()">Refresh</button>
+            <!-- Step 1: Start button (shown initially) -->
+            <div id="v-start-section" class="start-section">
+                <div class="hint">Click Start to scan for available VCI devices. GDS2 must be at Main Menu.</div>
+                <button id="v-start-btn" class="btn-success" onclick="viewerStart()">Start</button>
             </div>
 
-            <div id="nav-action-panel" class="panel">
-                <h3 id="nav-action-title">Step-by-Step Navigation</h3>
-                <div id="nav-action-hint" class="hint">Click "Start" to begin interactive navigation.</div>
-                <div id="nav-action-content"></div>
-            </div>
-
-            <div id="nav-choices-panel" class="panel" style="display:none;">
-                <h3 id="nav-choices-title">Available Choices</h3>
-                <div id="nav-choices-grid" class="choice-grid"></div>
-            </div>
-
-            <div id="nav-report-panel" class="results-panel" style="display:none;">
-                <div class="results-header">
-                    <h3 id="nav-report-title">Report Data</h3>
-                    <button class="btn-outline btn-small" onclick="downloadNavCSV()">Download CSV</button>
+            <!-- Step 2: Device selection (shown after Start, stays visible) -->
+            <div id="v-device-section" style="display:none;">
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px;">
+                    <div>
+                        <label style="font-size:12px;color:#888;display:block;margin-bottom:4px;">Device</label>
+                        <div style="display:flex;gap:6px;">
+                            <select id="v-device" style="flex:1;" onchange="viewerDeviceChanged()">
+                                <option value="">-- Select Device --</option>
+                            </select>
+                            <button id="v-change-device-btn" class="btn-small btn-primary" onclick="viewerChangeDevice()" title="Change Device">⟳</button>
+                        </div>
+                    </div>
+                    <div>
+                        <label style="font-size:12px;color:#888;display:block;margin-bottom:4px;">Module</label>
+                        <select id="v-module" style="width:100%;" disabled onchange="viewerSelectModule()">
+                            <option value="">-- Select Module --</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label style="font-size:12px;color:#888;display:block;margin-bottom:4px;">Data Category</label>
+                        <select id="v-data" style="width:100%;" disabled onchange="viewerSelectData()">
+                            <option value="">-- Select Data --</option>
+                        </select>
+                    </div>
                 </div>
-                <div id="nav-vehicle-info" class="vehicle-info-bar"></div>
-                <div class="table-container"><div id="nav-report-data" class="table-scroll"></div></div>
+            </div>
+
+            <div id="v-status-bar" style="background:#f8f9fa;border:1px solid #e1e8ed;border-radius:6px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;">
+                <span id="v-status-text" style="font-weight:600;font-size:13px;">Click Start to begin</span>
+                <button id="v-stop-btn" class="btn-danger btn-small" style="display:none;" onclick="viewerStop()">Stop</button>
             </div>
         </div>
-    </div>
 
-    <!-- ===== Agent Tab ===== -->
-    <div id="tab-agent" class="tab-content">
-        <div class="container">
-            <div id="a-loading" class="alert alert-loading"></div>
-            <div id="a-error" class="alert alert-error"></div>
-            <div id="a-success" class="alert alert-success"></div>
+        <div id="v-dtc-panel" class="panel" style="display:none;">
+            <h3>DTCs <span id="v-dtc-count" class="dtc-count-badge zero">0</span></h3>
+            <div class="table-container"><div id="v-dtc-data" class="table-scroll"></div></div>
+        </div>
 
-            <div class="panel" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-                <span style="font-weight:600;">Agent:</span>
-                <span id="agent-badge" class="agent-badge unavailable">CHECKING...</span>
-                <span id="agent-path" style="color:#888;font-size:12px;flex:1;"></span>
-                <button class="btn-outline btn-small" onclick="checkAgentStatus()">Refresh</button>
-                <button class="btn-danger btn-small" onclick="resetAgent()">Reset</button>
+        <div id="v-params-panel" class="results-panel" style="display:none;">
+            <div class="results-header">
+                <h3>Live Parameters</h3>
+                <span style="font-size:12px;color:#888;">Changes: <strong id="v-change-count">0</strong></span>
             </div>
-            <div class="panel">
-                <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
-                    <span id="agent-indicator" class="indicator"></span>
-                    <span id="agent-status-text" style="font-weight:600;">Stopped</span>
-                </div>
-                <h3>Agent-based High-Frequency Monitoring</h3>
-                <div class="hint">Navigate to Data Display page first, then start monitoring.</div>
-                <div id="agent-page-hint" class="hint" style="color:#e74c3c;display:none;">Current page is not Data Display. Please navigate there first.</div>
-                <div class="action-row" style="margin-bottom:12px;">
-                    <select id="agent-interval" style="width:auto;min-width:140px;">
-                        <option value="100" selected>100ms</option><option value="200">200ms</option><option value="500">500ms</option><option value="1000">1s</option>
-                    </select>
-                    <button id="agent-start-btn" class="btn-orange" disabled>Start Monitoring</button>
-                    <button id="agent-stop-btn" class="btn-danger" disabled>Stop</button>
-                </div>
-                <div class="stats-row">
-                    <div class="stat"><span class="stat-label">Snapshots:</span><span id="agent-snapshots" class="stat-value">0</span></div>
-                    <div class="stat"><span class="stat-label">Params:</span><span id="agent-param-count" class="stat-value">0</span></div>
-                    <div class="stat"><span class="stat-label">Changes:</span><span id="agent-change-count" class="stat-value">0</span></div>
-                    <div class="stat"><span class="stat-label">Latency:</span><span id="agent-latency" class="stat-value fast">-</span></div>
-                </div>
-            </div>
-            <div id="agent-changes-log" class="changes-log" style="display:none;">
+            <div class="table-container"><div id="v-params-data" class="table-scroll"></div></div>
+        </div>
+
+        <div id="v-changes-panel" class="panel" style="display:none;">
+            <h3 style="margin-bottom:8px;">Parameter Changes</h3>
+            <div id="v-changes-log" class="changes-log">
                 <div class="change-item" style="background:#f0f0f0;font-weight:600;"><span class="change-time">Time</span><span class="change-param">Parameter</span><span>Old → New</span></div>
-            </div>
-            <div id="agent-results" class="results-panel" style="display:none;">
-                <div class="results-header"><h3>Live Parameters</h3><span id="agent-page-context" style="font-size:12px;color:#888;"></span></div>
-                <div class="table-container"><div id="agent-data-container" class="table-scroll"></div></div>
             </div>
         </div>
     </div>
 
     <script>
-    let navState = { page: 'unknown', choices: [], context: {} };
+    function escapeHtml(str) {
+        if (!str) return '';
+        return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
 
-    function switchTab(tab) {
-        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-        document.querySelector(`.tab[data-tab="${tab}"]`).classList.add('active');
-        document.getElementById('tab-' + tab).classList.add('active');
-        if (tab === 'agent') checkAgentStatus();
+    function escapeAttr(str) {
+        return String(str).replace(/&/g,'&amp;').replace(/'/g,'&#39;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
 
     function updateStateDisplay(page, context) {
@@ -347,487 +244,406 @@
         document.getElementById('current-data').textContent = context?.data_category || '-';
     }
 
-    // ===== Navigation API calls =====
-    async function navCall(url, opts) {
+    // ===== Data Viewer =====
+    const viewer = {
+        device: null, module: null, dataCategory: null,
+        devices: [], modules: [], dataCategories: [],
+        monitoring: false,
+        eventSource: null, totalChanges: 0,
+        deviceConnected: false,
+    };
+
+    async function viewerCheckAgent() {
         try {
-            const response = await fetch(url, opts || { method: 'POST' });
-            return await response.json();
-        } catch (e) {
-            return { success: false, error: e.message };
-        }
-    }
-
-    async function navStart() {
-        showNavLoading('Checking agent connection...');
-        handleNavResult(await navCall('/api/nav/start'), 'Started');
-    }
-
-    async function navBack() {
-        showNavLoading('Going back...');
-        handleNavResult(await navCall('/api/nav/back'), 'Went back');
-    }
-
-    async function navHome() {
-        showNavLoading('Going to Main Menu...');
-        handleNavResult(await navCall('/api/nav/home'), 'Returned to Main Menu');
-    }
-
-    async function navRefresh() {
-        showNavLoading('Refreshing...');
-        handleNavResult(await navCall('/api/nav/choices', { method: 'GET' }), 'Refreshed');
-    }
-
-    async function navDiagnostics() {
-        showNavLoading('Clicking Diagnostics...');
-        handleNavResult(await navCall('/api/nav/diagnostics'), 'Clicked Diagnostics');
-    }
-
-    async function navSelectDevice(device) {
-        showNavLoading('Selecting device: ' + device);
-        handleNavResult(await navCall('/api/nav/select_device', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ device })
-        }), 'Selected device: ' + device);
-    }
-
-    async function navDisconnectDevice() {
-        showNavLoading('Disconnecting device...');
-        handleNavResult(await navCall('/api/nav/disconnect_device'), 'Device disconnected');
-    }
-
-    async function navOpenDeviceSelector() {
-        showNavLoading('Opening Device Explorer...');
-        handleNavResult(await navCall('/api/nav/open_device_selector'), 'Device Explorer opened');
-    }
-
-    async function navEnter() {
-        showNavLoading('Clicking Enter...');
-        handleNavResult(await navCall('/api/nav/enter'), 'Entered');
-    }
-
-    async function navModuleDiagnostics() {
-        showNavLoading('Selecting Module Diagnostics...');
-        handleNavResult(await navCall('/api/nav/module_diagnostics'), 'Selected Module Diagnostics');
-    }
-
-    async function navSelectModule(module) {
-        showNavLoading('Selecting module...');
-        handleNavResult(await navCall('/api/nav/select_module', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ module })
-        }), 'Selected: ' + module);
-    }
-
-    function navSelectModuleFromDropdown() {
-        const select = document.getElementById('module-select');
-        if (select && select.value) {
-            navSelectModule(select.value);
-        } else {
-            showNavError('Please select a module');
-        }
-    }
-
-    async function navDataDisplay() {
-        showNavLoading('Selecting Data Display...');
-        handleNavResult(await navCall('/api/nav/data_display'), 'Selected Data Display');
-    }
-
-    async function navSelectDataCategory(category) {
-        showNavLoading('Selecting: ' + category);
-        handleNavResult(await navCall('/api/nav/select_data_category', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ data_category: category })
-        }), 'Selected: ' + category);
-    }
-
-    function navSelectDataCategoryFromDropdown() {
-        const select = document.getElementById('data-category-select');
-        if (select && select.value) {
-            navSelectDataCategory(select.value);
-        } else {
-            showNavError('Please select a data category');
-        }
-    }
-
-    async function navSelectSubCategory(sub) {
-        showNavLoading('Selecting: ' + sub);
-        handleNavResult(await navCall('/api/nav/select_sub_category', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ sub_category: sub })
-        }), 'Selected: ' + sub);
-    }
-
-    function navSelectSubCategoryFromDropdown() {
-        const select = document.getElementById('sub-category-select');
-        if (select && select.value) {
-            navSelectSubCategory(select.value);
-        } else {
-            showNavError('Please select a sub-category');
-        }
-    }
-
-    async function navGetDTCs() {
-        showNavLoading('Fetching DTCs from Agent...');
-        const data = await navCall('/api/agent/dtcs', { method: 'GET' });
-        hideNavLoading();
-        if (data.success) {
-            showNavSuccess('DTCs fetched: ' + (data.dtcs?.length || 0) + ' found');
-            displayAgentDTCs(data);
-        } else {
-            showNavError(data.error || 'Failed to fetch DTCs');
-        }
-    }
-
-    async function navStartMonitoring() {
-        showNavLoading('Starting Agent monitoring...');
-        const interval_ms = 100;
-        const data = await navCall('/api/agent/monitor/start', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ interval_ms })
-        });
-        hideNavLoading();
-        if (data.success) {
-            showNavSuccess('Monitoring started');
-            // Switch to Agent tab to see live data
-            switchTab('agent');
-        } else {
-            showNavError(data.error || 'Failed to start monitoring');
-        }
-    }
-
-    function autoStartAgentIfNeeded() {
-        // Check if agent is available and auto-fetch initial data
-        fetch('/api/agent/status').then(r => r.json()).then(d => {
+            const d = await (await fetch('/api/agent/status')).json();
+            const b = document.getElementById('v-agent-badge');
             if (d.agent && d.agent.available) {
-                // Agent is available, fetch initial DTCs
-                fetch('/api/agent/dtcs').then(r => r.json()).then(data => {
-                    if (data.success && data.dtcs && data.dtcs.length > 0) {
-                        displayAgentDTCs(data);
-                    }
-                }).catch(() => {});
-            }
-        }).catch(() => {});
-    }
-
-    function displayAgentDTCs(data) {
-        const panel = document.getElementById('nav-report-panel');
-        const title = document.getElementById('nav-report-title');
-        const vi = document.getElementById('nav-vehicle-info');
-        const rd = document.getElementById('nav-report-data');
-
-        vi.classList.remove('show');
-
-        if (data.dtcs && data.dtcs.length > 0) {
-            title.textContent = 'DTCs (' + data.dtcs.length + ')';
-            rd.innerHTML = '<table><thead><tr><th>Code</th><th>Module</th><th>Description</th><th>Status</th></tr></thead><tbody>' +
-                data.dtcs.map(d => '<tr><td><strong>'+(d.code||'')+'</strong></td><td>'+(d.control_module||d.module||'')+'</td><td>'+(d.description||'')+'</td><td>'+(d.status||'')+'</td></tr>').join('') +
-                '</tbody></table>';
-            panel.style.display = 'block';
-        } else {
-            title.textContent = 'DTCs';
-            rd.innerHTML = '<div style="text-align:center;padding:40px;color:#27ae60;font-weight:600;">No DTCs found</div>';
-            panel.style.display = 'block';
-        }
-    }
-
-    function handleNavResult(data, successMsg) {
-        hideNavLoading();
-        if (data.success) {
-            navState = { page: data.page, choices: data.choices || [], context: data.context || {}, selected: data.selected };
-            updateStateDisplay(data.page, data.context);
-            updateNavUI();
-            showNavSuccess(successMsg);
-        } else {
-            showNavError(data.error || 'Operation failed');
-            if (data.choices) { navState.choices = data.choices; updateNavUI(); }
-        }
-    }
-
-    function escapeAttr(str) {
-        return String(str).replace(/&/g,'&amp;').replace(/'/g,'&#39;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    }
-
-    function updateNavUI() {
-        const page = navState.page;
-        const choices = navState.choices || [];
-        const ctx = navState.context || {};
-
-        document.getElementById('nav-page').textContent = page ? page.replace(/_/g, ' ') : '-';
-        document.getElementById('nav-device').textContent = ctx.device || '-';
-        document.getElementById('nav-module').textContent = ctx.module || '-';
-        document.getElementById('nav-category').textContent = ctx.data_category || '-';
-
-        document.getElementById('nav-back-btn').disabled = (page === 'main_menu' || page === 'unknown');
-        document.getElementById('nav-home-btn').disabled = (page === 'main_menu' || page === 'unknown');
-
-        const aTitle = document.getElementById('nav-action-title');
-        const aHint = document.getElementById('nav-action-hint');
-        const aCont = document.getElementById('nav-action-content');
-        const cPanel = document.getElementById('nav-choices-panel');
-        const cTitle = document.getElementById('nav-choices-title');
-        const cGrid = document.getElementById('nav-choices-grid');
-
-        aCont.innerHTML = '';
-        cGrid.innerHTML = '';
-        cPanel.style.display = 'none';
-
-        switch (page) {
-            case 'main_menu':
-                aTitle.textContent = 'Main Menu';
-                aHint.textContent = 'Click Diagnostics to begin.';
-                aCont.innerHTML = '<button class="btn-primary" onclick="navDiagnostics()">Diagnostics</button>';
-                break;
-
-            case 'device_explorer':
-                aTitle.textContent = 'Device Explorer';
-                aHint.textContent = 'Select a VCI device to connect.';
-                if (choices.length > 0) {
-                    cTitle.textContent = 'Available Devices';
-                    cGrid.innerHTML = choices.map(d =>
-                        `<button class="choice-btn" onclick="navSelectDevice('${escapeAttr(d)}')">${d}</button>`
-                    ).join('');
-                    cPanel.style.display = 'block';
-                }
-                break;
-
-            case 'vehicle_selection':
-                aTitle.textContent = 'Vehicle Selection';
-                aHint.textContent = 'Device: ' + (ctx.device || 'Not connected') + '. Click Enter to proceed.';
-                aCont.innerHTML = '<button class="btn-success" onclick="navEnter()">Enter</button> ' +
-                    '<button class="btn-warning" onclick="navDisconnectDevice()">Disconnect</button> ' +
-                    '<button class="btn-outline" onclick="navOpenDeviceSelector()">Select Device</button>';
-                break;
-
-            case 'diagnostics_menu':
-                aTitle.textContent = 'Diagnostics Menu';
-                aHint.textContent = 'Select Module Diagnostics to view modules.';
-                aCont.innerHTML = '<button class="btn-primary" onclick="navModuleDiagnostics()">Module Diagnostics</button>';
-                break;
-
-            case 'module_list':
-                aTitle.textContent = 'Module List';
-                aHint.textContent = 'Select a module to diagnose.';
-                if (choices.length > 0) {
-                    aCont.innerHTML = '<div class="action-row">' +
-                        '<select id="module-select" style="flex:1;max-width:400px;">' +
-                        '<option value="">-- Select Module (' + choices.length + ') --</option>' +
-                        choices.map(m => `<option value="${escapeAttr(m)}">${m}</option>`).join('') +
-                        '</select>' +
-                        '<button class="btn-primary" onclick="navSelectModuleFromDropdown()">Select</button>' +
-                        '</div>';
-                }
-                break;
-
-            case 'module_submenu':
-                aTitle.textContent = 'Module Submenu';
-                aHint.textContent = 'Module: ' + (ctx.module || '-') + '. Select Data Display.';
-                aCont.innerHTML = '<button class="btn-primary" onclick="navDataDisplay()">Data Display</button>';
-                break;
-
-            case 'data_list':
-                aTitle.textContent = 'Data Categories';
-                aHint.textContent = 'Module: ' + (ctx.module || '-') + '. Select a data category.';
-                if (choices.length > 0) {
-                    aCont.innerHTML = '<div class="action-row">' +
-                        '<select id="data-category-select" style="flex:1;max-width:400px;">' +
-                        '<option value="">-- Select Data Category (' + choices.length + ') --</option>' +
-                        choices.map(c => `<option value="${escapeAttr(c)}">${c}</option>`).join('') +
-                        '</select>' +
-                        '<button class="btn-primary" onclick="navSelectDataCategoryFromDropdown()">Select</button>' +
-                        '</div>';
-                }
-                break;
-
-            case 'sub_data_list':
-                aTitle.textContent = 'Sub-Categories';
-                aHint.textContent = 'Category: ' + (ctx.data_category || '-') + '. Select a sub-category.';
-                if (choices.length > 0) {
-                    aCont.innerHTML = '<div class="action-row">' +
-                        '<select id="sub-category-select" style="flex:1;max-width:400px;">' +
-                        '<option value="">-- Select Sub-Category (' + choices.length + ') --</option>' +
-                        choices.map(s => `<option value="${escapeAttr(s)}">${s}</option>`).join('') +
-                        '</select>' +
-                        '<button class="btn-primary" onclick="navSelectSubCategoryFromDropdown()">Select</button>' +
-                        '</div>';
-                }
-                break;
-
-            case 'data_display':
-                aTitle.textContent = 'Data Display';
-                aHint.textContent = 'Viewing: ' + (ctx.data_category || '-') + '. Java Agent is monitoring data.';
-                aCont.innerHTML = '<button class="btn-success" onclick="navGetDTCs()">Get DTCs</button> <button class="btn-purple" onclick="navStartMonitoring()">Start Monitoring</button>';
-                // Auto-start agent monitoring when arriving at data_display
-                autoStartAgentIfNeeded();
-                break;
-
-            default:
-                aTitle.textContent = 'Navigation';
-                aHint.textContent = 'Click Start to begin or Refresh to detect current page.';
-        }
-    }
-
-    function displayNavReport(data) {
-        const panel = document.getElementById('nav-report-panel');
-        const title = document.getElementById('nav-report-title');
-        const vi = document.getElementById('nav-vehicle-info');
-        const rd = document.getElementById('nav-report-data');
-        let html = '';
-
-        if (data.vehicle_info) {
-            vi.innerHTML = 'VIN: <span>' + (data.vehicle_info.vin||'-') + '</span> Make: <span>' + (data.vehicle_info.make||'-') + '</span> Model: <span>' + (data.vehicle_info.model||'-') + '</span> Year: <span>' + (data.vehicle_info.year||'-') + '</span>';
-            vi.classList.add('show');
-        } else { vi.classList.remove('show'); }
-
-        if (data.dtc_list && data.dtc_list.length > 0) {
-            title.textContent = 'DTCs (' + data.dtc_list.length + ')';
-            html += '<table><thead><tr><th>Code</th><th>Module</th><th>Description</th><th>Status</th></tr></thead><tbody>' +
-                data.dtc_list.map(d => '<tr><td><strong>'+d.code+'</strong></td><td>'+d.module+'</td><td>'+d.description+'</td><td>'+d.status+'</td></tr>').join('') +
-                '</tbody></table>';
-        }
-        if (data.report_data && data.report_data.data_items && data.report_data.data_items.length > 0) {
-            if (!data.dtc_list || !data.dtc_list.length) title.textContent = 'Data Items (' + data.report_data.data_items.length + ')';
-            if (html) html += '<div style="height:16px;"></div>';
-            html += '<table><thead><tr><th>Parameter</th><th>Value</th><th>Units</th></tr></thead><tbody>' +
-                data.report_data.data_items.map(i => '<tr><td>'+i.parameter+'</td><td><strong>'+i.value+'</strong></td><td>'+i.units+'</td></tr>').join('') +
-                '</tbody></table>';
-        }
-        rd.innerHTML = html || '<div style="text-align:center;padding:40px;color:#999;">No data in report</div>';
-        panel.style.display = 'block';
-    }
-
-    function downloadNavCSV() {
-        const tables = document.querySelectorAll('#nav-report-data table');
-        if (!tables.length) return;
-        let csv = [];
-        tables.forEach(t => { for (let r of t.querySelectorAll('tr')) csv.push(Array.from(r.querySelectorAll('td,th')).map(c => '"'+c.textContent+'"').join(',')); csv.push(''); });
-        const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv.join('\n')], {type:'text/csv'})); a.download = 'gds2_report.csv'; a.click();
-    }
-
-    function showNavLoading(m) { const e=document.getElementById('nav-loading'); e.textContent=m; e.classList.add('show'); document.getElementById('nav-error').classList.remove('show'); document.getElementById('nav-success').classList.remove('show'); }
-    function hideNavLoading() { document.getElementById('nav-loading').classList.remove('show'); }
-    function showNavError(m) { const e=document.getElementById('nav-error'); e.textContent=m; e.classList.add('show'); hideNavLoading(); }
-    function showNavSuccess(m) { const e=document.getElementById('nav-success'); e.textContent=m; e.classList.add('show'); hideNavLoading(); setTimeout(()=>e.classList.remove('show'), 3000); }
-
-    // ===== Agent Tab =====
-    let agentES=null, agentActive=false;
-
-    async function resetAgent() {
-        try {
-            await fetch('/api/agent/reset', { method: 'POST' });
-            if (agentES) { agentES.close(); agentES = null; }
-            agentActive = false;
-            document.getElementById('agent-indicator').classList.remove('active');
-            document.getElementById('agent-status-text').textContent = 'Stopped';
-            document.getElementById('agent-start-btn').disabled = false;
-            document.getElementById('agent-stop-btn').disabled = true;
-            checkAgentStatus();
-        } catch (e) {
-            console.error('Reset failed:', e);
-        }
-    }
-
-    async function checkAgentStatus() {
-        try {
-            const [agentData, stateData] = await Promise.all([
-                fetch('/api/agent/status').then(r => r.json()),
-                fetch('/api/state').then(r => r.json())
-            ]);
-
-            const b = document.getElementById('agent-badge'), p = document.getElementById('agent-path');
-            const pageHint = document.getElementById('agent-page-hint');
-            const startBtn = document.getElementById('agent-start-btn');
-
-            const isDataDisplay = stateData.page === 'data_display';
-            const agentAvailable = agentData.agent && agentData.agent.available;
-            const isStreaming = agentData.streaming && agentData.streaming.running;
-
-            if (isStreaming) {
-                b.className = 'agent-badge streaming';
-                b.textContent = 'STREAMING';
-                startBtn.disabled = true;
-                pageHint.style.display = 'none';
-            } else if (agentAvailable) {
-                b.className = 'agent-badge available';
-                b.textContent = 'AVAILABLE';
-                p.textContent = 'v' + (agentData.agent.version || '1.0') + ' | ' + agentData.agent.age_seconds + 's ago';
-
-                if (isDataDisplay) {
-                    startBtn.disabled = false;
-                    pageHint.style.display = 'none';
-                } else {
-                    startBtn.disabled = true;
-                    pageHint.textContent = 'Current page: ' + (stateData.page || 'unknown').replace(/_/g, ' ') + '. Navigate to Data Display first.';
-                    pageHint.style.display = 'block';
-                }
+                b.className = 'agent-badge available'; b.textContent = 'AGENT OK';
             } else {
-                b.className = 'agent-badge unavailable';
-                b.textContent = 'NOT AVAILABLE';
-                startBtn.disabled = true;
-                p.textContent = agentData.agent?.path || '';
-                pageHint.style.display = 'none';
+                b.className = 'agent-badge unavailable'; b.textContent = 'NO AGENT';
             }
         } catch(e) {
-            document.getElementById('agent-badge').className = 'agent-badge unavailable';
-            document.getElementById('agent-badge').textContent = 'ERROR';
-            document.getElementById('agent-start-btn').disabled = true;
+            document.getElementById('v-agent-badge').className = 'agent-badge unavailable';
+            document.getElementById('v-agent-badge').textContent = 'ERROR';
         }
     }
 
-    document.getElementById('agent-start-btn').addEventListener('click', async () => {
-        const ms = parseInt(document.getElementById('agent-interval').value);
-        document.getElementById('a-loading').textContent='Starting monitoring...'; document.getElementById('a-loading').classList.add('show');
+    function viewerSetStatus(text, type) {
+        const el = document.getElementById('v-status-text');
+        el.textContent = text;
+        el.style.color = type === 'error' ? '#e74c3c' : type === 'monitoring' ? '#27ae60' : '#2c3e50';
+    }
+
+    function showViewerLoading(msg) {
+        const e = document.getElementById('v-loading'); e.textContent = msg; e.classList.add('show');
+        document.getElementById('v-error').classList.remove('show');
+    }
+    function hideViewerLoading() { document.getElementById('v-loading').classList.remove('show'); }
+    function showViewerError(msg) { const e = document.getElementById('v-error'); e.textContent = msg; e.classList.add('show'); hideViewerLoading(); }
+    function showViewerSuccess(msg) { const e = document.getElementById('v-success'); e.textContent = msg; e.classList.add('show'); hideViewerLoading(); setTimeout(()=>e.classList.remove('show'), 3000); }
+
+    async function viewerStart() {
+        showViewerLoading('Scanning for devices...');
+        viewerSetStatus('Navigating...', 'loading');
+        document.getElementById('v-start-btn').disabled = true;
+
         try {
-            const d = await (await fetch('/api/agent/monitor/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({interval_ms:ms})})).json();
+            const d = await (await fetch('/api/viewer/start', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({})
+            })).json();
+
             if (d.success) {
-                if(agentES)agentES.close(); agentES=new EventSource('/api/stream/events'); agentActive=true;
-                let totalChanges = 0;
-                agentES.addEventListener('snapshot', e => {
-                    const d=JSON.parse(e.data);
-                    document.getElementById('agent-snapshots').textContent=d.extraction_count||0;
-                    document.getElementById('agent-param-count').textContent=d.param_count||0;
-                    if(d.extraction_duration_ms!==undefined){
-                        const el=document.getElementById('agent-latency');
-                        el.textContent=d.extraction_duration_ms+'ms';
-                        el.className=d.extraction_duration_ms<50?'stat-value fast':'stat-value';
+                if (d.modules) {
+                    // Device already connected - start() navigated all the way to Module List
+                    viewer.deviceConnected = true;
+                    viewer.device = d.device || 'Connected Device';
+                    viewer.modules = d.modules;
+                    viewer.module = null;
+                    viewer.dataCategory = null;
+
+                    // Update device dropdown with connected device
+                    const deviceSel = document.getElementById('v-device');
+                    deviceSel.innerHTML = `<option value="${escapeAttr(viewer.device)}" selected>${viewer.device}</option>`;
+
+                    // Update module dropdown
+                    const moduleSel = document.getElementById('v-module');
+                    moduleSel.innerHTML = '<option value="">-- Select Module (' + viewer.modules.length + ') --</option>' +
+                        viewer.modules.map(m => `<option value="${escapeAttr(m)}">${m}</option>`).join('');
+                    moduleSel.disabled = false;
+
+                    document.getElementById('v-data').innerHTML = '<option value="">-- Select Data --</option>';
+                    document.getElementById('v-data').disabled = true;
+
+                    document.getElementById('v-start-section').style.display = 'none';
+                    document.getElementById('v-device-section').style.display = 'block';
+
+                    viewerSetStatus('Connected. Select a module.', '');
+                    showViewerSuccess('Device connected. ' + viewer.modules.length + ' modules found.');
+                    if (d.vin) viewerSetStatus('VIN: ' + d.vin + '. Select a module.', '');
+
+                    updateStateDisplay('module_list', { device: viewer.device, module: null, data_category: null });
+
+                } else if (d.devices && d.devices.length > 0) {
+                    // Device not connected - show device selection
+                    viewer.devices = d.devices;
+                    const sel = document.getElementById('v-device');
+                    sel.innerHTML = '<option value="">-- Select Device (' + d.devices.length + ') --</option>' +
+                        d.devices.map(dev => `<option value="${escapeAttr(dev)}">${dev}</option>`).join('');
+
+                    document.getElementById('v-start-section').style.display = 'none';
+                    document.getElementById('v-device-section').style.display = 'block';
+
+                    viewerSetStatus('Select a device to connect', '');
+                    showViewerSuccess('Found ' + d.devices.length + ' device(s)');
+                    updateStateDisplay('device_explorer', {});
+                } else {
+                    showViewerError('No devices found');
+                    viewerSetStatus('No devices found', 'error');
+                }
+            } else {
+                showViewerError(d.error || 'Start failed');
+                viewerSetStatus('Start failed', 'error');
+            }
+        } catch(e) {
+            showViewerError(e.message);
+            viewerSetStatus('Start failed', 'error');
+        }
+        document.getElementById('v-start-btn').disabled = false;
+    }
+
+    function viewerDeviceChanged() {
+        const device = document.getElementById('v-device').value;
+        if (!device) return;
+
+        // User selected a new device - connect to it
+        viewerConnectDevice(device);
+    }
+
+    async function viewerChangeDevice() {
+        showViewerLoading('Navigating to Device Explorer...');
+        viewerSetStatus('Opening Device Explorer...', 'loading');
+        document.getElementById('v-change-device-btn').disabled = true;
+        document.getElementById('v-device').disabled = true;
+        document.getElementById('v-module').disabled = true;
+        document.getElementById('v-data').disabled = true;
+        viewerStopSSE();
+
+        try {
+            const d = await (await fetch('/api/viewer/change_device', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({})
+            })).json();
+
+            if (d.success && d.devices && d.devices.length > 0) {
+                viewer.devices = d.devices;
+                viewer.deviceConnected = false;  // Reset so user must select
+
+                // Update device dropdown with all available devices
+                const sel = document.getElementById('v-device');
+                sel.innerHTML = '<option value="">-- Select Device (' + d.devices.length + ') --</option>' +
+                    d.devices.map(dev => `<option value="${escapeAttr(dev)}">${dev}</option>`).join('');
+                sel.disabled = false;
+
+                // Clear module and data selections
+                document.getElementById('v-module').innerHTML = '<option value="">-- Select Module --</option>';
+                document.getElementById('v-module').disabled = true;
+                document.getElementById('v-data').innerHTML = '<option value="">-- Select Data --</option>';
+                document.getElementById('v-data').disabled = true;
+
+                viewerSetStatus('Select a device to connect', '');
+                showViewerSuccess('Found ' + d.devices.length + ' device(s). Select one to connect.');
+                updateStateDisplay('device_explorer', { device: null, module: null, data_category: null });
+            } else {
+                showViewerError(d.error || 'No devices found');
+                viewerSetStatus('Failed to get devices', 'error');
+                document.getElementById('v-device').disabled = false;
+            }
+        } catch(e) {
+            showViewerError(e.message);
+            viewerSetStatus('Failed to get devices', 'error');
+            document.getElementById('v-device').disabled = false;
+        }
+        document.getElementById('v-change-device-btn').disabled = false;
+    }
+
+    async function viewerConnectDevice(device) {
+        // If device_connected is true, we don't need a device selection
+        if (!viewer.deviceConnected && !device) {
+            return;
+        }
+
+        viewerStopSSE();
+        viewer.monitoring = false;
+        document.getElementById('v-stop-btn').style.display = 'none';
+
+        // Disable all dropdowns during connection
+        document.getElementById('v-device').disabled = true;
+        document.getElementById('v-module').disabled = true;
+        document.getElementById('v-data').disabled = true;
+
+        showViewerLoading('Connecting to ' + (device || 'device') + '...');
+        viewerSetStatus('Connecting to device...', 'loading');
+
+        try {
+            const d = await (await fetch('/api/viewer/connect', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ device: device || 'default' })
+            })).json();
+
+            if (d.success) {
+                // Use device name from response, fallback to request device
+                viewer.device = d.device || device || 'Connected';
+                viewer.modules = d.modules || [];
+                viewer.module = null;
+                viewer.dataCategory = null;
+
+                // Update device dropdown to show current device
+                const deviceSel = document.getElementById('v-device');
+                if (viewer.device && viewer.device !== 'Connected') {
+                    // Make sure the device is in the dropdown and selected
+                    let found = false;
+                    for (let opt of deviceSel.options) {
+                        if (opt.value === viewer.device) {
+                            opt.selected = true;
+                            found = true;
+                        } else {
+                            opt.selected = false;
+                        }
                     }
-                    if(d.parameters){
-                        document.getElementById('agent-data-container').innerHTML='<table><thead><tr><th>Module</th><th>Parameter</th><th>Value</th><th>Unit</th></tr></thead><tbody>'+d.parameters.map(p=>'<tr><td>'+(p.module||'')+'</td><td>'+(p.name||'')+'</td><td><strong>'+(p.value||'')+'</strong></td><td>'+(p.unit||'')+'</td></tr>').join('')+'</tbody></table>';
+                    // If not found, add it
+                    if (!found && viewer.device) {
+                        deviceSel.innerHTML = `<option value="${escapeAttr(viewer.device)}" selected>${viewer.device}</option>`;
                     }
-                    // Handle param changes embedded in snapshot
-                    if(d.param_changes && d.param_changes.length > 0){
-                        totalChanges += d.param_changes.length;
-                        document.getElementById('agent-change-count').textContent = totalChanges;
-                        const log=document.getElementById('agent-changes-log');
-                        d.param_changes.forEach(c=>{
-                            const i=document.createElement('div');
-                            i.className='change-item';
-                            i.innerHTML='<span class="change-time">'+new Date(c.timestamp).toLocaleTimeString()+'</span><span class="change-param">'+c.parameter+'</span><span class="change-old">'+c.old_value+'</span><span class="change-arrow">→</span><span class="change-new">'+c.new_value+'</span>';
-                            // Insert after header (children[0]), or append if no header
-                            log.insertBefore(i, log.children[1] || null);
-                            while(log.children.length>101) log.removeChild(log.lastChild);
-                        });
-                    }
+                }
+
+                const sel = document.getElementById('v-module');
+                sel.innerHTML = '<option value="">-- Select Module (' + viewer.modules.length + ') --</option>' +
+                    viewer.modules.map(m => `<option value="${escapeAttr(m)}">${m}</option>`).join('');
+                sel.disabled = false;
+
+                document.getElementById('v-data').innerHTML = '<option value="">-- Select Data --</option>';
+                document.getElementById('v-data').disabled = true;
+
+                // Re-enable device dropdown so user can switch devices
+                document.getElementById('v-device').disabled = false;
+
+                viewerSetStatus('Connected. Select a module.', '');
+                showViewerSuccess('Connected. ' + viewer.modules.length + ' modules found.');
+                if (d.vin) viewerSetStatus('VIN: ' + d.vin + '. Select a module.', '');
+
+                updateStateDisplay('module_list', { device: viewer.device, module: null, data_category: null });
+            } else {
+                showViewerError(d.error || 'Connection failed');
+                viewerSetStatus('Connection failed', 'error');
+                // Re-enable device dropdown on error
+                document.getElementById('v-device').disabled = false;
+            }
+        } catch(e) {
+            showViewerError(e.message);
+            viewerSetStatus('Connection failed', 'error');
+            // Re-enable device dropdown on error
+            document.getElementById('v-device').disabled = false;
+        }
+    }
+
+    // Keep old function name for backward compatibility
+    async function viewerConnect() {
+        const device = document.getElementById('v-device')?.value || '';
+        viewerConnectDevice(device);
+    }
+
+    async function viewerSelectModule() {
+        const module = document.getElementById('v-module').value;
+        if (!module) return;
+
+        showViewerLoading('Selecting ' + module + '...');
+        viewerSetStatus('Scanning data categories...', 'loading');
+        document.getElementById('v-data').disabled = true;
+        viewerStopSSE();
+
+        try {
+            const d = await (await fetch('/api/viewer/select_module', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ module })
+            })).json();
+
+            if (d.success) {
+                viewer.module = module;
+                viewer.dataCategories = d.data_categories || [];
+                viewer.dataCategory = null;
+
+                const sel = document.getElementById('v-data');
+                sel.innerHTML = '<option value="">-- Select Data (' + viewer.dataCategories.length + ') --</option>' +
+                    viewer.dataCategories.map(c => `<option value="${escapeAttr(c)}">${c}</option>`).join('');
+                sel.disabled = false;
+
+                viewerSetStatus('Ready. Select a data category.', '');
+                showViewerSuccess(viewer.dataCategories.length + ' data categories found.');
+
+                updateStateDisplay('data_list', { device: viewer.device, module, data_category: null });
+            } else {
+                showViewerError(d.error || 'Failed');
+                viewerSetStatus('Module selection failed', 'error');
+            }
+        } catch(e) {
+            showViewerError(e.message);
+            viewerSetStatus('Module selection failed', 'error');
+        }
+    }
+
+    async function viewerSelectData() {
+        const dataCategory = document.getElementById('v-data').value;
+        if (!dataCategory) return;
+
+        showViewerLoading('Selecting ' + dataCategory + '...');
+        viewerSetStatus('Navigating to Data Display...', 'loading');
+        viewerStopSSE();
+
+        try {
+            const d = await (await fetch('/api/viewer/select_data', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ data_category: dataCategory })
+            })).json();
+
+            if (d.success) {
+                viewer.dataCategory = dataCategory;
+                viewer.monitoring = true;
+                viewer.totalChanges = 0;
+
+                document.getElementById('v-change-count').textContent = '0';
+                viewerSetStatus('Monitoring ' + dataCategory, 'monitoring');
+                showViewerSuccess('Monitoring started');
+                document.getElementById('v-stop-btn').style.display = '';
+                document.getElementById('v-params-panel').style.display = 'block';
+                document.getElementById('v-changes-panel').style.display = 'block';
+
+                updateStateDisplay('data_display', { device: viewer.device, module: viewer.module, data_category: dataCategory });
+
+                // Start SSE for agent streaming
+                await fetch('/api/agent/monitor/start', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ interval_ms: 100 })
                 });
-                agentES.onerror = () => { if(agentActive) setTimeout(()=>{if(agentActive){if(agentES)agentES.close();agentES=new EventSource('/api/stream/events');}},2000); };
-                document.getElementById('agent-start-btn').disabled=true; document.getElementById('agent-stop-btn').disabled=false;
-                document.getElementById('agent-indicator').classList.add('active'); document.getElementById('agent-status-text').textContent='Running';
-                document.getElementById('agent-changes-log').style.display='block'; document.getElementById('agent-results').style.display='block';
-                document.getElementById('agent-badge').className='agent-badge streaming'; document.getElementById('agent-badge').textContent='STREAMING';
-                document.getElementById('agent-page-hint').style.display='none';
-                document.getElementById('a-loading').classList.remove('show');
-            } else { document.getElementById('a-error').textContent=d.error||'Failed'; document.getElementById('a-error').classList.add('show'); document.getElementById('a-loading').classList.remove('show'); }
-        } catch(e) { document.getElementById('a-error').textContent=e.message; document.getElementById('a-error').classList.add('show'); document.getElementById('a-loading').classList.remove('show'); }
-    });
+                viewerStartSSE();
+            } else {
+                showViewerError(d.error || 'Failed');
+                viewerSetStatus('Data selection failed', 'error');
+            }
+        } catch(e) {
+            showViewerError(e.message);
+            viewerSetStatus('Data selection failed', 'error');
+        }
+    }
 
-    document.getElementById('agent-stop-btn').addEventListener('click', async () => {
-        if(agentES){agentES.close();agentES=null;} agentActive=false;
-        await fetch('/api/stream/stop',{method:'POST'});
-        document.getElementById('agent-start-btn').disabled=false; document.getElementById('agent-stop-btn').disabled=true;
-        document.getElementById('agent-indicator').classList.remove('active'); document.getElementById('agent-status-text').textContent='Stopped';
-        checkAgentStatus();
-    });
+    function viewerStartSSE() {
+        viewerStopSSE();
+        viewer.eventSource = new EventSource('/api/stream/events');
 
-    updateNavUI();
+        viewer.eventSource.addEventListener('snapshot', e => {
+            const d = JSON.parse(e.data);
+
+            if (d.parameters) {
+                document.getElementById('v-params-data').innerHTML =
+                    '<table><thead><tr><th>Module</th><th>Parameter</th><th>Value</th><th>Unit</th></tr></thead><tbody>' +
+                    d.parameters.map(p => '<tr><td>'+escapeHtml(p.module)+'</td><td>'+escapeHtml(p.name)+'</td><td><strong>'+escapeHtml(p.value)+'</strong></td><td>'+escapeHtml(p.unit)+'</td></tr>').join('') +
+                    '</tbody></table>';
+            }
+
+            if (d.dtcs) {
+                const panel = document.getElementById('v-dtc-panel');
+                const badge = document.getElementById('v-dtc-count');
+                badge.textContent = d.dtcs.length;
+                badge.className = d.dtcs.length > 0 ? 'dtc-count-badge' : 'dtc-count-badge zero';
+                if (d.dtcs.length > 0) {
+                    document.getElementById('v-dtc-data').innerHTML =
+                        '<table><thead><tr><th>Code</th><th>Module</th><th>Description</th><th>Status</th></tr></thead><tbody>' +
+                        d.dtcs.map(dt => '<tr><td><strong>'+escapeHtml(dt.code)+'</strong></td><td>'+escapeHtml(dt.control_module||dt.module)+'</td><td>'+escapeHtml(dt.description)+'</td><td>'+escapeHtml(dt.status)+'</td></tr>').join('') +
+                        '</tbody></table>';
+                    panel.style.display = 'block';
+                } else { panel.style.display = 'none'; }
+            }
+
+            if (d.param_changes && d.param_changes.length > 0) {
+                viewer.totalChanges += d.param_changes.length;
+                document.getElementById('v-change-count').textContent = viewer.totalChanges;
+                const log = document.getElementById('v-changes-log');
+                d.param_changes.forEach(c => {
+                    const i = document.createElement('div');
+                    i.className = 'change-item';
+                    i.innerHTML = '<span class="change-time">' + escapeHtml(new Date(c.timestamp).toLocaleTimeString()) + '</span>' +
+                        '<span class="change-param">' + escapeHtml(c.parameter) + '</span>' +
+                        '<span class="change-old">' + escapeHtml(c.old_value) + '</span>' +
+                        '<span class="change-arrow">\u2192</span>' +
+                        '<span class="change-new">' + escapeHtml(c.new_value) + '</span>';
+                    log.insertBefore(i, log.children[1] || null);
+                    while (log.children.length > 101) log.removeChild(log.lastChild);
+                });
+            }
+        });
+
+        viewer.eventSource.onerror = () => {
+            if (viewer.monitoring) setTimeout(() => { if (viewer.monitoring) viewerStartSSE(); }, 2000);
+        };
+    }
+
+    function viewerStopSSE() {
+        if (viewer.eventSource) { viewer.eventSource.close(); viewer.eventSource = null; }
+    }
+
+    async function viewerStop() {
+        viewerStopSSE();
+        viewer.monitoring = false;
+        document.getElementById('v-stop-btn').style.display = 'none';
+        viewerSetStatus('Stopped', '');
+
+        try {
+            await fetch('/api/viewer/stop', { method: 'POST' });
+            await fetch('/api/stream/stop', { method: 'POST' });
+        } catch(e) {}
+    }
+
+    viewerCheckAgent();
     </script>
 </body>
 </html>

@@ -312,6 +312,44 @@ class NavigationController:
                 context=self._context.copy(),
             )
 
+    def go_vehicle_menu(self) -> NavigationResult:
+        """
+        Click Vehicle Menu to jump directly to Diagnostics Menu.
+
+        Faster than going Home when changing modules.
+        """
+        try:
+            result = self.nav.click_button("Vehicle Menu")
+            if not result.get('success'):
+                return NavigationResult(
+                    success=False,
+                    page=self._current_page,
+                    error="Vehicle Menu not available",
+                    context=self._context.copy(),
+                )
+
+            time.sleep(2)
+
+            new_page = self.detect_current_page()
+            self._context["module"] = None
+            self._context["data_category"] = None
+            self._context["sub_category"] = None
+
+            return NavigationResult(
+                success=True,
+                page=new_page,
+                context=self._context.copy(),
+            )
+
+        except Exception as e:
+            logger.exception(f"go_vehicle_menu failed: {e}")
+            return NavigationResult(
+                success=False,
+                page=self._current_page,
+                error=str(e),
+                context=self._context.copy(),
+            )
+
     def navigate_to(self, target: GDS2Page) -> NavigationResult:
         """
         Navigate from current page to target page.

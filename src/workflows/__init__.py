@@ -5,16 +5,19 @@ Agent-based navigation: Java Agent for GDS2 main window + Windows API for Device
 - No PyAutoGUI, OpenCV, or screen dependency
 
 Available workflows:
-- InteractiveWorkflow: Step-by-step interactive navigation (recommended)
-- ReadDataDisplayAgentWorkflow: Legacy monolithic workflow
+- DataViewerWorkflow: Simplified 3-dropdown UI (Device → Module → Data) - PRIMARY
+- InteractiveWorkflow: Step-by-step interactive navigation (internal)
+- ReadDataDisplayAgentWorkflow: CLI workflow wrapper
 
 Note: Legacy PyAutoGUI-based workflows have been archived to archive/src/workflows/
 """
 
 from .interactive_workflow import InteractiveWorkflow
 from .read_data_display_agent import ReadDataDisplayAgentWorkflow
+from .data_viewer import DataViewerWorkflow
 
 __all__ = [
+    "DataViewerWorkflow",
     "InteractiveWorkflow",
     "ReadDataDisplayAgentWorkflow",
 ]
@@ -22,6 +25,7 @@ __all__ = [
 
 # Workflow registry for easy access
 WORKFLOW_REGISTRY = {
+    "data_viewer": DataViewerWorkflow,
     "interactive": InteractiveWorkflow,
     "read_data_display": ReadDataDisplayAgentWorkflow,
 }
