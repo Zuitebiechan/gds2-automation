@@ -214,6 +214,70 @@ class ProtocolEncoder:
         """编码心跳响应"""
         return Message(MsgType.HEARTBEAT_ACK, sequence, b'').encode()
 
+    @staticmethod
+    def encode_start_filter_req(channel_id: int, filter_type: int,
+                                mask_msg: Optional[dict], pattern_msg: Optional[dict],
+                                flow_control_msg: Optional[dict],
+                                sequence: int = 0) -> bytes:
+        """编码 PassThruStartMsgFilter 请求"""
+        body = struct.pack('>II', channel_id, filter_type)
+
+        # 编码每个可选的消息 (标志 + 消息内容)
+        for msg in [mask_msg, pattern_msg, flow_control_msg]:
+            if msg is not None:
+                data = msg.get('data', b'')
+                body += struct.pack('>B', 1)  # present flag
+                body += struct.pack('>IIIII',
+                                   msg.get('protocol_id', 0),
+                                   msg.get('rx_status', 0),
+                                   msg.get('tx_flags', 0),
+                                   msg.get('timestamp', 0),
+                                   len(data))
+                body += data
+            else:
+                body += struct.pack('>B', 0)  # not present
+
+        return Message(MsgType.START_FILTER_REQ, sequence, body).encode()
+
+    @staticmethod
+    def encode_start_filter_rsp(return_code: int, filter_id: int,
+                                sequence: int = 0) -> bytes:
+        """编码 PassThruStartMsgFilter 响应"""
+        body = struct.pack('>II', return_code, filter_id)
+        return Message(MsgType.START_FILTER_RSP, sequence, body).encode()
+
+    @staticmethod
+    def encode_stop_filter_req(channel_id: int, filter_id: int,
+                               sequence: int = 0) -> bytes:
+        """编码 PassThruStopMsgFilter 请求"""
+        body = struct.pack('>II', channel_id, filter_id)
+        return Message(MsgType.STOP_FILTER_REQ, sequence, body).encode()
+
+    @staticmethod
+    def encode_stop_filter_rsp(return_code: int, sequence: int = 0) -> bytes:
+        """编码 PassThruStopMsgFilter 响应"""
+        body = struct.pack('>I', return_code)
+        return Message(MsgType.STOP_FILTER_RSP, sequence, body).encode()
+
+    @staticmethod
+    def encode_ioctl_req(channel_id: int, ioctl_id: int,
+                        input_data: Optional[bytes] = None,
+                        sequence: int = 0) -> bytes:
+        """编码 PassThruIoctl 请求"""
+        input_bytes = input_data if input_data else b''
+        body = struct.pack('>III', channel_id, ioctl_id, len(input_bytes))
+        body += input_bytes
+        return Message(MsgType.IOCTL_REQ, sequence, body).encode()
+
+    @staticmethod
+    def encode_ioctl_rsp(return_code: int, output_data: Optional[bytes] = None,
+                        sequence: int = 0) -> bytes:
+        """编码 PassThruIoctl 响应"""
+        output_bytes = output_data if output_data else b''
+        body = struct.pack('>II', return_code, len(output_bytes))
+        body += output_bytes
+        return Message(MsgType.IOCTL_RSP, sequence, body).encode()
+
 
 class ProtocolDecoder:
     """协议解码器"""
@@ -341,3 +405,65 @@ class ProtocolDecoder:
         dll_ver = body[84:164].rstrip(b'\x00').decode('utf-8', errors='replace')
         api_ver = body[164:244].rstrip(b'\x00').decode('utf-8', errors='replace')
         return return_code, fw_ver, dll_ver, api_ver
+
+    @staticmethod
+    def decode_start_filter_req(body: bytes) -> Tuple[int, int, Optional[dict],
+                                                       Optional[dict], Optional[dict]]:
+        """
+        解码 PassThruStartMsgFilter 请求
+
+        返回: (channel_id, filter_type, mask_msg, pattern_msg, flow_control_msg)
+        """
+        channel_id, filter_type = struct.unpack('>II', body[:8])
+        offset = 8
+
+        messages = []
+        for _ in range(3):  # mask, pattern, flow_control
+            present = body[offset]
+            offset += 1
+            if present:
+                protocol_id, rx_status, tx_flags, timestamp, data_size = \
+                    struct.unpack('>IIIII', body[offset:offset+20])
+                offset += 20
+                data = body[offset:offset+data_size]
+                offset += data_size
+                messages.append({
+                    'protocol_id': protocol_id,
+                    'rx_status': rx_status,
+                    'tx_flags': tx_flags,
+                    'timestamp': timestamp,
+                    'data': data
+                })
+            else:
+                messages.append(None)
+
+        return channel_id, filter_type, messages[0], messages[1], messages[2]
+
+    @staticmethod
+    def decode_start_filter_rsp(body: bytes) -> Tuple[int, int]:
+        """解码 PassThruStartMsgFilter 响应，返回 (return_code, filter_id)"""
+        return struct.unpack('>II', body[:8])
+
+    @staticmethod
+    def decode_stop_filter_req(body: bytes) -> Tuple[int, int]:
+        """解码 PassThruStopMsgFilter 请求，返回 (channel_id, filter_id)"""
+        return struct.unpack('>II', body[:8])
+
+    @staticmethod
+    def decode_stop_filter_rsp(body: bytes) -> int:
+        """解码 PassThruStopMsgFilter 响应，返回 return_code"""
+        return struct.unpack('>I', body[:4])[0]
+
+    @staticmethod
+    def decode_ioctl_req(body: bytes) -> Tuple[int, int, Optional[bytes]]:
+        """解码 PassThruIoctl 请求，返回 (channel_id, ioctl_id, input_data)"""
+        channel_id, ioctl_id, input_len = struct.unpack('>III', body[:12])
+        input_data = body[12:12+input_len] if input_len > 0 else None
+        return channel_id, ioctl_id, input_data
+
+    @staticmethod
+    def decode_ioctl_rsp(body: bytes) -> Tuple[int, Optional[bytes]]:
+        """解码 PassThruIoctl 响应，返回 (return_code, output_data)"""
+        return_code, output_len = struct.unpack('>II', body[:8])
+        output_data = body[8:8+output_len] if output_len > 0 else None
+        return return_code, output_data

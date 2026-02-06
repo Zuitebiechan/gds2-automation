@@ -353,6 +353,44 @@ class J2534Driver:
         """停止消息过滤器"""
         return self.dll.PassThruStopMsgFilter(channel_id, filter_id)
 
+    def ioctl(self, channel_id: int, ioctl_id: int,
+              input_data: Optional[bytes] = None) -> Tuple[int, Optional[bytes]]:
+        """
+        执行 IOCTL 操作
+
+        Returns: (return_code, output_data)
+        """
+        # READ_VBATT (0x03) - 读取电池电压
+        if ioctl_id == 0x03:
+            voltage = c_ulong()
+            ret = self.dll.PassThruIoctl(channel_id, ioctl_id, None, byref(voltage))
+            if ret == STATUS_NOERROR:
+                # 返回电压值 (毫伏)
+                import struct
+                return ret, struct.pack('>I', voltage.value)
+            return ret, None
+
+        # CLEAR_TX_BUFFER (0x07), CLEAR_RX_BUFFER (0x08), etc.
+        elif ioctl_id in (0x07, 0x08, 0x09, 0x0A):
+            ret = self.dll.PassThruIoctl(channel_id, ioctl_id, None, None)
+            return ret, None
+
+        # SET_CONFIG (0x02) - 设置配置参数
+        elif ioctl_id == 0x02 and input_data:
+            # 简化实现：直接调用，不解析参数
+            ret = self.dll.PassThruIoctl(channel_id, ioctl_id, None, None)
+            return ret, None
+
+        # GET_CONFIG (0x01) - 获取配置参数
+        elif ioctl_id == 0x01:
+            ret = self.dll.PassThruIoctl(channel_id, ioctl_id, None, None)
+            return ret, None
+
+        # 其他 IOCTL - 直接调用
+        else:
+            ret = self.dll.PassThruIoctl(channel_id, ioctl_id, None, None)
+            return ret, None
+
     @property
     def is_open(self) -> bool:
         """设备是否已打开"""

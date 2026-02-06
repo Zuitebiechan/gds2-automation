@@ -196,6 +196,28 @@ class ReverseProxyClient:
             ret, fw, dll, api = self.driver.read_version(device_id)
             return ProtocolEncoder.encode_read_version_rsp(ret, fw, dll, api, sequence)
 
+        elif msg_type == MsgType.START_FILTER_REQ:
+            channel_id, filter_type, mask_msg, pattern_msg, flow_msg = \
+                ProtocolDecoder.decode_start_filter_req(body)
+            logger.info(f"PassThruStartMsgFilter(ch={channel_id}, type={filter_type})")
+            ret, filter_id = self.driver.start_msg_filter(
+                channel_id, filter_type, mask_msg, pattern_msg, flow_msg
+            )
+            logger.info(f"  -> ret={ret}, filter_id={filter_id}")
+            return ProtocolEncoder.encode_start_filter_rsp(ret, filter_id, sequence)
+
+        elif msg_type == MsgType.STOP_FILTER_REQ:
+            channel_id, filter_id = ProtocolDecoder.decode_stop_filter_req(body)
+            logger.info(f"PassThruStopMsgFilter(ch={channel_id}, filter={filter_id})")
+            ret = self.driver.stop_msg_filter(channel_id, filter_id)
+            return ProtocolEncoder.encode_stop_filter_rsp(ret, sequence)
+
+        elif msg_type == MsgType.IOCTL_REQ:
+            channel_id, ioctl_id, input_data = ProtocolDecoder.decode_ioctl_req(body)
+            logger.info(f"PassThruIoctl(ch={channel_id}, ioctl={ioctl_id})")
+            ret, output_data = self.driver.ioctl(channel_id, ioctl_id, input_data)
+            return ProtocolEncoder.encode_ioctl_rsp(ret, output_data, sequence)
+
         else:
             logger.warning(f"未知消息类型: {msg_type:#x}")
             return None
