@@ -5,6 +5,7 @@ J2534 驱动封装
 """
 
 import os
+import struct
 import ctypes
 from ctypes import (
     POINTER, Structure, byref,
@@ -13,6 +14,9 @@ from ctypes import (
 )
 from typing import Optional, Tuple, List
 from dataclasses import dataclass
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -61,6 +65,29 @@ ERROR_NAMES = {
     ERR_BUFFER_EMPTY: "ERR_BUFFER_EMPTY",
     ERR_DEVICE_IN_USE: "ERR_DEVICE_IN_USE",
     ERR_INVALID_DEVICE_ID: "ERR_INVALID_DEVICE_ID",
+}
+
+# IOCTL IDs
+IOCTL_GET_CONFIG = 0x01
+IOCTL_SET_CONFIG = 0x02
+IOCTL_READ_VBATT = 0x03
+IOCTL_FIVE_BAUD_INIT = 0x04
+IOCTL_FAST_INIT = 0x05
+IOCTL_CLEAR_TX_BUFFER = 0x07
+IOCTL_CLEAR_RX_BUFFER = 0x08
+IOCTL_CLEAR_PERIODIC_MSGS = 0x09
+IOCTL_CLEAR_MSG_FILTERS = 0x0A
+
+IOCTL_NAMES = {
+    IOCTL_GET_CONFIG: "GET_CONFIG",
+    IOCTL_SET_CONFIG: "SET_CONFIG",
+    IOCTL_READ_VBATT: "READ_VBATT",
+    IOCTL_FIVE_BAUD_INIT: "FIVE_BAUD_INIT",
+    IOCTL_FAST_INIT: "FAST_INIT",
+    IOCTL_CLEAR_TX_BUFFER: "CLEAR_TX_BUFFER",
+    IOCTL_CLEAR_RX_BUFFER: "CLEAR_RX_BUFFER",
+    IOCTL_CLEAR_PERIODIC_MSGS: "CLEAR_PERIODIC_MSGS",
+    IOCTL_CLEAR_MSG_FILTERS: "CLEAR_MSG_FILTERS",
 }
 
 # 协议类型
@@ -124,6 +151,22 @@ class PASSTHRU_MSG(Structure):
         for i, b in enumerate(data):
             msg.Data[i] = b
         return msg
+
+
+class SCONFIG(Structure):
+    """J2534 配置参数结构"""
+    _fields_ = [
+        ("Parameter", c_ulong),
+        ("Value", c_ulong),
+    ]
+
+
+class SCONFIG_LIST(Structure):
+    """J2534 配置参数列表"""
+    _fields_ = [
+        ("NumOfParams", c_ulong),
+        ("ConfigPtr", POINTER(SCONFIG)),
+    ]
 
 
 # ============================================================================
@@ -358,38 +401,125 @@ class J2534Driver:
         """
         执行 IOCTL 操作
 
+        input_data format for SET_CONFIG/GET_CONFIG:
+            4 bytes: NumOfParams (big-endian)
+            N * 8 bytes: Parameter(4) + Value(4) (big-endian)
+
         Returns: (return_code, output_data)
         """
+        ioctl_label = IOCTL_NAMES.get(ioctl_id, f"0x{ioctl_id:02x}")
+        logger.info(f"ioctl(ch={channel_id}, id={ioctl_label})")
+
+        # SET_CONFIG (0x02) - 设置配置参数
+        if ioctl_id == IOCTL_SET_CONFIG and input_data:
+            return self._ioctl_set_config(channel_id, input_data)
+
+        # GET_CONFIG (0x01) - 获取配置参数
+        if ioctl_id == IOCTL_GET_CONFIG and input_data:
+            return self._ioctl_get_config(channel_id, input_data)
+
         # READ_VBATT (0x03) - 读取电池电压
-        if ioctl_id == 0x03:
+        if ioctl_id == IOCTL_READ_VBATT:
             voltage = c_ulong()
             ret = self.dll.PassThruIoctl(channel_id, ioctl_id, None, byref(voltage))
             if ret == STATUS_NOERROR:
-                # 返回电压值 (毫伏)
-                import struct
                 return ret, struct.pack('>I', voltage.value)
             return ret, None
 
         # CLEAR_TX_BUFFER (0x07), CLEAR_RX_BUFFER (0x08), etc.
-        elif ioctl_id in (0x07, 0x08, 0x09, 0x0A):
-            ret = self.dll.PassThruIoctl(channel_id, ioctl_id, None, None)
-            return ret, None
-
-        # SET_CONFIG (0x02) - 设置配置参数
-        elif ioctl_id == 0x02 and input_data:
-            # 简化实现：直接调用，不解析参数
-            ret = self.dll.PassThruIoctl(channel_id, ioctl_id, None, None)
-            return ret, None
-
-        # GET_CONFIG (0x01) - 获取配置参数
-        elif ioctl_id == 0x01:
+        if ioctl_id in (IOCTL_CLEAR_TX_BUFFER, IOCTL_CLEAR_RX_BUFFER,
+                        IOCTL_CLEAR_PERIODIC_MSGS, IOCTL_CLEAR_MSG_FILTERS):
             ret = self.dll.PassThruIoctl(channel_id, ioctl_id, None, None)
             return ret, None
 
         # 其他 IOCTL - 直接调用
-        else:
-            ret = self.dll.PassThruIoctl(channel_id, ioctl_id, None, None)
-            return ret, None
+        ret = self.dll.PassThruIoctl(channel_id, ioctl_id, None, None)
+        return ret, None
+
+    def _ioctl_set_config(self, channel_id: int,
+                          input_data: bytes) -> Tuple[int, Optional[bytes]]:
+        """SET_CONFIG: 将序列化的参数写入真实 DLL"""
+        if len(input_data) < 4:
+            logger.error(f"SET_CONFIG: input_data too short: {len(input_data)}")
+            return ERR_FAILED, None
+
+        num_params = struct.unpack('>I', input_data[:4])[0]
+        expected_len = 4 + num_params * 8
+        if len(input_data) < expected_len:
+            logger.error(f"SET_CONFIG: input_data too short: {len(input_data)} < {expected_len}")
+            return ERR_FAILED, None
+
+        params = []
+        offset = 4
+        for _ in range(num_params):
+            param_id, value = struct.unpack('>II', input_data[offset:offset + 8])
+            params.append((param_id, value))
+            offset += 8
+
+        # 构建 SCONFIG_LIST
+        config_array = (SCONFIG * num_params)()
+        for i, (param_id, value) in enumerate(params):
+            config_array[i].Parameter = param_id
+            config_array[i].Value = value
+            logger.info(f"  SET param=0x{param_id:04x} value={value}")
+
+        config_list = SCONFIG_LIST()
+        config_list.NumOfParams = num_params
+        config_list.ConfigPtr = ctypes.cast(config_array, POINTER(SCONFIG))
+
+        ret = self.dll.PassThruIoctl(
+            channel_id, IOCTL_SET_CONFIG, byref(config_list), None
+        )
+        logger.info(f"  SET_CONFIG -> {self.get_error_name(ret)}")
+        return ret, None
+
+    def _ioctl_get_config(self, channel_id: int,
+                          input_data: bytes) -> Tuple[int, Optional[bytes]]:
+        """GET_CONFIG: 从真实 DLL 读取配置参数"""
+        if len(input_data) < 4:
+            logger.error(f"GET_CONFIG: input_data too short: {len(input_data)}")
+            return ERR_FAILED, None
+
+        num_params = struct.unpack('>I', input_data[:4])[0]
+        expected_len = 4 + num_params * 8
+        if len(input_data) < expected_len:
+            logger.error(f"GET_CONFIG: input_data too short: {len(input_data)} < {expected_len}")
+            return ERR_FAILED, None
+
+        param_ids = []
+        offset = 4
+        for _ in range(num_params):
+            param_id, _ = struct.unpack('>II', input_data[offset:offset + 8])
+            param_ids.append(param_id)
+            offset += 8
+
+        # 构建 SCONFIG_LIST (Parameter 填入 ID, Value 由 DLL 填充)
+        config_array = (SCONFIG * num_params)()
+        for i, param_id in enumerate(param_ids):
+            config_array[i].Parameter = param_id
+            config_array[i].Value = 0
+
+        config_list = SCONFIG_LIST()
+        config_list.NumOfParams = num_params
+        config_list.ConfigPtr = ctypes.cast(config_array, POINTER(SCONFIG))
+
+        ret = self.dll.PassThruIoctl(
+            channel_id, IOCTL_GET_CONFIG, byref(config_list), None
+        )
+
+        if ret == STATUS_NOERROR:
+            # 序列化结果: NumOfParams + N * (Parameter + Value)
+            output = struct.pack('>I', num_params)
+            for i in range(num_params):
+                output += struct.pack('>II',
+                                      config_array[i].Parameter,
+                                      config_array[i].Value)
+                logger.info(f"  GET param=0x{config_array[i].Parameter:04x} "
+                          f"value={config_array[i].Value}")
+            return ret, output
+
+        logger.info(f"  GET_CONFIG -> {self.get_error_name(ret)}")
+        return ret, None
 
     @property
     def is_open(self) -> bool:

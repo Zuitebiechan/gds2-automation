@@ -11,15 +11,29 @@ VCI Proxy 反向连接服务器（运行在阿里云）
 
 import asyncio
 import struct
+import time
 import logging
 import argparse
 from typing import Optional
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s'
+    format='%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s',
+    datefmt='%H:%M:%S'
 )
 logger = logging.getLogger(__name__)
+
+# Message type names for logging
+MSG_NAMES = {
+    0x0001: "Open", 0x0002: "Close", 0x0003: "Connect", 0x0004: "Disconnect",
+    0x0005: "ReadMsgs", 0x0006: "WriteMsgs", 0x0007: "Ioctl",
+    0x0010: "StartFilter", 0x0011: "StopFilter",
+    0x0020: "ReadVersion", 0x0021: "GetLastError", 0x00FF: "Heartbeat",
+    0x8001: "Open_RSP", 0x8002: "Close_RSP", 0x8003: "Connect_RSP",
+    0x8004: "Disconnect_RSP", 0x8005: "ReadMsgs_RSP", 0x8006: "WriteMsgs_RSP",
+    0x8007: "Ioctl_RSP", 0x8010: "StartFilter_RSP", 0x8011: "StopFilter_RSP",
+    0x8020: "ReadVersion_RSP", 0x8021: "GetLastError_RSP", 0x80FF: "Heartbeat_ACK",
+}
 
 MAGIC = 0x4A325334
 HEADER_SIZE = 14
@@ -154,6 +168,9 @@ class ReverseProxyServer:
                 self.sequence += 1
                 new_seq = self.sequence
 
+                msg_name = MSG_NAMES.get(msg_type, f"0x{msg_type:04x}")
+                fwd_start = time.monotonic()
+
                 # 创建响应 Future
                 future = asyncio.get_event_loop().create_future()
                 self.response_futures[new_seq] = future
@@ -174,6 +191,7 @@ class ReverseProxyServer:
                 # 等待响应
                 try:
                     resp_type, resp_body = await asyncio.wait_for(future, timeout=30.0)
+                    fwd_ms = (time.monotonic() - fwd_start) * 1000
 
                     # 发送响应给客户端（使用原始 sequence）
                     resp_header = struct.pack('>IIHI', MAGIC,
@@ -181,10 +199,14 @@ class ReverseProxyServer:
                                              resp_type, sequence)
                     writer.write(resp_header + resp_body)
                     await writer.drain()
-                    logger.debug(f"响应已转发: type={resp_type:#x}, seq={sequence}")
+
+                    # Log with latency (skip noisy ReadMsgs BUFFER_EMPTY)
+                    if msg_type != 0x0005 or fwd_ms > 200:
+                        logger.info(f"[PROXY] {msg_name} seq={sequence} -> {fwd_ms:.1f}ms")
 
                 except asyncio.TimeoutError:
-                    logger.error("等待 VCI 响应超时")
+                    fwd_ms = (time.monotonic() - fwd_start) * 1000
+                    logger.error(f"[PROXY] {msg_name} seq={sequence} TIMEOUT after {fwd_ms:.0f}ms")
                     break
 
         except asyncio.IncompleteReadError:

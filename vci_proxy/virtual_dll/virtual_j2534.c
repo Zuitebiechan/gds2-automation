@@ -19,6 +19,7 @@
 #include "j2534.h"
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -47,6 +48,8 @@
 #define MSG_STOP_FILTER_RSP     0x8011
 #define MSG_READ_VERSION_REQ    0x0020
 #define MSG_READ_VERSION_RSP    0x8020
+#define MSG_GET_LAST_ERROR_REQ  0x0021
+#define MSG_GET_LAST_ERROR_RSP  0x8021
 #define MSG_HEARTBEAT           0x00FF
 #define MSG_HEARTBEAT_ACK       0x80FF
 
@@ -54,12 +57,107 @@
 static const char* SERVER_HOST = "127.0.0.1";
 static const int SERVER_PORT = 9001;
 
+// Socket recv timeout (ms) - prevents indefinite blocking
+#define SOCKET_RECV_TIMEOUT_MS  30000
+
 // Global state
 static SOCKET g_socket = INVALID_SOCKET;
 static BOOL g_initialized = FALSE;
 static unsigned long g_sequence = 0;
 static char g_last_error[256] = {0};
 static CRITICAL_SECTION g_cs;
+
+// Logging
+static FILE* g_log_file = NULL;
+static LARGE_INTEGER g_perf_freq;
+
+// ============================================================================
+// Logging
+// ============================================================================
+
+static void log_init(void) {
+    char log_path[MAX_PATH];
+    char* userprofile = getenv("USERPROFILE");
+    if (userprofile) {
+        sprintf_s(log_path, sizeof(log_path), "%s\\gds2-data\\vci_proxy_dll.log", userprofile);
+    } else {
+        strcpy_s(log_path, sizeof(log_path), "C:\\vci_proxy_dll.log");
+    }
+
+    g_log_file = fopen(log_path, "a");
+    QueryPerformanceFrequency(&g_perf_freq);
+
+    if (g_log_file) {
+        fprintf(g_log_file, "\n========== DLL Loaded ==========\n");
+        fflush(g_log_file);
+    }
+}
+
+static void log_close(void) {
+    if (g_log_file) {
+        fprintf(g_log_file, "========== DLL Unloaded ==========\n");
+        fclose(g_log_file);
+        g_log_file = NULL;
+    }
+}
+
+static double get_time_ms(void) {
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    return (double)now.QuadPart / (double)g_perf_freq.QuadPart * 1000.0;
+}
+
+static void log_msg(const char* fmt, ...) {
+    if (!g_log_file) return;
+
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+
+    fprintf(g_log_file, "%02d:%02d:%02d.%03d | ",
+            st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(g_log_file, fmt, args);
+    va_end(args);
+
+    fprintf(g_log_file, "\n");
+    fflush(g_log_file);
+}
+
+static const char* ioctl_name(unsigned long id) {
+    switch (id) {
+        case GET_CONFIG: return "GET_CONFIG";
+        case SET_CONFIG: return "SET_CONFIG";
+        case READ_VBATT: return "READ_VBATT";
+        case FIVE_BAUD_INIT: return "FIVE_BAUD_INIT";
+        case FAST_INIT: return "FAST_INIT";
+        case CLEAR_TX_BUFFER: return "CLEAR_TX_BUFFER";
+        case CLEAR_RX_BUFFER: return "CLEAR_RX_BUFFER";
+        case CLEAR_PERIODIC_MSGS: return "CLEAR_PERIODIC_MSGS";
+        case CLEAR_MSG_FILTERS: return "CLEAR_MSG_FILTERS";
+        default: return "UNKNOWN";
+    }
+}
+
+static const char* error_name(long code) {
+    switch (code) {
+        case STATUS_NOERROR: return "OK";
+        case ERR_NOT_SUPPORTED: return "NOT_SUPPORTED";
+        case ERR_INVALID_CHANNEL_ID: return "INVALID_CHANNEL_ID";
+        case ERR_NULL_PARAMETER: return "NULL_PARAMETER";
+        case ERR_FAILED: return "FAILED";
+        case ERR_DEVICE_NOT_CONNECTED: return "DEVICE_NOT_CONNECTED";
+        case ERR_TIMEOUT: return "TIMEOUT";
+        case ERR_BUFFER_EMPTY: return "BUFFER_EMPTY";
+        case ERR_BUFFER_OVERFLOW: return "BUFFER_OVERFLOW";
+        default: return "OTHER";
+    }
+}
+
+// ============================================================================
+// Network helpers
+// ============================================================================
 
 // Helper: Convert to big-endian (network byte order)
 static void write_uint32_be(unsigned char* buf, unsigned long val) {
@@ -85,18 +183,35 @@ static unsigned short read_uint16_be(const unsigned char* buf) {
     return ((unsigned short)buf[0] << 8) | (unsigned short)buf[1];
 }
 
+// Receive exactly n bytes (handles partial recv)
+static int recv_exact(SOCKET sock, char* buf, int len) {
+    int total = 0;
+    while (total < len) {
+        int received = recv(sock, buf + total, len - total, 0);
+        if (received <= 0) {
+            return received;
+        }
+        total += received;
+    }
+    return total;
+}
+
 // Initialize Winsock and connect to server
 static BOOL connect_to_server(void) {
     WSADATA wsaData;
     struct sockaddr_in serverAddr;
+    DWORD timeout;
 
     if (g_socket != INVALID_SOCKET) {
         return TRUE;  // Already connected
     }
 
+    log_msg("Connecting to %s:%d...", SERVER_HOST, SERVER_PORT);
+
     // Initialize Winsock
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
         sprintf_s(g_last_error, sizeof(g_last_error), "WSAStartup failed");
+        log_msg("ERROR: WSAStartup failed");
         return FALSE;
     }
 
@@ -104,8 +219,19 @@ static BOOL connect_to_server(void) {
     g_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (g_socket == INVALID_SOCKET) {
         sprintf_s(g_last_error, sizeof(g_last_error), "Socket creation failed");
+        log_msg("ERROR: Socket creation failed");
         WSACleanup();
         return FALSE;
+    }
+
+    // Set recv timeout to avoid indefinite blocking
+    timeout = SOCKET_RECV_TIMEOUT_MS;
+    setsockopt(g_socket, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
+
+    // Disable Nagle's algorithm for low latency
+    {
+        int flag = 1;
+        setsockopt(g_socket, IPPROTO_TCP, TCP_NODELAY, (const char*)&flag, sizeof(flag));
     }
 
     // Connect to server
@@ -117,13 +243,24 @@ static BOOL connect_to_server(void) {
     if (connect(g_socket, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
         sprintf_s(g_last_error, sizeof(g_last_error),
                   "Connection to %s:%d failed", SERVER_HOST, SERVER_PORT);
+        log_msg("ERROR: Connection failed (WSA=%d)", WSAGetLastError());
         closesocket(g_socket);
         g_socket = INVALID_SOCKET;
         WSACleanup();
         return FALSE;
     }
 
+    log_msg("Connected to server");
     return TRUE;
+}
+
+// Close socket and allow reconnection
+static void disconnect_socket(void) {
+    if (g_socket != INVALID_SOCKET) {
+        closesocket(g_socket);
+        g_socket = INVALID_SOCKET;
+        log_msg("Socket disconnected");
+    }
 }
 
 // Send message and receive response
@@ -133,7 +270,9 @@ static long send_recv(unsigned short msg_type, const unsigned char* body,
     unsigned char header[HEADER_SIZE];
     unsigned char resp_header[HEADER_SIZE];
     unsigned long total_len = HEADER_SIZE + body_len;
-    unsigned long magic, length, resp_type, sequence;
+    unsigned long magic, length;
+    unsigned short resp_type;
+    unsigned long sequence;
     int sent, received;
 
     EnterCriticalSection(&g_cs);
@@ -154,8 +293,8 @@ static long send_recv(unsigned short msg_type, const unsigned char* body,
     // Send header
     sent = send(g_socket, (const char*)header, HEADER_SIZE, 0);
     if (sent != HEADER_SIZE) {
-        closesocket(g_socket);
-        g_socket = INVALID_SOCKET;
+        log_msg("ERROR: Send header failed (sent=%d, WSA=%d)", sent, WSAGetLastError());
+        disconnect_socket();
         LeaveCriticalSection(&g_cs);
         return ERR_FAILED;
     }
@@ -164,18 +303,18 @@ static long send_recv(unsigned short msg_type, const unsigned char* body,
     if (body_len > 0) {
         sent = send(g_socket, (const char*)body, body_len, 0);
         if (sent != (int)body_len) {
-            closesocket(g_socket);
-            g_socket = INVALID_SOCKET;
+            log_msg("ERROR: Send body failed (sent=%d/%lu, WSA=%d)", sent, body_len, WSAGetLastError());
+            disconnect_socket();
             LeaveCriticalSection(&g_cs);
             return ERR_FAILED;
         }
     }
 
-    // Receive response header
-    received = recv(g_socket, (char*)resp_header, HEADER_SIZE, MSG_WAITALL);
+    // Receive response header (use recv_exact for reliability)
+    received = recv_exact(g_socket, (char*)resp_header, HEADER_SIZE);
     if (received != HEADER_SIZE) {
-        closesocket(g_socket);
-        g_socket = INVALID_SOCKET;
+        log_msg("ERROR: Recv header failed (received=%d, WSA=%d)", received, WSAGetLastError());
+        disconnect_socket();
         LeaveCriticalSection(&g_cs);
         return ERR_FAILED;
     }
@@ -187,6 +326,8 @@ static long send_recv(unsigned short msg_type, const unsigned char* body,
     sequence = read_uint32_be(resp_header + 10);
 
     if (magic != MAGIC) {
+        log_msg("ERROR: Invalid magic: %08lx", magic);
+        disconnect_socket();
         LeaveCriticalSection(&g_cs);
         return ERR_FAILED;
     }
@@ -195,13 +336,15 @@ static long send_recv(unsigned short msg_type, const unsigned char* body,
     *resp_len = length - HEADER_SIZE;
     if (*resp_len > 0) {
         if (*resp_len > max_resp_len) {
+            log_msg("ERROR: Response too large: %lu > %lu", *resp_len, max_resp_len);
+            disconnect_socket();
             LeaveCriticalSection(&g_cs);
             return ERR_BUFFER_OVERFLOW;
         }
-        received = recv(g_socket, (char*)resp_body, *resp_len, MSG_WAITALL);
+        received = recv_exact(g_socket, (char*)resp_body, *resp_len);
         if (received != (int)*resp_len) {
-            closesocket(g_socket);
-            g_socket = INVALID_SOCKET;
+            log_msg("ERROR: Recv body failed (received=%d/%lu, WSA=%d)", received, *resp_len, WSAGetLastError());
+            disconnect_socket();
             LeaveCriticalSection(&g_cs);
             return ERR_FAILED;
         }
@@ -217,12 +360,14 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
         case DLL_PROCESS_ATTACH:
             InitializeCriticalSection(&g_cs);
             g_initialized = TRUE;
+            log_init();
             break;
         case DLL_PROCESS_DETACH:
             if (g_socket != INVALID_SOCKET) {
                 closesocket(g_socket);
                 WSACleanup();
             }
+            log_close();
             DeleteCriticalSection(&g_cs);
             break;
     }
@@ -239,6 +384,7 @@ J2534_API long __stdcall PassThruOpen(void* pName, unsigned long* pDeviceID) {
     unsigned long resp_len;
     unsigned long body_len = 0;
     long ret;
+    double start_ms;
 
     if (pDeviceID == NULL) {
         return ERR_NULL_PARAMETER;
@@ -255,17 +401,24 @@ J2534_API long __stdcall PassThruOpen(void* pName, unsigned long* pDeviceID) {
         }
     }
 
+    start_ms = get_time_ms();
+    log_msg(">> PassThruOpen(name=%s)", pName ? (const char*)pName : "NULL");
+
     ret = send_recv(MSG_OPEN_REQ, body, body_len, resp, &resp_len, sizeof(resp));
     if (ret != STATUS_NOERROR) {
+        log_msg("<< PassThruOpen -> %s (%.1fms)", error_name(ret), get_time_ms() - start_ms);
         return ret;
     }
 
     if (resp_len >= 8) {
         unsigned long return_code = read_uint32_be(resp);
         *pDeviceID = read_uint32_be(resp + 4);
+        log_msg("<< PassThruOpen -> %s, deviceId=%lu (%.1fms)",
+                error_name(return_code), *pDeviceID, get_time_ms() - start_ms);
         return return_code;
     }
 
+    log_msg("<< PassThruOpen -> FAILED (short response, %.1fms)", get_time_ms() - start_ms);
     return ERR_FAILED;
 }
 
@@ -274,16 +427,21 @@ J2534_API long __stdcall PassThruClose(unsigned long DeviceID) {
     unsigned char resp[16];
     unsigned long resp_len;
     long ret;
+    double start_ms = get_time_ms();
+
+    log_msg(">> PassThruClose(deviceId=%lu)", DeviceID);
 
     write_uint32_be(body, DeviceID);
-
     ret = send_recv(MSG_CLOSE_REQ, body, 4, resp, &resp_len, sizeof(resp));
     if (ret != STATUS_NOERROR) {
+        log_msg("<< PassThruClose -> %s (%.1fms)", error_name(ret), get_time_ms() - start_ms);
         return ret;
     }
 
     if (resp_len >= 4) {
-        return read_uint32_be(resp);
+        long rc = read_uint32_be(resp);
+        log_msg("<< PassThruClose -> %s (%.1fms)", error_name(rc), get_time_ms() - start_ms);
+        return rc;
     }
 
     return ERR_FAILED;
@@ -298,10 +456,14 @@ J2534_API long __stdcall PassThruConnect(unsigned long DeviceID,
     unsigned char resp[16];
     unsigned long resp_len;
     long ret;
+    double start_ms = get_time_ms();
 
     if (pChannelID == NULL) {
         return ERR_NULL_PARAMETER;
     }
+
+    log_msg(">> PassThruConnect(dev=%lu, proto=%lu, flags=0x%lx, baud=%lu)",
+            DeviceID, ProtocolID, Flags, BaudRate);
 
     write_uint32_be(body, DeviceID);
     write_uint32_be(body + 4, ProtocolID);
@@ -310,12 +472,15 @@ J2534_API long __stdcall PassThruConnect(unsigned long DeviceID,
 
     ret = send_recv(MSG_CONNECT_REQ, body, 16, resp, &resp_len, sizeof(resp));
     if (ret != STATUS_NOERROR) {
+        log_msg("<< PassThruConnect -> %s (%.1fms)", error_name(ret), get_time_ms() - start_ms);
         return ret;
     }
 
     if (resp_len >= 8) {
         unsigned long return_code = read_uint32_be(resp);
         *pChannelID = read_uint32_be(resp + 4);
+        log_msg("<< PassThruConnect -> %s, channelId=%lu (%.1fms)",
+                error_name(return_code), *pChannelID, get_time_ms() - start_ms);
         return return_code;
     }
 
@@ -327,16 +492,21 @@ J2534_API long __stdcall PassThruDisconnect(unsigned long ChannelID) {
     unsigned char resp[16];
     unsigned long resp_len;
     long ret;
+    double start_ms = get_time_ms();
+
+    log_msg(">> PassThruDisconnect(ch=%lu)", ChannelID);
 
     write_uint32_be(body, ChannelID);
-
     ret = send_recv(MSG_DISCONNECT_REQ, body, 4, resp, &resp_len, sizeof(resp));
     if (ret != STATUS_NOERROR) {
+        log_msg("<< PassThruDisconnect -> %s (%.1fms)", error_name(ret), get_time_ms() - start_ms);
         return ret;
     }
 
     if (resp_len >= 4) {
-        return read_uint32_be(resp);
+        long rc = read_uint32_be(resp);
+        log_msg("<< PassThruDisconnect -> %s (%.1fms)", error_name(rc), get_time_ms() - start_ms);
+        return rc;
     }
 
     return ERR_FAILED;
@@ -352,6 +522,7 @@ J2534_API long __stdcall PassThruReadMsgs(unsigned long ChannelID,
     long ret;
     unsigned long return_code, num_msgs;
     unsigned long offset, i;
+    double start_ms = get_time_ms();
 
     if (pMsg == NULL || pNumMsgs == NULL) {
         return ERR_NULL_PARAMETER;
@@ -363,6 +534,8 @@ J2534_API long __stdcall PassThruReadMsgs(unsigned long ChannelID,
 
     ret = send_recv(MSG_READ_MSGS_REQ, body, 12, resp, &resp_len, sizeof(resp));
     if (ret != STATUS_NOERROR) {
+        log_msg("<< ReadMsgs(ch=%lu,t=%lu) -> %s (%.1fms)",
+                ChannelID, Timeout, error_name(ret), get_time_ms() - start_ms);
         return ret;
     }
 
@@ -393,6 +566,13 @@ J2534_API long __stdcall PassThruReadMsgs(unsigned long ChannelID,
     }
 
     *pNumMsgs = i;
+
+    // Only log non-trivial results (avoid flooding on BUFFER_EMPTY)
+    if (return_code != ERR_BUFFER_EMPTY && return_code != ERR_TIMEOUT) {
+        log_msg("<< ReadMsgs(ch=%lu) -> %s, msgs=%lu (%.1fms)",
+                ChannelID, error_name(return_code), i, get_time_ms() - start_ms);
+    }
+
     return return_code;
 }
 
@@ -406,10 +586,13 @@ J2534_API long __stdcall PassThruWriteMsgs(unsigned long ChannelID,
     unsigned long body_len;
     unsigned long i;
     long ret;
+    double start_ms = get_time_ms();
 
     if (pMsg == NULL || pNumMsgs == NULL) {
         return ERR_NULL_PARAMETER;
     }
+
+    log_msg(">> WriteMsgs(ch=%lu, n=%lu, t=%lu)", ChannelID, *pNumMsgs, Timeout);
 
     write_uint32_be(body, ChannelID);
     write_uint32_be(body + 4, *pNumMsgs);
@@ -429,14 +612,20 @@ J2534_API long __stdcall PassThruWriteMsgs(unsigned long ChannelID,
         body_len += pMsg[i].DataSize;
     }
 
+    // Update actual message count in case loop broke early
+    write_uint32_be(body + 4, i);
+
     ret = send_recv(MSG_WRITE_MSGS_REQ, body, body_len, resp, &resp_len, sizeof(resp));
     if (ret != STATUS_NOERROR) {
+        log_msg("<< WriteMsgs -> %s (%.1fms)", error_name(ret), get_time_ms() - start_ms);
         return ret;
     }
 
     if (resp_len >= 8) {
         unsigned long return_code = read_uint32_be(resp);
         *pNumMsgs = read_uint32_be(resp + 4);
+        log_msg("<< WriteMsgs -> %s, written=%lu (%.1fms)",
+                error_name(return_code), *pNumMsgs, get_time_ms() - start_ms);
         return return_code;
     }
 
@@ -447,13 +636,13 @@ J2534_API long __stdcall PassThruStartPeriodicMsg(unsigned long ChannelID,
                                                    PASSTHRU_MSG* pMsg,
                                                    unsigned long* pMsgID,
                                                    unsigned long TimeInterval) {
-    // TODO: Implement
+    log_msg(">> StartPeriodicMsg(ch=%lu) -> NOT_SUPPORTED", ChannelID);
     return ERR_NOT_SUPPORTED;
 }
 
 J2534_API long __stdcall PassThruStopPeriodicMsg(unsigned long ChannelID,
                                                   unsigned long MsgID) {
-    // TODO: Implement
+    log_msg(">> StopPeriodicMsg(ch=%lu, msg=%lu) -> NOT_SUPPORTED", ChannelID, MsgID);
     return ERR_NOT_SUPPORTED;
 }
 
@@ -468,10 +657,13 @@ J2534_API long __stdcall PassThruStartMsgFilter(unsigned long ChannelID,
     unsigned long resp_len;
     unsigned long body_len = 0;
     long ret;
+    double start_ms = get_time_ms();
 
     if (pFilterID == NULL) {
         return ERR_NULL_PARAMETER;
     }
+
+    log_msg(">> StartMsgFilter(ch=%lu, type=%lu)", ChannelID, FilterType);
 
     // Header: ChannelID + FilterType
     write_uint32_be(body, ChannelID);
@@ -480,6 +672,9 @@ J2534_API long __stdcall PassThruStartMsgFilter(unsigned long ChannelID,
 
     // Encode MaskMsg (present flag + message)
     if (pMaskMsg != NULL) {
+        if (body_len + 1 + 20 + pMaskMsg->DataSize > sizeof(body)) {
+            return ERR_FAILED;
+        }
         body[body_len++] = 1;  // present
         write_uint32_be(body + body_len, pMaskMsg->ProtocolID);
         write_uint32_be(body + body_len + 4, pMaskMsg->RxStatus);
@@ -495,6 +690,9 @@ J2534_API long __stdcall PassThruStartMsgFilter(unsigned long ChannelID,
 
     // Encode PatternMsg
     if (pPatternMsg != NULL) {
+        if (body_len + 1 + 20 + pPatternMsg->DataSize > sizeof(body)) {
+            return ERR_FAILED;
+        }
         body[body_len++] = 1;
         write_uint32_be(body + body_len, pPatternMsg->ProtocolID);
         write_uint32_be(body + body_len + 4, pPatternMsg->RxStatus);
@@ -510,6 +708,9 @@ J2534_API long __stdcall PassThruStartMsgFilter(unsigned long ChannelID,
 
     // Encode FlowControlMsg
     if (pFlowControlMsg != NULL) {
+        if (body_len + 1 + 20 + pFlowControlMsg->DataSize > sizeof(body)) {
+            return ERR_FAILED;
+        }
         body[body_len++] = 1;
         write_uint32_be(body + body_len, pFlowControlMsg->ProtocolID);
         write_uint32_be(body + body_len + 4, pFlowControlMsg->RxStatus);
@@ -525,12 +726,15 @@ J2534_API long __stdcall PassThruStartMsgFilter(unsigned long ChannelID,
 
     ret = send_recv(MSG_START_FILTER_REQ, body, body_len, resp, &resp_len, sizeof(resp));
     if (ret != STATUS_NOERROR) {
+        log_msg("<< StartMsgFilter -> %s (%.1fms)", error_name(ret), get_time_ms() - start_ms);
         return ret;
     }
 
     if (resp_len >= 8) {
         unsigned long return_code = read_uint32_be(resp);
         *pFilterID = read_uint32_be(resp + 4);
+        log_msg("<< StartMsgFilter -> %s, filterId=%lu (%.1fms)",
+                error_name(return_code), *pFilterID, get_time_ms() - start_ms);
         return return_code;
     }
 
@@ -543,17 +747,23 @@ J2534_API long __stdcall PassThruStopMsgFilter(unsigned long ChannelID,
     unsigned char resp[16];
     unsigned long resp_len;
     long ret;
+    double start_ms = get_time_ms();
+
+    log_msg(">> StopMsgFilter(ch=%lu, filter=%lu)", ChannelID, FilterID);
 
     write_uint32_be(body, ChannelID);
     write_uint32_be(body + 4, FilterID);
 
     ret = send_recv(MSG_STOP_FILTER_REQ, body, 8, resp, &resp_len, sizeof(resp));
     if (ret != STATUS_NOERROR) {
+        log_msg("<< StopMsgFilter -> %s (%.1fms)", error_name(ret), get_time_ms() - start_ms);
         return ret;
     }
 
     if (resp_len >= 4) {
-        return read_uint32_be(resp);
+        long rc = read_uint32_be(resp);
+        log_msg("<< StopMsgFilter -> %s (%.1fms)", error_name(rc), get_time_ms() - start_ms);
+        return rc;
     }
 
     return ERR_FAILED;
@@ -562,7 +772,7 @@ J2534_API long __stdcall PassThruStopMsgFilter(unsigned long ChannelID,
 J2534_API long __stdcall PassThruSetProgrammingVoltage(unsigned long DeviceID,
                                                         unsigned long PinNumber,
                                                         unsigned long Voltage) {
-    // TODO: Implement
+    log_msg(">> SetProgrammingVoltage(dev=%lu) -> NOT_SUPPORTED", DeviceID);
     return ERR_NOT_SUPPORTED;
 }
 
@@ -574,15 +784,19 @@ J2534_API long __stdcall PassThruReadVersion(unsigned long DeviceID,
     unsigned char resp[256];
     unsigned long resp_len;
     long ret;
+    double start_ms = get_time_ms();
 
     if (pFirmwareVersion == NULL || pDllVersion == NULL || pApiVersion == NULL) {
         return ERR_NULL_PARAMETER;
     }
 
+    log_msg(">> PassThruReadVersion(dev=%lu)", DeviceID);
+
     write_uint32_be(body, DeviceID);
 
     ret = send_recv(MSG_READ_VERSION_REQ, body, 4, resp, &resp_len, sizeof(resp));
     if (ret != STATUS_NOERROR) {
+        log_msg("<< ReadVersion -> %s (%.1fms)", error_name(ret), get_time_ms() - start_ms);
         return ret;
     }
 
@@ -594,6 +808,7 @@ J2534_API long __stdcall PassThruReadVersion(unsigned long DeviceID,
         pDllVersion[79] = 0;
         memcpy(pApiVersion, resp + 164, 80);
         pApiVersion[79] = 0;
+        log_msg("<< ReadVersion -> %s (%.1fms)", error_name(return_code), get_time_ms() - start_ms);
         return return_code;
     }
 
@@ -613,20 +828,65 @@ J2534_API long __stdcall PassThruIoctl(unsigned long ChannelID,
                                         unsigned long IoctlID,
                                         void* pInput,
                                         void* pOutput) {
-    unsigned char body[256];
-    unsigned char resp[256];
+    unsigned char body[4096];
+    unsigned char resp[4096];
     unsigned long resp_len;
     unsigned long body_len;
     long ret;
+    double start_ms = get_time_ms();
 
-    // Build request
+    log_msg(">> PassThruIoctl(ch=%lu, ioctl=%s[0x%02lx], in=%s, out=%s)",
+            ChannelID, ioctl_name(IoctlID), IoctlID,
+            pInput ? "yes" : "NULL", pOutput ? "yes" : "NULL");
+
+    // Build request header
     write_uint32_be(body, ChannelID);
     write_uint32_be(body + 4, IoctlID);
-    write_uint32_be(body + 8, 0);  // no input data for now
-    body_len = 12;
+
+    // Serialize input data based on IOCTL type
+    if ((IoctlID == SET_CONFIG || IoctlID == GET_CONFIG) && pInput != NULL) {
+        // SCONFIG_LIST: NumOfParams + array of {Parameter, Value}
+        SCONFIG_LIST* pList = (SCONFIG_LIST*)pInput;
+        unsigned long i;
+        unsigned long input_len;
+
+        // Bounds check to prevent buffer overflow
+        if (pList->NumOfParams > 500) {
+            log_msg("ERROR: NumOfParams too large: %lu", pList->NumOfParams);
+            return ERR_FAILED;
+        }
+
+        input_len = 4 + pList->NumOfParams * 8;  // count + N*(param+value)
+        if (12 + input_len > sizeof(body)) {
+            log_msg("ERROR: SCONFIG data exceeds buffer: %lu", 12 + input_len);
+            return ERR_FAILED;
+        }
+
+        write_uint32_be(body + 8, input_len);
+        body_len = 12;
+
+        // Write NumOfParams
+        write_uint32_be(body + body_len, pList->NumOfParams);
+        body_len += 4;
+
+        // Write each SCONFIG entry
+        for (i = 0; i < pList->NumOfParams; i++) {
+            write_uint32_be(body + body_len, pList->ConfigPtr[i].Parameter);
+            write_uint32_be(body + body_len + 4, pList->ConfigPtr[i].Value);
+            log_msg("   param[%lu]: id=0x%04lx value=%lu",
+                    i, pList->ConfigPtr[i].Parameter, pList->ConfigPtr[i].Value);
+            body_len += 8;
+        }
+    } else {
+        // No input data
+        write_uint32_be(body + 8, 0);
+        body_len = 12;
+    }
 
     ret = send_recv(MSG_IOCTL_REQ, body, body_len, resp, &resp_len, sizeof(resp));
     if (ret != STATUS_NOERROR) {
+        log_msg("<< Ioctl(%s) -> %s (%.1fms)", ioctl_name(IoctlID),
+                error_name(ret), get_time_ms() - start_ms);
         return ret;
     }
 
@@ -638,10 +898,36 @@ J2534_API long __stdcall PassThruIoctl(unsigned long ChannelID,
         if (IoctlID == READ_VBATT && pOutput != NULL && output_len >= 4) {
             unsigned long voltage = read_uint32_be(resp + 8);
             *((unsigned long*)pOutput) = voltage;
+            log_msg("<< Ioctl(READ_VBATT) -> %s, voltage=%lumV (%.1fms)",
+                    error_name(return_code), voltage, get_time_ms() - start_ms);
+        }
+        // Handle GET_CONFIG - write values back to caller's SCONFIG_LIST (via pInput per J2534 spec)
+        else if (IoctlID == GET_CONFIG && pInput != NULL && output_len >= 4) {
+            SCONFIG_LIST* pList = (SCONFIG_LIST*)pInput;
+            unsigned long num_params = read_uint32_be(resp + 8);
+            unsigned long i;
+            unsigned long off = 12;
+
+            for (i = 0; i < num_params && i < pList->NumOfParams; i++) {
+                if (off + 8 > resp_len) break;
+                pList->ConfigPtr[i].Parameter = read_uint32_be(resp + off);
+                pList->ConfigPtr[i].Value = read_uint32_be(resp + off + 4);
+                log_msg("   got param[%lu]: id=0x%04lx value=%lu",
+                        i, pList->ConfigPtr[i].Parameter, pList->ConfigPtr[i].Value);
+                off += 8;
+            }
+            log_msg("<< Ioctl(GET_CONFIG) -> %s, %lu params (%.1fms)",
+                    error_name(return_code), num_params, get_time_ms() - start_ms);
+        }
+        else {
+            log_msg("<< Ioctl(%s) -> %s (%.1fms)", ioctl_name(IoctlID),
+                    error_name(return_code), get_time_ms() - start_ms);
         }
 
         return return_code;
     }
 
+    log_msg("<< Ioctl(%s) -> FAILED (short response, %.1fms)",
+            ioctl_name(IoctlID), get_time_ms() - start_ms);
     return ERR_FAILED;
 }

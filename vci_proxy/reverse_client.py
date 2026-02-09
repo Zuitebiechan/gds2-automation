@@ -12,6 +12,7 @@ VCI Proxy 反向连接模式
 import asyncio
 import socket
 import struct
+import time
 import logging
 import argparse
 from typing import Optional
@@ -26,9 +27,18 @@ from vci_proxy.j2534_driver import J2534Driver
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s'
+    format='%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s',
+    datefmt='%H:%M:%S'
 )
 logger = logging.getLogger(__name__)
+
+# Message type names for logging
+MSG_NAMES = {
+    0x0001: "Open", 0x0002: "Close", 0x0003: "Connect", 0x0004: "Disconnect",
+    0x0005: "ReadMsgs", 0x0006: "WriteMsgs", 0x0007: "Ioctl",
+    0x0010: "StartFilter", 0x0011: "StopFilter",
+    0x0020: "ReadVersion", 0x0021: "GetLastError", 0x00FF: "Heartbeat",
+}
 
 
 class ReverseProxyClient:
@@ -141,6 +151,8 @@ class ReverseProxyClient:
     async def _handle_message(self, msg_type: int, body: bytes,
                              sequence: int) -> Optional[bytes]:
         """处理消息"""
+        msg_name = MSG_NAMES.get(msg_type, f"0x{msg_type:04x}")
+        start = time.monotonic()
 
         if msg_type == MsgType.HEARTBEAT:
             return ProtocolEncoder.encode_heartbeat_ack(sequence)
@@ -150,28 +162,34 @@ class ReverseProxyClient:
 
         elif msg_type == MsgType.OPEN_REQ:
             device_name = ProtocolDecoder.decode_open_req(body)
-            logger.info(f"PassThruOpen({device_name})")
+            logger.info(f">> PassThruOpen({device_name})")
             ret, device_id = self.driver.open(device_name)
-            logger.info(f"  -> ret={ret}, device_id={device_id}")
+            ms = (time.monotonic() - start) * 1000
+            logger.info(f"<< PassThruOpen -> ret={ret}, id={device_id} ({ms:.1f}ms)")
             return ProtocolEncoder.encode_open_rsp(ret, device_id, sequence)
 
         elif msg_type == MsgType.CLOSE_REQ:
             device_id = ProtocolDecoder.decode_close_req(body)
-            logger.info(f"PassThruClose({device_id})")
+            logger.info(f">> PassThruClose({device_id})")
             ret = self.driver.close(device_id)
+            ms = (time.monotonic() - start) * 1000
+            logger.info(f"<< PassThruClose -> ret={ret} ({ms:.1f}ms)")
             return ProtocolEncoder.encode_close_rsp(ret, sequence)
 
         elif msg_type == MsgType.CONNECT_REQ:
             device_id, protocol_id, flags, baudrate = ProtocolDecoder.decode_connect_req(body)
-            logger.info(f"PassThruConnect(dev={device_id}, proto={protocol_id}, baud={baudrate})")
+            logger.info(f">> PassThruConnect(dev={device_id}, proto={protocol_id}, baud={baudrate})")
             ret, channel_id = self.driver.connect(device_id, protocol_id, flags, baudrate)
-            logger.info(f"  -> ret={ret}, channel_id={channel_id}")
+            ms = (time.monotonic() - start) * 1000
+            logger.info(f"<< PassThruConnect -> ret={ret}, ch={channel_id} ({ms:.1f}ms)")
             return ProtocolEncoder.encode_connect_rsp(ret, channel_id, sequence)
 
         elif msg_type == MsgType.DISCONNECT_REQ:
             channel_id = ProtocolDecoder.decode_disconnect_req(body)
-            logger.info(f"PassThruDisconnect({channel_id})")
+            logger.info(f">> PassThruDisconnect({channel_id})")
             ret = self.driver.disconnect(channel_id)
+            ms = (time.monotonic() - start) * 1000
+            logger.info(f"<< PassThruDisconnect -> ret={ret} ({ms:.1f}ms)")
             return ProtocolEncoder.encode_disconnect_rsp(ret, sequence)
 
         elif msg_type == MsgType.READ_MSGS_REQ:
@@ -180,42 +198,55 @@ class ReverseProxyClient:
             ret, messages = await loop.run_in_executor(
                 None, self.driver.read_msgs, channel_id, num_msgs, timeout
             )
+            ms = (time.monotonic() - start) * 1000
+            if ret != 0x10:  # Skip BUFFER_EMPTY noise
+                logger.info(f"<< ReadMsgs(ch={channel_id}) -> ret={ret}, n={len(messages)} ({ms:.1f}ms)")
             return ProtocolEncoder.encode_read_msgs_rsp(ret, messages, sequence)
 
         elif msg_type == MsgType.WRITE_MSGS_REQ:
             channel_id, messages, timeout = ProtocolDecoder.decode_write_msgs_req(body)
+            logger.info(f">> WriteMsgs(ch={channel_id}, n={len(messages)}, t={timeout})")
             loop = asyncio.get_event_loop()
             ret, num_written = await loop.run_in_executor(
                 None, self.driver.write_msgs, channel_id, messages, timeout
             )
+            ms = (time.monotonic() - start) * 1000
+            logger.info(f"<< WriteMsgs -> ret={ret}, written={num_written} ({ms:.1f}ms)")
             return ProtocolEncoder.encode_write_msgs_rsp(ret, num_written, sequence)
 
         elif msg_type == MsgType.READ_VERSION_REQ:
             device_id = ProtocolDecoder.decode_read_version_req(body)
-            logger.info(f"PassThruReadVersion({device_id})")
+            logger.info(f">> PassThruReadVersion({device_id})")
             ret, fw, dll, api = self.driver.read_version(device_id)
+            ms = (time.monotonic() - start) * 1000
+            logger.info(f"<< ReadVersion -> ret={ret} ({ms:.1f}ms)")
             return ProtocolEncoder.encode_read_version_rsp(ret, fw, dll, api, sequence)
 
         elif msg_type == MsgType.START_FILTER_REQ:
             channel_id, filter_type, mask_msg, pattern_msg, flow_msg = \
                 ProtocolDecoder.decode_start_filter_req(body)
-            logger.info(f"PassThruStartMsgFilter(ch={channel_id}, type={filter_type})")
+            logger.info(f">> StartMsgFilter(ch={channel_id}, type={filter_type})")
             ret, filter_id = self.driver.start_msg_filter(
                 channel_id, filter_type, mask_msg, pattern_msg, flow_msg
             )
-            logger.info(f"  -> ret={ret}, filter_id={filter_id}")
+            ms = (time.monotonic() - start) * 1000
+            logger.info(f"<< StartMsgFilter -> ret={ret}, fid={filter_id} ({ms:.1f}ms)")
             return ProtocolEncoder.encode_start_filter_rsp(ret, filter_id, sequence)
 
         elif msg_type == MsgType.STOP_FILTER_REQ:
             channel_id, filter_id = ProtocolDecoder.decode_stop_filter_req(body)
-            logger.info(f"PassThruStopMsgFilter(ch={channel_id}, filter={filter_id})")
+            logger.info(f">> StopMsgFilter(ch={channel_id}, filter={filter_id})")
             ret = self.driver.stop_msg_filter(channel_id, filter_id)
+            ms = (time.monotonic() - start) * 1000
+            logger.info(f"<< StopMsgFilter -> ret={ret} ({ms:.1f}ms)")
             return ProtocolEncoder.encode_stop_filter_rsp(ret, sequence)
 
         elif msg_type == MsgType.IOCTL_REQ:
             channel_id, ioctl_id, input_data = ProtocolDecoder.decode_ioctl_req(body)
-            logger.info(f"PassThruIoctl(ch={channel_id}, ioctl={ioctl_id})")
+            logger.info(f">> PassThruIoctl(ch={channel_id}, ioctl=0x{ioctl_id:02x})")
             ret, output_data = self.driver.ioctl(channel_id, ioctl_id, input_data)
+            ms = (time.monotonic() - start) * 1000
+            logger.info(f"<< Ioctl(0x{ioctl_id:02x}) -> ret={ret} ({ms:.1f}ms)")
             return ProtocolEncoder.encode_ioctl_rsp(ret, output_data, sequence)
 
         else:
