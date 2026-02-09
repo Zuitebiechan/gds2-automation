@@ -1,0 +1,5 @@
+# Cloud server dependencies for Web UI
+# No pywinauto, pyautogui, opencv, easyocr needed
+
+flask>=2.0.0
+flask-cors>=3.0.0

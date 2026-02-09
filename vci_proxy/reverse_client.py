@@ -10,8 +10,6 @@ VCI Proxy 反向连接模式
 """
 
 import asyncio
-import socket
-import struct
 import time
 import logging
 import argparse
@@ -64,15 +62,15 @@ class ReverseProxyClient:
         return True
 
     async def connect_and_serve(self):
-        """连接到服务器并处理请求"""
+        """连接到服务器并处理请求（无限重试，指数退避）"""
         if not self._ensure_driver():
             return
 
         self.running = True
-        retry_count = 0
-        max_retries = 10
+        backoff_seconds = 5.0
+        max_backoff = 60.0
 
-        while self.running and retry_count < max_retries:
+        while self.running:
             try:
                 logger.info(f"正在连接到 {self.server_host}:{self.server_port}...")
 
@@ -81,7 +79,7 @@ class ReverseProxyClient:
                 )
 
                 logger.info("已连接到云服务器!")
-                retry_count = 0  # 重置重试计数
+                backoff_seconds = 5.0  # 连接成功，重置退避
 
                 # 发送注册消息
                 await self._send_registration(writer)
@@ -90,13 +88,13 @@ class ReverseProxyClient:
                 await self._handle_requests(reader, writer)
 
             except ConnectionRefusedError:
-                retry_count += 1
-                logger.warning(f"连接被拒绝，{5}秒后重试 ({retry_count}/{max_retries})...")
-                await asyncio.sleep(5)
+                logger.warning(f"连接被拒绝，{backoff_seconds:.0f}秒后重试...")
             except Exception as e:
-                retry_count += 1
-                logger.error(f"连接错误: {e}，{5}秒后重试 ({retry_count}/{max_retries})...")
-                await asyncio.sleep(5)
+                logger.error(f"连接错误: {e}，{backoff_seconds:.0f}秒后重试...")
+
+            if self.running:
+                await asyncio.sleep(backoff_seconds)
+                backoff_seconds = min(backoff_seconds * 2, max_backoff)
 
         logger.info("已停止")
 
@@ -194,7 +192,7 @@ class ReverseProxyClient:
 
         elif msg_type == MsgType.READ_MSGS_REQ:
             channel_id, num_msgs, timeout = ProtocolDecoder.decode_read_msgs_req(body)
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             ret, messages = await loop.run_in_executor(
                 None, self.driver.read_msgs, channel_id, num_msgs, timeout
             )
@@ -206,7 +204,7 @@ class ReverseProxyClient:
         elif msg_type == MsgType.WRITE_MSGS_REQ:
             channel_id, messages, timeout = ProtocolDecoder.decode_write_msgs_req(body)
             logger.info(f">> WriteMsgs(ch={channel_id}, n={len(messages)}, t={timeout})")
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             ret, num_written = await loop.run_in_executor(
                 None, self.driver.write_msgs, channel_id, messages, timeout
             )

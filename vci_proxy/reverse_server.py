@@ -79,11 +79,36 @@ class ReverseProxyServer:
             proxy_server.serve_forever()
         )
 
+    def _cancel_pending_futures(self):
+        """取消所有挂起的 Future（VCI 断开时调用）"""
+        pending = list(self.response_futures.items())
+        self.response_futures.clear()
+        for seq, future in pending:
+            if not future.done():
+                future.set_exception(ConnectionError("VCI Proxy 已断开"))
+                logger.debug(f"取消挂起的 Future: seq={seq}")
+        if pending:
+            logger.info(f"已取消 {len(pending)} 个挂起的请求")
+
     async def _handle_vci_connection(self, reader: asyncio.StreamReader,
                                      writer: asyncio.StreamWriter):
         """处理 VCI Proxy 的连接"""
         addr = writer.get_extra_info('peername')
         logger.info(f"VCI Proxy 已连接: {addr}")
+
+        # 关闭已有的 VCI 连接
+        if self.vci_writer is not None:
+            logger.warning(f"替换已有 VCI 连接，新连接: {addr}")
+            old_writer = self.vci_writer
+            self.vci_connected.clear()
+            self._cancel_pending_futures()
+            self.vci_reader = None
+            self.vci_writer = None
+            try:
+                old_writer.close()
+            except Exception:
+                pass
+
         print(f"\n*** VCI Proxy 已连接: {addr} ***\n")
 
         self.vci_reader = reader
@@ -130,6 +155,7 @@ class ReverseProxyServer:
             logger.error(f"VCI 连接错误: {e}")
         finally:
             self.vci_connected.clear()
+            self._cancel_pending_futures()
             self.vci_reader = None
             self.vci_writer = None
             writer.close()
@@ -165,14 +191,14 @@ class ReverseProxyServer:
                 body = await reader.readexactly(body_len) if body_len > 0 else b''
 
                 # 转发请求到 VCI Proxy
-                self.sequence += 1
+                self.sequence = (self.sequence + 1) & 0xFFFFFFFF
                 new_seq = self.sequence
 
                 msg_name = MSG_NAMES.get(msg_type, f"0x{msg_type:04x}")
                 fwd_start = time.monotonic()
 
                 # 创建响应 Future
-                future = asyncio.get_event_loop().create_future()
+                future = asyncio.get_running_loop().create_future()
                 self.response_futures[new_seq] = future
 
                 # 重新打包并发送（使用锁保护）
@@ -204,9 +230,10 @@ class ReverseProxyServer:
                     if msg_type != 0x0005 or fwd_ms > 200:
                         logger.info(f"[PROXY] {msg_name} seq={sequence} -> {fwd_ms:.1f}ms")
 
-                except asyncio.TimeoutError:
+                except (asyncio.TimeoutError, ConnectionError) as e:
                     fwd_ms = (time.monotonic() - fwd_start) * 1000
-                    logger.error(f"[PROXY] {msg_name} seq={sequence} TIMEOUT after {fwd_ms:.0f}ms")
+                    reason = "VCI_DISCONNECTED" if isinstance(e, ConnectionError) else "TIMEOUT"
+                    logger.error(f"[PROXY] {msg_name} seq={sequence} {reason} after {fwd_ms:.0f}ms")
                     break
 
         except asyncio.IncompleteReadError:

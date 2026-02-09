@@ -267,11 +267,9 @@ class AgentNavigator:
         # Ensure data dir exists
         self._data_dir.mkdir(parents=True, exist_ok=True)
 
-        # Clear old result
-        if self._result_file.exists():
-            self._result_file.unlink()
-
-        # Write command file
+        # Write command file (don't delete result.json - cmd_id matching
+        # ensures correctness, and deletion causes WinError 32 on Windows
+        # when the Java Agent is concurrently writing to it)
         with open(self._command_file, 'w', encoding='utf-8') as f:
             json.dump(command, f)
 
@@ -287,10 +285,8 @@ class AgentNavigator:
                         logger.debug(f"Received result: {result}")
                         return result
 
-                except json.JSONDecodeError:
-                    pass  # File still being written
-                except Exception as e:
-                    logger.debug(f"Error reading result: {e}")
+                except (json.JSONDecodeError, PermissionError, OSError):
+                    pass  # File still being written or locked
 
             time.sleep(0.05)  # Poll every 50ms
 

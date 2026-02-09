@@ -75,13 +75,31 @@ static LARGE_INTEGER g_perf_freq;
 // Logging
 // ============================================================================
 
+// Log rotation threshold (10 MB)
+#define LOG_MAX_SIZE (10 * 1024 * 1024)
+
 static void log_init(void) {
     char log_path[MAX_PATH];
+    char old_path[MAX_PATH];
     char* userprofile = getenv("USERPROFILE");
     if (userprofile) {
         sprintf_s(log_path, sizeof(log_path), "%s\\gds2-data\\vci_proxy_dll.log", userprofile);
+        sprintf_s(old_path, sizeof(old_path), "%s\\gds2-data\\vci_proxy_dll.log.old", userprofile);
     } else {
         strcpy_s(log_path, sizeof(log_path), "C:\\vci_proxy_dll.log");
+        strcpy_s(old_path, sizeof(old_path), "C:\\vci_proxy_dll.log.old");
+    }
+
+    // Log rotation: if log file exceeds threshold, rotate
+    {
+        WIN32_FILE_ATTRIBUTE_DATA fileInfo;
+        if (GetFileAttributesExA(log_path, GetFileExInfoStandard, &fileInfo)) {
+            ULONGLONG fileSize = ((ULONGLONG)fileInfo.nFileSizeHigh << 32) | fileInfo.nFileSizeLow;
+            if (fileSize > LOG_MAX_SIZE) {
+                DeleteFileA(old_path);
+                MoveFileA(log_path, old_path);
+            }
+        }
     }
 
     g_log_file = fopen(log_path, "a");
@@ -198,7 +216,6 @@ static int recv_exact(SOCKET sock, char* buf, int len) {
 
 // Initialize Winsock and connect to server
 static BOOL connect_to_server(void) {
-    WSADATA wsaData;
     struct sockaddr_in serverAddr;
     DWORD timeout;
 
@@ -208,19 +225,11 @@ static BOOL connect_to_server(void) {
 
     log_msg("Connecting to %s:%d...", SERVER_HOST, SERVER_PORT);
 
-    // Initialize Winsock
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        sprintf_s(g_last_error, sizeof(g_last_error), "WSAStartup failed");
-        log_msg("ERROR: WSAStartup failed");
-        return FALSE;
-    }
-
     // Create socket
     g_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (g_socket == INVALID_SOCKET) {
         sprintf_s(g_last_error, sizeof(g_last_error), "Socket creation failed");
         log_msg("ERROR: Socket creation failed");
-        WSACleanup();
         return FALSE;
     }
 
@@ -246,7 +255,6 @@ static BOOL connect_to_server(void) {
         log_msg("ERROR: Connection failed (WSA=%d)", WSAGetLastError());
         closesocket(g_socket);
         g_socket = INVALID_SOCKET;
-        WSACleanup();
         return FALSE;
     }
 
@@ -263,7 +271,11 @@ static void disconnect_socket(void) {
     }
 }
 
-// Send message and receive response
+// Retry delays in milliseconds
+static const DWORD RETRY_DELAYS[] = { 100, 500, 1000 };
+#define MAX_RETRIES 3
+
+// Send message and receive response (with retry on transient failures)
 static long send_recv(unsigned short msg_type, const unsigned char* body,
                       unsigned long body_len, unsigned char* resp_body,
                       unsigned long* resp_len, unsigned long max_resp_len) {
@@ -274,99 +286,116 @@ static long send_recv(unsigned short msg_type, const unsigned char* body,
     unsigned short resp_type;
     unsigned long sequence;
     int sent, received;
+    int retry;
 
     EnterCriticalSection(&g_cs);
 
-    if (!connect_to_server()) {
-        LeaveCriticalSection(&g_cs);
-        return ERR_DEVICE_NOT_CONNECTED;
-    }
-
     g_sequence++;
+    sequence = g_sequence;
 
-    // Build header
-    write_uint32_be(header, MAGIC);
-    write_uint32_be(header + 4, total_len);
-    write_uint16_be(header + 8, msg_type);
-    write_uint32_be(header + 10, g_sequence);
-
-    // Send header
-    sent = send(g_socket, (const char*)header, HEADER_SIZE, 0);
-    if (sent != HEADER_SIZE) {
-        log_msg("ERROR: Send header failed (sent=%d, WSA=%d)", sent, WSAGetLastError());
-        disconnect_socket();
-        LeaveCriticalSection(&g_cs);
-        return ERR_FAILED;
-    }
-
-    // Send body
-    if (body_len > 0) {
-        sent = send(g_socket, (const char*)body, body_len, 0);
-        if (sent != (int)body_len) {
-            log_msg("ERROR: Send body failed (sent=%d/%lu, WSA=%d)", sent, body_len, WSAGetLastError());
-            disconnect_socket();
-            LeaveCriticalSection(&g_cs);
-            return ERR_FAILED;
+    for (retry = 0; retry <= MAX_RETRIES; retry++) {
+        if (retry > 0) {
+            log_msg("RETRY %d/%d for seq=%lu (delay=%lums)",
+                    retry, MAX_RETRIES, sequence, RETRY_DELAYS[retry - 1]);
+            Sleep(RETRY_DELAYS[retry - 1]);
         }
-    }
 
-    // Receive response header (use recv_exact for reliability)
-    received = recv_exact(g_socket, (char*)resp_header, HEADER_SIZE);
-    if (received != HEADER_SIZE) {
-        log_msg("ERROR: Recv header failed (received=%d, WSA=%d)", received, WSAGetLastError());
-        disconnect_socket();
-        LeaveCriticalSection(&g_cs);
-        return ERR_FAILED;
-    }
-
-    // Parse response header
-    magic = read_uint32_be(resp_header);
-    length = read_uint32_be(resp_header + 4);
-    resp_type = read_uint16_be(resp_header + 8);
-    sequence = read_uint32_be(resp_header + 10);
-
-    if (magic != MAGIC) {
-        log_msg("ERROR: Invalid magic: %08lx", magic);
-        disconnect_socket();
-        LeaveCriticalSection(&g_cs);
-        return ERR_FAILED;
-    }
-
-    // Receive response body
-    *resp_len = length - HEADER_SIZE;
-    if (*resp_len > 0) {
-        if (*resp_len > max_resp_len) {
-            log_msg("ERROR: Response too large: %lu > %lu", *resp_len, max_resp_len);
-            disconnect_socket();
-            LeaveCriticalSection(&g_cs);
-            return ERR_BUFFER_OVERFLOW;
+        if (!connect_to_server()) {
+            continue;
         }
-        received = recv_exact(g_socket, (char*)resp_body, *resp_len);
-        if (received != (int)*resp_len) {
-            log_msg("ERROR: Recv body failed (received=%d/%lu, WSA=%d)", received, *resp_len, WSAGetLastError());
+
+        // Build header
+        write_uint32_be(header, MAGIC);
+        write_uint32_be(header + 4, total_len);
+        write_uint16_be(header + 8, msg_type);
+        write_uint32_be(header + 10, sequence);
+
+        // Send header
+        sent = send(g_socket, (const char*)header, HEADER_SIZE, 0);
+        if (sent != HEADER_SIZE) {
+            log_msg("ERROR: Send header failed (sent=%d, WSA=%d)", sent, WSAGetLastError());
             disconnect_socket();
-            LeaveCriticalSection(&g_cs);
-            return ERR_FAILED;
+            continue;
         }
+
+        // Send body
+        if (body_len > 0) {
+            sent = send(g_socket, (const char*)body, body_len, 0);
+            if (sent != (int)body_len) {
+                log_msg("ERROR: Send body failed (sent=%d/%lu, WSA=%d)", sent, body_len, WSAGetLastError());
+                disconnect_socket();
+                continue;
+            }
+        }
+
+        // Receive response header
+        received = recv_exact(g_socket, (char*)resp_header, HEADER_SIZE);
+        if (received != HEADER_SIZE) {
+            log_msg("ERROR: Recv header failed (received=%d, WSA=%d)", received, WSAGetLastError());
+            disconnect_socket();
+            continue;
+        }
+
+        // Parse response header
+        magic = read_uint32_be(resp_header);
+        length = read_uint32_be(resp_header + 4);
+        resp_type = read_uint16_be(resp_header + 8);
+
+        if (magic != MAGIC) {
+            log_msg("ERROR: Invalid magic: %08lx", magic);
+            disconnect_socket();
+            continue;
+        }
+
+        // Receive response body
+        *resp_len = length - HEADER_SIZE;
+        if (*resp_len > 0) {
+            if (*resp_len > max_resp_len) {
+                log_msg("ERROR: Response too large: %lu > %lu", *resp_len, max_resp_len);
+                disconnect_socket();
+                LeaveCriticalSection(&g_cs);
+                return ERR_BUFFER_OVERFLOW;  // Protocol error, not transient
+            }
+            received = recv_exact(g_socket, (char*)resp_body, *resp_len);
+            if (received != (int)*resp_len) {
+                log_msg("ERROR: Recv body failed (received=%d/%lu, WSA=%d)", received, *resp_len, WSAGetLastError());
+                disconnect_socket();
+                continue;
+            }
+        }
+
+        // Success
+        if (retry > 0) {
+            log_msg("RETRY succeeded on attempt %d for seq=%lu", retry + 1, sequence);
+        }
+        LeaveCriticalSection(&g_cs);
+        return STATUS_NOERROR;
     }
 
+    // All retries exhausted
+    log_msg("ERROR: All %d retries exhausted for seq=%lu", MAX_RETRIES + 1, sequence);
     LeaveCriticalSection(&g_cs);
-    return STATUS_NOERROR;
+    return ERR_DEVICE_NOT_CONNECTED;
 }
 
 // DLL Entry Point
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
     switch (fdwReason) {
         case DLL_PROCESS_ATTACH:
-            InitializeCriticalSection(&g_cs);
-            g_initialized = TRUE;
-            log_init();
+            {
+                WSADATA wsaData;
+                InitializeCriticalSection(&g_cs);
+                WSAStartup(MAKEWORD(2, 2), &wsaData);
+                g_initialized = TRUE;
+                log_init();
+            }
             break;
         case DLL_PROCESS_DETACH:
             if (g_socket != INVALID_SOCKET) {
                 closesocket(g_socket);
-                WSACleanup();
+                g_socket = INVALID_SOCKET;
             }
+            WSACleanup();
             log_close();
             DeleteCriticalSection(&g_cs);
             break;
