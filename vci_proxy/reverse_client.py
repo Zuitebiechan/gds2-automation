@@ -22,6 +22,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from vci_proxy.protocol import MAGIC, HEADER_SIZE, MsgType, Message, ProtocolEncoder, ProtocolDecoder
 from vci_proxy.j2534_driver import J2534Driver
+from vci_proxy.config import ProxyConfig
+from vci_proxy.cache_vbatt import VbattCache
+from vci_proxy.auth import compute_signature
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,12 +45,18 @@ MSG_NAMES = {
 class ReverseProxyClient:
     """反向代理客户端 - 主动连接到云服务器"""
 
-    def __init__(self, server_host: str, server_port: int, dll_path: Optional[str] = None):
+    def __init__(self, server_host: str, server_port: int,
+                 dll_path: Optional[str] = None,
+                 config: Optional[ProxyConfig] = None):
         self.server_host = server_host
         self.server_port = server_port
         self.dll_path = dll_path
+        self.config = config or ProxyConfig()
         self.driver: Optional[J2534Driver] = None
         self.running = False
+
+        # P2-2: VBATT cache
+        self._vbatt_cache = VbattCache(self.config.vbatt_cache)
 
     def _ensure_driver(self) -> bool:
         """确保驱动已加载"""
@@ -81,8 +90,14 @@ class ReverseProxyClient:
                 logger.info("已连接到云服务器!")
                 backoff_seconds = 5.0  # 连接成功，重置退避
 
-                # 发送注册消息
-                await self._send_registration(writer)
+                # 发送注册/认证消息
+                if not await self._send_registration(reader, writer):
+                    logger.warning("Authentication failed, reconnecting...")
+                    writer.close()
+                    if self.running:
+                        await asyncio.sleep(backoff_seconds)
+                        backoff_seconds = min(backoff_seconds * 2, max_backoff)
+                    continue
 
                 # 处理请求循环
                 await self._handle_requests(reader, writer)
@@ -92,19 +107,72 @@ class ReverseProxyClient:
             except Exception as e:
                 logger.error(f"连接错误: {e}，{backoff_seconds:.0f}秒后重试...")
 
+            # Invalidate caches on disconnect
+            self._vbatt_cache.invalidate()
+
             if self.running:
                 await asyncio.sleep(backoff_seconds)
                 backoff_seconds = min(backoff_seconds * 2, max_backoff)
 
         logger.info("已停止")
 
-    async def _send_registration(self, writer: asyncio.StreamWriter):
-        """发送注册消息"""
-        # 使用心跳作为注册确认
-        msg = ProtocolEncoder.encode_heartbeat(0)
-        writer.write(msg)
-        await writer.drain()
-        logger.info("已发送注册消息")
+    async def _send_registration(self, reader: asyncio.StreamReader,
+                                 writer: asyncio.StreamWriter) -> bool:
+        """Send registration/authentication message.
+
+        If auth is enabled, sends AUTH_REQ and waits for AUTH_RSP.
+        Otherwise sends legacy heartbeat.
+
+        Returns True if registration succeeded, False otherwise.
+        """
+        if self.config.auth.enabled and self.config.auth.token:
+            timestamp = int(time.time())
+            signature = compute_signature(self.config.auth.token, timestamp)
+            msg = ProtocolEncoder.encode_auth_req(timestamp, signature, 0)
+            writer.write(msg)
+            await writer.drain()
+            logger.info("已发送认证请求")
+
+            # Wait for AUTH_RSP
+            try:
+                header = await asyncio.wait_for(
+                    reader.readexactly(HEADER_SIZE),
+                    timeout=self.config.auth.auth_timeout_s,
+                )
+                magic, length, msg_type, sequence = Message.decode_header(header)
+                if magic != MAGIC:
+                    logger.error(f"Invalid magic in auth response: {magic:#x}")
+                    return False
+
+                body_len = length - HEADER_SIZE
+                body = await reader.readexactly(body_len) if body_len > 0 else b''
+
+                if msg_type == MsgType.AUTH_RSP:
+                    success, message = ProtocolDecoder.decode_auth_rsp(body)
+                    if success:
+                        logger.info(f"认证成功: {message}")
+                        return True
+                    else:
+                        logger.error(f"认证失败: {message}")
+                        return False
+                elif msg_type == MsgType.HEARTBEAT_ACK:
+                    # Server doesn't support auth, accepted as legacy
+                    logger.info("Server accepted auth as heartbeat (legacy mode)")
+                    return True
+                else:
+                    logger.warning(f"Unexpected auth response type: {msg_type:#x}")
+                    return False
+
+            except asyncio.TimeoutError:
+                logger.error("Auth response timeout")
+                return False
+        else:
+            # Legacy heartbeat registration
+            msg = ProtocolEncoder.encode_heartbeat(0)
+            writer.write(msg)
+            await writer.drain()
+            logger.info("已发送注册消息")
+            return True
 
     async def _handle_requests(self, reader: asyncio.StreamReader,
                                writer: asyncio.StreamWriter):
@@ -172,6 +240,7 @@ class ReverseProxyClient:
             ret = self.driver.close(device_id)
             ms = (time.monotonic() - start) * 1000
             logger.info(f"<< PassThruClose -> ret={ret} ({ms:.1f}ms)")
+            self._vbatt_cache.invalidate()
             return ProtocolEncoder.encode_close_rsp(ret, sequence)
 
         elif msg_type == MsgType.CONNECT_REQ:
@@ -188,6 +257,7 @@ class ReverseProxyClient:
             ret = self.driver.disconnect(channel_id)
             ms = (time.monotonic() - start) * 1000
             logger.info(f"<< PassThruDisconnect -> ret={ret} ({ms:.1f}ms)")
+            self._vbatt_cache.invalidate()
             return ProtocolEncoder.encode_disconnect_rsp(ret, sequence)
 
         elif msg_type == MsgType.READ_MSGS_REQ:
@@ -241,10 +311,22 @@ class ReverseProxyClient:
 
         elif msg_type == MsgType.IOCTL_REQ:
             channel_id, ioctl_id, input_data = ProtocolDecoder.decode_ioctl_req(body)
+
+            # P2-2: VBATT cache check
+            cached = self._vbatt_cache.try_get_cached(ioctl_id)
+            if cached is not None:
+                ret, output_data = cached
+                logger.debug(f"<< Ioctl(0x{ioctl_id:02x}) -> [CACHED] ret={ret}")
+                return ProtocolEncoder.encode_ioctl_rsp(ret, output_data, sequence)
+
             logger.info(f">> PassThruIoctl(ch={channel_id}, ioctl=0x{ioctl_id:02x})")
             ret, output_data = self.driver.ioctl(channel_id, ioctl_id, input_data)
             ms = (time.monotonic() - start) * 1000
             logger.info(f"<< Ioctl(0x{ioctl_id:02x}) -> ret={ret} ({ms:.1f}ms)")
+
+            # P2-2: Record VBATT result
+            self._vbatt_cache.record_result(ioctl_id, ret, output_data)
+
             return ProtocolEncoder.encode_ioctl_rsp(ret, output_data, sequence)
 
         else:
@@ -261,17 +343,32 @@ def main():
     parser.add_argument('--host', default='8.136.197.36', help='云服务器地址')
     parser.add_argument('--port', '-p', type=int, default=9000, help='云服务器端口')
     parser.add_argument('--dll', default=None, help='J2534 DLL 路径')
+    parser.add_argument('--auth-token', type=str, default=None,
+                       help='PSK authentication token')
+    parser.add_argument('--no-vbatt-cache', action='store_true',
+                       help='Disable READ_VBATT response cache')
+    parser.add_argument('--vbatt-ttl', type=int, default=5,
+                       help='VBATT cache TTL in seconds (默认: 5)')
     args = parser.parse_args()
+
+    config = ProxyConfig.from_args(
+        auth_token=args.auth_token,
+        no_vbatt_cache=args.no_vbatt_cache,
+        vbatt_ttl=args.vbatt_ttl,
+    )
 
     print("=" * 50)
     print("VCI Proxy 反向连接模式")
     print("=" * 50)
     print(f"目标服务器: {args.host}:{args.port}")
+    print(f"Auth: {'enabled' if config.auth.enabled else 'disabled'}")
+    print(f"VBATT cache: {'enabled' if config.vbatt_cache.enabled else 'disabled'}"
+          f" (TTL={config.vbatt_cache.ttl_s}s)")
     print("按 Ctrl+C 停止")
     print("=" * 50)
     print()
 
-    client = ReverseProxyClient(args.host, args.port, args.dll)
+    client = ReverseProxyClient(args.host, args.port, args.dll, config)
 
     try:
         asyncio.run(client.connect_and_serve())

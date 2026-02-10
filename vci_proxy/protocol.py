@@ -36,6 +36,7 @@ class MsgType(IntEnum):
     STOP_FILTER_REQ = 0x0011
     READ_VERSION_REQ = 0x0020
     GET_LAST_ERROR_REQ = 0x0021
+    AUTH_REQ = 0x00FE
     HEARTBEAT = 0x00FF
 
     # 响应 (0x80xx)
@@ -50,6 +51,7 @@ class MsgType(IntEnum):
     STOP_FILTER_RSP = 0x8011
     READ_VERSION_RSP = 0x8020
     GET_LAST_ERROR_RSP = 0x8021
+    AUTH_RSP = 0x80FE
     HEARTBEAT_ACK = 0x80FF
 
 
@@ -213,6 +215,21 @@ class ProtocolEncoder:
     def encode_heartbeat_ack(sequence: int = 0) -> bytes:
         """编码心跳响应"""
         return Message(MsgType.HEARTBEAT_ACK, sequence, b'').encode()
+
+    @staticmethod
+    def encode_auth_req(timestamp: int, signature: bytes,
+                        sequence: int = 0) -> bytes:
+        """编码认证请求: 8-byte timestamp + 32-byte HMAC-SHA256"""
+        body = struct.pack('>Q', timestamp) + signature
+        return Message(MsgType.AUTH_REQ, sequence, body).encode()
+
+    @staticmethod
+    def encode_auth_rsp(success: bool, message: str = "",
+                        sequence: int = 0) -> bytes:
+        """编码认证响应: 1-byte success flag + UTF-8 message"""
+        msg_bytes = message.encode('utf-8')
+        body = struct.pack('>B', 1 if success else 0) + msg_bytes
+        return Message(MsgType.AUTH_RSP, sequence, body).encode()
 
     @staticmethod
     def encode_start_filter_req(channel_id: int, filter_type: int,
@@ -467,3 +484,17 @@ class ProtocolDecoder:
         return_code, output_len = struct.unpack('>II', body[:8])
         output_data = body[8:8+output_len] if output_len > 0 else None
         return return_code, output_data
+
+    @staticmethod
+    def decode_auth_req(body: bytes) -> Tuple[int, bytes]:
+        """解码认证请求，返回 (timestamp, signature_32bytes)"""
+        timestamp = struct.unpack('>Q', body[:8])[0]
+        signature = body[8:40]
+        return timestamp, signature
+
+    @staticmethod
+    def decode_auth_rsp(body: bytes) -> Tuple[bool, str]:
+        """解码认证响应，返回 (success, message)"""
+        success = body[0] != 0
+        message = body[1:].decode('utf-8', errors='replace') if len(body) > 1 else ""
+        return success, message
