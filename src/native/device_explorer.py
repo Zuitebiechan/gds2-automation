@@ -34,7 +34,7 @@ WM_CLOSE = 0x0010
 # ListView messages
 LVM_FIRST = 0x1000
 LVM_GETITEMCOUNT = LVM_FIRST + 4
-LVM_GETITEMTEXT = LVM_FIRST + 45   # LVM_GETITEMTEXTW
+LVM_GETITEMTEXT = LVM_FIRST + 115  # LVM_GETITEMTEXTW (Unicode)
 LVM_SETITEMSTATE = LVM_FIRST + 43
 LVM_GETITEMSTATE = LVM_FIRST + 44
 LVM_ENSUREVISIBLE = LVM_FIRST + 19
@@ -51,6 +51,9 @@ PROCESS_QUERY_INFORMATION = 0x0400
 MEM_COMMIT = 0x1000
 MEM_RELEASE = 0x8000
 PAGE_READWRITE = 0x04
+
+# Process query
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
 # Callback type
 EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -110,7 +113,7 @@ class DeviceExplorerController:
         Get all device names from the list using cross-process memory reading.
 
         Uses Windows API to allocate memory in the target process and
-        read the ListView item text.
+        read the ListView item text. Handles both 32-bit and 64-bit targets.
 
         Returns:
             List of device name strings
@@ -130,8 +133,8 @@ class DeviceExplorerController:
         user32.GetWindowThreadProcessId(self._dialog_hwnd, ctypes.byref(process_id))
 
         if not process_id.value:
-            logger.warning("Could not get process ID, falling back to known devices")
-            return self._get_known_device_names()
+            logger.warning("Could not get process ID")
+            return [f"Device {i+1}" for i in range(count)]
 
         # Open the process with required permissions
         process_handle = kernel32.OpenProcess(
@@ -141,33 +144,23 @@ class DeviceExplorerController:
         )
 
         if not process_handle:
-            logger.warning(f"Could not open process {process_id.value}, falling back to known devices")
-            return self._get_known_device_names()
+            logger.warning(f"Could not open process {process_id.value}")
+            return [f"Device {i+1}" for i in range(count)]
 
         try:
+            # Detect if target process is 32-bit (WOW64)
+            is_wow64 = ctypes.c_int(0)
+            kernel32.IsWow64Process(process_handle, ctypes.byref(is_wow64))
+            target_is_32bit = bool(is_wow64.value)
+            logger.info(f"Target process is {'32-bit' if target_is_32bit else '64-bit'}")
+
             device_names = []
-            all_read_failed = True
             for i in range(count):
-                name = self._read_listview_item_text(process_handle, i)
+                name = self._read_listview_item_text(process_handle, i, target_is_32bit=target_is_32bit)
                 if name:
                     device_names.append(name)
-                    all_read_failed = False
                 else:
-                    device_names.append(None)  # Placeholder
-
-            # If all reads failed, use known device names
-            if all_read_failed:
-                logger.warning("Cross-process reading failed for all items, using known device names")
-                return self._get_known_device_names()
-
-            # Fill in any failed reads with known names or fallback
-            known_names = ["MDI", "MDI 2", "SM2 USB", "SM3 USB"]
-            for i in range(len(device_names)):
-                if device_names[i] is None:
-                    if i < len(known_names):
-                        device_names[i] = known_names[i]
-                    else:
-                        device_names[i] = f"Device {i}"
+                    device_names.append(f"Device {i+1}")
 
             logger.info(f"Read device names: {device_names}")
             return device_names
@@ -175,24 +168,32 @@ class DeviceExplorerController:
         finally:
             kernel32.CloseHandle(process_handle)
 
-    def _read_listview_item_text(self, process_handle, item_index: int, subitem: int = 0) -> Optional[str]:
+    def _read_listview_item_text(self, process_handle, item_index: int, subitem: int = 0, target_is_32bit: bool = False) -> Optional[str]:
         """
         Read text from a ListView item in another process.
 
         Uses cross-process memory allocation to get the item text.
+        Supports both 32-bit and 64-bit target processes.
 
         Args:
             process_handle: Handle to the target process
             item_index: Index of the item
             subitem: Subitem index (0 for main text)
+            target_is_32bit: True if target is a 32-bit (WOW64) process
 
         Returns:
             Item text or None if failed
         """
-        # LVITEM structure size (for 64-bit: need to handle both 32/64 bit)
-        # We'll use a simplified approach with fixed buffer size
         MAX_TEXT_LENGTH = 256
-        LVITEM_SIZE = 72  # Size on 64-bit Windows
+
+        if target_is_32bit:
+            # 32-bit LVITEMW: pointers are 4 bytes
+            # mask(4) iItem(4) iSubItem(4) state(4) stateMask(4)
+            # pszText(4) cchTextMax(4) iImage(4) lParam(4)
+            LVITEM_SIZE = 36
+        else:
+            # 64-bit LVITEMW: pointers are 8 bytes, alignment padding
+            LVITEM_SIZE = 72
 
         # Allocate memory in target process for LVITEM structure + text buffer
         total_size = LVITEM_SIZE + (MAX_TEXT_LENGTH * 2)  # Unicode chars
@@ -209,34 +210,36 @@ class DeviceExplorerController:
             return None
 
         try:
-            # Build LVITEM structure
-            # struct LVITEMW {
-            #   UINT   mask;          // 0
-            #   int    iItem;         // 4
-            #   int    iSubItem;      // 8
-            #   UINT   state;         // 12
-            #   UINT   stateMask;     // 16
-            #   LPWSTR pszText;       // 20 (32-bit) or 24 (64-bit)
-            #   int    cchTextMax;    // 24 (32-bit) or 32 (64-bit)
-            #   ...
-            # }
-
             text_buffer_addr = remote_buffer + LVITEM_SIZE
 
-            # Create LVITEM structure (64-bit layout)
-            # We use pack to create the structure
-            # mask = LVIF_TEXT = 0x0001
-            lvitem = struct.pack(
-                "IiiII" + "Q" + "i" + "xxxx" + "Q" * 4,  # Simplified 64-bit layout
-                0x0001,          # mask (LVIF_TEXT)
-                item_index,      # iItem
-                subitem,         # iSubItem
-                0,               # state
-                0,               # stateMask
-                text_buffer_addr,  # pszText (pointer to text buffer)
-                MAX_TEXT_LENGTH,   # cchTextMax
-                0, 0, 0, 0       # padding/other fields
-            )
+            if target_is_32bit:
+                # 32-bit LVITEMW struct layout
+                # All pointers are 4 bytes (use "I" for unsigned 32-bit)
+                lvitem = struct.pack(
+                    "<IiiII I i i I",
+                    0x0001,                              # mask (LVIF_TEXT)
+                    item_index,                          # iItem
+                    subitem,                             # iSubItem
+                    0,                                   # state
+                    0,                                   # stateMask
+                    text_buffer_addr & 0xFFFFFFFF,       # pszText (32-bit pointer)
+                    MAX_TEXT_LENGTH,                      # cchTextMax
+                    0,                                   # iImage
+                    0,                                   # lParam
+                )
+            else:
+                # 64-bit LVITEMW struct layout
+                lvitem = struct.pack(
+                    "IiiII" + "Q" + "i" + "xxxx" + "Q" * 4,
+                    0x0001,          # mask (LVIF_TEXT)
+                    item_index,      # iItem
+                    subitem,         # iSubItem
+                    0,               # state
+                    0,               # stateMask
+                    text_buffer_addr,  # pszText (64-bit pointer)
+                    MAX_TEXT_LENGTH,   # cchTextMax
+                    0, 0, 0, 0       # padding/other fields
+                )
 
             # Write LVITEM to remote process
             bytes_written = ctypes.c_size_t()
@@ -283,17 +286,6 @@ class DeviceExplorerController:
 
         finally:
             kernel32.VirtualFreeEx(process_handle, remote_buffer, 0, MEM_RELEASE)
-
-    def _get_known_device_names(self) -> List[str]:
-        """
-        Fallback: Return known device names based on count.
-
-        This is a fallback when cross-process reading fails.
-        """
-        count = self.get_device_count()
-        # Known device order in GDS2 Device Explorer
-        known_devices = ["MDI", "MDI 2", "SM2 USB", "SM3 USB"]
-        return known_devices[:count] if count <= len(known_devices) else [f"Device {i}" for i in range(count)]
 
     def get_available_devices(self) -> List[str]:
         """

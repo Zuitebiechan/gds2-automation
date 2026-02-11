@@ -1,0 +1,16 @@
+Windows Registry Editor Version 5.00
+
+; VCI Proxy - Virtual J2534 Device Registration
+; Run as Administrator to import
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\PassThruSupport.04.04\VCI Proxy]
+"Name"="VCI Proxy (Remote)"
+"Vendor"="VCI Proxy"
+"ConfigApplication"=""
+"FunctionLibrary"="C:\\Program Files (x86)\\VCI_Proxy\\virtual_j2534.dll"
+"CAN"=dword:00000001
+"ISO15765"=dword:00000001
+"ISO14230"=dword:00000001
+"ISO9141"=dword:00000001
+"J1850PWM"=dword:00000001
+"J1850VPW"=dword:00000001

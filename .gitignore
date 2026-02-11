@@ -31,6 +31,8 @@ env/
 .vscode/
 *.swp
 *.swo
+.claude/skills/
+.claude/settings.local.json
 
 # Logs
 logs/
@@ -61,3 +63,16 @@ screenshots/
 
 # Exploration results
 exploration_results/
+
+# Test results
+test_results/
+
+# Temporary JSON files
+gds2_inspect.json
+
+# Vendor binaries
+vendor/
+
+# Auto-generated mappings (keep template in repo)
+mappings/*.json
+!mappings/example_vehicle.json
