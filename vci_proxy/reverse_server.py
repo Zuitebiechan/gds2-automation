@@ -21,7 +21,7 @@ from .cache_read_msgs import ReadMsgsCache
 from .cache_filter_dedup import FilterDeduplicationCache
 from .cache_vbatt import VbattCache
 from .auth import verify_signature
-from .protocol import MsgType, ProtocolDecoder, ProtocolEncoder
+from .protocol import MAGIC, HEADER_SIZE, MsgType, MSG_NAMES, ProtocolDecoder, ProtocolEncoder
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,39 +29,6 @@ logging.basicConfig(
     datefmt='%H:%M:%S'
 )
 logger = logging.getLogger(__name__)
-
-# Message type names for logging
-MSG_NAMES = {
-    0x0001: "Open", 0x0002: "Close", 0x0003: "Connect", 0x0004: "Disconnect",
-    0x0005: "ReadMsgs", 0x0006: "WriteMsgs", 0x0007: "Ioctl",
-    0x0010: "StartFilter", 0x0011: "StopFilter",
-    0x0020: "ReadVersion", 0x0021: "GetLastError",
-    0x00FE: "AuthReq", 0x00FF: "Heartbeat",
-    0x8001: "Open_RSP", 0x8002: "Close_RSP", 0x8003: "Connect_RSP",
-    0x8004: "Disconnect_RSP", 0x8005: "ReadMsgs_RSP", 0x8006: "WriteMsgs_RSP",
-    0x8007: "Ioctl_RSP", 0x8010: "StartFilter_RSP", 0x8011: "StopFilter_RSP",
-    0x8020: "ReadVersion_RSP", 0x8021: "GetLastError_RSP",
-    0x80FE: "Auth_RSP", 0x80FF: "Heartbeat_ACK",
-}
-
-MAGIC = 0x4A325334
-HEADER_SIZE = 14
-
-# Message types
-MSG_HEARTBEAT = 0x00FF
-MSG_HEARTBEAT_ACK = 0x80FF
-MSG_AUTH_REQ = 0x00FE
-
-# J2534 request types for cache integration
-MSG_READ_MSGS_REQ = 0x0005
-MSG_READ_MSGS_RSP = 0x8005
-MSG_START_FILTER_REQ = 0x0010
-MSG_START_FILTER_RSP = 0x8010
-MSG_STOP_FILTER_REQ = 0x0011
-MSG_DISCONNECT_REQ = 0x0004
-MSG_CLOSE_REQ = 0x0002
-MSG_IOCTL_REQ = 0x0007
-MSG_IOCTL_RSP = 0x8007
 
 
 class ReverseProxyServer:
@@ -164,7 +131,7 @@ class ReverseProxyServer:
         body_len = length - HEADER_SIZE
         body = await reader.readexactly(body_len) if body_len > 0 else b''
 
-        if msg_type == MSG_AUTH_REQ:
+        if msg_type == MsgType.AUTH_REQ:
             if not self.config.auth.enabled:
                 # Auth not required, but client sent AUTH_REQ -- accept it
                 logger.info("Auth not required, accepting AUTH_REQ")
@@ -189,7 +156,7 @@ class ReverseProxyServer:
                 logger.warning(f"VCI client authentication failed: {reason}")
             return success
 
-        if msg_type == MSG_HEARTBEAT:
+        if msg_type == MsgType.HEARTBEAT:
             if self.config.auth.enabled:
                 logger.warning(
                     "Auth required but VCI client sent HEARTBEAT (legacy client)"
@@ -197,7 +164,7 @@ class ReverseProxyServer:
                 return False
             # Legacy client, accept heartbeat as registration
             ack_header = struct.pack(
-                '>IIHI', MAGIC, HEADER_SIZE, MSG_HEARTBEAT_ACK, sequence
+                '>IIHI', MAGIC, HEADER_SIZE, MsgType.HEARTBEAT_ACK, sequence
             )
             async with self.vci_lock:
                 writer.write(ack_header)
@@ -253,16 +220,16 @@ class ReverseProxyServer:
                 body = await reader.readexactly(body_len) if body_len > 0 else b''
 
                 # 处理心跳消息 - 发送 ACK
-                if msg_type == MSG_HEARTBEAT:
+                if msg_type == MsgType.HEARTBEAT:
                     logger.debug(f"收到心跳, seq={sequence}")
-                    ack_header = struct.pack('>IIHI', MAGIC, HEADER_SIZE, MSG_HEARTBEAT_ACK, sequence)
+                    ack_header = struct.pack('>IIHI', MAGIC, HEADER_SIZE, MsgType.HEARTBEAT_ACK, sequence)
                     async with self.vci_lock:
                         writer.write(ack_header)
                         await writer.drain()
                     continue
 
                 # 心跳 ACK - 忽略
-                if msg_type == MSG_HEARTBEAT_ACK:
+                if msg_type == MsgType.HEARTBEAT_ACK:
                     logger.debug(f"收到心跳ACK, seq={sequence}")
                     continue
 
@@ -285,6 +252,71 @@ class ReverseProxyServer:
             writer.close()
             print(f"\n*** VCI Proxy 已断开 ***\n")
 
+    def _try_serve_cached(self, msg_type: int, body: bytes,
+                          sequence: int) -> tuple[Optional[bytes], Optional[int]]:
+        """Try to serve the request from cache.
+
+        Returns (cached_response, ioctl_id).
+        cached_response is None if cache miss.
+        ioctl_id is set when msg_type is IOCTL_REQ (needed for recording later).
+        """
+        ioctl_id = None
+
+        if msg_type == MsgType.READ_MSGS_REQ:
+            channel_id, num_msgs, timeout = ProtocolDecoder.decode_read_msgs_req(body)
+            cached = self._read_cache.try_serve_from_cache(
+                channel_id, num_msgs, timeout, sequence
+            )
+            if cached is not None:
+                return cached, ioctl_id
+
+        elif msg_type == MsgType.START_FILTER_REQ:
+            cached = self._filter_cache.try_dedup(body, sequence)
+            if cached is not None:
+                return cached, ioctl_id
+
+        elif msg_type == MsgType.IOCTL_REQ:
+            _ch, ioctl_id, _input = ProtocolDecoder.decode_ioctl_req(body)
+            cached = self._vbatt_cache.try_get_cached(ioctl_id)
+            if cached is not None:
+                ret, output_data = cached
+                resp = ProtocolEncoder.encode_ioctl_rsp(ret, output_data, sequence)
+                return resp, ioctl_id
+
+        return None, ioctl_id
+
+    def _invalidate_caches(self, msg_type: int, body: bytes):
+        """Invalidate caches based on the request type."""
+        if msg_type == MsgType.DISCONNECT_REQ:
+            channel_id = ProtocolDecoder.decode_disconnect_req(body)
+            self._read_cache.invalidate_channel(channel_id)
+            self._filter_cache.invalidate_channel(channel_id)
+            self._vbatt_cache.invalidate()
+        elif msg_type == MsgType.CLOSE_REQ:
+            self._read_cache.clear()
+            self._filter_cache.clear()
+            self._vbatt_cache.invalidate()
+        elif msg_type == MsgType.STOP_FILTER_REQ:
+            _ch_id, filter_id = ProtocolDecoder.decode_stop_filter_req(body)
+            self._filter_cache.on_stop_filter(filter_id)
+
+    def _record_in_caches(self, msg_type: int, body: bytes,
+                          resp_type: int, resp_body: bytes,
+                          ioctl_id: Optional[int]):
+        """Record response in caches for future lookups."""
+        if msg_type == MsgType.READ_MSGS_REQ:
+            channel_id = struct.unpack('>I', body[:4])[0]
+            return_code = struct.unpack('>I', resp_body[:4])[0]
+            self._read_cache.record_result(channel_id, return_code)
+
+        elif msg_type == MsgType.START_FILTER_REQ and resp_type == MsgType.START_FILTER_RSP:
+            return_code, filter_id = ProtocolDecoder.decode_start_filter_rsp(resp_body)
+            self._filter_cache.record_result(body, filter_id, return_code, resp_body)
+
+        elif msg_type == MsgType.IOCTL_REQ and ioctl_id is not None and resp_type == MsgType.IOCTL_RSP:
+            ret, output_data = ProtocolDecoder.decode_ioctl_rsp(resp_body)
+            self._vbatt_cache.record_result(ioctl_id, ret, output_data)
+
     async def _handle_proxy_connection(self, reader: asyncio.StreamReader,
                                        writer: asyncio.StreamWriter):
         """处理本地代理连接"""
@@ -298,7 +330,6 @@ class ReverseProxyServer:
                     logger.info("等待 VCI Proxy 连接...")
                     await self.vci_connected.wait()
 
-                # 检查 VCI writer 是否有效
                 if self.vci_writer is None:
                     logger.error("VCI writer 无效")
                     break
@@ -316,63 +347,24 @@ class ReverseProxyServer:
 
                 msg_name = MSG_NAMES.get(msg_type, f"0x{msg_type:04x}")
 
-                # --- P1-1: ReadMsgs BUFFER_EMPTY cache ---
-                if msg_type == MSG_READ_MSGS_REQ:
-                    channel_id, num_msgs, timeout = ProtocolDecoder.decode_read_msgs_req(body)
-                    cached = self._read_cache.try_serve_from_cache(
-                        channel_id, num_msgs, timeout, sequence
-                    )
-                    if cached is not None:
-                        writer.write(cached)
-                        await writer.drain()
-                        continue
+                # Try serving from cache
+                cached, ioctl_id = self._try_serve_cached(msg_type, body, sequence)
+                if cached is not None:
+                    writer.write(cached)
+                    await writer.drain()
+                    continue
 
-                # --- P2-1: Filter deduplication ---
-                if msg_type == MSG_START_FILTER_REQ:
-                    cached = self._filter_cache.try_dedup(body, sequence)
-                    if cached is not None:
-                        writer.write(cached)
-                        await writer.drain()
-                        continue
-
-                # --- P2-2: VBATT cache (server-side) ---
-                ioctl_id = None
-                if msg_type == MSG_IOCTL_REQ:
-                    _ch, ioctl_id, _input = ProtocolDecoder.decode_ioctl_req(body)
-                    cached = self._vbatt_cache.try_get_cached(ioctl_id)
-                    if cached is not None:
-                        ret, output_data = cached
-                        resp_body = ProtocolEncoder.encode_ioctl_rsp(ret, output_data, sequence)
-                        writer.write(resp_body)
-                        await writer.drain()
-                        continue
-
-                # --- Cache invalidation on Disconnect/Close ---
-                if msg_type == MSG_DISCONNECT_REQ:
-                    channel_id = ProtocolDecoder.decode_disconnect_req(body)
-                    self._read_cache.invalidate_channel(channel_id)
-                    self._filter_cache.invalidate_channel(channel_id)
-                    self._vbatt_cache.invalidate()
-                elif msg_type == MSG_CLOSE_REQ:
-                    self._read_cache.clear()
-                    self._filter_cache.clear()
-                    self._vbatt_cache.invalidate()
-
-                # --- StopFilter: remove from dedup cache ---
-                if msg_type == MSG_STOP_FILTER_REQ:
-                    _ch_id, filter_id = ProtocolDecoder.decode_stop_filter_req(body)
-                    self._filter_cache.on_stop_filter(filter_id)
+                # Invalidate caches as needed
+                self._invalidate_caches(msg_type, body)
 
                 # 转发请求到 VCI Proxy
                 self.sequence = (self.sequence + 1) & 0xFFFFFFFF
                 new_seq = self.sequence
                 fwd_start = time.monotonic()
 
-                # 创建响应 Future
                 future = asyncio.get_running_loop().create_future()
                 self.response_futures[new_seq] = future
 
-                # 重新打包并发送（使用锁保护）
                 try:
                     new_header = struct.pack('>IIHI', MAGIC, length, msg_type, new_seq)
                     async with self.vci_lock:
@@ -390,20 +382,7 @@ class ReverseProxyServer:
                     resp_type, resp_body = await asyncio.wait_for(future, timeout=30.0)
                     fwd_ms = (time.monotonic() - fwd_start) * 1000
 
-                    # --- Record results in caches ---
-                    if msg_type == MSG_READ_MSGS_REQ:
-                        return_code = struct.unpack('>I', resp_body[:4])[0]
-                        self._read_cache.record_result(channel_id, return_code)
-
-                    if msg_type == MSG_START_FILTER_REQ and resp_type == MSG_START_FILTER_RSP:
-                        return_code, filter_id = ProtocolDecoder.decode_start_filter_rsp(resp_body)
-                        self._filter_cache.record_result(
-                            body, filter_id, return_code, resp_body
-                        )
-
-                    if msg_type == MSG_IOCTL_REQ and ioctl_id is not None and resp_type == MSG_IOCTL_RSP:
-                        ret, output_data = ProtocolDecoder.decode_ioctl_rsp(resp_body)
-                        self._vbatt_cache.record_result(ioctl_id, ret, output_data)
+                    self._record_in_caches(msg_type, body, resp_type, resp_body, ioctl_id)
 
                     # 发送响应给客户端（使用原始 sequence）
                     resp_header = struct.pack('>IIHI', MAGIC,
@@ -412,11 +391,11 @@ class ReverseProxyServer:
                     writer.write(resp_header + resp_body)
                     await writer.drain()
 
-                    # Log with latency (skip noisy ReadMsgs BUFFER_EMPTY)
-                    if msg_type != 0x0005 or fwd_ms > 200:
+                    if msg_type != MsgType.READ_MSGS_REQ or fwd_ms > 200:
                         logger.info(f"[PROXY] {msg_name} seq={sequence} -> {fwd_ms:.1f}ms")
 
                 except (asyncio.TimeoutError, ConnectionError) as e:
+                    self.response_futures.pop(new_seq, None)
                     fwd_ms = (time.monotonic() - fwd_start) * 1000
                     reason = "VCI_DISCONNECTED" if isinstance(e, ConnectionError) else "TIMEOUT"
                     logger.error(f"[PROXY] {msg_name} seq={sequence} {reason} after {fwd_ms:.0f}ms")

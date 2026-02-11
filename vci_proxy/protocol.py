@@ -55,6 +55,10 @@ class MsgType(IntEnum):
     HEARTBEAT_ACK = 0x80FF
 
 
+# Human-readable message type names for logging
+MSG_NAMES = {v: v.name for v in MsgType}
+
+
 @dataclass
 class Message:
     """协议消息"""
@@ -300,6 +304,11 @@ class ProtocolDecoder:
     """协议解码器"""
 
     @staticmethod
+    def _check_min_len(body: bytes, min_len: int, context: str):
+        if len(body) < min_len:
+            raise ValueError(f"{context}: body too short ({len(body)} < {min_len})")
+
+    @staticmethod
     def decode_open_req(body: bytes) -> Optional[str]:
         """解码 PassThruOpen 请求，返回 device_name"""
         if not body:
@@ -309,41 +318,49 @@ class ProtocolDecoder:
     @staticmethod
     def decode_open_rsp(body: bytes) -> Tuple[int, int]:
         """解码 PassThruOpen 响应，返回 (return_code, device_id)"""
+        ProtocolDecoder._check_min_len(body, 8, "OpenRsp")
         return struct.unpack('>II', body[:8])
 
     @staticmethod
     def decode_close_req(body: bytes) -> int:
         """解码 PassThruClose 请求，返回 device_id"""
+        ProtocolDecoder._check_min_len(body, 4, "CloseReq")
         return struct.unpack('>I', body[:4])[0]
 
     @staticmethod
     def decode_close_rsp(body: bytes) -> int:
         """解码 PassThruClose 响应，返回 return_code"""
+        ProtocolDecoder._check_min_len(body, 4, "CloseRsp")
         return struct.unpack('>I', body[:4])[0]
 
     @staticmethod
     def decode_connect_req(body: bytes) -> Tuple[int, int, int, int]:
         """解码 PassThruConnect 请求，返回 (device_id, protocol_id, flags, baudrate)"""
+        ProtocolDecoder._check_min_len(body, 16, "ConnectReq")
         return struct.unpack('>IIII', body[:16])
 
     @staticmethod
     def decode_connect_rsp(body: bytes) -> Tuple[int, int]:
         """解码 PassThruConnect 响应，返回 (return_code, channel_id)"""
+        ProtocolDecoder._check_min_len(body, 8, "ConnectRsp")
         return struct.unpack('>II', body[:8])
 
     @staticmethod
     def decode_disconnect_req(body: bytes) -> int:
         """解码 PassThruDisconnect 请求，返回 channel_id"""
+        ProtocolDecoder._check_min_len(body, 4, "DisconnectReq")
         return struct.unpack('>I', body[:4])[0]
 
     @staticmethod
     def decode_disconnect_rsp(body: bytes) -> int:
         """解码 PassThruDisconnect 响应，返回 return_code"""
+        ProtocolDecoder._check_min_len(body, 4, "DisconnectRsp")
         return struct.unpack('>I', body[:4])[0]
 
     @staticmethod
     def decode_read_msgs_req(body: bytes) -> Tuple[int, int, int]:
         """解码 PassThruReadMsgs 请求，返回 (channel_id, num_msgs, timeout)"""
+        ProtocolDecoder._check_min_len(body, 12, "ReadMsgsReq")
         return struct.unpack('>III', body[:12])
 
     @staticmethod
@@ -355,14 +372,19 @@ class ProtocolDecoder:
         messages: List of dict with keys:
             - protocol_id, rx_status, tx_flags, timestamp, data (bytes)
         """
+        ProtocolDecoder._check_min_len(body, 8, "ReadMsgsRsp")
         return_code, num_msgs = struct.unpack('>II', body[:8])
         messages = []
         offset = 8
 
         for _ in range(num_msgs):
+            if offset + 20 > len(body):
+                break
             protocol_id, rx_status, tx_flags, timestamp, data_size = \
                 struct.unpack('>IIIII', body[offset:offset+20])
             offset += 20
+            if offset + data_size > len(body):
+                break
             data = body[offset:offset+data_size]
             offset += data_size
 
@@ -383,14 +405,19 @@ class ProtocolDecoder:
 
         返回: (channel_id, messages, timeout)
         """
+        ProtocolDecoder._check_min_len(body, 12, "WriteMsgsReq")
         channel_id, num_msgs, timeout = struct.unpack('>III', body[:12])
         messages = []
         offset = 12
 
         for _ in range(num_msgs):
+            if offset + 20 > len(body):
+                break
             protocol_id, rx_status, tx_flags, timestamp, data_size = \
                 struct.unpack('>IIIII', body[offset:offset+20])
             offset += 20
+            if offset + data_size > len(body):
+                break
             data = body[offset:offset+data_size]
             offset += data_size
 
@@ -407,16 +434,19 @@ class ProtocolDecoder:
     @staticmethod
     def decode_write_msgs_rsp(body: bytes) -> Tuple[int, int]:
         """解码 PassThruWriteMsgs 响应，返回 (return_code, num_written)"""
+        ProtocolDecoder._check_min_len(body, 8, "WriteMsgsRsp")
         return struct.unpack('>II', body[:8])
 
     @staticmethod
     def decode_read_version_req(body: bytes) -> int:
         """解码 PassThruReadVersion 请求，返回 device_id"""
+        ProtocolDecoder._check_min_len(body, 4, "ReadVersionReq")
         return struct.unpack('>I', body[:4])[0]
 
     @staticmethod
     def decode_read_version_rsp(body: bytes) -> Tuple[int, str, str, str]:
         """解码 PassThruReadVersion 响应，返回 (return_code, fw_ver, dll_ver, api_ver)"""
+        ProtocolDecoder._check_min_len(body, 244, "ReadVersionRsp")
         return_code = struct.unpack('>I', body[:4])[0]
         fw_ver = body[4:84].rstrip(b'\x00').decode('utf-8', errors='replace')
         dll_ver = body[84:164].rstrip(b'\x00').decode('utf-8', errors='replace')
@@ -431,17 +461,25 @@ class ProtocolDecoder:
 
         返回: (channel_id, filter_type, mask_msg, pattern_msg, flow_control_msg)
         """
+        ProtocolDecoder._check_min_len(body, 11, "StartFilterReq")  # 8 + 3 present flags
         channel_id, filter_type = struct.unpack('>II', body[:8])
         offset = 8
 
         messages = []
         for _ in range(3):  # mask, pattern, flow_control
+            if offset >= len(body):
+                messages.append(None)
+                continue
             present = body[offset]
             offset += 1
             if present:
+                if offset + 20 > len(body):
+                    raise ValueError(f"StartFilterReq: truncated message at offset {offset}")
                 protocol_id, rx_status, tx_flags, timestamp, data_size = \
                     struct.unpack('>IIIII', body[offset:offset+20])
                 offset += 20
+                if offset + data_size > len(body):
+                    raise ValueError(f"StartFilterReq: truncated data at offset {offset}")
                 data = body[offset:offset+data_size]
                 offset += data_size
                 messages.append({
@@ -459,21 +497,25 @@ class ProtocolDecoder:
     @staticmethod
     def decode_start_filter_rsp(body: bytes) -> Tuple[int, int]:
         """解码 PassThruStartMsgFilter 响应，返回 (return_code, filter_id)"""
+        ProtocolDecoder._check_min_len(body, 8, "StartFilterRsp")
         return struct.unpack('>II', body[:8])
 
     @staticmethod
     def decode_stop_filter_req(body: bytes) -> Tuple[int, int]:
         """解码 PassThruStopMsgFilter 请求，返回 (channel_id, filter_id)"""
+        ProtocolDecoder._check_min_len(body, 8, "StopFilterReq")
         return struct.unpack('>II', body[:8])
 
     @staticmethod
     def decode_stop_filter_rsp(body: bytes) -> int:
         """解码 PassThruStopMsgFilter 响应，返回 return_code"""
+        ProtocolDecoder._check_min_len(body, 4, "StopFilterRsp")
         return struct.unpack('>I', body[:4])[0]
 
     @staticmethod
     def decode_ioctl_req(body: bytes) -> Tuple[int, int, Optional[bytes]]:
         """解码 PassThruIoctl 请求，返回 (channel_id, ioctl_id, input_data)"""
+        ProtocolDecoder._check_min_len(body, 12, "IoctlReq")
         channel_id, ioctl_id, input_len = struct.unpack('>III', body[:12])
         input_data = body[12:12+input_len] if input_len > 0 else None
         return channel_id, ioctl_id, input_data
@@ -481,6 +523,7 @@ class ProtocolDecoder:
     @staticmethod
     def decode_ioctl_rsp(body: bytes) -> Tuple[int, Optional[bytes]]:
         """解码 PassThruIoctl 响应，返回 (return_code, output_data)"""
+        ProtocolDecoder._check_min_len(body, 8, "IoctlRsp")
         return_code, output_len = struct.unpack('>II', body[:8])
         output_data = body[8:8+output_len] if output_len > 0 else None
         return return_code, output_data
@@ -488,6 +531,7 @@ class ProtocolDecoder:
     @staticmethod
     def decode_auth_req(body: bytes) -> Tuple[int, bytes]:
         """解码认证请求，返回 (timestamp, signature_32bytes)"""
+        ProtocolDecoder._check_min_len(body, 40, "AuthReq")
         timestamp = struct.unpack('>Q', body[:8])[0]
         signature = body[8:40]
         return timestamp, signature
@@ -495,6 +539,7 @@ class ProtocolDecoder:
     @staticmethod
     def decode_auth_rsp(body: bytes) -> Tuple[bool, str]:
         """解码认证响应，返回 (success, message)"""
+        ProtocolDecoder._check_min_len(body, 1, "AuthRsp")
         success = body[0] != 0
         message = body[1:].decode('utf-8', errors='replace') if len(body) > 1 else ""
         return success, message

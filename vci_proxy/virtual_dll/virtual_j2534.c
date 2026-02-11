@@ -55,7 +55,7 @@
 
 // Server configuration
 static const char* SERVER_HOST = "127.0.0.1";
-static const int SERVER_PORT = 9001;
+static int SERVER_PORT = 9001;  // overridden by VCI_PROXY_PORT env var
 
 // Socket recv timeout (ms) - prevents indefinite blocking
 #define SOCKET_RECV_TIMEOUT_MS  30000
@@ -214,6 +214,19 @@ static int recv_exact(SOCKET sock, char* buf, int len) {
     return total;
 }
 
+// Send exactly n bytes (handles partial send)
+static int send_exact(SOCKET sock, const char* buf, int len) {
+    int total = 0;
+    while (total < len) {
+        int sent = send(sock, buf + total, len - total, 0);
+        if (sent <= 0) {
+            return sent;
+        }
+        total += sent;
+    }
+    return total;
+}
+
 // Initialize Winsock and connect to server
 static BOOL connect_to_server(void) {
     struct sockaddr_in serverAddr;
@@ -311,7 +324,7 @@ static long send_recv(unsigned short msg_type, const unsigned char* body,
         write_uint32_be(header + 10, sequence);
 
         // Send header
-        sent = send(g_socket, (const char*)header, HEADER_SIZE, 0);
+        sent = send_exact(g_socket, (const char*)header, HEADER_SIZE);
         if (sent != HEADER_SIZE) {
             log_msg("ERROR: Send header failed (sent=%d, WSA=%d)", sent, WSAGetLastError());
             disconnect_socket();
@@ -320,7 +333,7 @@ static long send_recv(unsigned short msg_type, const unsigned char* body,
 
         // Send body
         if (body_len > 0) {
-            sent = send(g_socket, (const char*)body, body_len, 0);
+            sent = send_exact(g_socket, (const char*)body, body_len);
             if (sent != (int)body_len) {
                 log_msg("ERROR: Send body failed (sent=%d/%lu, WSA=%d)", sent, body_len, WSAGetLastError());
                 disconnect_socket();
@@ -348,6 +361,11 @@ static long send_recv(unsigned short msg_type, const unsigned char* body,
         }
 
         // Receive response body
+        if (length < HEADER_SIZE) {
+            log_msg("ERROR: Response length too small: %lu < %u", length, HEADER_SIZE);
+            disconnect_socket();
+            continue;
+        }
         *resp_len = length - HEADER_SIZE;
         if (*resp_len > 0) {
             if (*resp_len > max_resp_len) {
@@ -384,10 +402,18 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
         case DLL_PROCESS_ATTACH:
             {
                 WSADATA wsaData;
+                char port_buf[16];
                 InitializeCriticalSection(&g_cs);
                 WSAStartup(MAKEWORD(2, 2), &wsaData);
                 g_initialized = TRUE;
                 log_init();
+                if (GetEnvironmentVariableA("VCI_PROXY_PORT", port_buf, sizeof(port_buf))) {
+                    int port = atoi(port_buf);
+                    if (port > 0 && port < 65536) {
+                        SERVER_PORT = port;
+                    }
+                }
+                log_msg("VCI Proxy DLL loaded, target port=%d", SERVER_PORT);
             }
             break;
         case DLL_PROCESS_DETACH:
@@ -423,6 +449,10 @@ J2534_API long __stdcall PassThruOpen(void* pName, unsigned long* pDeviceID) {
     if (pName != NULL) {
         const char* name = (const char*)pName;
         size_t name_len = strlen(name);
+        if (name_len > sizeof(body) - 1) {
+            log_msg("ERROR: Device name too long: %zu > %zu", name_len, sizeof(body) - 1);
+            return ERR_FAILED;
+        }
         if (name_len > 0) {
             memcpy(body, name, name_len);
             body[name_len] = 0;
@@ -577,21 +607,26 @@ J2534_API long __stdcall PassThruReadMsgs(unsigned long ChannelID,
 
     offset = 8;
     for (i = 0; i < num_msgs && i < *pNumMsgs; i++) {
+        unsigned long proto, rxstat, txflags, tstamp, datasize;
         if (offset + 20 > resp_len) break;
 
-        pMsg[i].ProtocolID = read_uint32_be(resp + offset);
-        pMsg[i].RxStatus = read_uint32_be(resp + offset + 4);
-        pMsg[i].TxFlags = read_uint32_be(resp + offset + 8);
-        pMsg[i].Timestamp = read_uint32_be(resp + offset + 12);
-        pMsg[i].DataSize = read_uint32_be(resp + offset + 16);
+        proto = read_uint32_be(resp + offset);
+        rxstat = read_uint32_be(resp + offset + 4);
+        txflags = read_uint32_be(resp + offset + 8);
+        tstamp = read_uint32_be(resp + offset + 12);
+        datasize = read_uint32_be(resp + offset + 16);
         offset += 20;
 
-        if (offset + pMsg[i].DataSize > resp_len) break;
-        if (pMsg[i].DataSize > sizeof(pMsg[i].Data)) {
-            pMsg[i].DataSize = sizeof(pMsg[i].Data);
-        }
-        memcpy(pMsg[i].Data, resp + offset, pMsg[i].DataSize);
-        offset += pMsg[i].DataSize;
+        if (datasize > sizeof(pMsg[i].Data)) datasize = sizeof(pMsg[i].Data);
+        if (offset + datasize > resp_len) break;
+
+        pMsg[i].ProtocolID = proto;
+        pMsg[i].RxStatus = rxstat;
+        pMsg[i].TxFlags = txflags;
+        pMsg[i].Timestamp = tstamp;
+        pMsg[i].DataSize = datasize;
+        memcpy(pMsg[i].Data, resp + offset, datasize);
+        offset += datasize;
     }
 
     *pNumMsgs = i;
@@ -629,6 +664,7 @@ J2534_API long __stdcall PassThruWriteMsgs(unsigned long ChannelID,
     body_len = 12;
 
     for (i = 0; i < *pNumMsgs; i++) {
+        if (body_len + 20 + pMsg[i].DataSize > sizeof(body)) break;
         write_uint32_be(body + body_len, pMsg[i].ProtocolID);
         write_uint32_be(body + body_len + 4, pMsg[i].RxStatus);
         write_uint32_be(body + body_len + 8, pMsg[i].TxFlags);
@@ -636,7 +672,6 @@ J2534_API long __stdcall PassThruWriteMsgs(unsigned long ChannelID,
         write_uint32_be(body + body_len + 16, pMsg[i].DataSize);
         body_len += 20;
 
-        if (body_len + pMsg[i].DataSize > sizeof(body)) break;
         memcpy(body + body_len, pMsg[i].Data, pMsg[i].DataSize);
         body_len += pMsg[i].DataSize;
     }

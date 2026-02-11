@@ -1,110 +1,161 @@
 # RPA_demo Project Memory
 
-**Last Updated:** 2026-02-03
-**Status:** Production Ready - Simplified Data Viewer + Java Agent Integration
+**Last Updated:** 2026-02-11
+**Branch:** feature/vci-proxy
+**Status:** Cloud Remote Diagnostics Platform - VCI Proxy validated, entering productization phase
 
 ---
 
 ## Table of Contents
-1. [Project Vision & Purpose](#project-vision--purpose)
+1. [Project Vision and Purpose](#project-vision-and-purpose)
 2. [Architecture Overview](#architecture-overview)
 3. [Project Structure](#project-structure)
-4. [Design Principles](#design-principles)
-5. [Current Implementation Status](#current-implementation-status)
-6. [Web UI Guide](#web-ui-guide)
-7. [Key Components Deep Dive](#key-components-deep-dive)
-8. [GDS2 Integration Details](#gds2-integration-details)
-9. [Working Demo Flow](#working-demo-flow)
-10. [Navigation Guide](#navigation-guide)
-11. [Current Scope & Limitations](#current-scope--limitations)
-12. [Development Workflow](#development-workflow)
-13. [Reference Documents](#reference-documents)
+4. [Layer 1: VCI Proxy Tunnel (Core Infrastructure)](#layer-1-vci-proxy-tunnel)
+5. [Layer 2: RPA Automation (Per-Software Plugin)](#layer-2-rpa-automation)
+6. [Layer 3: Debug Web UI (Temporary)](#layer-3-debug-web-ui)
+7. [GDS2 Integration Details](#gds2-integration-details)
+8. [Key Design Decisions](#key-design-decisions)
+9. [Data Flow](#data-flow)
+10. [Development Workflow](#development-workflow)
+11. [Current Scope and Roadmap](#current-scope-and-roadmap)
+12. [Reference Documents](#reference-documents)
 
 ---
 
-## Project Vision & Purpose
+## Project Vision and Purpose
 
-### The Big Picture
-This project uses **RPA (Robotic Process Automation) + Java Agent** to automate vehicle diagnostic software like **GDS2** (General Motors Diagnostic System 2). The long-term goal is to deploy this in production environments for actual vehicle diagnostics automation.
+### Ultimate Goal
 
-### Current Phase: Simplified Data Viewer
-- **Objective:** Automate vehicle diagnostics data collection with minimal user interaction
-- **Interface:** Simplified 3-dropdown UI: Device → Module → Data Category
-- **Architecture:** Java Agent for data extraction + Windows API for navigation
-- **Result:** High-frequency monitoring (100ms interval) with automatic navigation
+Turn professional vehicle diagnostics into a **one-button service**. The end user (car owner or technician) should never see or interact with OEM diagnostic software. They plug in a VCI device, open a simple app, and press a button to get results.
 
-### Confirmed Working Workflows
-1. **Data Viewer** - Simplified 3-dropdown UI with automatic navigation
-2. **Real-time Monitoring** - 100ms Agent-based parameter streaming via SSE
-3. **Device Switching** - Change VCI device from any page
-4. **DTC Auto-extraction** - DTCs automatically included in every snapshot
+```
+User's experience:          What happens behind the scenes:
 
-### Assumptions (Confirmed Working)
-- GDS2 is open with Java Agent attached
-- Hardware is connected (SM2 USB VCI device)
-- Vehicle data is loaded in GDS2
+  "Read DTCs"               App -> Cloud API -> RPA automates GDS2
+     [button]               -> VCI tunnel -> local hardware -> car
+                             -> DTCs extracted -> returned to app
+       |
+       v
+  P0300 - Random misfire    User has no idea GDS2 exists.
+  P0171 - System lean       They just see the results.
+  P0420 - Catalyst low
+```
+
+### Why This Matters
+
+Traditionally, a technician needs:
+- Expensive OEM diagnostic software ($$$)
+- Training to operate complex software
+- Software installed on a specific laptop
+
+This platform eliminates all three: OEM software runs in the cloud, RPA automates it, and the user gets a simple interface. The VCI Proxy tunnel bridges the cloud software to the user's local hardware over the internet.
+
+### Target Users
+- **Car owners** who want to perform their own diagnostics with minimal knowledge
+- **Independent mechanics** who need OEM-level diagnostics without dealership software
+- Anyone with a compatible VCI device and internet connection
+
+### Platform Strategy
+- **GDS2 (General Motors)** is the first supported OEM diagnostic tool
+- Future: BMW ISTA, Toyota Techstream, Ford IDS, VW ODIS, etc.
+- Each OEM tool gets its own RPA automation module; all share the VCI Proxy infrastructure
+- The user-facing interface remains the same regardless of which OEM tool runs behind the scenes
+
+### Current Phase
+- VCI Proxy tunnel validated end-to-end (including multi-port verification)
+- GDS2 cloud deployment working with RPA automation
+- Entering **productization phase**: packaging client, simplifying user flow
+- VCI support: Scanmatik SM2/SM3 (USB), with MDI/MDI2 planned
 
 ---
 
 ## Architecture Overview
 
-### Agent-Based Architecture
+### High-Level Architecture
 
 ```
-┌─────────────────────────────────────────┐
-│         Workflow Layer                  │  ← Business process orchestration
-│   - DataViewerWorkflow (PRIMARY)        │
-│   - InteractiveWorkflow                 │
-│   - ReadDataDisplayAgentWorkflow        │
-└─────────────────┬───────────────────────┘
-                  │
-┌─────────────────▼───────────────────────┐
-│    Navigation Layer                     │  ← GDS2 page transitions
-│   - NavigationController                │
-│   - AgentNavigator (Java Agent comms)   │
-│   - DeviceExplorerController (Win32)    │
-└─────────────────┬───────────────────────┘
-                  │
-┌─────────────────▼───────────────────────┐
-│      Data Collection Layer              │  ← Real-time monitoring
-│   - AgentDataCollector (100ms)          │
-│   - SSE Broadcasting                    │
-│   - Parameter change detection          │
-└─────────────────┬───────────────────────┘
-                  │
-┌─────────────────▼───────────────────────┐
-│      Discovery & Mapping Layer          │  ← List enumeration
-│   - VehicleDiscovery: enumerate lists   │
-│   - VehicleMapping: JSON persistence    │
-│   - On-demand module/data discovery     │
-└─────────────────────────────────────────┘
+                        Internet
+                           |
+    +----------------------+-----------------------+
+    |                 Cloud Server                  |
+    |               (Alibaba Cloud)                 |
+    |                                               |
+    |  +-------------------+  +------------------+  |
+    |  | OEM Diagnostic SW |  | RPA Automation   |  |
+    |  | (GDS2 + Agent)    |  | (Python)         |  |
+    |  +--------+----------+  +--------+---------+  |
+    |           |  J2534 API           |             |
+    |  +--------v----------+  +--------v---------+  |
+    |  | virtual_j2534.dll |  | Debug Web UI     |  |
+    |  | (Fake J2534 DLL)  |  | (Flask, temp)    |  |
+    |  +--------+----------+  +------------------+  |
+    |           |                                    |
+    |  +--------v----------+                         |
+    |  | reverse_server.py |                         |
+    |  | :9001 (DLL conn)  |                         |
+    |  | :9000 (VCI conn)  |                         |
+    |  | + 3-layer cache   |                         |
+    |  +--------+----------+                         |
+    +-----------|-----------+-----------------------+
+                | TCP tunnel (reverse connection)
+    +-----------|-----------+-----------------------+
+    |           |           User's Local Machine    |
+    |  +--------v----------+                         |
+    |  | reverse_client.py |                         |
+    |  | + PSK auth        |                         |
+    |  | + VBATT cache     |                         |
+    |  +--------+----------+                         |
+    |           | ctypes FFI                          |
+    |  +--------v----------+                         |
+    |  | Real J2534 DLL    |                         |
+    |  | (Scanmatik SM2/3) |                         |
+    |  +--------+----------+                         |
+    |           | USB                                |
+    |  +--------v----------+                         |
+    |  | VCI Device        |                         |
+    |  |      | OBD-II     |                         |
+    |  |   Vehicle ECU     |                         |
+    |  +-------------------+                         |
+    +-----------------------------------------------+
 ```
 
-### Data Viewer Flow
+### Three Layers
 
-```python
-# Simplified workflow - system handles all navigation
-viewer = DataViewerWorkflow()
+| Layer | Role | Lifespan |
+|-------|------|----------|
+| **VCI Proxy Tunnel** | Core infrastructure: bridge cloud software to local hardware | Permanent, shared by all OEM tools |
+| **RPA Automation** | Per-OEM-tool UI automation module (currently: GDS2) | Permanent, one per OEM tool |
+| **Debug Web UI** | Flask app for debugging/validating UI automation | Temporary, removed once automation is stable |
 
-# Step 1: Start - get devices or modules if connected
-result = viewer.start()
-# Returns: {"devices": [...]} or {"modules": [...], "device_connected": True}
+### Target Product Architecture
 
-# Step 2: Connect device - navigate to Module List
-result = viewer.connect_device("SM2 USB")
-# Returns: {"modules": [...], "vin": "..."}
-
-# Step 3: Select module - navigate to Data List
-result = viewer.select_module("[K20] Engine Control Module")
-# Returns: {"data_categories": [...]}
-
-# Step 4: Select data - navigate to Data Display, start monitoring
-result = viewer.select_data_category("Engine Data")
-# Returns: {"monitoring": True}
-
-# Change any selection - system auto-navigates
-viewer.get_available_devices()  # Navigate to Device Explorer
-viewer.select_module("Other Module")  # Uses Vehicle Menu shortcut
+```
+User-Facing Layer (future):
+  Mobile App / Mini-Program / Simple Web Page
+  - "Read DTCs" button
+  - "Live Data" button
+  - Connection code input
+       |
+       v
+Session Manager (future):
+  - Creates/destroys cloud VMs per user
+  - Generates connection codes
+  - Manages user authentication
+       |
+       v
+Diagnostic API Layer (future):
+  - "Read All DTCs" -> unified response format
+  - "Start Live Data" -> SSE stream
+  - Translates simple commands into OEM-specific RPA sequences
+       |
+       v
+RPA Layer (per OEM tool):            VCI Proxy Tunnel:
+  GDS2 adapter (working)              reverse_server (working)
+  ISTA adapter (future)                reverse_client (working)
+  ODIS adapter (future)                virtual_j2534.dll (working)
+       |                                    |
+       v                                    v
+  OEM Software in Cloud VM             User's Local VCI Hardware
 ```
 
 ---
@@ -113,526 +164,320 @@ viewer.select_module("Other Module")  # Uses Vehicle Menu shortcut
 
 ```
 RPA_demo/
-├── src/                          # Main source code
-│   ├── __init__.py
-│   │
-│   ├── core/                     # Core framework
-│   │   ├── __init__.py
-│   │   ├── driver.py             # GDS2Driver - pywinauto wrapper
-│   │   ├── locators.py           # Centralized UI element definitions
-│   │   └── template_matcher.py   # Multi-scale template matching
-│   │
-│   ├── discovery/                # Discovery system
-│   │   ├── __init__.py
-│   │   └── vehicle_mapping.py    # VehicleDiscovery & VehicleMapping
-│   │
-│   ├── native/                   # Windows API integration
-│   │   ├── __init__.py
-│   │   └── device_explorer.py    # Device Explorer automation
-│   │
-│   ├── navigation/               # Navigation system
-│   │   ├── __init__.py
-│   │   └── controller.py         # NavigationController
-│   │
-│   ├── streaming/                # Real-time data streaming
-│   │   ├── __init__.py
-│   │   ├── agent_navigator.py    # Java Agent communication
-│   │   └── agent_data_collector.py  # Agent-based data collection
-│   │
-│   ├── utils/                    # Utilities
-│   │   ├── __init__.py
-│   │   └── report_parser.py      # HTML report parsing
-│   │
-│   └── workflows/                # Business workflows
-│       ├── __init__.py
-│       ├── data_viewer.py        # PRIMARY - Simplified Data Viewer
-│       ├── interactive_workflow.py  # Step-by-step navigation
-│       └── read_data_display_agent.py  # CLI workflow wrapper
-│
-├── templates/                    # Web UI templates
-│   └── index.html                # Main Web UI page (Data Viewer)
-│
-├── scripts/                      # Utility scripts
-│   ├── run_demo.py               # Demo execution script
-│   ├── run_discovery.py          # Manual discovery utility
-│   ├── inspect_gds2.py           # UI inspection tool
-│   ├── inspect_agent.py          # Agent inspection tool
-│   ├── test_agent_collector.py   # Agent collector tests
-│   ├── test_agent_navigation.py  # Agent navigation tests
-│   ├── test_e2e_agent_flow.py    # E2E agent flow tests
-│   ├── test_e2e_full.py          # Full E2E tests
-│   ├── legacy/                   # Legacy test scripts
-│   └── exploration/              # Exploration scripts
-│
-├── mappings/                     # Auto-generated discovery data
-│   └── current_vehicle.json      # Module and data category mappings
-│
-├── images/                       # Template images
-│   ├── buttons/                  # Button templates
-│   ├── devices/                  # Device templates
-│   └── pages/                    # Page header templates
-│
-├── docs/                         # Documentation
-│   ├── GDS2_CONTROL_MAPPING.md   # UI control mapping
-│   └── WORKFLOW_DIAGRAM.md       # Navigation diagrams
-│
-├── tests/                        # pytest tests
-│   ├── __init__.py
-│   ├── conftest.py
-│   └── test_navigation_to_data_display.py
-│
-├── main.py                       # CLI entry point
-├── app.py                        # Flask Web UI backend
-├── CLAUDE.md                     # This file
-└── README.md                     # Project README
-```
-
-### Key Files
-
-| File | Purpose |
-|------|---------|
-| `main.py` | CLI entry point: `web`, `demo`, `inspect` commands |
-| `app.py` | Flask Web UI backend with Data Viewer API |
-| `templates/index.html` | Web UI frontend - Data Viewer |
-| `src/workflows/data_viewer.py` | **PRIMARY** - Simplified Data Viewer workflow |
-| `src/workflows/interactive_workflow.py` | Step-by-step interactive navigation |
-| `src/navigation/controller.py` | NavigationController - page transitions |
-| `src/native/device_explorer.py` | Windows API Device Explorer automation |
-| `src/streaming/agent_navigator.py` | Java Agent communication |
-| `src/streaming/agent_data_collector.py` | Agent-based real-time data collection |
-| `mappings/current_vehicle.json` | Auto-generated module/data mappings |
-
----
-
-## Design Principles
-
-### 1. Simplified User Interface
-
-**Three Dropdowns:**
-- Device: Select VCI device (SM2 USB, MDI, etc.)
-- Module: Select vehicle module (Engine Control Module, etc.)
-- Data Category: Select data to monitor (Engine Data, Misfire Data, etc.)
-
-**System handles all navigation:**
-- User selects → System navigates → Results appear
-- Change any selection → System stops monitoring, navigates back, resumes
-
-### 2. Smart Navigation
-
-**Navigation shortcuts for efficiency:**
-| Change | Navigation Path |
-|--------|----------------|
-| Change Data | Back → Data List → select new |
-| Change Module | Vehicle Menu → Diagnostics Menu → Module Diagnostics → Module List |
-| Change Device | Navigate to Main Menu → start from scratch |
-
-### 3. Java Agent for Data Collection
-
-**High-frequency monitoring:**
-```python
-from src.streaming import AgentDataCollector
-
-collector = AgentDataCollector(
-    on_snapshot=callback,      # Called every interval
-    on_param_change=callback,  # Called when parameters change
-    on_dtc_change=callback,    # Called when DTCs change
-    on_error=callback,         # Called on errors
-    interval_ms=100            # 100ms collection interval
-)
-collector.start()
-```
-
-**Performance comparison:**
-| Metric | HTML Method | Agent Method |
-|--------|-------------|--------------|
-| Min Interval | 3000ms | 100ms |
-| Latency | ~1500ms | ~50ms |
-| CPU Usage | High | Low |
-| UI Interaction | Required | None |
-
-### 4. Windows API for Device Explorer
-
-Device Explorer is a Win32 dialog, not JavaFX:
-```python
-from src.native import DeviceExplorerController
-
-explorer = DeviceExplorerController()
-if explorer.find_dialog():
-    devices = explorer.get_devices()
-    explorer.select_device("SM2 USB")
-    explorer.click_continue()
+|
+|-- vci_proxy/                      # LAYER 1: VCI Proxy Tunnel (core infra)
+|   |-- __init__.py                 # v0.3.0, exports all public classes
+|   |-- protocol.py                 # Binary protocol: 14-byte header, J2534 msg types
+|   |-- reverse_server.py           # Cloud-side server (port 9000 + 9001)
+|   |-- reverse_client.py           # Local-side client (connects to cloud)
+|   |-- j2534_driver.py             # ctypes wrapper for real J2534 DLL
+|   |-- config.py                   # Frozen dataclass configuration
+|   |-- auth.py                     # HMAC-SHA256 PSK authentication
+|   |-- cache_read_msgs.py          # P1-1: ReadMsgs BUFFER_EMPTY cache
+|   |-- cache_filter_dedup.py       # P2-1: StartFilter deduplication
+|   |-- cache_vbatt.py              # P2-2: READ_VBATT response cache
+|   |-- test_stability.py           # Stability/integration tests
+|   |-- virtual_dll/                # C DLL that GDS2 loads instead of real HW
+|   |   |-- virtual_j2534.c         # Virtual J2534 DLL source
+|   |   |-- virtual_j2534.def       # DLL export definitions
+|   |   |-- j2534.h                 # J2534 API header
+|   |   |-- build_msvc.bat          # MSVC build script
+|   |   |-- register_vci_proxy.reg  # Windows registry entries
+|   |   +-- README.md               # Build instructions
+|   +-- scripts/
+|       |-- start_proxy.bat
+|       |-- stop_proxy.bat
+|       +-- install_service.bat
+|
+|-- src/                            # LAYER 2: RPA Automation (GDS2-specific)
+|   |-- core/
+|   |   |-- driver.py               # GDS2Driver (pywinauto wrapper)
+|   |   |-- locators.py             # Centralized UI element definitions
+|   |   +-- template_matcher.py     # Multi-scale image template matching
+|   |-- navigation/
+|   |   +-- controller.py           # NavigationController + GDS2Page enum
+|   |-- streaming/
+|   |   |-- agent_navigator.py      # AgentNavigator: JSON command/response
+|   |   +-- agent_data_collector.py # AgentDataCollector: 100ms poll + SSE
+|   |-- native/
+|   |   +-- device_explorer.py      # DeviceExplorerController (Win32)
+|   |-- discovery/
+|   |   +-- vehicle_mapping.py      # VehicleMapping + VehicleDiscovery
+|   |-- utils/
+|   |   +-- report_parser.py        # GDS2 HTML report parsing
+|   +-- workflows/
+|       |-- data_viewer.py          # PRIMARY: DataViewerWorkflow
+|       |-- interactive_workflow.py  # Step-by-step navigation
+|       +-- read_data_display_agent.py  # CLI workflow wrapper
+|
+|-- app.py                          # LAYER 3: Flask Debug Web UI backend
+|-- templates/index.html            # Debug Web UI frontend
+|-- main.py                         # CLI: web, demo, inspect, discover
+|-- scripts/                        # Utility and deployment scripts
+|   |-- cloud_setup_gds2_agent.bat
+|   |-- cloud_start_webui.bat
+|   +-- create_shortcut.ps1
+|-- mappings/                       # Auto-generated discovery data
+|-- requirements.txt                # Full dev deps
+|-- requirements-minimal.txt        # Minimal (pywinauto + Pillow)
+|-- requirements-cloud.txt          # Cloud only (flask + flask-cors)
++-- CLAUDE.md                       # This file
 ```
 
 ---
 
-## Current Implementation Status
+## Layer 1: VCI Proxy Tunnel
 
-### Production Ready (Verified 2026-02-03)
+The core infrastructure that makes remote diagnostics possible. This layer is **OEM-tool-agnostic** and shared by all future diagnostic software.
 
-**Data Viewer Workflow:**
-- Start → Device selection or Module List (if connected)
-- Connect → Navigate through Device Explorer to Module List
-- Select Module → Navigate to Data List
-- Select Data → Navigate to Data Display, start monitoring
-- Change any selection → Smart back-navigation
+### How It Works
 
-### Fully Implemented
+1. **Cloud side**: GDS2 loads `virtual_j2534.dll` instead of a real device driver
+2. The virtual DLL converts J2534 API calls into TCP messages (custom binary protocol)
+3. Messages travel through `reverse_server.py` to `reverse_client.py` over the internet
+4. **Local side**: `reverse_client.py` calls the real J2534 DLL via ctypes, which talks to the physical VCI hardware
 
-- [x] **Data Viewer**
-  - [x] Simplified 3-dropdown UI
-  - [x] Automatic navigation
-  - [x] Device switching from any page
-  - [x] Smart back-navigation
+### Binary Protocol
 
-- [x] **Navigation System**
-  - [x] NavigationController for page transitions
-  - [x] Page detection via Agent
-  - [x] Button enabled/disabled state detection
-  - [x] GDS2Page enum for all pages
+```
++----------+----------+----------+----------+
+|  Magic   |  Length  |  MsgType | Sequence |
+|  4 bytes |  4 bytes |  2 bytes |  4 bytes |
++----------+----------+----------+----------+
+|              Message Body                  |
+|            (Variable Length)               |
++--------------------------------------------+
+```
 
-- [x] **Real-time Data Monitoring**
-  - [x] Agent-based collection (100ms interval)
-  - [x] Server-Sent Events (SSE) streaming
-  - [x] Parameter change detection
-  - [x] DTC auto-extraction
+- **Magic**: `0x4A325334` ("J2S4"), **Header**: 14 bytes
+- **Message types**: Full J2534 API (Open, Close, Connect, Disconnect, ReadMsgs, WriteMsgs, StartFilter, StopFilter, Ioctl, ReadVersion)
+- **Request/Response**: Requests `0x00xx`, Responses `0x80xx`
+- **Special**: `0x00FE` Auth, `0x00FF` Heartbeat
 
-- [x] **Device Explorer**
-  - [x] Windows API automation (not JavaFX)
-  - [x] Device enumeration
-  - [x] Device selection
-  - [x] Continue button handling
+### Authentication (P1-2)
 
-- [x] **Discovery System**
-  - [x] VehicleDiscovery - enumerate list items
-  - [x] VehicleMapping - JSON persistence
-  - [x] On-demand discovery
+- HMAC-SHA256 over PSK. Client sends `AUTH_REQ(timestamp, HMAC(key, timestamp))`
+- Replay protection: rejects timestamps with >5 minute drift
+- Backward compatible: legacy clients register via heartbeat when auth disabled
 
-### Not Yet Implemented
+### Caching (Latency Optimization)
 
-- [ ] ClearDTCWorkflow
-- [ ] Multi-vehicle session handling
-- [ ] VIN-based cache optimization
+| Cache | File | Purpose | TTL |
+|-------|------|---------|-----|
+| **ReadMsgs** (P1-1) | `cache_read_msgs.py` | Short-circuit BUFFER_EMPTY | 50ms per-channel |
+| **Filter Dedup** (P2-1) | `cache_filter_dedup.py` | Deduplicate StartFilter | SHA-256 key |
+| **VBATT** (P2-2) | `cache_vbatt.py` | Cache battery voltage | 5s global |
+
+All caches invalidate on Disconnect/Close. VBATT runs on **both** server and client.
+
+### Key Components
+
+| Component | File | Runs On | Description |
+|-----------|------|---------|-------------|
+| `ReverseProxyServer` | `reverse_server.py` | Cloud | Dual-port asyncio: `:9000` VCI client, `:9001` virtual DLL |
+| `ReverseProxyClient` | `reverse_client.py` | Local | Auto-reconnect with exponential backoff |
+| `J2534Driver` | `j2534_driver.py` | Local | ctypes wrapper for Scanmatik DLL |
+| `virtual_j2534.dll` | `virtual_dll/` | Cloud | C DLL GDS2 loads as real hardware |
+| `ProxyConfig` | `config.py` | Both | Frozen dataclass, `from_args()` for CLI |
+
+### Supported VCI Hardware
+
+| Device | Status |
+|--------|--------|
+| Scanmatik SM2 USB | Working |
+| Scanmatik SM3 | Working |
+| GM MDI / MDI2 | Planned |
 
 ---
 
-## Web UI Guide
+## Layer 2: RPA Automation
 
-### Starting the Web UI
+Per-OEM-tool UI automation. Currently: **GDS2 (General Motors)**. Future OEM tools get their own modules.
 
-```bash
-# Start Web UI (recommended)
-python main.py web
+### GDS2 Automation Stack
 
-# With custom port
-python main.py web --port 8000
+| Component | File | Purpose |
+|-----------|------|---------|
+| **DataViewerWorkflow** | `src/workflows/data_viewer.py` | Primary: Device -> Module -> Data |
+| **NavigationController** | `src/navigation/controller.py` | Page detection + transitions |
+| **AgentNavigator** | `src/streaming/agent_navigator.py` | JSON IPC with Java Agent (`~/gds2-data/`) |
+| **AgentDataCollector** | `src/streaming/agent_data_collector.py` | 100ms polling, change detection, SSE |
+| **DeviceExplorerController** | `src/native/device_explorer.py` | Win32 API for Device Explorer |
+| **VehicleMapping** | `src/discovery/vehicle_mapping.py` | JSON-persisted module/data cache |
+
+### GDS2 Page Flow
+
+```
+MAIN_MENU -> DEVICE_EXPLORER -> VEHICLE_SELECTION -> DIAGNOSTICS_MENU
+  -> MODULE_LIST -> MODULE_SUBMENU -> DATA_LIST -> [SUB_DATA_LIST] -> DATA_DISPLAY
 ```
 
-Open http://localhost:8080 in your browser.
+### Java Agent Communication
 
-### Data Viewer Workflow
+Injected into GDS2's JVM. IPC via JSON files:
+- `~/gds2-data/command.json` (Python writes)
+- `~/gds2-data/result.json` (Agent writes)
+- `~/gds2-data/latest.json` (Agent continuously updates)
 
-**User Flow:**
-1. **Click Start** - System scans for devices or navigates to Module List if connected
-2. **Select Device** - Choose VCI device from dropdown
-3. **Select Module** - System navigates and discovers data categories
-4. **Select Data Category** - System navigates to Data Display, starts monitoring
+### Device Explorer
 
-**Features:**
-- Change Device: Click ⟳ button to switch devices
-- Change Module: Just select a different module
-- Change Data: Just select a different data category
-- All transitions are automatic
+Win32 dialog (not JavaFX). Cross-process memory reading, keyboard simulation.
+
+---
+
+## Layer 3: Debug Web UI
+
+**Temporary.** For debugging UI automation only. Not the end-user product. Removed once automation is stable.
 
 ### API Endpoints
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/viewer/start` | POST | Initialize, get devices or modules |
-| `/api/viewer/connect` | POST | Connect device, get modules |
-| `/api/viewer/change_device` | POST | Navigate to Device Explorer |
-| `/api/viewer/select_module` | POST | Select module, get data categories |
-| `/api/viewer/select_data` | POST | Select data, start monitoring |
-| `/api/viewer/stop` | POST | Stop monitoring |
-| `/api/viewer/state` | GET | Get current viewer state |
-| `/api/stream/events` | GET | SSE endpoint for real-time data |
-| `/api/stream/start` | POST | Start streaming |
-| `/api/stream/stop` | POST | Stop streaming |
-| `/api/agent/status` | GET | Check Agent availability |
-| `/api/agent/dtcs` | GET | Get DTCs directly |
-| `/api/agent/snapshot` | GET | Get latest snapshot |
-
----
-
-## Key Components Deep Dive
-
-### DataViewerWorkflow (`src/workflows/data_viewer.py`)
-
-Primary workflow for the simplified Data Viewer.
-
-**Key Methods:**
-
-| Method | Purpose |
-|--------|---------|
-| `start()` | Initialize, get devices or navigate to Module List |
-| `connect_device(device)` | Connect to device, navigate to Module List |
-| `get_available_devices()` | Navigate to Device Explorer, get device list |
-| `select_module(module)` | Select module, navigate to Data List |
-| `select_data_category(category)` | Select data, start monitoring |
-| `stop_monitoring()` | Stop the Agent collector |
-| `get_state()` | Get current viewer state |
-
-### NavigationController (`src/navigation/controller.py`)
-
-Handles GDS2 page navigation.
-
-**Key Methods:**
-
-| Method | Purpose |
-|--------|---------|
-| `detect_current_page()` | Detect current GDS2 page |
-| `go_home()` | Click Home button |
-| `go_back()` | Click Back button |
-| `go_vehicle_menu()` | Click Vehicle Menu button |
-| `click_button(name)` | Click named button |
-| `select_list_item(name)` | Select item from list |
-| `wait_for_list()` | Wait for list to appear, return items |
-
-### DeviceExplorerController (`src/native/device_explorer.py`)
-
-Windows API automation for Device Explorer dialog.
-
-**Key Methods:**
-
-| Method | Purpose |
-|--------|---------|
-| `find_dialog()` | Find Device Explorer window |
-| `get_devices()` | Get list of available devices |
-| `select_device(name)` | Select device by name |
-| `click_continue()` | Click Continue button |
+| Group | Endpoint | Method | Purpose |
+|-------|----------|--------|---------|
+| Viewer | `/api/viewer/start` | POST | Init, get devices/modules |
+| | `/api/viewer/connect` | POST | Connect device |
+| | `/api/viewer/select_module` | POST | Select module |
+| | `/api/viewer/select_data` | POST | Select data, start monitor |
+| | `/api/viewer/stop` | POST | Stop monitoring |
+| Stream | `/api/stream/events` | GET | SSE real-time data |
+| Agent | `/api/agent/status` | GET | Agent availability |
+| | `/api/agent/dtcs` | GET | Get DTCs |
+| | `/api/agent/snapshot` | GET | Latest snapshot |
 
 ---
 
 ## GDS2 Integration Details
 
-### Application Info
-- **Type:** JavaFX desktop application (main window)
-- **Device Explorer:** Win32 dialog (not JavaFX)
-- **Developer:** General Motors
-- **Platform:** Windows only
-
-### Key Discoveries
-
-1. **Device Explorer is Win32** - Not JavaFX, requires Windows API automation
-2. **Page Detection via Agent** - Agent provides window titles and labels
-3. **Button State Detection** - Check enabled/disabled before clicking
-4. **Vehicle Menu Shortcut** - Fastest path to change modules
-5. **Home Button Disabled** - On some pages, use Back button loop instead
-
-### GDS2Page Enum
-
-```python
-class GDS2Page(Enum):
-    MAIN_MENU = "main_menu"
-    DEVICE_EXPLORER = "device_explorer"
-    VEHICLE_SELECTION = "vehicle_selection"
-    DIAGNOSTICS_MENU = "diagnostics_menu"
-    MODULE_LIST = "module_list"
-    MODULE_SUBMENU = "module_submenu"
-    DATA_LIST = "data_list"
-    SUB_DATA_LIST = "sub_data_list"
-    DATA_DISPLAY = "data_display"
-    UNKNOWN = "unknown"
-```
+- **Type**: JavaFX desktop app + Win32 dialogs (Device Explorer)
+- **Platform**: Windows only
+- **Agent**: Custom Java Agent injected at JVM startup
+- **Key**: Device Explorer is Win32; page detection via button/list inspection; Home button disabled on some pages (use Vehicle Menu shortcut); GDS2 uses GBK encoding
 
 ---
 
-## Working Demo Flow
+## Key Design Decisions
 
-### Navigation Path (Data Viewer)
-
-```
-1. Start
-   └── Check if device connected
-       ├── Connected: Navigate to Module List → return modules
-       └── Not connected: Navigate to Device Explorer → return devices
-
-2. Connect Device (if at Device Explorer)
-   └── Select device → Click Continue
-   └── Vehicle Selection → Click Enter
-   └── Diagnostics Menu → Module Diagnostics
-   └── Module List → discover modules
-
-3. Select Module
-   └── Module List → select module
-   └── Module Submenu → Data Display
-   └── Data List → discover data categories
-
-4. Select Data Category
-   └── Data List → select category
-   └── Data Display → start Agent monitoring
-
-5. Change Module (from anywhere)
-   └── Vehicle Menu → Diagnostics Menu
-   └── Module Diagnostics → Module List
-   └── (continue from step 3)
-
-6. Change Device (from anywhere)
-   └── Navigate to Vehicle Selection
-   └── Disconnect → Select Device
-   └── Device Explorer → (continue from step 2)
-```
-
-### Run the Demo
-
-**Web UI (Recommended):**
-```bash
-python main.py web
-# Open http://localhost:8080
-```
-
-**CLI:**
-```bash
-python main.py demo --module "[K20] Engine Control Module" --data "Misfire Data"
-```
+| Decision | Rationale |
+|----------|-----------|
+| **Reverse connection (local -> cloud)** | Avoids NAT/firewall at user location |
+| **Virtual DLL** | GDS2 thinks hardware is local. Zero mods to GDS2 |
+| **Java Agent (not PyAutoGUI)** | Direct JVM: 100ms collection, no screen dependency |
+| **Win32 API for Device Explorer** | Not JavaFX. Agent can't control it |
+| **Server-side caching** | ~70% round-trip reduction |
+| **Custom binary protocol** | Minimal overhead for high-freq J2534 |
+| **Per-OEM RPA modules** | Each tool has unique UI |
+| **Debug Web UI is temporary** | Not the product interface |
 
 ---
 
-## Navigation Guide
+## Data Flow
 
-### "I want to..."
-
-**View live data from a module:**
-1. Open Web UI: `python main.py web`
-2. Click Start
-3. Select device (or skip if connected)
-4. Select module
-5. Select data category
-
-**Switch to a different module:**
-Just select a different module from the dropdown. System uses Vehicle Menu shortcut.
-
-**Switch to a different device:**
-Click the ⟳ button next to device dropdown. System navigates to Device Explorer.
-
-**Add a new workflow:**
-1. Create `src/workflows/new_workflow.py`
-2. Use DataViewerWorkflow as reference
-3. Export in `src/workflows/__init__.py`
-
----
-
-## Current Scope & Limitations
-
-### What Works
-- Connect to running GDS2 with Java Agent
-- Navigate to any module and data category
-- Automatic device switching from any page
-- High-frequency monitoring (100ms)
-- DTC auto-extraction
-- Smart back-navigation
-
-### Known Limitations
-- GDS2 must be running with Java Agent
-- VCI device must be connected
-- Windows only
-- Single vehicle session per execution
-
-### Performance
-
-| Metric | Value |
-|--------|-------|
-| Collection Interval | 100ms |
-| Latency | ~50ms |
-| Device Selection | ~2 seconds |
-| Module Discovery | ~3 seconds |
-| Navigation | ~2-5 seconds per page |
+```
+User action -> DataViewerWorkflow -> AgentNavigator -> Java Agent -> GDS2
+  -> virtual_j2534.dll -> reverse_server (cache check) -> Internet
+  -> reverse_client (VBATT cache) -> real J2534 DLL -> USB -> VCI -> Vehicle ECU
+  -> response returns same path
+  -> AgentDataCollector (100ms poll) -> SSE -> Web UI
+```
 
 ---
 
 ## Development Workflow
 
-### Quick Start
 ```bash
-# Activate venv
-venv\Scripts\activate
-
-# Start Web UI
-python main.py web
-
-# Run CLI demo
-python main.py demo --module "[K20] Engine Control Module" --data "Engine Data"
+python main.py web                  # Debug Web UI (:8080)
+python main.py demo                 # CLI demo workflow
+python main.py inspect              # Inspect GDS2 UI
+python -m vci_proxy.reverse_server  # Cloud: proxy server
+python -m vci_proxy.reverse_client --host <ip>  # Local: connect
 ```
 
-### Test Imports
+### Cloud Setup
+
 ```bash
-python -c "from src.workflows import DataViewerWorkflow; print('OK')"
-python -c "from src.streaming import AgentNavigator, AgentDataCollector; print('OK')"
-python -c "from src.native import DeviceExplorerController; print('OK')"
+scripts\cloud_setup_gds2_agent.bat
+regedit /s vci_proxy\virtual_dll\register_vci_proxy.reg
+python -m vci_proxy.reverse_server
 ```
 
-### Troubleshooting
+---
 
-**Agent not available:**
-- Ensure GDS2 started with Java Agent attached
-- Check `%USERPROFILE%\gds2-data\latest.json` exists
+## Current Scope and Roadmap
 
-**Device Explorer not responding:**
-- Device Explorer is Win32, not JavaFX
-- Ensure GDS2 window is visible
+### Completed (2026-02-11)
 
-**Navigation stuck:**
-- Check for popup dialogs in GDS2
-- Verify button is enabled before clicking
+- [x] GDS2 cloud deployment + Java Agent
+- [x] VCI Proxy tunnel (reverse connection, binary protocol, PSK auth)
+- [x] 3-layer caching (server) + VBATT cache (client)
+- [x] Full GDS2 UI automation + 100ms data collection
+- [x] DTC extraction, Debug Web UI + SSE
+- [x] SM2/SM3 VCI support
+- [x] Code quality: protocol decoder validation, dispatch pattern, constant cleanup, DLL buffer overflow fixes
+- [x] Multi-port validation: Virtual DLL reads `VCI_PROXY_PORT` env var, two independent tunnels verified
+
+### Multi-Session Validation Results (2026-02-11)
+
+Tested running two independent server/client tunnels (ports 9000/9001 and 9100/9002):
+- **DLL env var mechanism**: Working. Both ports connect successfully.
+- **Independent tunnels**: Working. Two server/client pairs operate without interference.
+- **GDS2 dual-instance**: Not possible. GDS2 has a single-instance lock per machine.
+- **Conclusion**: Multi-user requires one VM/container per user. Architecture is sound; deployment uses VM isolation rather than port isolation on a single machine.
+
+### Phase 1: Client Packaging (Next)
+
+Package `reverse_client` as a standalone Windows executable so users don't need Python.
+
+- [ ] **PyInstaller exe**: Bundle reverse_client + all deps into single `VCI_Proxy_Client.exe`
+- [ ] **Simple GUI**: System tray icon showing connection status (connected/disconnected/reconnecting)
+- [ ] **Connection input**: Prompt for server address + auth token (or connection code) on first run
+- [ ] **Auto-reconnect indicator**: Visual feedback during reconnection with backoff
+- [ ] **Installer (optional)**: .msi or Inno Setup installer with desktop shortcut
+
+### Phase 2: Simplified Connection Flow
+
+Replace manual parameter entry with a connection code system.
+
+- [ ] **Connection code API**: Backend generates short codes (e.g., `A3X7K9`) mapping to {host, port, token}
+- [ ] **Client-side resolution**: Client enters code → fetches connection params from API → connects automatically
+- [ ] **Code lifecycle**: Codes expire after use or timeout; tied to a specific session/user
+
+### Phase 3: One-Button Diagnostics API
+
+Expose high-level diagnostic operations as simple API calls. This is the core product value.
+
+- [ ] **"Read All DTCs" API**: Single call that navigates GDS2 through all modules, collects all DTCs, returns structured result
+- [ ] **"Live Data Stream" API**: Single call that navigates to a data category and starts SSE streaming
+- [ ] **Simplified mobile UI**: Minimal phone-friendly page with two buttons (Read DTCs / Live Data)
+- [ ] **Progress feedback**: Real-time status updates during long operations ("Connecting to ECU...", "Scanning module 3/12...")
+
+### Phase 4: Session Manager
+
+Automated VM/container lifecycle management for multi-user support.
+
+- [ ] **Session Manager service**: Create/destroy cloud VMs on demand via Alibaba Cloud API
+- [ ] **VM image**: Pre-built image with GDS2 + Java Agent + reverse_server + all configs
+- [ ] **User authentication**: Login system with per-user session allocation
+- [ ] **Resource monitoring**: Track active sessions, idle timeout, auto-cleanup
+- [ ] **Connection code integration**: Session creation generates connection code for client
+
+### Future
+
+- [ ] MDI/MDI2 VCI support
+- [ ] More OEM tools (BMW ISTA, Toyota Techstream, Ford IDS, VW ODIS)
+- [ ] Per-OEM RPA adapters with unified diagnostic API
+- [ ] WeChat mini-program or mobile app as primary user interface
+- [ ] Physical device / dedicated hardware client (long-term)
 
 ---
 
 ## Reference Documents
 
-| Document | Location | Purpose |
-|----------|----------|---------|
-| GDS2 User Guide | `res/GM-GDS2-User-Guide.pdf` | Official button names, navigation flow |
-| Control Mapping | `docs/GDS2_CONTROL_MAPPING.md` | UI control type reference |
-| Workflow Diagram | `docs/WORKFLOW_DIAGRAM.md` | Navigation flow diagrams |
+| Document | Location |
+|----------|----------|
+| GDS2 User Guide | `res/GM-GDS2-User-Guide.pdf` |
+| Control Mapping | `docs/GDS2_CONTROL_MAPPING.md` |
+| Workflow Diagram | `docs/WORKFLOW_DIAGRAM.md` |
+| Virtual DLL README | `vci_proxy/virtual_dll/README.md` |
 
 ---
 
-## Recent Changes (2026-02-03)
-
-### Major Update: Simplified Data Viewer
-1. **Replaced 3-step workflow** with simplified Data Viewer UI
-   - Three dropdowns: Device → Module → Data Category
-   - Automatic navigation in background
-   - Smart back-navigation when selection changes
-
-2. **Removed legacy APIs and code**
-   - Removed `/api/nav/*` endpoints
-   - Removed `/api/fetch_modules`, `/api/fetch_categories`, etc.
-   - Removed legacy 3-step workflow code
-   - Cleaned up unused files
-
-3. **Improved device switching**
-   - Added "Change Device" button (⟳)
-   - Navigate to Device Explorer from any page
-   - Proper disconnect and reconnect flow
-
-4. **Fixed device-already-connected flow**
-   - `start()` now navigates to Module List if device connected
-   - Returns modules directly instead of requiring separate connect step
-
-### Files Modified
-- `src/workflows/data_viewer.py` - Major updates for device switching
-- `src/workflows/__init__.py` - Updated exports
-- `app.py` - Removed legacy APIs, kept only `/api/viewer/*`, `/api/stream/*`, `/api/agent/*`
-- `templates/index.html` - Updated to Data Viewer only
-- `README.md` - Complete rewrite for Data Viewer
-- `CLAUDE.md` - Complete rewrite for Data Viewer
-
-### Files Deleted
-- `src/workflows/module_data_display.py` - Broken imports
-- `src/workflows/module_discovery.py` - Broken imports
-- `scripts/run_module_data.py` - Dead code
-- `scripts/test_e2e_module_data.py` - Dead code
-
----
-
-**This document should be updated when architecture or implementation changes.**
+**Update this document when architecture or implementation changes.**
