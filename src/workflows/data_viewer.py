@@ -3,6 +3,8 @@ Data Viewer Workflow for GDS2.
 
 Simplified three-step workflow: Device -> Module -> Data Category.
 Handles all GDS2 navigation automatically in the background.
+
+Supports AI-powered exception recovery (Day 6 integration).
 """
 
 import logging
@@ -21,7 +23,7 @@ StatusCallback = Optional[Callable[[str], None]]
 class DataViewerWorkflow:
     """Simplified three-step workflow: Device -> Module -> Data."""
 
-    def __init__(self, nav=None):
+    def __init__(self, nav=None, enable_ai_recovery=False):
         self.controller = NavigationController(nav)
         self._mapping = None
         self._vehicle_id = "current_vehicle"
@@ -29,6 +31,25 @@ class DataViewerWorkflow:
         self._device = None
         self._module = None
         self._data_category = None
+
+        # AI Recovery Integration (Day 6)
+        self.recovery = None
+        if enable_ai_recovery:
+            from ..recovery import RecoveryManager
+            try:
+                self.recovery = RecoveryManager(
+                    agent_navigator=self.controller.nav if hasattr(self.controller, 'nav') else None,
+                    navigation_controller=self.controller,
+                )
+                if self.recovery.enabled:
+                    self.recovery.reset_session()
+                    logger.info("AI recovery enabled and initialized")
+                else:
+                    logger.info("AI recovery disabled (check config/API key)")
+                    self.recovery = None
+            except Exception as e:
+                logger.warning(f"Failed to initialize AI recovery: {e}")
+                self.recovery = None
 
     @property
     def mapping(self):
@@ -606,19 +627,61 @@ class DataViewerWorkflow:
             raise RuntimeError("Failed to click Continue in Device Explorer")
         time.sleep(3)  # Wait for device to connect
 
-    def _wait_for_button_enabled(self, button_text: str, timeout_sec: float = 30) -> bool:
+    def _wait_for_button_enabled(self, button_text: str, timeout_sec: float = 30, _recursion_depth: int = 0) -> bool:
         """
         Wait for a button to become enabled.
 
         Args:
             button_text: Text of the button to wait for
             timeout_sec: Maximum time to wait
+            _recursion_depth: Internal recursion counter (max 2 retries)
 
         Returns:
             True if button became enabled, False if timeout
+
+        With AI recovery enabled, handles:
+        - Unexpected dialogs during wait
+        - Timeout with AI decision (wait longer vs give up)
         """
+        # Prevent infinite recursion
+        MAX_RECURSION = 2
+        if _recursion_depth >= MAX_RECURSION:
+            logger.warning(f"Max recursion depth ({MAX_RECURSION}) reached for button wait")
+            return False
+
         start_time = time.time()
+        original_timeout = timeout_sec  # Save original for context
+
         while time.time() - start_time < timeout_sec:
+            # Check for unexpected dialogs (AI Recovery - Day 6)
+            if self.recovery:
+                if anomaly := self.recovery.check_for_dialogs():
+                    logger.warning(f"Unexpected dialog detected: {anomaly.context.get('modal_title')}")
+
+                    # Create operation context
+                    from ..recovery import OperationContext
+                    context = OperationContext(
+                        operation_name=f"wait_for_button:{button_text}",
+                        current_page=self.controller.current_page.value,
+                        visible_buttons=[button_text],
+                        recent_actions=["wait_for_button_enabled"],
+                        elapsed_time=time.time() - start_time,
+                        expected_time=original_timeout,
+                    )
+
+                    # Let AI handle it
+                    try:
+                        result = self.recovery.handle_anomaly(anomaly, context)
+                        if result.success:
+                            logger.info(f"Dialog recovered: {result.action.name}")
+                            # Continue waiting after recovery
+                        else:
+                            logger.error(f"Dialog recovery failed: {result.error}")
+                            # Continue waiting anyway, maybe button appeared
+                    except Exception as e:
+                        logger.error(f"Recovery exception: {e}", exc_info=True)
+
+            # Check button status
             buttons = self.controller.nav.get_buttons()
             for btn in buttons:
                 if btn.get('text') == button_text:
@@ -630,7 +693,44 @@ class DataViewerWorkflow:
                         break
             time.sleep(1)
 
-        logger.warning(f"Timeout waiting for button '{button_text}' to be enabled")
+        # Timeout - check if AI can help
+        elapsed = time.time() - start_time
+        logger.warning(f"Timeout waiting for button '{button_text}' after {elapsed:.1f}s")
+
+        if self.recovery:
+            from ..recovery import OperationContext
+            # Detect timeout anomaly
+            anomaly = self.recovery.detector.check_timeout(
+                operation=f"wait_for_button:{button_text}",
+                elapsed_time=elapsed,
+                expected_time=original_timeout,
+            )
+
+            if anomaly:
+                context = OperationContext(
+                    operation_name=f"wait_for_button:{button_text}",
+                    current_page=self.controller.current_page.value,
+                    visible_buttons=[button_text],
+                    recent_actions=["wait_for_button_enabled"],
+                    elapsed_time=elapsed,
+                    expected_time=original_timeout,
+                )
+
+                try:
+                    result = self.recovery.handle_anomaly(anomaly, context)
+                    if result.success and result.action.name == "WAIT_LONGER":
+                        # AI recommends waiting longer
+                        extended_timeout = 60  # Default to 60s
+                        logger.info(f"AI recommends waiting {extended_timeout} more seconds")
+                        # Recursively call with extended timeout (and increment depth)
+                        return self._wait_for_button_enabled(
+                            button_text, extended_timeout, _recursion_depth + 1
+                        )
+                    elif not result.success:
+                        logger.error(f"Timeout recovery failed: {result.error}")
+                except Exception as e:
+                    logger.error(f"Recovery exception: {e}", exc_info=True)
+
         return False
 
     def _navigate_to_main_menu(self, status):

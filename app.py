@@ -10,6 +10,19 @@ API Endpoints:
 - Agent API: /api/agent/* - Direct Agent communication
 """
 
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    from pathlib import Path
+    env_path = Path(__file__).parent / ".env"
+    if env_path.exists():
+        load_dotenv(env_path)
+        print(f"✅ Loaded environment variables from {env_path}")
+    else:
+        print(f"⚠️  .env file not found at {env_path}")
+except ImportError:
+    print("⚠️  python-dotenv not installed. Run: pip install python-dotenv")
+
 from flask import Flask, render_template, jsonify, request, Response
 from flask_cors import CORS
 import logging
@@ -75,7 +88,16 @@ def get_data_viewer():
     global _data_viewer
     if _data_viewer is None:
         from src.workflows.data_viewer import DataViewerWorkflow
-        _data_viewer = DataViewerWorkflow()
+        # Enable AI recovery (reads from .env: ENABLE_AI_RECOVERY=true)
+        _data_viewer = DataViewerWorkflow(enable_ai_recovery=True)
+
+        # Log AI recovery status
+        if _data_viewer.recovery and _data_viewer.recovery.enabled:
+            logger.info("✅ AI recovery enabled")
+            logger.info(f"   Provider: {_data_viewer.recovery.config.provider}")
+            logger.info(f"   Model: {_data_viewer.recovery.config.model}")
+        else:
+            logger.warning("⚠️  AI recovery not enabled (check .env configuration)")
     return _data_viewer
 
 
