@@ -48,6 +48,7 @@ class TestRecoveryAction:
         assert hasattr(RecoveryAction, "WAIT_LONGER")
         assert hasattr(RecoveryAction, "GO_BACK")
         assert hasattr(RecoveryAction, "RETRY_FROM_START")
+        assert hasattr(RecoveryAction, "DISMISS_AND_NAVIGATE")
         assert hasattr(RecoveryAction, "ABORT")
 
 

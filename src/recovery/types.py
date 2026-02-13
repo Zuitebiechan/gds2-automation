@@ -36,6 +36,7 @@ class RecoveryAction(Enum):
     WAIT_LONGER = auto()  # Extend timeout and continue waiting
     GO_BACK = auto()  # Navigate back to previous page
     RETRY_FROM_START = auto()  # Reset to main menu and retry
+    DISMISS_AND_NAVIGATE = auto()  # Dismiss dialog + navigate to recovery target page
     ABORT = auto()  # Give up, cannot recover
 
 
@@ -146,3 +147,36 @@ class OperationContext:
             "expected_time": self.expected_time,
             **self.additional_info
         }
+
+
+class WorkflowRecoveryError(Exception):
+    """
+    Raised after successful AI recovery to signal workflow rerouting.
+
+    Instead of blindly retrying the failed method with the same args,
+    this error tells the caller that:
+    1. The error dialog was dismissed
+    2. GDS2 was navigated to a recovery target page
+    3. The workflow should be restarted from that page
+
+    Attributes:
+        target_page: GDS2 page name where recovery navigated to
+        reasoning: AI's explanation of the error and recovery path
+        action: The recovery action that was taken
+        original_error: The original exception that triggered recovery
+    """
+
+    def __init__(
+        self,
+        target_page: str,
+        reasoning: str,
+        action: RecoveryAction,
+        original_error: Optional[Exception] = None,
+    ):
+        self.target_page = target_page
+        self.reasoning = reasoning
+        self.action = action
+        self.original_error = original_error
+        super().__init__(
+            f"Recovery complete: navigated to {target_page}. {reasoning}"
+        )

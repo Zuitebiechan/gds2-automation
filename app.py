@@ -17,11 +17,11 @@ try:
     env_path = Path(__file__).parent / ".env"
     if env_path.exists():
         load_dotenv(env_path)
-        print(f"✅ Loaded environment variables from {env_path}")
+        print(f"[OK] Loaded environment variables from {env_path}")
     else:
-        print(f"⚠️  .env file not found at {env_path}")
+        print(f"[WARN] .env file not found at {env_path}")
 except ImportError:
-    print("⚠️  python-dotenv not installed. Run: pip install python-dotenv")
+    print("[WARN] python-dotenv not installed. Run: pip install python-dotenv")
 
 from flask import Flask, render_template, jsonify, request, Response
 from flask_cors import CORS
@@ -33,6 +33,7 @@ import threading
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, asdict
+from src.recovery.types import WorkflowRecoveryError
 
 # Configure logging
 logging.basicConfig(
@@ -93,11 +94,11 @@ def get_data_viewer():
 
         # Log AI recovery status
         if _data_viewer.recovery and _data_viewer.recovery.enabled:
-            logger.info("✅ AI recovery enabled")
+            logger.info("[OK] AI recovery enabled")
             logger.info(f"   Provider: {_data_viewer.recovery.config.provider}")
             logger.info(f"   Model: {_data_viewer.recovery.config.model}")
         else:
-            logger.warning("⚠️  AI recovery not enabled (check .env configuration)")
+            logger.warning("[WARN] AI recovery not enabled (check .env configuration)")
     return _data_viewer
 
 
@@ -140,6 +141,16 @@ def viewer_connect():
             "vin": result.get("vin"),
             "device": result.get("device"),
         })
+
+    except WorkflowRecoveryError as e:
+        logger.info(f"viewer_connect recovered: {e}")
+        return jsonify({
+            "success": False,
+            "recovered": True,
+            "recovery_target": e.target_page,
+            "reasoning": e.reasoning,
+            "error": str(e),
+        }), 200
 
     except Exception as e:
         logger.exception("viewer_connect failed")
@@ -184,6 +195,16 @@ def viewer_select_module():
             "data_categories": result["data_categories"],
         })
 
+    except WorkflowRecoveryError as e:
+        logger.info(f"viewer_select_module recovered: {e}")
+        return jsonify({
+            "success": False,
+            "recovered": True,
+            "recovery_target": e.target_page,
+            "reasoning": e.reasoning,
+            "error": str(e),
+        }), 200
+
     except Exception as e:
         logger.exception("viewer_select_module failed")
         return jsonify({"success": False, "error": str(e)}), 500
@@ -206,6 +227,16 @@ def viewer_select_data():
             "monitoring": result["monitoring"],
             "sub_categories": result.get("sub_categories"),
         })
+
+    except WorkflowRecoveryError as e:
+        logger.info(f"viewer_select_data recovered: {e}")
+        return jsonify({
+            "success": False,
+            "recovered": True,
+            "recovery_target": e.target_page,
+            "reasoning": e.reasoning,
+            "error": str(e),
+        }), 200
 
     except Exception as e:
         logger.exception("viewer_select_data failed")

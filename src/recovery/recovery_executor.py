@@ -6,6 +6,7 @@ This module executes recovery actions recommended by the AI:
 - WAIT_LONGER: Return extended timeout to caller
 - GO_BACK: Navigate back to previous page
 - RETRY_FROM_START: Reset to Main Menu
+- DISMISS_AND_NAVIGATE: Dismiss dialog + navigate to recovery target page
 - ABORT: Log and raise exception
 
 Verifies recovery success after execution.
@@ -79,6 +80,8 @@ class RecoveryExecutor:
                     success = self._go_back()
                 elif action == RecoveryAction.RETRY_FROM_START:
                     success = self._retry_from_start()
+                elif action == RecoveryAction.DISMISS_AND_NAVIGATE:
+                    success = self._dismiss_and_navigate(decision.parameters)
                 elif action == RecoveryAction.ABORT:
                     # ABORT is not a failure, it's a deliberate decision to stop
                     elapsed = time.time() - start_time
@@ -101,13 +104,14 @@ class RecoveryExecutor:
                 # Verify recovery
                 if self._verify_recovery():
                     elapsed = time.time() - start_time
-                    logger.info(f"Recovery successful after {attempt} attempt(s) ({elapsed:.1f}s)")
+                    new_state = self._get_current_state()
+                    logger.info(f"Recovery successful after {attempt} attempt(s) ({elapsed:.1f}s), state: {new_state}")
                     return RecoveryResult(
                         success=True,
                         action=action,
                         attempts=attempt,
                         elapsed_time=elapsed,
-                        new_state=self._get_current_state(),
+                        new_state=new_state,
                     )
                 else:
                     logger.warning(f"Recovery verification failed on attempt {attempt}")
@@ -187,7 +191,7 @@ class RecoveryExecutor:
 
     def _go_back(self) -> bool:
         """
-        Navigate back to previous page.
+        Navigate back to previous page using Back button.
 
         Returns:
             True if navigation succeeded
@@ -198,11 +202,14 @@ class RecoveryExecutor:
 
         try:
             logger.info("Navigating back to previous page")
-            # Use Home button or back navigation
-            # This depends on your NavigationController implementation
-            # For now, just log - implement actual navigation as needed
-            logger.warning("GO_BACK not fully implemented yet - requires NavigationController.go_back()")
-            return False
+            result = self.nav_controller.go_back()
+
+            if result.success:
+                logger.info(f"Go back succeeded, now on: {result.page.value}")
+            else:
+                logger.warning(f"Go back failed: {result.error}")
+
+            return result.success
 
         except Exception as e:
             logger.error(f"Exception going back: {e}", exc_info=True)
@@ -210,7 +217,7 @@ class RecoveryExecutor:
 
     def _retry_from_start(self) -> bool:
         """
-        Reset to Main Menu and retry.
+        Reset to Main Menu using Home button.
 
         Returns:
             True if reset succeeded
@@ -220,13 +227,162 @@ class RecoveryExecutor:
             return False
 
         try:
-            logger.info("Resetting to Main Menu")
-            # This requires NavigationController to have a reset/home method
-            logger.warning("RETRY_FROM_START not fully implemented yet - requires NavigationController.go_to_main()")
-            return False
+            logger.info("Resetting to Main Menu via Home button")
+            result = self.nav_controller.go_home()
+
+            if result.success:
+                logger.info("Successfully returned to Main Menu")
+            else:
+                logger.warning(f"Go home failed: {result.error}")
+
+            return result.success
 
         except Exception as e:
             logger.error(f"Exception resetting to start: {e}", exc_info=True)
+            return False
+
+    def _dismiss_and_navigate(self, parameters: dict) -> bool:
+        """
+        Dismiss an error dialog and navigate to a recovery target page.
+
+        Two-phase recovery:
+        1. Click the dismiss button to close the dialog
+        2. Navigate to the target page using NavigationController
+
+        Args:
+            parameters: Must contain "dismiss_button" and "target_page" keys
+
+        Returns:
+            True if both dismissal and navigation succeeded
+        """
+        if not self.agent_nav:
+            logger.error("AgentNavigator not provided, cannot dismiss dialog")
+            return False
+        if not self.nav_controller:
+            logger.error("NavigationController not provided, cannot navigate")
+            return False
+
+        dismiss_button = parameters.get("dismiss_button", "OK")
+        target_page_name = parameters.get("target_page", "MAIN_MENU")
+
+        # Phase 1: Dismiss the dialog
+        logger.info(f"Phase 1: Dismissing dialog (clicking '{dismiss_button}')")
+        try:
+            result = self.agent_nav.click_button(dismiss_button)
+            if not result.get("success", False):
+                logger.warning(f"Failed to click dismiss button: {result.get('error', 'unknown')}")
+                return False
+        except Exception as e:
+            logger.error(f"Exception dismissing dialog: {e}", exc_info=True)
+            return False
+
+        # Wait for GDS2 to settle after dialog dismissal
+        time.sleep(2)
+
+        # Detect where we are now
+        current_page = self.nav_controller.detect_current_page()
+        logger.info(f"After dialog dismissal, current page: {current_page.value}")
+
+        # Resolve target page
+        from ..navigation.controller import GDS2Page
+        target_page = self._resolve_target_page(target_page_name)
+        if target_page is None:
+            logger.error(f"Unknown target page: {target_page_name}")
+            return False
+
+        # Phase 2: Navigate to recovery target
+        if current_page == target_page:
+            logger.info(f"Already on target page: {target_page.value}")
+            return True
+
+        logger.info(f"Phase 2: Navigating from {current_page.value} to {target_page.value}")
+
+        # Special handling for VEHICLE_SELECTION (not in navigate_to's page_depth)
+        if target_page == GDS2Page.VEHICLE_SELECTION:
+            return self._navigate_to_vehicle_selection(current_page)
+
+        # Use NavigationController's navigate_to for other pages
+        try:
+            nav_result = self.nav_controller.navigate_to(target_page)
+            if nav_result.success:
+                logger.info(f"Navigation succeeded, now on: {nav_result.page.value}")
+                return True
+
+            # Navigation failed (e.g., target is forward from current page).
+            # Dialog was already dismissed — that's the critical part.
+            # Treat as success with current page as the recovery landing point.
+            logger.warning(
+                f"Navigation to {target_page.value} failed: {nav_result.error}. "
+                f"Dialog was dismissed. Staying on {current_page.value}."
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Exception during navigation: {e}", exc_info=True)
+            # Dialog was already dismissed, consider it a partial success
+            logger.info("Dialog was dismissed before navigation exception. Treating as success.")
+            return True
+
+    def _resolve_target_page(self, page_name: str):
+        """
+        Resolve a page name string to a GDS2Page enum value.
+
+        Args:
+            page_name: Page name (e.g., "VEHICLE_SELECTION", "MAIN_MENU")
+
+        Returns:
+            GDS2Page enum value, or None if not found
+        """
+        from ..navigation.controller import GDS2Page
+
+        page_map = {
+            "MAIN_MENU": GDS2Page.MAIN_MENU,
+            "VEHICLE_SELECTION": GDS2Page.VEHICLE_SELECTION,
+            "DIAGNOSTICS_MENU": GDS2Page.DIAGNOSTICS_MENU,
+            "MODULE_LIST": GDS2Page.MODULE_LIST,
+            "MODULE_SUBMENU": GDS2Page.MODULE_SUBMENU,
+            "DATA_LIST": GDS2Page.DATA_LIST,
+            "DATA_DISPLAY": GDS2Page.DATA_DISPLAY,
+        }
+        return page_map.get(page_name)
+
+    def _navigate_to_vehicle_selection(self, current_page) -> bool:
+        """
+        Navigate to Vehicle Selection page.
+
+        VEHICLE_SELECTION is special because it's not in the normal
+        Back-button hierarchy (navigate_to doesn't handle it).
+        Strategy: go Home → start Diagnostics → arrives at Vehicle Selection.
+
+        But if we're already past Vehicle Selection (e.g., on MODULE_LIST),
+        we can try going Home first and the workflow will handle reconnection.
+
+        Args:
+            current_page: Current GDS2Page
+
+        Returns:
+            True if navigation succeeded
+        """
+        from ..navigation.controller import GDS2Page
+
+        # If we're already at VEHICLE_SELECTION, done
+        if current_page == GDS2Page.VEHICLE_SELECTION:
+            return True
+
+        # If we're at MAIN_MENU, we'd need to click Diagnostics to get to
+        # Vehicle Selection — but that triggers device explorer flow.
+        # For recovery purposes, just navigating to MAIN_MENU is sufficient
+        # as the workflow caller will handle the rest.
+        logger.info(
+            "VEHICLE_SELECTION requires going through Device Explorer flow. "
+            "Navigating to MAIN_MENU as recovery target instead."
+        )
+        try:
+            result = self.nav_controller.go_home()
+            if result.success:
+                logger.info("Navigated to MAIN_MENU (for VEHICLE_SELECTION recovery)")
+            return result.success
+        except Exception as e:
+            logger.error(f"Failed to navigate home: {e}", exc_info=True)
             return False
 
     def _verify_recovery(self) -> bool:

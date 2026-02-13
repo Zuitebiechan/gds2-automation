@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Any
 
 from ..navigation import NavigationController, NavigationResult, GDS2Page
+from ..recovery.decorators import with_recovery
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,7 @@ class DataViewerWorkflow:
             self._mapping = VehicleMapping()
         return self._mapping
 
+    @with_recovery
     def start(self, on_status: StatusCallback = None) -> dict:
         """
         Initialize the Data Viewer.
@@ -197,6 +199,7 @@ class DataViewerWorkflow:
             "device_connected": True,
         }
 
+    @with_recovery
     def connect_device(self, device_name: str, on_status: StatusCallback = None) -> dict:
         """
         Select device and navigate to Module List.
@@ -309,6 +312,7 @@ class DataViewerWorkflow:
             "device": self._device,
         }
 
+    @with_recovery
     def select_module(self, module_name: str, on_status: StatusCallback = None) -> dict:
         """
         Navigate to Data List for the given module.
@@ -379,6 +383,7 @@ class DataViewerWorkflow:
             "data_categories": data_categories,
         }
 
+    @with_recovery
     def select_data_category(self, data_category: str, on_status: StatusCallback = None) -> dict:
         """
         Navigate to Data Display and start monitoring.
@@ -429,6 +434,7 @@ class DataViewerWorkflow:
         """Clear monitoring state."""
         self._data_category = None
 
+    @with_recovery
     def get_available_devices(self, on_status: StatusCallback = None) -> dict:
         """
         Navigate to Device Explorer and get all available devices.

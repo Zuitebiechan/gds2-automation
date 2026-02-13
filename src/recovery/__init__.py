@@ -38,17 +38,21 @@ from .types import (
     RecoveryDecision,
     RecoveryResult,
     OperationContext,
+    WorkflowRecoveryError,
 )
 from .ai_recovery_agent import AIRecoveryAgent
 from .anomaly_detector import AnomalyDetector
 from .recovery_executor import RecoveryExecutor
 from .recovery_manager import RecoveryManager
+from .decorators import with_recovery
 
 __all__ = [
     # Configuration
     "AIRecoveryConfig",
     # Main coordinator (use this!)
     "RecoveryManager",
+    # Decorators
+    "with_recovery",
     # Components
     "AIRecoveryAgent",
     "AnomalyDetector",
@@ -61,6 +65,7 @@ __all__ = [
     "RecoveryDecision",
     "RecoveryResult",
     "OperationContext",
+    "WorkflowRecoveryError",
 ]
 
-__version__ = "0.3.0"  # Day 5: Detector + Executor + Manager complete
+__version__ = "0.4.0"  # Day 8: Smart recovery with DISMISS_AND_NAVIGATE
