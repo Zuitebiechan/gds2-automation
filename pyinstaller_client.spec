@@ -12,11 +12,41 @@ Output:
 
 block_cipher = None
 
+from pathlib import Path
+import sysconfig
+
+import PIL
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+
+# Pillow needs native extension modules (e.g. PIL._imaging.pyd) and plugin data.
+# Collect them explicitly to avoid runtime ImportError in packaged exe.
+pil_datas = collect_data_files('PIL')
+pil_binaries = collect_dynamic_libs('PIL')
+
+# On some Windows/Python combinations (especially mixed global/venv installs),
+# collect_dynamic_libs('PIL') may miss Pillow extension binaries.
+# Force-include only ABI-matching PIL extension modules from the active
+# interpreter so PIL.Image can import _imaging at runtime.
+pil_pkg_dir = Path(PIL.__file__).resolve().parent
+ext_suffix = sysconfig.get_config_var('EXT_SUFFIX') or '.pyd'
+
+matching_pyds = list(pil_pkg_dir.glob(f'*{ext_suffix}'))
+if not matching_pyds:
+    raise RuntimeError(
+        f"No Pillow extension matching active ABI suffix '{ext_suffix}' found in {pil_pkg_dir}. "
+        "Recreate venv and reinstall Pillow to match current Python architecture/version."
+    )
+
+for pyd in matching_pyds:
+    entry = (str(pyd), 'PIL')
+    if entry not in pil_binaries:
+        pil_binaries.append(entry)
+
 a = Analysis(
     ['vci_proxy/client_gui.py'],
     pathex=['.'],
-    binaries=[],
-    datas=[],
+    binaries=pil_binaries,
+    datas=pil_datas,
     hiddenimports=[
         'vci_proxy',
         'vci_proxy.protocol',
@@ -25,7 +55,12 @@ a = Analysis(
         'vci_proxy.j2534_driver',
         'vci_proxy.cache_vbatt',
         'vci_proxy.reverse_client',
+        'vci_proxy.diagnostics_window',
         'pystray._win32',
+        'PIL',
+        'PIL.Image',
+        'PIL.ImageDraw',
+        'PIL._imaging',
         'requests',
         'urllib3',
         'charset_normalizer',

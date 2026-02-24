@@ -20,7 +20,7 @@ REM Use PowerShell to create zip with specific files
 powershell -NoProfile -Command ^
   "$files = @(" ^
     "'app.py'," ^
-    "'main.py'," ^
+    "'diagnostics_api.py'," ^
     "'requirements-cloud.txt'," ^
     "'templates\index.html'," ^
     "'src\__init__.py'," ^
@@ -53,7 +53,7 @@ powershell -NoProfile -Command ^
 echo.
 echo Done! Upload cloud_webui.zip to the cloud server and extract.
 echo Then run: pip install -r requirements-cloud.txt
-echo Then run: python main.py web --port 8080
+echo Then run: python app.py --port 8080
 echo.
 
 endlocal

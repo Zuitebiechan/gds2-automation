@@ -372,7 +372,9 @@ class DataViewerWorkflow:
         self.controller._current_page = GDS2Page.DATA_LIST
 
         # Save to cache
-        cat_indices = {name: idx for idx, name in enumerate(data_categories)}
+        cat_indices: Dict[str, int | Dict[str, int]] = {
+            name: idx for idx, name in enumerate(data_categories)
+        }
         self.mapping.update_data_categories(self._vehicle_id, matched, cat_indices)
 
         self._module = matched
@@ -551,7 +553,7 @@ class DataViewerWorkflow:
         raise RuntimeError("Unexpected start result: missing 'devices' or 'modules'")
 
     def read_all_dtcs(self, on_status: StatusCallback = None) -> dict:
-        """Read all DTCs directly from Java Agent JSON snapshot."""
+        """Read DTCs from Agent JSON at current Data Display page."""
         def status(msg):
             logger.info(msg)
             if on_status:
@@ -566,10 +568,16 @@ class DataViewerWorkflow:
         if not availability.get("available"):
             raise RuntimeError("Java Agent not available. Start GDS2 with agent.")
 
-        status("Reading DTCs from Java Agent snapshot...")
+        current = self.controller.detect_current_page()
+        if current != GDS2Page.DATA_DISPLAY:
+            raise RuntimeError(
+                "Not at Data Display page. Select module and data category first."
+            )
+
+        status("Reading DTCs from current Data Display page...")
 
         raw = None
-        for encoding in ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252']:
+        for encoding in ['gbk', 'utf-8', 'utf-8-sig', 'latin-1', 'cp1252']:
             try:
                 with open(collector.json_path, 'r', encoding=encoding) as f:
                     raw = json.load(f)
@@ -581,6 +589,7 @@ class DataViewerWorkflow:
             raise RuntimeError("Failed to decode Agent JSON file")
 
         snapshot = _parse_agent_json(raw)
+
         return {
             "dtcs": [d.to_dict() for d in snapshot.dtcs],
             "dtc_count": len(snapshot.dtcs),

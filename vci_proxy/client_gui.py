@@ -348,6 +348,7 @@ class VCIProxyTrayApp:
     def _on_diagnostics(self, icon=None, item=None):
         """Open the diagnostics window."""
         if not self._config.get("host"):
+            self._show_threadsafe_error("Diagnostics", "Server address is not configured. Open Settings first.")
             return
 
         host = self._config["host"]
@@ -355,12 +356,36 @@ class VCIProxyTrayApp:
         api_base = f"http://{host}:{port}"
 
         def _open():
-            from vci_proxy.diagnostics_window import DiagnosticsWindow
+            try:
+                from vci_proxy.diagnostics_window import DiagnosticsWindow
 
-            win = DiagnosticsWindow(api_base)
-            win.show()
+                win = DiagnosticsWindow(api_base)
+                win.show()
+            except Exception as e:
+                logger.exception("Failed to open diagnostics window")
+                self._show_threadsafe_error(
+                    "Diagnostics Error",
+                    f"Failed to open diagnostics window.\n\n{e}\n\n"
+                    "Please rebuild the client and try again."
+                )
 
         threading.Thread(target=_open, daemon=True, name="diagnostics-window").start()
+
+    def _show_threadsafe_error(self, title: str, message: str) -> None:
+        """Show an error dialog from non-UI threads safely."""
+        def _show():
+            root = tk.Tk()
+            root.withdraw()
+            try:
+                messagebox.showerror(title, message)
+            finally:
+                root.destroy()
+
+        try:
+            _show()
+        except Exception:
+            # Last resort: keep a log entry even if dialog cannot be shown.
+            logger.error("%s: %s", title, message)
 
     def _on_quit(self, icon=None, item=None):
         """Quit the application."""

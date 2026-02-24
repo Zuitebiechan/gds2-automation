@@ -109,7 +109,9 @@ class DiagnosticsWindow:
         except tk.TclError:
             pass
 
-        self._root.option_add("*Font", "Segoe UI 10")
+        # Use ttk default font via style to avoid Tcl parsing issues with
+        # family names containing spaces (e.g. "Segoe UI").
+        style.configure(".", font=("Segoe UI", 10))
 
         style.configure("App.TFrame", background="white")
         style.configure("Card.TFrame", background="white")
@@ -257,6 +259,7 @@ class DiagnosticsWindow:
             values=[],
         )
         self._data_combo.grid(row=1, column=1, sticky="ew", pady=(0, 8), padx=(8, 8))
+        self._data_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_data_category_selected())
 
         # Row 3: stream controls
         controls = ttk.Frame(live_frame, style="Card.TFrame")
@@ -304,6 +307,7 @@ class DiagnosticsWindow:
         method: str,
         endpoint: str,
         json_data: Optional[dict[str, Any]] = None,
+        query_params: Optional[dict[str, Any]] = None,
         callback_event: str = "api_result",
     ) -> None:
         """Make API call in background thread and post result to queue."""
@@ -312,14 +316,23 @@ class DiagnosticsWindow:
             url = f"{self._api_base}/{endpoint.lstrip('/')}"
             try:
                 if method.upper() == "POST":
-                    resp = requests.post(url, json=json_data, timeout=60)
+                    resp = requests.post(url, json=json_data, params=query_params, timeout=60)
                 else:
-                    resp = requests.get(url, timeout=60)
-                resp.raise_for_status()
+                    resp = requests.get(url, params=query_params, timeout=60)
+
                 try:
                     data = resp.json()
                 except ValueError:
-                    data = {"success": False, "error": "Server returned invalid JSON."}
+                    data = {
+                        "success": False,
+                        "error": f"Server returned non-JSON response (HTTP {resp.status_code}).",
+                    }
+
+                if not resp.ok and "success" not in data:
+                    data = {
+                        "success": False,
+                        "error": data.get("error") or f"HTTP {resp.status_code} {resp.reason}",
+                    }
 
                 self._queue.put((callback_event, data))
             except Exception as exc:
@@ -397,9 +410,20 @@ class DiagnosticsWindow:
         self._api_call("POST", "/api/diagnose/start", callback_event="start_result")
 
     def _on_read_dtcs_clicked(self) -> None:
+        category = self._selected_data_category.get().strip()
+
+        if not category:
+            messagebox.showwarning("Data Category Required", "Please select a data category first.")
+            return
+
         self._read_dtc_button.configure(state=tk.DISABLED)
         self._set_status_text("Reading fault codes...")
-        self._api_call("GET", "/api/diagnose/dtcs", callback_event="dtcs_result")
+        self._api_call(
+            "GET",
+            "/api/diagnose/dtcs",
+            query_params={"data_category": category},
+            callback_event="dtcs_result",
+        )
 
     def _on_select_module_clicked(self) -> None:
         module = self._selected_module.get().strip()
@@ -409,6 +433,9 @@ class DiagnosticsWindow:
 
         self._select_module_button.configure(state=tk.DISABLED)
         self._start_stream_button.configure(state=tk.DISABLED)
+        self._read_dtc_button.configure(state=tk.DISABLED)
+        self._data_combo.configure(values=[])
+        self._selected_data_category.set("")
         self._set_status_text("Selecting module...")
         self._api_call(
             "POST",
@@ -418,7 +445,13 @@ class DiagnosticsWindow:
         )
 
     def _on_start_stream_clicked(self) -> None:
+        module = self._selected_module.get().strip()
         category = self._selected_data_category.get().strip()
+
+        if not module:
+            messagebox.showwarning("Module Required", "Please select a module first.")
+            return
+
         if not category:
             messagebox.showwarning("Data Category Required", "Please select a data category.")
             return
@@ -439,6 +472,12 @@ class DiagnosticsWindow:
         self._set_status_text("Stopping live stream...")
         self._api_call("POST", "/api/diagnose/live_data/stop", callback_event="live_stop_result")
 
+    def _on_data_category_selected(self) -> None:
+        """Enable actions only after user selects a data category."""
+        has_category = bool(self._selected_data_category.get().strip())
+        self._start_stream_button.configure(state=tk.NORMAL if has_category and not self._stream_active else tk.DISABLED)
+        self._read_dtc_button.configure(state=tk.NORMAL if has_category and not self._stream_active else tk.DISABLED)
+
     # ------------------------------------------------------------------
     # API event handlers
     # ------------------------------------------------------------------
@@ -455,18 +494,23 @@ class DiagnosticsWindow:
 
             self._module_combo.configure(values=modules)
             self._selected_module.set(modules[0] if modules else "")
+            self._data_combo.configure(values=[])
+            self._selected_data_category.set("")
 
-            self._read_dtc_button.configure(state=tk.NORMAL)
+            self._read_dtc_button.configure(state=tk.DISABLED)
+            self._start_stream_button.configure(state=tk.DISABLED)
+            self._stop_stream_button.configure(state=tk.DISABLED)
             self._select_module_button.configure(state=tk.NORMAL if modules else tk.DISABLED)
             self._set_server_connected(True)
-            self._set_status_text(f"Connected — VIN: {vin}")
+            self._set_status_text(f"Connected — VIN: {vin}. Select module and data category.")
             return
 
         self._set_server_connected(False)
         self._set_status_text(f"Connection failed: {self._error_message(payload, 'Unable to start diagnostics.')}")
 
     def _handle_dtcs_result(self, payload: dict[str, Any]) -> None:
-        self._read_dtc_button.configure(state=tk.NORMAL)
+        can_read = bool(self._selected_data_category.get().strip()) and not self._stream_active
+        self._read_dtc_button.configure(state=tk.NORMAL if can_read else tk.DISABLED)
 
         if not payload.get("success"):
             self._set_server_connected(False)
@@ -509,8 +553,9 @@ class DiagnosticsWindow:
                 categories = []
 
             self._data_combo.configure(values=categories)
-            self._selected_data_category.set(categories[0] if categories else "")
-            self._start_stream_button.configure(state=tk.NORMAL if categories else tk.DISABLED)
+            self._selected_data_category.set("")
+            self._start_stream_button.configure(state=tk.DISABLED)
+            self._read_dtc_button.configure(state=tk.DISABLED)
             self._stop_stream_button.configure(state=tk.DISABLED)
             self._select_module_button.configure(state=tk.NORMAL)
             self._set_server_connected(True)
@@ -526,6 +571,7 @@ class DiagnosticsWindow:
             self._set_server_connected(True)
             self._stream_active = True
             self._start_stream_button.configure(state=tk.DISABLED)
+            self._read_dtc_button.configure(state=tk.DISABLED)
             self._stop_stream_button.configure(state=tk.NORMAL)
             self._set_status_text(payload.get("message") or "Live stream started.")
             self._start_sse_thread()
@@ -533,7 +579,9 @@ class DiagnosticsWindow:
 
         self._stream_active = False
         self._set_server_connected(False)
-        self._start_stream_button.configure(state=tk.NORMAL)
+        can_start = bool(self._selected_data_category.get().strip())
+        self._start_stream_button.configure(state=tk.NORMAL if can_start else tk.DISABLED)
+        self._read_dtc_button.configure(state=tk.NORMAL if can_start else tk.DISABLED)
         self._stop_stream_button.configure(state=tk.DISABLED)
         self._set_status_text(f"Live stream failed: {self._error_message(payload, 'Request failed.')}")
 
@@ -541,7 +589,9 @@ class DiagnosticsWindow:
         self._stop_sse_thread()
         self._stream_active = False
 
-        self._start_stream_button.configure(state=tk.NORMAL)
+        can_start = bool(self._selected_data_category.get().strip())
+        self._start_stream_button.configure(state=tk.NORMAL if can_start else tk.DISABLED)
+        self._read_dtc_button.configure(state=tk.NORMAL if can_start else tk.DISABLED)
         self._stop_stream_button.configure(state=tk.DISABLED)
 
         if payload.get("success"):
@@ -637,7 +687,19 @@ class DiagnosticsWindow:
             return
 
         self._set_server_connected(True)
-        self._set_status_text(f"Streaming live data — {len(parameters)} parameter(s)")
+        extraction_count = payload.get("extraction_count")
+        change_count = payload.get("param_changes")
+        if isinstance(change_count, list):
+            changed = len(change_count)
+        else:
+            changed = 0
+
+        if isinstance(extraction_count, int):
+            self._set_status_text(
+                f"Streaming #{extraction_count} — {len(parameters)} parameter(s), {changed} changed"
+            )
+        else:
+            self._set_status_text(f"Streaming live data — {len(parameters)} parameter(s)")
         self._update_live_data_rows(parameters)
 
     # ------------------------------------------------------------------

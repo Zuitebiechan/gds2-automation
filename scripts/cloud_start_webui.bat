@@ -37,6 +37,12 @@ if errorlevel 1 (
 )
 
 REM Start the web UI
-python main.py web --port %PORT%
+if not exist app.py (
+    echo [ERROR] app.py not found in current directory.
+    echo Run this script from the project root folder.
+    exit /b 1
+)
+
+python app.py --port %PORT%
 
 endlocal

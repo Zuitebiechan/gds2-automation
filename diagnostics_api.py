@@ -74,7 +74,24 @@ def diagnose_start():
 def diagnose_dtcs():
     """Read DTCs directly from Agent snapshot JSON."""
     try:
+        module_name = request.args.get('module', '').strip()
+        data_category = request.args.get('data_category', '').strip()
+
         viewer = _app_bindings()["get_data_viewer"]()
+
+        # Keep navigation minimal for UI flow:
+        # User already clicked "Select module", so we should avoid jumping
+        # back to module list unless module context is missing.
+        current_page = viewer.controller.detect_current_page()
+        state = viewer.get_state()
+
+        if module_name and not state.get("module"):
+            viewer.select_module(module_name)
+            current_page = viewer.controller.detect_current_page()
+
+        if data_category and current_page.value != "data_display":
+            viewer.select_data_category(data_category)
+
         result = viewer.read_all_dtcs()
         return jsonify({
             "success": True,
@@ -82,6 +99,21 @@ def diagnose_dtcs():
             "dtc_count": result["dtc_count"],
             "page_context": result.get("page_context"),
         })
+
+    except WorkflowRecoveryError as e:
+        logger.info(f"diagnose_dtcs recovered: {e}")
+        return jsonify({
+            "success": False,
+            "recovered": True,
+            "recovery_target": e.target_page,
+            "reasoning": e.reasoning,
+            "error": str(e),
+            "dtcs": [],
+        }), 200
+
+    except RuntimeError as e:
+        logger.info(f"diagnose_dtcs invalid state: {e}")
+        return jsonify({"success": False, "error": str(e), "dtcs": []}), 400
 
     except Exception as e:
         logger.exception("diagnose_dtcs failed")
