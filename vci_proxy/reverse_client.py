@@ -14,7 +14,7 @@ import time
 import logging
 import argparse
 import os
-from typing import Optional
+from typing import Optional, Callable
 
 from vci_proxy.protocol import MAGIC, HEADER_SIZE, MsgType, MSG_NAMES, Message, ProtocolEncoder, ProtocolDecoder
 from vci_proxy.j2534_driver import J2534Driver
@@ -35,15 +35,24 @@ class ReverseProxyClient:
 
     def __init__(self, server_host: str, server_port: int,
                  dll_path: Optional[str] = None,
-                 config: Optional[ProxyConfig] = None):
+                 config: Optional[ProxyConfig] = None,
+                 on_status_change: Optional[Callable[[str, str], None]] = None):
         self.server_host = server_host
         self.server_port = server_port
         self.dll_path = dll_path
         self.config = config or ProxyConfig()
         self.driver: Optional[J2534Driver] = None
         self.running = False
-
+        self._on_status_change = on_status_change
         # P2-2: VBATT cache
+
+    def _notify_status(self, status: str, detail: str = ""):
+        """Notify GUI of status changes. status: 'connected'|'connecting'|'disconnected'|'error'"""
+        if self._on_status_change:
+            try:
+                self._on_status_change(status, detail)
+            except Exception:
+                pass
         self._vbatt_cache = VbattCache(self.config.vbatt_cache)
 
     def _ensure_driver(self) -> bool:
@@ -55,12 +64,14 @@ class ReverseProxyClient:
                 return True
             except Exception as e:
                 logger.error(f"加载 J2534 驱动失败: {e}")
+                self._notify_status('error', f'Failed to load J2534 driver: {e}')
                 return False
         return True
 
     async def connect_and_serve(self):
         """连接到服务器并处理请求（无限重试，指数退避）"""
         if not self._ensure_driver():
+            self._notify_status('error', 'J2534 driver not available')
             return
 
         self.running = True
@@ -69,6 +80,7 @@ class ReverseProxyClient:
 
         while self.running:
             try:
+                self._notify_status('connecting', f'{self.server_host}:{self.server_port}')
                 logger.info(f"正在连接到 {self.server_host}:{self.server_port}...")
 
                 reader, writer = await asyncio.open_connection(
@@ -76,6 +88,7 @@ class ReverseProxyClient:
                 )
 
                 logger.info("已连接到云服务器!")
+                self._notify_status('connected', f'{self.server_host}:{self.server_port}')
                 backoff_seconds = 5.0  # 连接成功，重置退避
 
                 # 发送注册/认证消息
@@ -91,8 +104,10 @@ class ReverseProxyClient:
                 await self._handle_requests(reader, writer)
 
             except ConnectionRefusedError:
+                self._notify_status('disconnected', f'Connection refused, retrying in {backoff_seconds:.0f}s')
                 logger.warning(f"连接被拒绝，{backoff_seconds:.0f}秒后重试...")
             except Exception as e:
+                self._notify_status('disconnected', f'Error: {e}, retrying in {backoff_seconds:.0f}s')
                 logger.error(f"连接错误: {e}，{backoff_seconds:.0f}秒后重试...")
 
             # Invalidate caches on disconnect

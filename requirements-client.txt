@@ -1,0 +1,6 @@
+# VCI Proxy Client GUI - Dependencies
+# For building the standalone VCI_Proxy_Client.exe
+pystray>=0.19.0
+Pillow>=9.0.0
+requests>=2.28.0
+pyinstaller>=6.0.0

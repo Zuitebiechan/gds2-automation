@@ -10,6 +10,7 @@ Supports AI-powered exception recovery (Day 6 integration).
 import logging
 import re
 import time
+import json
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Any
 
@@ -513,6 +514,77 @@ class DataViewerWorkflow:
         return {
             "devices": devices,
             "at_device_explorer": True,
+        }
+
+    @with_recovery
+    def auto_start(self, on_status: StatusCallback = None) -> dict:
+        """
+        One-button start flow.
+
+        1. Call start()
+        2. If device selection is required, auto-connect to "VCI Proxy (Remote)"
+        3. Return module list context
+        """
+        def status(msg):
+            logger.info(msg)
+            if on_status:
+                on_status(msg)
+
+        result = self.start(on_status=on_status)
+
+        if "devices" in result:
+            status("Auto-connecting to VCI Proxy (Remote)...")
+            connected = self.connect_device("VCI Proxy (Remote)", on_status=on_status)
+            return {
+                "modules": connected["modules"],
+                "vin": connected.get("vin"),
+                "device": connected.get("device"),
+            }
+
+        if "modules" in result:
+            return {
+                "modules": result["modules"],
+                "vin": result.get("vin"),
+                "device": result.get("device"),
+            }
+
+        raise RuntimeError("Unexpected start result: missing 'devices' or 'modules'")
+
+    def read_all_dtcs(self, on_status: StatusCallback = None) -> dict:
+        """Read all DTCs directly from Java Agent JSON snapshot."""
+        def status(msg):
+            logger.info(msg)
+            if on_status:
+                on_status(msg)
+
+        from ..streaming import AgentDataCollector
+        from ..streaming.agent_data_collector import _parse_agent_json
+
+        collector = AgentDataCollector()
+        availability = collector.check_agent_available()
+
+        if not availability.get("available"):
+            raise RuntimeError("Java Agent not available. Start GDS2 with agent.")
+
+        status("Reading DTCs from Java Agent snapshot...")
+
+        raw = None
+        for encoding in ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252']:
+            try:
+                with open(collector.json_path, 'r', encoding=encoding) as f:
+                    raw = json.load(f)
+                break
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+
+        if raw is None:
+            raise RuntimeError("Failed to decode Agent JSON file")
+
+        snapshot = _parse_agent_json(raw)
+        return {
+            "dtcs": [d.to_dict() for d in snapshot.dtcs],
+            "dtc_count": len(snapshot.dtcs),
+            "page_context": snapshot.page_context,
         }
 
     def get_state(self) -> dict:

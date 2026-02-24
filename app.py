@@ -49,6 +49,9 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app)
 
+from diagnostics_api import diagnostics_bp
+app.register_blueprint(diagnostics_bp)
+
 
 # =============================================================================
 # Flask Routes - Basic
@@ -714,6 +717,7 @@ if __name__ == '__main__':
     else:
         print(f"\n  http://localhost:{port}")
     print(f"\n  Data Viewer: /api/viewer/*")
+    print(f"  Diagnostics: /api/diagnose/*")
     print(f"  Streaming:   /api/stream/*")
     print(f"  Agent:       /api/agent/*")
     print(f"{'='*60}\n")
