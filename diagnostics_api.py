@@ -317,13 +317,17 @@ def diagnose_live_data_stop():
 
 @diagnostics_bp.route('/ai_diagnose', methods=['POST'])
 def diagnose_ai_start():
-    """Start AI diagnosis: 30s data collection + LLM analysis."""
+    """Start AI diagnosis: navigate to Data Display, 30s data collection + LLM analysis."""
     data = request.json or {}
+    data_category = data.get('data_category', '')
     vehicle_context = {
         'vin': data.get('vin', ''),
         'module': data.get('module', ''),
-        'data_category': data.get('data_category', ''),
+        'data_category': data_category,
     }
+
+    if not data_category:
+        return jsonify({"success": False, "error": "data_category required"}), 400
 
     try:
         engine = _get_ai_engine()
@@ -333,12 +337,27 @@ def diagnose_ai_start():
                 "error": "AI diagnosis already in progress",
             }), 409
 
+        # Navigate GDS2 to Data Display page for the selected category
+        app_shared = _app_bindings()
+        viewer = app_shared["get_data_viewer"]()
+        viewer.select_data_category(data_category)
+
         session_id = engine.start_session(vehicle_context)
         return jsonify({
             "success": True,
             "session_id": session_id,
             "message": "AI diagnosis started. Subscribe to /ai_diagnose/events for progress.",
         })
+
+    except WorkflowRecoveryError as e:
+        logger.info(f"diagnose_ai_start recovered: {e}")
+        return jsonify({
+            "success": False,
+            "recovered": True,
+            "recovery_target": e.target_page,
+            "reasoning": e.reasoning,
+            "error": str(e),
+        }), 409
 
     except Exception as e:
         logger.exception("diagnose_ai_start failed")
