@@ -232,14 +232,17 @@ class NavigationController:
                     context=self._context.copy(),
                 )
 
-            time.sleep(1.5)
+            # Wait for page to actually change instead of blind sleep
+            old_page = self._current_page
+            try:
+                new_page = self.wait_for_page_transition(old_page, timeout=15)
+            except TimeoutError:
+                logger.warning("Page did not transition after Back click, detecting...")
+                new_page = self.detect_current_page()
 
             # Pop from history if possible
             if self._history:
                 self._history.pop()
-
-            # Detect new page
-            new_page = self.detect_current_page()
 
             # Update context based on navigation
             if new_page == GDS2Page.DATA_LIST:
@@ -284,7 +287,12 @@ class NavigationController:
                     context=self._context.copy(),
                 )
 
-            time.sleep(2)
+            # Wait for page transition to Main Menu
+            old_page = self._current_page
+            try:
+                self.wait_for_page_transition(old_page, timeout=15)
+            except TimeoutError:
+                logger.warning("Page did not transition after Home click")
 
             # Clear history and context
             self._history.clear()
@@ -292,7 +300,7 @@ class NavigationController:
                 "module": None,
                 "data_category": None,
                 "sub_category": None,
-                "device": self._context.get("device"),  # Keep device selection
+                "device": self._context.get("device"),
             }
 
             self._current_page = GDS2Page.MAIN_MENU
@@ -328,9 +336,13 @@ class NavigationController:
                     context=self._context.copy(),
                 )
 
-            time.sleep(2)
-
-            new_page = self.detect_current_page()
+            # Wait for page transition instead of blind sleep
+            old_page = self._current_page
+            try:
+                new_page = self.wait_for_page_transition(old_page, timeout=15)
+            except TimeoutError:
+                logger.warning("Page did not transition after Vehicle Menu click")
+                new_page = self.detect_current_page()
             self._context["module"] = None
             self._context["data_category"] = None
             self._context["sub_category"] = None
@@ -412,6 +424,94 @@ class NavigationController:
             context=self._context.copy(),
         )
 
+    def wait_for_page_transition(
+        self,
+        from_page: GDS2Page,
+        timeout: float = 30.0,
+        poll_interval: float = 0.5,
+    ) -> GDS2Page:
+        """
+        Wait until the current page changes from `from_page`.
+
+        Polls detect_current_page until it returns something OTHER than
+        from_page and UNKNOWN.  This replaces blind time.sleep() after
+        navigation actions.
+
+        Args:
+            from_page: The page we are leaving
+            timeout: Maximum seconds to wait
+            poll_interval: Seconds between polls
+
+        Returns:
+            The new GDS2Page detected
+
+        Raises:
+            TimeoutError if page doesn't change within timeout
+        """
+        start = time.time()
+        last_detected = from_page
+        while time.time() - start < timeout:
+            current = self.detect_current_page(retries=0)
+            last_detected = current
+            if current != from_page and current != GDS2Page.UNKNOWN:
+                logger.info(
+                    f"Page transitioned from {from_page.value} to {current.value} "
+                    f"in {time.time() - start:.1f}s"
+                )
+                self._current_page = current
+                return current
+            time.sleep(poll_interval)
+        raise TimeoutError(
+            f"Page did not transition from {from_page.value} within {timeout}s. "
+            f"Last detected: {last_detected.value}"
+        )
+
+    def wait_for_page_stable(
+        self,
+        timeout: float = 30.0,
+        stable_duration: float = 1.0,
+        poll_interval: float = 0.3,
+    ) -> GDS2Page:
+        """
+        Wait until the detected page stays the same for `stable_duration` seconds.
+
+        Useful after actions where the target page is unknown, or when
+        GDS2 might briefly show an intermediate state (loading).
+
+        Args:
+            timeout: Maximum seconds to wait
+            stable_duration: How long the page must stay the same
+            poll_interval: Seconds between polls
+
+        Returns:
+            The stable GDS2Page detected
+
+        Raises:
+            TimeoutError if no stable page within timeout
+        """
+        start = time.time()
+        last_page = GDS2Page.UNKNOWN
+        stable_since = start
+
+        while time.time() - start < timeout:
+            current = self.detect_current_page(retries=0)
+            if current != last_page or current == GDS2Page.UNKNOWN:
+                last_page = current
+                stable_since = time.time()
+            elif time.time() - stable_since >= stable_duration:
+                logger.info(
+                    f"Page stable at {current.value} for {stable_duration}s "
+                    f"(total wait: {time.time() - start:.1f}s)"
+                )
+                self._current_page = current
+                return current
+            time.sleep(poll_interval)
+
+        raise TimeoutError(
+            f"Page did not stabilize within {timeout}s. "
+            f"Last detected: {last_page.value}"
+        )
+
     # =========================================================================
     # State Queries
     # =========================================================================
@@ -425,11 +525,28 @@ class NavigationController:
         """Get list items from current page."""
         return self.nav.get_list_items(list_index)
 
-    def wait_for_list(self, list_index: int = 0, max_attempts: int = 15) -> List[str]:
-        """Wait for list items to load."""
+    def wait_for_list(self, list_index: int = 0, max_attempts: int = 15,
+                      previous_items: Optional[List[str]] = None) -> List[str]:
+        """
+        Wait for list items to load.
+
+        Args:
+            list_index: Index of the ListView to read
+            max_attempts: Max polling attempts (1s apart)
+            previous_items: If provided, waits until items DIFFER from these
+                           (prevents returning stale items from a prior page)
+
+        Returns:
+            List of item texts, or [] on timeout
+        """
         for attempt in range(max_attempts):
             items = self.nav.get_list_items(list_index)
             if items:
+                # If caller told us what was on screen before, reject stale data
+                if previous_items is not None and items == previous_items:
+                    logger.debug(f"List unchanged (stale), waiting... ({attempt + 1}/{max_attempts})")
+                    time.sleep(1)
+                    continue
                 return items
             logger.debug(f"Waiting for list... ({attempt + 1}/{max_attempts})")
             time.sleep(1)
@@ -494,13 +611,16 @@ class NavigationController:
                 context=self._context.copy(),
             )
 
-        time.sleep(2)
+        # Wait for page transition instead of blind sleep
+        old_page = self._current_page
+        try:
+            new_page = self.wait_for_page_transition(old_page, timeout=15)
+        except TimeoutError:
+            logger.warning("Page did not transition after list item selection")
+            new_page = self.detect_current_page()
 
         # Update history
-        self._history.append(self._current_page)
-
-        # Detect new page
-        new_page = self.detect_current_page()
+        self._history.append(old_page)
 
         return NavigationResult(
             success=True,
@@ -528,10 +648,13 @@ class NavigationController:
                 context=self._context.copy(),
             )
 
-        time.sleep(1.5)
-
-        # Detect new page
-        new_page = self.detect_current_page()
+        # Wait for page transition instead of blind sleep
+        old_page = self._current_page
+        try:
+            new_page = self.wait_for_page_transition(old_page, timeout=15)
+        except TimeoutError:
+            logger.warning(f"Page did not transition after clicking '{button_text}'")
+            new_page = self.detect_current_page()
 
         return NavigationResult(
             success=True,
@@ -579,7 +702,9 @@ class NavigationController:
                     context=self._context.copy(),
                 )
 
-            time.sleep(3)  # Wait for Device Explorer or next page
+            # Wait for page transition or Device Explorer
+            # Use a short initial wait + page detection instead of blind 3s sleep
+            time.sleep(1)  # Brief settle time for Device Explorer dialog
 
             # Check if Device Explorer appeared
             from ..native import DeviceExplorerController
@@ -596,10 +721,14 @@ class NavigationController:
                     choices=devices,
                     context=self._context.copy(),
                 )
-            else:
-                # No Device Explorer - detect current page
-                # Do NOT auto-click Enter, let user decide
-                new_page = self.detect_current_page(retries=3, retry_delay=1.5)
+                # No Device Explorer - wait for page transition from MAIN_MENU
+                try:
+                    new_page = self.wait_for_page_transition(
+                        GDS2Page.MAIN_MENU, timeout=30
+                    )
+                except TimeoutError:
+                    logger.warning("Page did not transition after Diagnostics click")
+                    new_page = self.detect_current_page(retries=3, retry_delay=1.5)
                 logger.info(f"After Diagnostics click, detected page: {new_page.value}")
 
                 self._history.append(GDS2Page.MAIN_MENU)
@@ -671,13 +800,14 @@ class NavigationController:
                     context=self._context.copy(),
                 )
 
-            time.sleep(3)
-
-            # Update context
-            self._context["device"] = device_name
-
-            # Detect current page - do NOT auto-click Enter
-            new_page = self.detect_current_page(retries=3, retry_delay=1.5)
+            # Wait for page transition from Device Explorer instead of blind sleep
+            try:
+                new_page = self.wait_for_page_transition(
+                    GDS2Page.DEVICE_EXPLORER, timeout=30
+                )
+            except TimeoutError:
+                logger.warning("Page did not transition after device Continue click")
+                new_page = self.detect_current_page(retries=3, retry_delay=1.5)
             logger.info(f"After device selection, detected page: {new_page.value}")
 
             self._history.append(GDS2Page.DEVICE_EXPLORER)
@@ -735,7 +865,8 @@ class NavigationController:
                     context=self._context.copy(),
                 )
 
-            time.sleep(2)
+            # Wait briefly for disconnect to process
+            time.sleep(1)
 
             # Clear device from context
             self._context["device"] = None
@@ -790,7 +921,7 @@ class NavigationController:
                     context=self._context.copy(),
                 )
 
-            time.sleep(2)
+            time.sleep(1)  # Brief settle for dialog to appear
 
             # Check if Device Explorer appeared
             from ..native import DeviceExplorerController
@@ -844,24 +975,29 @@ class NavigationController:
                     context=self._context.copy(),
                 )
 
-            time.sleep(3)
+            # Wait for page transition from Vehicle Selection instead of blind sleep
+            try:
+                new_page = self.wait_for_page_transition(
+                    GDS2Page.VEHICLE_SELECTION, timeout=30
+                )
+            except TimeoutError:
+                logger.warning("Page did not transition after Enter click")
+                new_page = self.detect_current_page(retries=2, retry_delay=1.5)
 
             # Dismiss any warning dialogs
             self.dismiss_warning_dialog()
 
-            # Detect new page with retries - GDS2 may take time to transition
-            for attempt in range(3):
-                new_page = self.detect_current_page(retries=2, retry_delay=1.5)
-                logger.info(f"After Enter attempt {attempt + 1}, detected page: {new_page.value}")
-
-                # If we've left Vehicle Selection, we're done
-                if new_page != GDS2Page.VEHICLE_SELECTION:
-                    break
-
-                # Still at Vehicle Selection - try clicking Enter again
+            # If still at Vehicle Selection after first attempt, retry
+            if new_page == GDS2Page.VEHICLE_SELECTION:
                 logger.info("Still at Vehicle Selection, retrying Enter...")
                 self.nav.click_button("Enter")
-                time.sleep(3)
+                try:
+                    new_page = self.wait_for_page_transition(
+                        GDS2Page.VEHICLE_SELECTION, timeout=30
+                    )
+                except TimeoutError:
+                    logger.warning("Page still did not transition after Enter retry")
+                    new_page = self.detect_current_page(retries=2, retry_delay=1.5)
                 self.dismiss_warning_dialog()
 
             # If GDS2 auto-navigated to Module List (skipping Diagnostics Menu),
@@ -870,8 +1006,12 @@ class NavigationController:
                 logger.info("GDS2 auto-navigated to Module List, clicking Back to return to Diagnostics Menu...")
                 back_result = self.nav.click_button("Back")
                 if back_result.get('success'):
-                    time.sleep(2)
-                    new_page = self.detect_current_page(retries=2, retry_delay=1.0)
+                    try:
+                        new_page = self.wait_for_page_transition(
+                            GDS2Page.MODULE_LIST, timeout=15
+                        )
+                    except TimeoutError:
+                        new_page = self.detect_current_page(retries=2, retry_delay=1.0)
                     logger.info(f"After Back, detected page: {new_page.value}")
 
             # Get choices for the new page
@@ -980,14 +1120,13 @@ class NavigationController:
                 context=self._context.copy(),
             )
 
-        time.sleep(3)
-
-        # Update context
-        self._context["data_category"] = matched_item
-        self._context["sub_category"] = None
-
-        # Detect what appeared: Data Display or Sub-category list
-        new_page = self.detect_current_page()
+        # Wait for page transition instead of blind sleep
+        old_page = self._current_page
+        try:
+            new_page = self.wait_for_page_transition(old_page, timeout=20)
+        except TimeoutError:
+            logger.warning("Page did not transition after data category selection")
+            new_page = self.detect_current_page()
 
         if new_page == GDS2Page.DATA_DISPLAY:
             self._history.append(self._current_page)
@@ -1067,13 +1206,13 @@ class NavigationController:
                 context=self._context.copy(),
             )
 
-        time.sleep(3)
-
-        # Update context
-        self._context["sub_category"] = matched_item
-
-        # Detect new page (should be Data Display)
-        new_page = self.detect_current_page()
+        # Wait for page transition instead of blind sleep
+        old_page = self._current_page
+        try:
+            new_page = self.wait_for_page_transition(old_page, timeout=20)
+        except TimeoutError:
+            logger.warning("Page did not transition after sub-category selection")
+            new_page = self.detect_current_page()
         self._history.append(self._current_page)
         self._current_page = new_page
 

@@ -158,8 +158,15 @@ class DataViewerWorkflow:
                 for i, item in enumerate(items):
                     if "Module Diagnostics" in item:
                         self.controller.nav.select_list_item(0, i, double_click=True)
-                        time.sleep(3)
-                        current = GDS2Page.MODULE_LIST
+                        # Wait for page transition instead of blind sleep
+                        try:
+                            new_page = self.controller.wait_for_page_transition(
+                                GDS2Page.DIAGNOSTICS_MENU, timeout=30
+                            )
+                            current = new_page
+                        except TimeoutError:
+                            logger.warning("Page did not transition after Module Diagnostics selection")
+                            current = self.controller.detect_current_page()
                         break
 
         # If deeper than Module List, navigate back
@@ -267,8 +274,14 @@ class DataViewerWorkflow:
                 for i, item in enumerate(items):
                     if "Module Diagnostics" in item:
                         self.controller.nav.select_list_item(0, i, double_click=True)
-                        time.sleep(3)
-                        current = GDS2Page.MODULE_LIST
+                        try:
+                            new_page = self.controller.wait_for_page_transition(
+                                GDS2Page.DIAGNOSTICS_MENU, timeout=30
+                            )
+                            current = new_page
+                        except TimeoutError:
+                            logger.warning("Page did not transition after Module Diagnostics selection")
+                            current = self.controller.detect_current_page()
                         break
 
         # If at Data Display/Data List, navigate back to Module List
@@ -280,7 +293,7 @@ class DataViewerWorkflow:
         if current == GDS2Page.MODULE_SUBMENU:
             status("Going back to Module List...")
             self.controller.go_back()
-            time.sleep(2)
+            # go_back now uses wait_for_page_transition internally
 
         # Now we should be at Module List
         status("Scanning modules...")
@@ -346,18 +359,27 @@ class DataViewerWorkflow:
         if not result.get('success'):
             raise RuntimeError(f"Failed to select module: {result.get('message')}")
 
-        time.sleep(3)
+        # Wait for page transition instead of blind sleep
+        try:
+            self.controller.wait_for_page_transition(GDS2Page.MODULE_LIST, timeout=30)
+        except TimeoutError:
+            logger.warning("Page did not transition after module selection")
         self.controller.set_context(module=matched)
-        self.controller._current_page = GDS2Page.MODULE_SUBMENU
+        self.controller._current_page = self.controller.detect_current_page()
 
         # Select Data Display from submenu
         status("Opening Data Display...")
-        submenu = self.controller.wait_for_list()
+        submenu = self.controller.wait_for_list(previous_items=items)
         if submenu:
             for i, item in enumerate(submenu):
                 if "Data Display" in item:
                     self.controller.nav.select_list_item(0, i, double_click=True)
-                    time.sleep(3)
+                    try:
+                        self.controller.wait_for_page_transition(
+                            GDS2Page.MODULE_SUBMENU, timeout=30
+                        )
+                    except TimeoutError:
+                        logger.warning("Page did not transition after Data Display selection")
                     break
 
         # Handle warning dialog
@@ -365,7 +387,7 @@ class DataViewerWorkflow:
 
         # Discover data categories
         status("Scanning data categories...")
-        data_categories = self.controller.wait_for_list()
+        data_categories = self.controller.wait_for_list(previous_items=submenu if submenu else None)
         if not data_categories:
             raise RuntimeError("No data categories found")
 
@@ -406,7 +428,7 @@ class DataViewerWorkflow:
         if current == GDS2Page.DATA_DISPLAY:
             status("Going back to Data List...")
             self.controller.go_back()
-            time.sleep(1)
+            # go_back now uses wait_for_page_transition internally
 
         # Select data category
         status(f"Selecting {data_category}...")
@@ -712,7 +734,7 @@ class DataViewerWorkflow:
         status("Clicking Continue...")
         if not explorer.click_continue():
             raise RuntimeError("Failed to click Continue in Device Explorer")
-        time.sleep(3)  # Wait for device to connect
+        time.sleep(2)  # Wait for device to connect and page to load
 
     def _wait_for_button_enabled(self, button_text: str, timeout_sec: float = 30, _recursion_depth: int = 0) -> bool:
         """
@@ -853,7 +875,7 @@ class DataViewerWorkflow:
                 status("Clicking Home...")
                 result = self.controller.go_home()
                 if result.success:
-                    time.sleep(2)
+                    # go_home uses wait_for_page_transition internally
                     return
                 else:
                     logger.warning(f"Home click failed: {result.error}")
@@ -863,7 +885,7 @@ class DataViewerWorkflow:
                 status(f"Going back... ({attempt + 1})")
                 result = self.controller.go_back()
                 if result.success:
-                    time.sleep(1.5)
+                    # go_back uses wait_for_page_transition internally
                     continue
                 else:
                     logger.warning(f"Back click failed: {result.error}")
@@ -901,7 +923,6 @@ class DataViewerWorkflow:
             status("Using Vehicle Menu shortcut...")
             result = self.controller.go_vehicle_menu()
             if result.success:
-                time.sleep(2)
                 # Now at Diagnostics Menu - select Module Diagnostics
                 items = self.controller.wait_for_list()
                 if items:
@@ -909,7 +930,13 @@ class DataViewerWorkflow:
                         if "Module Diagnostics" in item:
                             status("Selecting Module Diagnostics...")
                             self.controller.nav.select_list_item(0, i, double_click=True)
-                            time.sleep(3)
+                            try:
+                                self.controller.wait_for_page_transition(
+                                    GDS2Page.DIAGNOSTICS_MENU, timeout=30
+                                )
+                            except TimeoutError:
+                                logger.warning("Page did not transition after Module Diagnostics selection")
+                            self.controller._current_page = self.controller.detect_current_page()
                             self.controller._current_page = GDS2Page.MODULE_LIST
                             return
 
