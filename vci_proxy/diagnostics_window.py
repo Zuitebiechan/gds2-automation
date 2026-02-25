@@ -45,6 +45,12 @@ class DiagnosticsWindow:
         self._sse_response: Optional[requests.Response] = None
         self._stream_active = False
 
+        self._ai_sse_running = False
+        self._ai_sse_thread: Optional[threading.Thread] = None
+        self._ai_sse_response: Optional[requests.Response] = None
+        self._vin = ""
+        self._cached_payload_id = ""
+
         self._live_param_rows: dict[str, str] = {}
 
         self._status_message = tk.StringVar(value="Ready")
@@ -77,6 +83,7 @@ class DiagnosticsWindow:
 
         self._is_destroying = True
         self._stop_sse_thread()
+        self._stop_ai_sse_thread()
 
         try:
             self._root.quit()
@@ -93,7 +100,7 @@ class DiagnosticsWindow:
     # ------------------------------------------------------------------
 
     def _build_window_geometry(self) -> None:
-        width, height = 900, 700
+        width, height = 900, 850
         self._root.update_idletasks()
         screen_w = self._root.winfo_screenwidth()
         screen_h = self._root.winfo_screenheight()
@@ -137,6 +144,7 @@ class DiagnosticsWindow:
         self._build_start_section(root_frame)
         self._build_dtc_section(root_frame)
         self._build_live_data_section(root_frame)
+        self._build_ai_result_section(root_frame)
 
     def _build_header(self, parent: ttk.Frame) -> None:
         header = ttk.Frame(parent, style="Card.TFrame", padding=(0, 0, 0, 10))
@@ -188,19 +196,11 @@ class DiagnosticsWindow:
 
         button_row = ttk.Frame(dtc_frame, style="Card.TFrame")
         button_row.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        button_row.columnconfigure(2, weight=1)
-
-        self._read_dtc_button = ttk.Button(
-            button_row,
-            text="Read DTCs",
-            command=self._on_read_dtcs_clicked,
-            state=tk.DISABLED,
-        )
-        self._read_dtc_button.grid(row=0, column=0, sticky="w", padx=(0, 10))
+        button_row.columnconfigure(1, weight=1)
 
         ttk.Label(button_row, textvariable=self._dtc_count_text, style="Subtle.TLabel").grid(
             row=0,
-            column=1,
+            column=0,
             sticky="w",
         )
 
@@ -261,25 +261,48 @@ class DiagnosticsWindow:
         self._data_combo.grid(row=1, column=1, sticky="ew", pady=(0, 8), padx=(8, 8))
         self._data_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_data_category_selected())
 
-        # Row 3: stream controls
-        controls = ttk.Frame(live_frame, style="Card.TFrame")
-        controls.grid(row=2, column=0, columnspan=3, sticky="w", pady=(4, 10))
+        # Row 3: Primary controls
+        primary_controls = ttk.Frame(live_frame, style="Card.TFrame")
+        primary_controls.grid(row=2, column=0, columnspan=3, sticky="w", pady=(4, 5))
+
+        self._ai_diagnose_button = ttk.Button(
+            primary_controls,
+            text="✨ AI Diagnose",
+            style="Big.TButton",
+            command=self._on_ai_diagnose_clicked,
+            state=tk.DISABLED,
+        )
+        self._ai_diagnose_button.grid(row=0, column=0, sticky="w")
+
+        # Row 4: Secondary controls (Advanced)
+        secondary_controls = ttk.Frame(live_frame, style="Card.TFrame")
+        secondary_controls.grid(row=3, column=0, columnspan=3, sticky="w", pady=(0, 10))
+        
+        ttk.Label(secondary_controls, text="Advanced:", style="Subtle.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 8))
+
+        self._read_dtc_button = ttk.Button(
+            secondary_controls,
+            text="Read DTCs",
+            command=self._on_read_dtcs_clicked,
+            state=tk.DISABLED,
+        )
+        self._read_dtc_button.grid(row=0, column=1, sticky="w", padx=(0, 8))
 
         self._start_stream_button = ttk.Button(
-            controls,
+            secondary_controls,
             text="▶ Start Stream",
             command=self._on_start_stream_clicked,
             state=tk.DISABLED,
         )
-        self._start_stream_button.grid(row=0, column=0, sticky="w")
+        self._start_stream_button.grid(row=0, column=2, sticky="w", padx=(0, 8))
 
         self._stop_stream_button = ttk.Button(
-            controls,
+            secondary_controls,
             text="⏹ Stop",
             command=self._on_stop_stream_clicked,
             state=tk.DISABLED,
         )
-        self._stop_stream_button.grid(row=0, column=1, sticky="w", padx=(10, 0))
+        self._stop_stream_button.grid(row=0, column=3, sticky="w")
 
         # Row 4+: live table
         live_cols = ("parameter", "value", "unit")
@@ -298,6 +321,33 @@ class DiagnosticsWindow:
         live_scroll.grid(row=4, column=2, sticky="ns")
         self._live_tree.configure(yscrollcommand=live_scroll.set)
 
+    def _build_ai_result_section(self, parent: ttk.Frame) -> None:
+        ai_frame = ttk.LabelFrame(parent, text="AI Diagnosis Result", padding=12)
+        ai_frame.grid(row=4, column=0, sticky="nsew", pady=(12, 0))
+        ai_frame.columnconfigure(0, weight=1)
+        ai_frame.rowconfigure(1, weight=1)
+
+        header_row = ttk.Frame(ai_frame, style="Card.TFrame")
+        header_row.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        header_row.columnconfigure(1, weight=1)
+
+        self._ai_status_text = tk.StringVar(value="Ready")
+        ttk.Label(header_row, textvariable=self._ai_status_text, style="Status.TLabel").grid(row=0, column=0, sticky="w")
+
+        self._ai_retry_button = ttk.Button(
+            header_row,
+            text="Retry Analysis",
+            command=self._on_ai_retry_clicked,
+        )
+        self._ai_retry_button.grid(row=0, column=2, sticky="e")
+        self._ai_retry_button.grid_remove() # Initially hidden
+
+        self._ai_result_text = tk.Text(ai_frame, height=8, wrap=tk.WORD, font=("Segoe UI", 10), bg="#f9fafb", fg="#111827", state=tk.DISABLED)
+        self._ai_result_text.grid(row=1, column=0, sticky="nsew")
+
+        ai_scroll = ttk.Scrollbar(ai_frame, orient=tk.VERTICAL, command=self._ai_result_text.yview)
+        ai_scroll.grid(row=1, column=1, sticky="ns")
+        self._ai_result_text.configure(yscrollcommand=ai_scroll.set)
     # ------------------------------------------------------------------
     # Generic threaded API helpers
     # ------------------------------------------------------------------
@@ -373,7 +423,18 @@ class DiagnosticsWindow:
             self._handle_sse_snapshot(data)
         elif event == "sse_error":
             self._handle_sse_error(data)
-
+        elif event == "ai_start_result":
+            self._handle_ai_start_result(data)
+        elif event == "ai_progress":
+            self._handle_ai_progress(data)
+        elif event == "ai_llm_chunk":
+            self._handle_ai_llm_chunk(data)
+        elif event == "ai_result":
+            self._handle_ai_result(data)
+        elif event == "ai_error":
+            self._handle_ai_error(data)
+        elif event == "ai_done":
+            self._handle_ai_done(data)
     # ------------------------------------------------------------------
     # Header/status helpers
     # ------------------------------------------------------------------
@@ -409,6 +470,51 @@ class DiagnosticsWindow:
 
         self._api_call("POST", "/api/diagnose/start", callback_event="start_result")
 
+    def _on_ai_diagnose_clicked(self) -> None:
+        module = self._selected_module.get().strip()
+        category = self._selected_data_category.get().strip()
+
+        if not module:
+            messagebox.showwarning("Module Required", "Please select a module first.")
+            return
+
+        if not category:
+            messagebox.showwarning("Data Category Required", "Please select a data category.")
+            return
+
+        self._ai_diagnose_button.configure(state=tk.DISABLED)
+        self._start_stream_button.configure(state=tk.DISABLED)
+        self._read_dtc_button.configure(state=tk.DISABLED)
+        self._ai_retry_button.grid_remove()
+        
+        self._ai_status_text.set("Starting AI Diagnosis...")
+        self._set_ai_result_text("")
+
+        self._api_call(
+            "POST",
+            "/api/diagnose/ai_diagnose",
+            json_data={"module": module, "data_category": category, "vin": self._vin},
+            callback_event="ai_start_result",
+        )
+
+    def _on_ai_retry_clicked(self) -> None:
+        if not self._cached_payload_id:
+            return
+            
+        self._ai_diagnose_button.configure(state=tk.DISABLED)
+        self._start_stream_button.configure(state=tk.DISABLED)
+        self._read_dtc_button.configure(state=tk.DISABLED)
+        self._ai_retry_button.grid_remove()
+        
+        self._ai_status_text.set("Retrying AI Diagnosis...")
+        self._set_ai_result_text("")
+
+        self._api_call(
+            "POST",
+            "/api/diagnose/ai_diagnose/retry",
+            json_data={"cached_payload_id": self._cached_payload_id},
+            callback_event="ai_start_result",
+        )
     def _on_read_dtcs_clicked(self) -> None:
         category = self._selected_data_category.get().strip()
 
@@ -477,7 +583,7 @@ class DiagnosticsWindow:
         has_category = bool(self._selected_data_category.get().strip())
         self._start_stream_button.configure(state=tk.NORMAL if has_category and not self._stream_active else tk.DISABLED)
         self._read_dtc_button.configure(state=tk.NORMAL if has_category and not self._stream_active else tk.DISABLED)
-
+        self._ai_diagnose_button.configure(state=tk.NORMAL if has_category and not self._stream_active else tk.DISABLED)
     # ------------------------------------------------------------------
     # API event handlers
     # ------------------------------------------------------------------
@@ -500,9 +606,11 @@ class DiagnosticsWindow:
             self._read_dtc_button.configure(state=tk.DISABLED)
             self._start_stream_button.configure(state=tk.DISABLED)
             self._stop_stream_button.configure(state=tk.DISABLED)
+            self._ai_diagnose_button.configure(state=tk.DISABLED)
             self._select_module_button.configure(state=tk.NORMAL if modules else tk.DISABLED)
             self._set_server_connected(True)
             self._set_status_text(f"Connected — VIN: {vin}. Select module and data category.")
+            self._vin = vin
             return
 
         self._set_server_connected(False)
@@ -557,6 +665,7 @@ class DiagnosticsWindow:
             self._start_stream_button.configure(state=tk.DISABLED)
             self._read_dtc_button.configure(state=tk.DISABLED)
             self._stop_stream_button.configure(state=tk.DISABLED)
+            self._ai_diagnose_button.configure(state=tk.DISABLED)
             self._select_module_button.configure(state=tk.NORMAL)
             self._set_server_connected(True)
             self._set_status_text("Module selected. Choose a data category.")
@@ -572,6 +681,7 @@ class DiagnosticsWindow:
             self._stream_active = True
             self._start_stream_button.configure(state=tk.DISABLED)
             self._read_dtc_button.configure(state=tk.DISABLED)
+            self._ai_diagnose_button.configure(state=tk.DISABLED)
             self._stop_stream_button.configure(state=tk.NORMAL)
             self._set_status_text(payload.get("message") or "Live stream started.")
             self._start_sse_thread()
@@ -582,6 +692,7 @@ class DiagnosticsWindow:
         can_start = bool(self._selected_data_category.get().strip())
         self._start_stream_button.configure(state=tk.NORMAL if can_start else tk.DISABLED)
         self._read_dtc_button.configure(state=tk.NORMAL if can_start else tk.DISABLED)
+        self._ai_diagnose_button.configure(state=tk.NORMAL if can_start else tk.DISABLED)
         self._stop_stream_button.configure(state=tk.DISABLED)
         self._set_status_text(f"Live stream failed: {self._error_message(payload, 'Request failed.')}")
 
@@ -592,8 +703,8 @@ class DiagnosticsWindow:
         can_start = bool(self._selected_data_category.get().strip())
         self._start_stream_button.configure(state=tk.NORMAL if can_start else tk.DISABLED)
         self._read_dtc_button.configure(state=tk.NORMAL if can_start else tk.DISABLED)
+        self._ai_diagnose_button.configure(state=tk.NORMAL if can_start else tk.DISABLED)
         self._stop_stream_button.configure(state=tk.DISABLED)
-
         if payload.get("success"):
             self._set_server_connected(True)
             self._set_status_text(payload.get("message") or "Live stream stopped.")
@@ -662,9 +773,144 @@ class DiagnosticsWindow:
         self._stream_active = False
         self._set_server_connected(False)
         self._start_stream_button.configure(state=tk.NORMAL)
+        self._ai_diagnose_button.configure(state=tk.NORMAL)
+        self._read_dtc_button.configure(state=tk.NORMAL)
         self._stop_stream_button.configure(state=tk.DISABLED)
         self._set_status_text(f"Live stream error: {self._error_message(payload, 'Disconnected from server.')}")
 
+    # ------------------------------------------------------------------
+    # AI SSE streaming and handlers
+    # ------------------------------------------------------------------
+
+    def _set_ai_result_text(self, text: str) -> None:
+        self._ai_result_text.configure(state=tk.NORMAL)
+        self._ai_result_text.delete("1.0", tk.END)
+        if text:
+            self._ai_result_text.insert(tk.END, text)
+        self._ai_result_text.configure(state=tk.DISABLED)
+        self._ai_result_text.see(tk.END)
+
+    def _append_ai_result_text(self, text: str) -> None:
+        self._ai_result_text.configure(state=tk.NORMAL)
+        self._ai_result_text.insert(tk.END, text)
+        self._ai_result_text.configure(state=tk.DISABLED)
+        self._ai_result_text.see(tk.END)
+
+    def _handle_ai_start_result(self, payload: dict[str, Any]) -> None:
+        if payload.get("success"):
+            session_id = payload.get("session_id")
+            if session_id:
+                self._ai_status_text.set("AI Diagnosis started. Waiting for events...")
+                self._start_ai_sse_thread(session_id)
+            else:
+                self._ai_status_text.set("Error: No session_id returned.")
+                self._ai_diagnose_button.configure(state=tk.NORMAL)
+                self._start_stream_button.configure(state=tk.NORMAL)
+                self._read_dtc_button.configure(state=tk.NORMAL)
+        else:
+            self._ai_status_text.set(f"Failed to start AI Diagnosis: {self._error_message(payload, 'Request failed.')}")
+            self._ai_diagnose_button.configure(state=tk.NORMAL)
+            self._start_stream_button.configure(state=tk.NORMAL)
+            self._read_dtc_button.configure(state=tk.NORMAL)
+
+    def _handle_ai_progress(self, payload: dict[str, Any]) -> None:
+        message = payload.get("message", "Processing...")
+        self._ai_status_text.set(message)
+
+    def _handle_ai_llm_chunk(self, payload: dict[str, Any]) -> None:
+        chunk = payload.get("chunk", "")
+        if chunk:
+            self._append_ai_result_text(chunk)
+
+    def _handle_ai_result(self, payload: dict[str, Any]) -> None:
+        self._cached_payload_id = payload.get("cached_payload_id", "")
+        
+        verdict = payload.get("verdict", "Unknown")
+        confidence = payload.get("confidence", "Unknown")
+        findings = payload.get("findings", [])
+        recommended_action = payload.get("recommended_action", "None")
+        
+        summary = f"\n\n--- FINAL VERDICT ---\n"
+        summary += f"Verdict: {verdict}\n"
+        summary += f"Confidence: {confidence}\n"
+        summary += f"Findings:\n"
+        for finding in findings:
+            summary += f"  - {finding}\n"
+        summary += f"Recommended Action: {recommended_action}\n"
+        
+        self._append_ai_result_text(summary)
+        self._ai_status_text.set("AI Diagnosis Complete.")
+
+    def _handle_ai_error(self, payload: dict[str, Any]) -> None:
+        error_msg = payload.get("error", "Unknown error")
+        self._ai_status_text.set(f"Error: {error_msg}")
+        self._append_ai_result_text(f"\n\n[Error: {error_msg}]")
+        
+        self._cached_payload_id = payload.get("cached_payload_id", "")
+        is_retryable = payload.get("retryable", False)
+        
+        if is_retryable and self._cached_payload_id:
+            self._ai_retry_button.grid()
+
+    def _handle_ai_done(self, payload: dict[str, Any]) -> None:
+        self._stop_ai_sse_thread()
+        self._ai_diagnose_button.configure(state=tk.NORMAL)
+        self._start_stream_button.configure(state=tk.NORMAL)
+        self._read_dtc_button.configure(state=tk.NORMAL)
+
+    def _start_ai_sse_thread(self, session_id: str) -> None:
+        self._stop_ai_sse_thread()
+        self._ai_sse_running = True
+
+        def _ai_sse_worker() -> None:
+            url = f"{self._api_base}/api/diagnose/ai_diagnose/events?session_id={session_id}"
+            try:
+                with requests.get(url, stream=True, timeout=None) as response:
+                    self._ai_sse_response = response
+                    response.raise_for_status()
+
+                    current_event = None
+                    for raw_line in response.iter_lines(decode_unicode=True):
+                        if not self._ai_sse_running:
+                            break
+                        if not raw_line:
+                            continue
+
+                        line = raw_line.strip()
+                        if line.startswith("event: "):
+                            current_event = line[7:]
+                        elif line.startswith("data: "):
+                            chunk = line[6:]
+                            try:
+                                payload = json.loads(chunk)
+                                if current_event:
+                                    self._queue.put((f"ai_{current_event}", payload))
+                            except json.JSONDecodeError:
+                                continue
+            except Exception as exc:
+                if self._ai_sse_running:
+                    self._queue.put(("ai_error", {"error": str(exc)}))
+            finally:
+                self._ai_sse_response = None
+                if self._ai_sse_running:
+                    self._queue.put(("ai_done", {}))
+
+        self._ai_sse_thread = threading.Thread(target=_ai_sse_worker, daemon=True, name="diag-ai-sse")
+        self._ai_sse_thread.start()
+
+    def _stop_ai_sse_thread(self) -> None:
+        self._ai_sse_running = False
+
+        if self._ai_sse_response is not None:
+            try:
+                self._ai_sse_response.close()
+            except Exception:
+                pass
+            self._ai_sse_response = None
+
+        if self._ai_sse_thread and self._ai_sse_thread.is_alive():
+            self._ai_sse_thread.join(timeout=1.5)
+        self._ai_sse_thread = None
     def _handle_sse_snapshot(self, payload: dict[str, Any]) -> None:
         if not isinstance(payload, dict):
             return

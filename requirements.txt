@@ -23,3 +23,6 @@ pydantic>=2.0.0
 # Development
 pytest>=7.0.0
 pytest-cov>=4.0.0
+
+# AI diagnosis (Phase 3.5)
+zhipuai>=2.1.5

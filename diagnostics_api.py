@@ -1,20 +1,54 @@
-"""Phase 3 one-button diagnostics API blueprint."""
+"""Phase 3 diagnostics + Phase 3.5 AI diagnosis API blueprint."""
 
 import json
 import logging
 import queue
+import os
 import time
 
 from flask import Blueprint, Response, jsonify, request
 
 from src.recovery.types import WorkflowRecoveryError
 from src.streaming import AgentDataCollector
+from src.diagnosis.ai_engine import AIEngine, get_cached_payload
 
 logger = logging.getLogger(__name__)
 
 diagnostics_bp = Blueprint("diagnostics", __name__, url_prefix="/api/diagnose")
 
 _diag_collector = None
+
+# Phase 3.5: AI diagnosis engine (lazy-initialized)
+_ai_engine: AIEngine | None = None
+
+
+def _get_ai_engine() -> AIEngine:
+    """Lazy-init the AI engine with API key from config."""
+    global _ai_engine
+    if _ai_engine is None:
+        api_key = _load_zhipu_api_key()
+        if not api_key:
+            raise RuntimeError(
+                "ZhipuAI API key not configured. "
+                "Set it in %APPDATA%/VCI_Proxy/config.json under 'zhipu_api_key'."
+            )
+        _ai_engine = AIEngine(api_key=api_key)
+    return _ai_engine
+
+
+def _load_zhipu_api_key() -> str | None:
+    """Load ZhipuAI API key from config file."""
+    config_dir = os.path.join(
+        os.environ.get('APPDATA', os.path.expanduser('~')),
+        'VCI_Proxy'
+    )
+    config_path = os.path.join(config_dir, 'config.json')
+    try:
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+        return config.get('zhipu_api_key', '').strip() or None
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
 
 
 def _app_bindings():
@@ -273,4 +307,125 @@ def diagnose_live_data_stop():
 
     except Exception as e:
         logger.exception("diagnose_live_data_stop failed")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# =========================================================================
+# Phase 3.5: AI Diagnosis endpoints
+# =========================================================================
+
+
+@diagnostics_bp.route('/ai_diagnose', methods=['POST'])
+def diagnose_ai_start():
+    """Start AI diagnosis: 30s data collection + LLM analysis."""
+    data = request.json or {}
+    vehicle_context = {
+        'vin': data.get('vin', ''),
+        'module': data.get('module', ''),
+        'data_category': data.get('data_category', ''),
+    }
+
+    try:
+        engine = _get_ai_engine()
+        if engine.is_active:
+            return jsonify({
+                "success": False,
+                "error": "AI diagnosis already in progress",
+            }), 409
+
+        session_id = engine.start_session(vehicle_context)
+        return jsonify({
+            "success": True,
+            "session_id": session_id,
+            "message": "AI diagnosis started. Subscribe to /ai_diagnose/events for progress.",
+        })
+
+    except Exception as e:
+        logger.exception("diagnose_ai_start failed")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@diagnostics_bp.route('/ai_diagnose/events')
+def diagnose_ai_events():
+    """SSE endpoint for AI diagnosis progress + streamed LLM result."""
+    session_id = request.args.get('session_id', '').strip()
+    if not session_id:
+        return jsonify({"success": False, "error": "session_id required"}), 400
+
+    try:
+        engine = _get_ai_engine()
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+    event_queue = engine.get_event_queue(session_id)
+    if event_queue is None:
+        return jsonify({
+            "success": False,
+            "error": f"Session {session_id} not found",
+        }), 404
+
+    def generate():
+        yield f"event: connected\ndata: {json.dumps({'session_id': session_id})}\n\n"
+
+        while True:
+            try:
+                message = event_queue.get(timeout=60)
+                yield message
+
+                # Check if this was the final event
+                if '"event": "done"' in message or 'event: done' in message:
+                    break
+                if 'event: error' in message:
+                    break
+                if 'event: result' in message:
+                    # Result sent, done event follows
+                    continue
+
+            except queue.Empty:
+                yield ": keepalive\n\n"
+
+    return Response(
+        generate(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
+        }
+    )
+
+
+@diagnostics_bp.route('/ai_diagnose/retry', methods=['POST'])
+def diagnose_ai_retry():
+    """Retry LLM analysis with cached payload (skip re-collection)."""
+    data = request.json or {}
+    cached_payload_id = data.get('cached_payload_id', '').strip()
+    vehicle_context = {
+        'vin': data.get('vin', ''),
+        'module': data.get('module', ''),
+    }
+
+    if not cached_payload_id:
+        return jsonify({
+            "success": False,
+            "error": "cached_payload_id required",
+        }), 400
+
+    try:
+        engine = _get_ai_engine()
+        if engine.is_active:
+            return jsonify({
+                "success": False,
+                "error": "AI diagnosis already in progress",
+            }), 409
+
+        session_id = engine.retry_with_cached(cached_payload_id, vehicle_context)
+        return jsonify({
+            "success": True,
+            "session_id": session_id,
+            "message": "Retry started. Subscribe to /ai_diagnose/events for progress.",
+        })
+
+    except Exception as e:
+        logger.exception("diagnose_ai_retry failed")
         return jsonify({"success": False, "error": str(e)}), 500
