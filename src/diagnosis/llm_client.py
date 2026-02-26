@@ -188,13 +188,35 @@ class LLMClient:
         for chunk in response:
             total_chunks += 1
             if total_chunks <= 3:
-                logger.debug(f"LLM chunk #{total_chunks}: choices={chunk.choices}, delta={chunk.choices[0].delta if chunk.choices else 'N/A'}")
+                logger.info(f"LLM chunk #{total_chunks}: {chunk}")
             if chunk.choices and chunk.choices[0].delta.content:
                 chunk_count += 1
                 yield chunk.choices[0].delta.content
         logger.info(f"LLM stream: {total_chunks} total chunks, {chunk_count} with content")
         if chunk_count == 0:
-            logger.warning("LLM stream returned 0 content chunks — likely a reasoning model thinking without output")
+            # Streaming returned nothing — fallback to blocking call
+            logger.warning("Stream returned no content, falling back to non-stream call")
+            try:
+                client = self._get_client()
+                user_message = _build_user_message(vehicle_context, delta_payload)
+                blocking_resp = client.chat.completions.create(
+                    model=self._model,
+                    messages=[
+                        {"role": "system", "content": DIAGNOSTIC_SYSTEM_PROMPT},
+                        {"role": "user", "content": user_message},
+                    ],
+                    stream=False,
+                    max_tokens=4096,
+                    temperature=0.3,
+                )
+                if blocking_resp.choices and blocking_resp.choices[0].message.content:
+                    text = blocking_resp.choices[0].message.content
+                    logger.info(f"Non-stream fallback returned {len(text)} chars")
+                    yield text
+                else:
+                    logger.warning(f"Non-stream fallback also empty: {blocking_resp}")
+            except Exception as e:
+                logger.exception(f"Non-stream fallback failed: {e}")
     def diagnose_blocking(
         self,
         vehicle_context: dict[str, Any],
