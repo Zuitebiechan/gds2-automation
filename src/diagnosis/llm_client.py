@@ -1,7 +1,7 @@
 """
 ZhipuAI LLM client for vehicle diagnosis.
 
-Wraps the ZhipuAI glm-4.7-flash API with:
+Wraps the ZhipuAI glm-4.7 API with:
 - Streaming response support with per-chunk and total timeout protection
 - Diagnostic prompt assembly
 - Structured JSON response parsing
@@ -135,7 +135,7 @@ class LLMClient:
     STREAM_CHUNK_TIMEOUT = 60   # Max seconds to wait for a single chunk
     STREAM_TOTAL_TIMEOUT = 180  # Max total seconds for the entire stream
 
-    def __init__(self, api_key: str, model: str = "glm-4.7-flash"):
+    def __init__(self, api_key: str, model: str = "glm-4.7"):
         self._api_key = api_key
         self._model = model
         self._client = None
@@ -197,6 +197,7 @@ class LLMClient:
             stream=True,
             max_tokens=4096,
             temperature=0.3,  # Low temperature for factual analysis
+            thinking={"type": "disabled"},  # Disable reasoning to get direct content output
         )
 
         chunk_count = 0
@@ -244,6 +245,7 @@ class LLMClient:
                     stream=False,
                     max_tokens=4096,
                     temperature=0.3,
+                    thinking={"type": "disabled"},  # Must match streaming call
                 )
                 if blocking_resp.choices and blocking_resp.choices[0].message.content:
                     text = blocking_resp.choices[0].message.content
