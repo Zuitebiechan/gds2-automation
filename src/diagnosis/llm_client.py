@@ -9,6 +9,7 @@ Wraps the ZhipuAI glm-4.7-flash API with:
 Uses OpenAI-compatible API via the zhipuai SDK.
 """
 
+import ast
 import json
 import logging
 import time
@@ -305,9 +306,19 @@ class LLMClient:
         brace_start = text.find('{')
         brace_end = text.rfind('}')
         if brace_start != -1 and brace_end > brace_start:
+            json_candidate = text[brace_start:brace_end + 1]
             try:
-                return json.loads(text[brace_start:brace_end + 1])
+                return json.loads(json_candidate)
             except json.JSONDecodeError:
+                pass
+
+            # Fallback: LLM sometimes outputs Python-style dicts (single quotes).
+            # ast.literal_eval can safely parse these.
+            try:
+                result = ast.literal_eval(json_candidate)
+                if isinstance(result, dict):
+                    return result
+            except (ValueError, SyntaxError):
                 pass
 
         logger.warning("Failed to parse LLM verdict as JSON. Response preview: %s", text[:500])

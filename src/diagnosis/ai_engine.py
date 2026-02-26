@@ -353,9 +353,11 @@ class AIEngine:
         )
 
     def _cleanup_session(self, session_id: str) -> None:
-        """Mark session as complete and emit done event."""
+        """Mark session as complete, emit done event, and clean up resources."""
         self._emit(session_id, 'done', {'session_id': session_id})
 
         with self._session_lock:
             if self._active_session == session_id:
                 self._active_session = None
+            # Clean up event queue to prevent memory leak
+            self._event_queues.pop(session_id, None)

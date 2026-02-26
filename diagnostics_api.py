@@ -392,11 +392,13 @@ def diagnose_ai_events():
                 yield message
 
                 # Check if this was the final event
-                if '"event": "done"' in message or 'event: done' in message:
+                # SSE format: 'event: <type>\ndata: <json>\n\n'
+                # Check by line prefix, not substring match (avoid false positives)
+                if message.startswith('event: done\n'):
                     break
-                if 'event: error' in message:
+                if message.startswith('event: error\n'):
                     break
-                if 'event: result' in message:
+                if message.startswith('event: result\n'):
                     # Result sent, done event follows
                     continue
 

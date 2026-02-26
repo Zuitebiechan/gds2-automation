@@ -818,40 +818,50 @@ class DiagnosticsWindow:
         self._ai_status_text.set(message)
 
     def _handle_ai_llm_chunk(self, payload: dict[str, Any]) -> None:
-        chunk = payload.get("chunk", "")
+        chunk = payload.get("text", "")
         if chunk:
             self._append_ai_result_text(chunk)
 
     def _handle_ai_result(self, payload: dict[str, Any]) -> None:
         self._cached_payload_id = payload.get("cached_payload_id", "")
 
-        verdict_data = payload.get("verdict") or {}
+        verdict_data = payload.get("verdict")
         raw_response = payload.get("raw_response", "")
 
-        verdict = verdict_data.get("verdict", "Unknown") if isinstance(verdict_data, dict) else "Unknown"
-        confidence = verdict_data.get("confidence", "Unknown") if isinstance(verdict_data, dict) else "Unknown"
-        findings = verdict_data.get("findings", []) if isinstance(verdict_data, dict) else []
-        recommended_action = verdict_data.get("recommended_action", "None") if isinstance(verdict_data, dict) else "None"
-        ai_summary = verdict_data.get("summary", "") if isinstance(verdict_data, dict) else ""
+        # If LLM chunks were already streamed, the text widget has content.
+        # If not (e.g. non-stream fallback), show raw_response as base text.
+        current_text = self._ai_result_text.get("1.0", tk.END).strip()
+        if not current_text and raw_response:
+            self._set_ai_result_text(raw_response)
 
-        summary = "\n\n--- FINAL VERDICT ---\n"
-        summary += f"Verdict: {verdict}\n"
-        summary += f"Confidence: {confidence}\n"
-        if ai_summary:
-            summary += f"Summary: {ai_summary}\n"
-        summary += f"Findings:\n"
-        for finding in findings:
-            if isinstance(finding, dict):
-                dtc = finding.get('dtc', 'N/A')
-                severity = finding.get('severity', 'N/A')
-                analysis = finding.get('analysis', '')
-                summary += f"  [{severity.upper()}] {dtc}: {analysis}\n"
-            else:
-                summary += f"  - {finding}\n"
-        summary += f"Recommended Action: {recommended_action}\n"
+        # Build structured verdict summary
+        if isinstance(verdict_data, dict) and verdict_data:
+            verdict = verdict_data.get("verdict", "Unknown")
+            confidence = verdict_data.get("confidence", "Unknown")
+            findings = verdict_data.get("findings", [])
+            recommended_action = verdict_data.get("recommended_action", "None")
+            ai_summary = verdict_data.get("summary", "")
 
-        self._set_ai_result_text(raw_response)
-        self._append_ai_result_text(summary)
+            summary = "\n\n--- FINAL VERDICT ---\n"
+            summary += f"Verdict: {verdict}\n"
+            summary += f"Confidence: {confidence}\n"
+            if ai_summary:
+                summary += f"Summary: {ai_summary}\n"
+            summary += "Findings:\n"
+            for finding in findings:
+                if isinstance(finding, dict):
+                    dtc = finding.get('dtc', 'N/A')
+                    severity = finding.get('severity', 'N/A')
+                    analysis = finding.get('analysis', '')
+                    summary += f"  [{severity.upper()}] {dtc}: {analysis}\n"
+                else:
+                    summary += f"  - {finding}\n"
+            summary += f"Recommended Action: {recommended_action}\n"
+            self._append_ai_result_text(summary)
+        else:
+            # parse_verdict failed — raw_response is already displayed
+            self._append_ai_result_text("\n\n[Note: Could not parse structured verdict from AI response.]\n")
+
         self._ai_status_text.set("AI Diagnosis Complete.")
 
     def _handle_ai_error(self, payload: dict[str, Any]) -> None:
@@ -878,7 +888,7 @@ class DiagnosticsWindow:
         def _ai_sse_worker() -> None:
             url = f"{self._api_base}/api/diagnose/ai_diagnose/events?session_id={session_id}"
             try:
-                with requests.get(url, stream=True, timeout=None) as response:
+                with requests.get(url, stream=True, timeout=(10, 300)) as response:
                     self._ai_sse_response = response
                     response.raise_for_status()
 

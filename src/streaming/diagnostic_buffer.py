@@ -135,10 +135,7 @@ class DiagnosticBuffer:
                 history = self._param_history.setdefault(key, [])
 
                 if not history or history[-1][1] != value:
-                    # Value changed — record it
-                    history.append((relative_time, value))
-                elif not history:
-                    # First entry
+                    # Value changed (or first entry) — record it
                     history.append((relative_time, value))
 
             # Store snapshot
