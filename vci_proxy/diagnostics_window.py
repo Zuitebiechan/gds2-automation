@@ -824,20 +824,33 @@ class DiagnosticsWindow:
 
     def _handle_ai_result(self, payload: dict[str, Any]) -> None:
         self._cached_payload_id = payload.get("cached_payload_id", "")
-        
-        verdict = payload.get("verdict", "Unknown")
-        confidence = payload.get("confidence", "Unknown")
-        findings = payload.get("findings", [])
-        recommended_action = payload.get("recommended_action", "None")
-        
-        summary = f"\n\n--- FINAL VERDICT ---\n"
+
+        verdict_data = payload.get("verdict") or {}
+        raw_response = payload.get("raw_response", "")
+
+        verdict = verdict_data.get("verdict", "Unknown") if isinstance(verdict_data, dict) else "Unknown"
+        confidence = verdict_data.get("confidence", "Unknown") if isinstance(verdict_data, dict) else "Unknown"
+        findings = verdict_data.get("findings", []) if isinstance(verdict_data, dict) else []
+        recommended_action = verdict_data.get("recommended_action", "None") if isinstance(verdict_data, dict) else "None"
+        ai_summary = verdict_data.get("summary", "") if isinstance(verdict_data, dict) else ""
+
+        summary = "\n\n--- FINAL VERDICT ---\n"
         summary += f"Verdict: {verdict}\n"
         summary += f"Confidence: {confidence}\n"
+        if ai_summary:
+            summary += f"Summary: {ai_summary}\n"
         summary += f"Findings:\n"
         for finding in findings:
-            summary += f"  - {finding}\n"
+            if isinstance(finding, dict):
+                dtc = finding.get('dtc', 'N/A')
+                severity = finding.get('severity', 'N/A')
+                analysis = finding.get('analysis', '')
+                summary += f"  [{severity.upper()}] {dtc}: {analysis}\n"
+            else:
+                summary += f"  - {finding}\n"
         summary += f"Recommended Action: {recommended_action}\n"
-        
+
+        self._set_ai_result_text(raw_response)
         self._append_ai_result_text(summary)
         self._ai_status_text.set("AI Diagnosis Complete.")
 
