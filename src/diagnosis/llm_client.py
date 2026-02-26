@@ -2,7 +2,7 @@
 ZhipuAI LLM client for vehicle diagnosis.
 
 Wraps the ZhipuAI glm-4.7-flash API with:
-- Streaming response support
+- Streaming response support with per-chunk and total timeout protection
 - Diagnostic prompt assembly
 - Structured JSON response parsing
 
@@ -11,6 +11,7 @@ Uses OpenAI-compatible API via the zhipuai SDK.
 
 import json
 import logging
+import time
 from typing import Any, Generator, Optional
 
 logger = logging.getLogger(__name__)
@@ -129,6 +130,10 @@ class LLMClient:
     API key is loaded from config, never hardcoded.
     """
 
+    # Timeout constants
+    STREAM_CHUNK_TIMEOUT = 60   # Max seconds to wait for a single chunk
+    STREAM_TOTAL_TIMEOUT = 180  # Max total seconds for the entire stream
+
     def __init__(self, api_key: str, model: str = "glm-4.7-flash"):
         self._api_key = api_key
         self._model = model
@@ -138,8 +143,18 @@ class LLMClient:
         """Lazy-init the ZhipuAI client."""
         if self._client is None:
             try:
+                import httpx
                 from zhipuai import ZhipuAI
-                self._client = ZhipuAI(api_key=self._api_key)
+                # Set httpx read timeout to match our chunk timeout
+                # Default is 300s which is too long for streaming
+                timeout = httpx.Timeout(
+                    timeout=float(self.STREAM_CHUNK_TIMEOUT),
+                    connect=8.0,
+                )
+                self._client = ZhipuAI(
+                    api_key=self._api_key,
+                    timeout=timeout,
+                )
             except ImportError:
                 raise RuntimeError(
                     "zhipuai package not installed. Run: pip install zhipuai"
@@ -185,14 +200,34 @@ class LLMClient:
 
         chunk_count = 0
         total_chunks = 0
+        stream_start = time.monotonic()
+        last_chunk_time = stream_start
+
         for chunk in response:
+            now = time.monotonic()
+
+            # Total stream timeout
+            if now - stream_start > self.STREAM_TOTAL_TIMEOUT:
+                logger.warning(
+                    f"Stream total timeout ({self.STREAM_TOTAL_TIMEOUT}s) exceeded "
+                    f"after {total_chunks} chunks ({chunk_count} with content)"
+                )
+                break
+
+            last_chunk_time = now
             total_chunks += 1
+
             if total_chunks <= 3:
                 logger.info(f"LLM chunk #{total_chunks}: {chunk}")
             if chunk.choices and chunk.choices[0].delta.content:
                 chunk_count += 1
                 yield chunk.choices[0].delta.content
-        logger.info(f"LLM stream: {total_chunks} total chunks, {chunk_count} with content")
+
+        elapsed = time.monotonic() - stream_start
+        logger.info(
+            f"LLM stream: {total_chunks} total chunks, {chunk_count} with content, "
+            f"{elapsed:.1f}s elapsed"
+        )
         if chunk_count == 0:
             # Streaming returned nothing — fallback to blocking call
             logger.warning("Stream returned no content, falling back to non-stream call")
@@ -217,6 +252,7 @@ class LLMClient:
                     logger.warning(f"Non-stream fallback also empty: {blocking_resp}")
             except Exception as e:
                 logger.exception(f"Non-stream fallback failed: {e}")
+
     def diagnose_blocking(
         self,
         vehicle_context: dict[str, Any],
