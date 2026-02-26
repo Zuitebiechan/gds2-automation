@@ -721,29 +721,30 @@ class NavigationController:
                     choices=devices,
                     context=self._context.copy(),
                 )
-                # No Device Explorer - wait for page transition from MAIN_MENU
-                try:
-                    new_page = self.wait_for_page_transition(
-                        GDS2Page.MAIN_MENU, timeout=30
-                    )
-                except TimeoutError:
-                    logger.warning("Page did not transition after Diagnostics click")
-                    new_page = self.detect_current_page(retries=3, retry_delay=1.5)
-                logger.info(f"After Diagnostics click, detected page: {new_page.value}")
 
-                self._history.append(GDS2Page.MAIN_MENU)
-
-                # Get choices for the current page
-                choices = None
-                if new_page in (GDS2Page.DIAGNOSTICS_MENU, GDS2Page.MODULE_LIST, GDS2Page.DATA_LIST, GDS2Page.VEHICLE_SELECTION):
-                    choices = self.get_list_items()
-
-                return NavigationResult(
-                    success=True,
-                    page=new_page,
-                    choices=choices,
-                    context=self._context.copy(),
+            # No Device Explorer - wait for page transition from MAIN_MENU
+            try:
+                new_page = self.wait_for_page_transition(
+                    GDS2Page.MAIN_MENU, timeout=30
                 )
+            except TimeoutError:
+                logger.warning("Page did not transition after Diagnostics click")
+                new_page = self.detect_current_page(retries=3, retry_delay=1.5)
+            logger.info(f"After Diagnostics click, detected page: {new_page.value}")
+
+            self._history.append(GDS2Page.MAIN_MENU)
+
+            # Get choices for the current page
+            choices = None
+            if new_page in (GDS2Page.DIAGNOSTICS_MENU, GDS2Page.MODULE_LIST, GDS2Page.DATA_LIST, GDS2Page.VEHICLE_SELECTION):
+                choices = self.get_list_items()
+
+            return NavigationResult(
+                success=True,
+                page=new_page,
+                choices=choices,
+                context=self._context.copy(),
+            )
 
         except Exception as e:
             logger.exception(f"start_diagnostics failed: {e}")
