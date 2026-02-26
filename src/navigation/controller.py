@@ -1120,7 +1120,7 @@ class NavigationController:
             )
 
         # Select the item
-        result = self.nav.select_list_item(0, target_index, double_click=False)
+        result = self.nav.select_list_item(0, target_index, double_click=True)
         if not result.get('success'):
             return NavigationResult(
                 success=False,
@@ -1206,7 +1206,7 @@ class NavigationController:
                 context=self._context.copy(),
             )
 
-        result = self.nav.select_list_item(0, target_index, double_click=False)
+        result = self.nav.select_list_item(0, target_index, double_click=True)
         if not result.get('success'):
             return NavigationResult(
                 success=False,
