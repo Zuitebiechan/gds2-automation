@@ -183,10 +183,18 @@ class LLMClient:
             temperature=0.3,  # Low temperature for factual analysis
         )
 
+        chunk_count = 0
+        total_chunks = 0
         for chunk in response:
+            total_chunks += 1
+            if total_chunks <= 3:
+                logger.debug(f"LLM chunk #{total_chunks}: choices={chunk.choices}, delta={chunk.choices[0].delta if chunk.choices else 'N/A'}")
             if chunk.choices and chunk.choices[0].delta.content:
+                chunk_count += 1
                 yield chunk.choices[0].delta.content
-
+        logger.info(f"LLM stream: {total_chunks} total chunks, {chunk_count} with content")
+        if chunk_count == 0:
+            logger.warning("LLM stream returned 0 content chunks — likely a reasoning model thinking without output")
     def diagnose_blocking(
         self,
         vehicle_context: dict[str, Any],
