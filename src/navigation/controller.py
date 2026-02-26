@@ -988,6 +988,9 @@ class NavigationController:
             # Dismiss any warning dialogs
             self.dismiss_warning_dialog()
 
+            # Re-detect page after dismissing dialog (dialog may have obscured detection)
+            if new_page == GDS2Page.UNKNOWN:
+                new_page = self.detect_current_page(retries=2, retry_delay=1.5)
             # If still at Vehicle Selection after first attempt, retry
             if new_page == GDS2Page.VEHICLE_SELECTION:
                 logger.info("Still at Vehicle Selection, retrying Enter...")
@@ -1000,6 +1003,8 @@ class NavigationController:
                     logger.warning("Page still did not transition after Enter retry")
                     new_page = self.detect_current_page(retries=2, retry_delay=1.5)
                 self.dismiss_warning_dialog()
+                if new_page == GDS2Page.UNKNOWN:
+                    new_page = self.detect_current_page(retries=2, retry_delay=1.5)
 
             # If GDS2 auto-navigated to Module List (skipping Diagnostics Menu),
             # click Back to return to Diagnostics Menu so user can choose
