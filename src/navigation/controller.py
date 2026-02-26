@@ -460,6 +460,9 @@ class NavigationController:
                 )
                 self._current_page = current
                 return current
+            # If UNKNOWN, try dismissing warning dialog (may be blocking detection)
+            if current == GDS2Page.UNKNOWN:
+                self.dismiss_warning_dialog()
             time.sleep(poll_interval)
         raise TimeoutError(
             f"Page did not transition from {from_page.value} within {timeout}s. "
