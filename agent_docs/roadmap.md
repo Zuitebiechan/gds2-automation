@@ -1,7 +1,7 @@
 # Roadmap
 
-**Last Updated**: 2026-02-25  
-**Status**: Phase 1 complete, Phase 3 under final validation, Phase 3.5 in progress
+**Last Updated**: 2026-02-26  
+**Status**: Phase 1 complete, Phase 3 complete, Phase 3.5 complete ✅
 
 ## Completed Foundations
 
@@ -57,35 +57,35 @@ Deferred until multi-user/session manager has business priority.
 - [ ] Final in-vehicle verification of DTC presence/absence behavior across modules
 - [ ] Final in-vehicle verification of live parameter value-change visibility under dynamic conditions
 
-## Phase 3.5: AI-Powered Diagnosis (In Progress)
+## Phase 3.5: AI-Powered Diagnosis ✅
 
 Target UX: mechanics click one button, AI analyzes DTCs + live sensor data, returns structured verdict.
 
 ### Architecture
 
 - **Trigger**: On-demand ("AI Diagnose" button) — post-click 30s data collection
-- **LLM**: ZhipuAI glm-4.7-flash (free, 200K context)
+- **LLM**: ZhipuAI glm-4.7 (thinking disabled, all tokens → content output)
 - **Data pipeline**: AgentDataCollector → DiagnosticBuffer (30s sliding window) → delta-compressed payload → LLM → SSE-streamed result
 - **Comm pattern**: SSE progress events (collecting → analyzing → streamed result)
 
 ### Cloud APIs (`/api/diagnose/*`)
 
-- [ ] `POST /ai_diagnose` — start 30s data collection + LLM analysis, return session_id
-- [ ] `GET /ai_diagnose/events?session_id=...` — SSE progress + streamed LLM result
-- [ ] `POST /ai_diagnose/retry` — retry LLM call with cached payload (skip re-collection)
+- [x] `POST /ai_diagnose` — start 30s data collection + LLM analysis, return session_id
+- [x] `GET /ai_diagnose/events?session_id=...` — SSE progress + streamed LLM result
+- [x] `POST /ai_diagnose/retry` — retry LLM call with cached payload (skip re-collection)
 
 ### New components
 
-- [ ] `src/streaming/diagnostic_buffer.py` — DiagnosticBuffer: 30s ring buffer, dual-rate sampling, delta compression
-- [ ] `src/diagnosis/llm_client.py` — ZhipuAI streaming wrapper + prompt assembly
-- [ ] `src/diagnosis/ai_engine.py` — Orchestration: collector → buffer → DTCs → LLM → SSE
+- [x] `src/streaming/diagnostic_buffer.py` — DiagnosticBuffer: 30s ring buffer, dual-rate sampling, delta compression
+- [x] `src/diagnosis/llm_client.py` — ZhipuAI streaming wrapper + prompt assembly + verdict parsing
+- [x] `src/diagnosis/ai_engine.py` — Orchestration: collector → buffer → DTCs → LLM → SSE
 
 ### Client UX changes
 
-- [ ] "AI Diagnose" as primary button (large, prominent)
-- [ ] "Read DTCs" / "Start Stream" moved to secondary/advanced row
-- [ ] Progress display during 30s collection + LLM analysis
-- [ ] Streamed result panel showing AI verdict in real-time
+- [x] "AI Diagnose" as primary button (large, prominent)
+- [x] "Read DTCs" / "Start Stream" moved to secondary/advanced row
+- [x] Progress display during 30s collection + LLM analysis
+- [x] Streamed result panel showing AI verdict in real-time
 
 ### Data payload to LLM
 
@@ -94,10 +94,23 @@ Target UX: mechanics click one button, AI analyzes DTCs + live sensor data, retu
 - 30s live data as delta-compressed timeline (initial state + timestamped changes)
 - Pre-flagged significant parameter changes with timing
 
+### Robustness (battle-tested)
+
+- Streaming timeout protection: 60s per-chunk, 180s total stream
+- Non-stream fallback when streaming returns 0 content chunks
+- Verdict parsing: JSON → markdown code block → brace extraction → ast.literal_eval
+- Deferred event queue cleanup (30s Timer) to prevent SSE 404 race conditions
+- Single active session enforcement (409 reject on concurrent requests)
+
+### Known model history
+
+- glm-4.7-flash: **rejected** — reasoning model spent all max_tokens on thinking, 0 content output
+- glm-4.7 with `thinking={"type": "disabled"}`: **working** — correct structured output
+- DeepSeek V3: approved fallback if glm-4.7 has stability issues
+
 ### Future (V2 — deferred)
 
 - [ ] DTC knowledge lookup (curated GM DTC → root cause JSON)
-- [ ] RAG pipeline with Technical Service Bulletins
 ## Phase 4: Session Manager (Planned)
 
 - [ ] On-demand VM lifecycle (create/destroy cloud sessions)

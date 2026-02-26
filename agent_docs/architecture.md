@@ -116,7 +116,7 @@ AI Diagnosis flow (Phase 3.5):
   User clicks "AI Diagnose"
   -> AgentDataCollector -> DiagnosticBuffer (30s accumulation)
   -> delta-compressed payload (initial state + timestamped changes)
-  -> ZhipuAI glm-4.7-flash (streaming) -> SSE -> Local Diagnostics Window
+  -> ZhipuAI glm-4.7 (streaming, thinking disabled) -> SSE -> Local Diagnostics Window
 ```
 
 ## Key Design Decisions

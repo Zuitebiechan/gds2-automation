@@ -16,15 +16,18 @@ This project has three product layers:
 
 `app.py` and `templates/` remain a **debug/service layer**, not the final mechanic-facing product.
 
-## CURRENT STATUS (2026-02-25)
+## CURRENT STATUS (2026-02-26)
 
 - Phase 1 client packaging is done (tray app + config persistence + reconnect status)
 - Phase 3 diagnostics API is implemented under `/api/diagnose/*`
-- Phase 3.5 AI-Powered Diagnosis is **in progress**:
-  - ZhipuAI glm-4.7-flash integration (free 200K context model)
-  - 30s sliding window buffer for live sensor data
+- Phase 3.5 AI-Powered Diagnosis is **complete** ✅:
+  - ZhipuAI glm-4.7 integration (thinking disabled, all tokens go to content output)
+  - 30s sliding window buffer for live sensor data with dual-rate sampling (10Hz/1Hz)
   - Delta-compressed timeline payload for LLM
-  - SSE-streamed progress + LLM result to client
+  - SSE-streamed progress + real-time LLM token streaming to client
+  - Structured JSON verdict parsing with multiple fallback strategies
+  - Streaming timeout protection (60s per-chunk, 180s total)
+  - Deferred event queue cleanup (30s Timer) to prevent SSE race conditions
 - Local diagnostics window is integrated into exe:
   - Start Diagnostics
   - Select Module
@@ -121,6 +124,7 @@ This sequence ensures GDS2 is on Data Display page where DTC and live data are v
 - One GDS2 instance per machine (single-instance lock)
 - ZhipuAI API key stored in `%APPDATA%/VCI_Proxy/config.json` (never in source code)
 - AI Diagnose requires 30s data collection window before LLM call
+- LLM model: ZhipuAI glm-4.7 with `thinking={"type": "disabled"}` (not glm-4.7-flash)
 
 ## REFERENCE DOCS
 

@@ -65,7 +65,7 @@ User clicks "AI Diagnose"
   → 30s collection (SSE progress: "Collecting... 15/30s")
   → Read DTCs from final snapshot
   → Assemble delta-compressed payload (initial state + timestamped changes)
-  → Call ZhipuAI glm-4.7-flash (streaming)
+  → Call ZhipuAI glm-4.7 (streaming, thinking disabled)
   → SSE-stream LLM tokens to client in real-time
   → Final structured verdict displayed
 ```
