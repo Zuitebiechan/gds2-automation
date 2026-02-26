@@ -244,5 +244,5 @@ class LLMClient:
             except json.JSONDecodeError:
                 pass
 
-        logger.warning("Failed to parse LLM verdict as JSON")
+        logger.warning("Failed to parse LLM verdict as JSON. Response preview: %s", text[:500])
         return None
