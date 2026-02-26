@@ -353,11 +353,20 @@ class AIEngine:
         )
 
     def _cleanup_session(self, session_id: str) -> None:
-        """Mark session as complete, emit done event, and clean up resources."""
+        """Mark session as complete, emit done event, and schedule queue cleanup."""
         self._emit(session_id, 'done', {'session_id': session_id})
 
         with self._session_lock:
             if self._active_session == session_id:
                 self._active_session = None
-            # Clean up event queue to prevent memory leak
-            self._event_queues.pop(session_id, None)
+
+        # Delay queue cleanup to give SSE consumer time to read remaining events.
+        # The queue will be garbage-collected after the timer fires.
+        def _deferred_cleanup():
+            with self._session_lock:
+                self._event_queues.pop(session_id, None)
+            logger.debug(f"Cleaned up event queue for session {session_id}")
+
+        cleanup_timer = threading.Timer(30.0, _deferred_cleanup)
+        cleanup_timer.daemon = True
+        cleanup_timer.start()
