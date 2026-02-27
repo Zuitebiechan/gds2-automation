@@ -23,11 +23,10 @@ from vci_proxy.config import ProxyConfig
 from vci_proxy.cache_vbatt import VbattCache
 from vci_proxy.auth import compute_signature
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s',
-    datefmt='%H:%M:%S'
-)
+# NOTE: logging.basicConfig is intentionally NOT called here.
+# When used as a library (imported by client_gui.py), the GUI's main()
+# configures logging with both console + file handlers.
+# When run standalone (__main__), main() below calls basicConfig.
 logger = logging.getLogger(__name__)
 
 
@@ -48,6 +47,7 @@ class ReverseProxyClient:
         # Pre-warm: cached PassThruOpen result
         self._prewarm_device_id: Optional[int] = None
         self._prewarm_ret: Optional[int] = None
+        self._prewarm_task: Optional[asyncio.Task] = None
         # P2-2: VBATT cache
 
     def _notify_status(self, status: str, detail: str = ""):
@@ -115,9 +115,11 @@ class ReverseProxyClient:
                         backoff_seconds = min(backoff_seconds * 2, max_backoff)
                     continue
 
-                # Pre-warm: call PassThruOpen in background so it's ready
-                # before GDS2 sends OPEN_REQ (SM2 takes ~23s)
-                await self._prewarm_open()
+                # Pre-warm: fire PassThruOpen as background task (don't await)
+                # so _handle_requests can start immediately and read messages.
+                # SM2 takes ~23s; if GDS2 OPEN_REQ arrives before pre-warm
+                # completes, _handle_open will wait for the running pre-warm.
+                self._prewarm_task = asyncio.ensure_future(self._prewarm_open())
 
                 # 处理请求循环
                 await self._handle_requests(reader, writer)
@@ -300,12 +302,21 @@ class ReverseProxyClient:
         device_name = ProtocolDecoder.decode_open_req(body)
         logger.info(f">> PassThruOpen({device_name})")
 
+        # If pre-warm is still running, wait for it to complete
+        if self._prewarm_task is not None and not self._prewarm_task.done():
+            logger.info("OPEN_REQ arrived while pre-warm in progress, waiting...")
+            try:
+                await self._prewarm_task
+            except Exception:
+                pass  # errors already logged in _prewarm_open
+
         # Use pre-warmed handle if available
         if self._prewarm_device_id is not None and self._prewarm_ret == 0:
             device_id = self._prewarm_device_id
             ret = self._prewarm_ret
             self._prewarm_device_id = None  # consume it
             self._prewarm_ret = None
+            self._prewarm_task = None
             logger.info(f"<< PassThruOpen -> ret={ret}, id={device_id} [PRE-WARMED]")
             return ProtocolEncoder.encode_open_rsp(ret, device_id, sequence)
 
@@ -453,6 +464,11 @@ class ReverseProxyClient:
 
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s',
+        datefmt='%H:%M:%S'
+    )
     parser = argparse.ArgumentParser(description='VCI Proxy 反向连接客户端')
     parser.add_argument('--host', default=os.environ.get('VCI_PROXY_HOST', '127.0.0.1'),
                        help='云服务器地址 (或设置 VCI_PROXY_HOST 环境变量)')
