@@ -10,6 +10,7 @@ VCI Proxy 反向连接模式
 """
 
 import asyncio
+import socket
 import time
 import logging
 import argparse
@@ -44,6 +45,9 @@ class ReverseProxyClient:
         self.driver: Optional[J2534Driver] = None
         self.running = False
         self._on_status_change = on_status_change
+        # Pre-warm: cached PassThruOpen result
+        self._prewarm_device_id: Optional[int] = None
+        self._prewarm_ret: Optional[int] = None
         # P2-2: VBATT cache
 
     def _notify_status(self, status: str, detail: str = ""):
@@ -87,6 +91,17 @@ class ReverseProxyClient:
                     self.server_host, self.server_port
                 )
 
+                # Set TCP keepalive to prevent NAT timeout
+                sock = writer.get_extra_info('socket')
+                if sock is not None:
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                    if hasattr(socket, 'TCP_KEEPIDLE'):
+                        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 20)
+                    if hasattr(socket, 'TCP_KEEPINTVL'):
+                        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
+                    if hasattr(socket, 'TCP_KEEPCNT'):
+                        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+
                 logger.info("已连接到云服务器!")
                 self._notify_status('connected', f'{self.server_host}:{self.server_port}')
                 backoff_seconds = 5.0  # 连接成功，重置退避
@@ -99,6 +114,10 @@ class ReverseProxyClient:
                         await asyncio.sleep(backoff_seconds)
                         backoff_seconds = min(backoff_seconds * 2, max_backoff)
                     continue
+
+                # Pre-warm: call PassThruOpen in background so it's ready
+                # before GDS2 sends OPEN_REQ (SM2 takes ~23s)
+                await self._prewarm_open()
 
                 # 处理请求循环
                 await self._handle_requests(reader, writer)
@@ -170,11 +189,41 @@ class ReverseProxyClient:
                 logger.error("Auth response timeout")
                 return False
         else:
-            # Legacy heartbeat registration
+            # Two-phase heartbeat handshake:
+            #   1. Send HEARTBEAT
+            #   2. Wait for HEARTBEAT_ACK from server
+            #   3. Send a second HEARTBEAT to confirm
+            # This prevents port scanners from being accepted as VCI clients.
             msg = ProtocolEncoder.encode_heartbeat(0)
             writer.write(msg)
             await writer.drain()
-            logger.info("已发送注册消息")
+            logger.info("已发送注册心跳 (phase 1)")
+
+            # Wait for ACK
+            try:
+                header = await asyncio.wait_for(
+                    reader.readexactly(HEADER_SIZE), timeout=5.0
+                )
+                magic, length, msg_type, sequence = Message.decode_header(header)
+                body_len = length - HEADER_SIZE
+                if body_len > 0:
+                    await reader.readexactly(body_len)  # drain body
+
+                if magic != MAGIC:
+                    logger.error(f"Invalid magic in registration ACK: {magic:#x}")
+                    return False
+                if msg_type not in (MsgType.HEARTBEAT_ACK, MsgType.HEARTBEAT):
+                    logger.warning(f"Unexpected registration response: {msg_type:#x}")
+                    return False
+            except asyncio.TimeoutError:
+                logger.error("Registration ACK timeout")
+                return False
+
+            # Send confirmation heartbeat (phase 2)
+            msg2 = ProtocolEncoder.encode_heartbeat(1)
+            writer.write(msg2)
+            await writer.drain()
+            logger.info("已发送确认心跳 (phase 2) — 注册完成")
             return True
 
     async def _handle_requests(self, reader: asyncio.StreamReader,
@@ -185,7 +234,7 @@ class ReverseProxyClient:
                 # 读取消息头
                 header = await asyncio.wait_for(
                     reader.readexactly(HEADER_SIZE),
-                    timeout=60.0
+                    timeout=25.0  # Reduced from 60s to prevent NAT timeout
                 )
 
                 magic, length, msg_type, sequence = Message.decode_header(header)
@@ -219,9 +268,48 @@ class ReverseProxyClient:
 
     # --- Individual message handlers ---
 
+    async def _prewarm_open(self):
+        """Pre-warm PassThruOpen in background thread.
+
+        SM2's smj2534.dll takes ~23s for PassThruOpen. By calling it
+        proactively after connecting to the cloud server, the device
+        handle is ready when GDS2's OPEN_REQ arrives.
+        """
+        if self.driver is None:
+            return
+        logger.info("Pre-warm: calling PassThruOpen in background...")
+        loop = asyncio.get_running_loop()
+        try:
+            ret, device_id = await loop.run_in_executor(
+                None, self.driver.open, None
+            )
+            if ret == 0:  # STATUS_NOERROR
+                self._prewarm_device_id = device_id
+                self._prewarm_ret = ret
+                logger.info(f"Pre-warm: PassThruOpen OK, device_id={device_id}")
+            else:
+                logger.warning(f"Pre-warm: PassThruOpen failed, ret={ret}")
+                self._prewarm_device_id = None
+                self._prewarm_ret = None
+        except Exception as e:
+            logger.error(f"Pre-warm: PassThruOpen error: {e}")
+            self._prewarm_device_id = None
+            self._prewarm_ret = None
+
     async def _handle_open(self, body: bytes, sequence: int) -> bytes:
         device_name = ProtocolDecoder.decode_open_req(body)
         logger.info(f">> PassThruOpen({device_name})")
+
+        # Use pre-warmed handle if available
+        if self._prewarm_device_id is not None and self._prewarm_ret == 0:
+            device_id = self._prewarm_device_id
+            ret = self._prewarm_ret
+            self._prewarm_device_id = None  # consume it
+            self._prewarm_ret = None
+            logger.info(f"<< PassThruOpen -> ret={ret}, id={device_id} [PRE-WARMED]")
+            return ProtocolEncoder.encode_open_rsp(ret, device_id, sequence)
+
+        # Fallback: call PassThruOpen normally
         loop = asyncio.get_running_loop()
         ret, device_id = await loop.run_in_executor(
             None, self.driver.open, device_name
@@ -236,6 +324,9 @@ class ReverseProxyClient:
         ret = await loop.run_in_executor(None, self.driver.close, device_id)
         logger.info(f"<< PassThruClose -> ret={ret}")
         self._vbatt_cache.invalidate()
+        # Invalidate pre-warm cache on close
+        self._prewarm_device_id = None
+        self._prewarm_ret = None
         return ProtocolEncoder.encode_close_rsp(ret, sequence)
 
     async def _handle_connect(self, body: bytes, sequence: int) -> bytes:

@@ -110,7 +110,14 @@ class ReverseProxyServer:
 
         Reads the first message from the VCI client. If auth is enabled,
         expects AUTH_REQ with valid HMAC. If auth is disabled, accepts
-        either AUTH_REQ or legacy HEARTBEAT.
+        either AUTH_REQ or legacy HEARTBEAT with two-phase handshake.
+
+        The two-phase handshake for legacy heartbeat registration works as:
+          1. Client sends HEARTBEAT
+          2. Server replies HEARTBEAT_ACK
+          3. Client must send a second HEARTBEAT within 5s
+        This prevents port scanners (which send random bytes) from
+        accidentally registering as a VCI client.
 
         Returns True if authenticated, False otherwise.
         """
@@ -162,14 +169,51 @@ class ReverseProxyServer:
                     "Auth required but VCI client sent HEARTBEAT (legacy client)"
                 )
                 return False
-            # Legacy client, accept heartbeat as registration
+
+            # Phase 1: reply ACK to the first heartbeat
             ack_header = struct.pack(
                 '>IIHI', MAGIC, HEADER_SIZE, MsgType.HEARTBEAT_ACK, sequence
             )
             async with self.vci_lock:
                 writer.write(ack_header)
                 await writer.drain()
-            logger.info("Legacy VCI client registered via heartbeat")
+
+            # Phase 2: require a second heartbeat within 5 seconds.
+            # Real VCI clients will respond; port scanners won't.
+            try:
+                header2 = await asyncio.wait_for(
+                    reader.readexactly(HEADER_SIZE), timeout=5.0
+                )
+            except (asyncio.TimeoutError, asyncio.IncompleteReadError):
+                logger.warning(
+                    "VCI client did not complete two-phase handshake (no 2nd heartbeat)"
+                )
+                return False
+
+            magic2, length2, msg_type2, seq2 = struct.unpack('>IIHI', header2)
+            if magic2 != MAGIC:
+                logger.warning(f"Invalid magic in handshake phase 2: {magic2:#x}")
+                return False
+
+            body2_len = length2 - HEADER_SIZE
+            if body2_len > 0:
+                await reader.readexactly(body2_len)  # drain body
+
+            if msg_type2 not in (MsgType.HEARTBEAT, MsgType.HEARTBEAT_ACK):
+                logger.warning(
+                    f"Unexpected message in handshake phase 2: {msg_type2:#x}"
+                )
+                return False
+
+            # Phase 2 ACK
+            ack2 = struct.pack(
+                '>IIHI', MAGIC, HEADER_SIZE, MsgType.HEARTBEAT_ACK, seq2
+            )
+            async with self.vci_lock:
+                writer.write(ack2)
+                await writer.drain()
+
+            logger.info("VCI client registered via two-phase heartbeat handshake")
             return True
 
         logger.warning(f"Unexpected first message type during auth: {msg_type:#x}")
