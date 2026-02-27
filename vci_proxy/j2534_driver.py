@@ -1,10 +1,11 @@
 """
 J2534 驱动封装
 
-封装 Scanmatik J2534 DLL，提供 Python 接口
+Wraps any SAE J2534-compliant DLL with auto-discovery via Windows registry.
 """
 
 import os
+import sys
 import struct
 import ctypes
 from ctypes import (
@@ -170,14 +171,89 @@ class SCONFIG_LIST(Structure):
 
 
 # ============================================================================
+# J2534 Registry Discovery
+# ============================================================================
+
+
+# Standard registry key per SAE J2534-1 specification
+J2534_REGISTRY_KEY = r"SOFTWARE\PassThruSupport.04.04"
+
+
+def discover_j2534_drivers() -> list[dict[str, str]]:
+    """Discover installed J2534 drivers from Windows registry.
+
+    Reads HKLM\\SOFTWARE\\PassThruSupport.04.04 which is the standard
+    location where SAE J2534-compliant drivers register themselves.
+
+    Returns:
+        List of dicts with keys: 'name', 'dll_path', 'vendor'
+        Sorted by name. Empty list on non-Windows or if no drivers found.
+    """
+    if sys.platform != 'win32':
+        return []
+
+    import winreg
+    drivers = []
+
+    for hive_flag in (winreg.KEY_READ, winreg.KEY_READ | winreg.KEY_WOW64_32KEY):
+        try:
+            root = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, J2534_REGISTRY_KEY, 0, hive_flag)
+        except OSError:
+            continue
+
+        try:
+            idx = 0
+            while True:
+                try:
+                    subkey_name = winreg.EnumKey(root, idx)
+                    idx += 1
+                except OSError:
+                    break
+
+                try:
+                    subkey = winreg.OpenKey(root, subkey_name, 0, hive_flag)
+                    try:
+                        dll_path, _ = winreg.QueryValueEx(subkey, 'FunctionLibrary')
+                        vendor = ''
+                        try:
+                            vendor, _ = winreg.QueryValueEx(subkey, 'Vendor')
+                        except OSError:
+                            pass
+
+                        name = subkey_name
+                        try:
+                            name, _ = winreg.QueryValueEx(subkey, 'Name')
+                        except OSError:
+                            pass
+
+                        if dll_path and os.path.exists(dll_path):
+                            # Avoid duplicates (same DLL from 32/64-bit views)
+                            if not any(d['dll_path'] == dll_path for d in drivers):
+                                drivers.append({
+                                    'name': name,
+                                    'dll_path': dll_path,
+                                    'vendor': vendor,
+                                })
+                    finally:
+                        winreg.CloseKey(subkey)
+                except OSError:
+                    continue
+        finally:
+            winreg.CloseKey(root)
+
+    drivers.sort(key=lambda d: d['name'])
+    return drivers
+
+
+# ============================================================================
 # J2534 驱动类
 # ============================================================================
 
 class J2534Driver:
     """J2534 驱动封装"""
 
-    # 默认 DLL 路径
-    DEFAULT_DLL_PATHS = [
+    # Legacy fallback paths (Scanmatik) for systems without registry entries
+    FALLBACK_DLL_PATHS = [
         r"C:\Program Files (x86)\Scanmatik\smj2534_0404_usb_sm3.dll",
         r"C:\Program Files (x86)\Scanmatik\smj2534.dll",
     ]
@@ -188,8 +264,19 @@ class J2534Driver:
         self._device_id: Optional[int] = None
         self._channels: dict = {}  # channel_id -> info
 
-        # 尝试加载 DLL
-        paths_to_try = [dll_path] if dll_path else self.DEFAULT_DLL_PATHS
+        if dll_path:
+            # Explicit path provided (from config/GUI)
+            paths_to_try = [dll_path]
+        else:
+            # Auto-discover: registry first, then Scanmatik fallback
+            discovered = discover_j2534_drivers()
+            paths_to_try = [d['dll_path'] for d in discovered]
+            if not paths_to_try:
+                paths_to_try = self.FALLBACK_DLL_PATHS
+                logger.info("No J2534 drivers in registry, trying Scanmatik fallback paths")
+            else:
+                names = ', '.join(d['name'] for d in discovered)
+                logger.info(f"Found {len(discovered)} J2534 driver(s) in registry: {names}")
 
         for path in paths_to_try:
             if path and os.path.exists(path):
@@ -201,7 +288,11 @@ class J2534Driver:
                     continue
 
         if not self.dll:
-            raise RuntimeError("无法加载 J2534 DLL")
+            raise RuntimeError(
+                "无法加载 J2534 DLL. "
+                "Please install a J2534-compatible VCI driver, "
+                "or specify the DLL path in client settings."
+            )
 
         self._setup_functions()
 

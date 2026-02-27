@@ -163,12 +163,44 @@ class ConfigDialog:
             row=4, column=1, columnspan=2, sticky=tk.EW, pady=4, padx=(8, 0)
         )
 
-        # DLL path (optional)
-        ttk.Label(frame, text="J2534 DLL:").grid(row=5, column=0, sticky=tk.W, pady=4)
-        dll_var = tk.StringVar(value=self._config.get("dll_path", ""))
-        ttk.Entry(frame, textvariable=dll_var, width=25).grid(
-            row=5, column=1, sticky=tk.EW, pady=4, padx=(8, 0)
+        # J2534 DLL selection (dropdown with auto-discovered drivers + browse)
+        ttk.Label(frame, text="J2534 Driver:").grid(row=5, column=0, sticky=tk.W, pady=4)
+
+        # Discover installed J2534 drivers from Windows registry
+        from vci_proxy.j2534_driver import discover_j2534_drivers
+        discovered_drivers = discover_j2534_drivers()
+
+        # Build combobox values: "Auto-detect" + discovered drivers
+        dll_choices = ["Auto-detect (recommended)"]
+        dll_path_map: dict[str, str] = {}  # display_name -> dll_path
+        for drv in discovered_drivers:
+            label = f"{drv['name']}"
+            if drv['vendor']:
+                label += f" ({drv['vendor']})"
+            dll_choices.append(label)
+            dll_path_map[label] = drv['dll_path']
+
+        # Determine initial selection based on saved config
+        saved_dll = self._config.get("dll_path", "")
+        initial_value = "Auto-detect (recommended)"
+        if saved_dll:
+            # Check if saved path matches any discovered driver
+            for label, path in dll_path_map.items():
+                if os.path.normcase(path) == os.path.normcase(saved_dll):
+                    initial_value = label
+                    break
+            else:
+                # Custom path not in registry — show it directly
+                initial_value = saved_dll
+                dll_choices.append(saved_dll)
+                dll_path_map[saved_dll] = saved_dll
+
+        dll_var = tk.StringVar(value=initial_value)
+        dll_combo = ttk.Combobox(
+            frame, textvariable=dll_var, values=dll_choices,
+            width=28, state="readonly",
         )
+        dll_combo.grid(row=5, column=1, sticky=tk.EW, pady=4, padx=(8, 0))
 
         def browse_dll():
             path = filedialog.askopenfilename(
@@ -176,18 +208,31 @@ class ConfigDialog:
                 filetypes=[("DLL files", "*.dll"), ("All files", "*.*")],
             )
             if path:
+                # Add custom path to choices and select it
+                if path not in dll_path_map:
+                    dll_choices.append(path)
+                    dll_path_map[path] = path
+                    dll_combo['values'] = dll_choices
                 dll_var.set(path)
 
         ttk.Button(frame, text="...", width=3, command=browse_dll).grid(
             row=5, column=2, pady=4, padx=(4, 0)
         )
 
-        # Hint
+        def _resolve_dll_path() -> str:
+            """Convert combobox selection to a dll_path string for config."""
+            selected = dll_var.get()
+            if selected == "Auto-detect (recommended)":
+                return ""  # Empty = auto-detect in J2534Driver
+            return dll_path_map.get(selected, selected)
+
+        # Driver count hint
+        if discovered_drivers:
+            hint = f"{len(discovered_drivers)} J2534 driver(s) found on this system."
+        else:
+            hint = "No J2534 drivers found. Install a VCI driver or browse manually."
         ttk.Label(
-            frame,
-            text="Leave DLL blank to auto-detect Scanmatik driver.",
-            foreground="gray",
-            font=("Segoe UI", 8),
+            frame, text=hint, foreground="gray", font=("Segoe UI", 8),
         ).grid(row=6, column=0, columnspan=3, sticky=tk.W, pady=(0, 10))
 
         # Buttons
@@ -215,7 +260,7 @@ class ConfigDialog:
                 "port": port,
                 "api_port": api_port,
                 "auth_token": token_var.get().strip(),
-                "dll_path": dll_var.get().strip(),
+                "dll_path": _resolve_dll_path(),
             }
             root.destroy()
 
