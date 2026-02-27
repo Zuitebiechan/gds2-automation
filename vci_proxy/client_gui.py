@@ -494,11 +494,17 @@ class VCIProxyTrayApp:
 
 def main():
     """Launch the VCI Proxy Client GUI."""
-    # Configure logging
+    # Configure logging — output to both console and file
+    log_file = CONFIG_DIR / "client.log"
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s.%(msecs)03d [%(levelname)s] %(name)s: %(message)s",
         datefmt="%H:%M:%S",
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler(str(log_file), encoding='utf-8'),
+        ],
     )
 
     app = VCIProxyTrayApp()
