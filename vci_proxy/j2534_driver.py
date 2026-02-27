@@ -241,7 +241,19 @@ def discover_j2534_drivers() -> list[dict[str, str]]:
         finally:
             winreg.CloseKey(root)
 
-    drivers.sort(key=lambda d: d['name'])
+    # Sort: prefer Scanmatik drivers (our primary supported hardware),
+    # then alphabetical. This ensures SM2/SM3 are tried before MDI/others
+    # when no explicit DLL path is configured.
+    def _sort_key(d: dict) -> tuple:
+        name_lower = d['name'].lower()
+        vendor_lower = d.get('vendor', '').lower()
+        is_scanmatik = 'scanmatik' in name_lower or 'scanmatik' in vendor_lower
+        is_sm = name_lower.startswith('sm2') or name_lower.startswith('sm3')
+        # 0 = preferred (Scanmatik), 1 = others
+        priority = 0 if (is_scanmatik or is_sm) else 1
+        return (priority, d['name'])
+
+    drivers.sort(key=_sort_key)
     return drivers
 
 
