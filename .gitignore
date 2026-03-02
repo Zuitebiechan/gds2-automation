@@ -44,6 +44,8 @@ logs/
 
 # Environment
 .env
+.env.*
+!.env.example
 
 # Test
 .coverage
@@ -57,6 +59,8 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.bak
+nul
+=2.28.0
 
 # Screenshots directory
 screenshots/
