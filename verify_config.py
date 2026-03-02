@@ -218,9 +218,9 @@ def main():
     all_passed = all(result for _, result in results)
 
     if all_passed:
-        print("\n✅ 所有检查通过! 可以开始Day 7测试")
-        print("\n运行测试:")
-        print("  python test_real_recovery.py")
+        print("\n✅ 所有检查通过! 可以启动 Web UI")
+        print("\n启动命令:")
+        print("  python app.py --port 8080")
         return 0
     else:
         print("\n❌ 部分检查失败，请修复后重试")

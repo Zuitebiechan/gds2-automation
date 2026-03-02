@@ -9,7 +9,7 @@ Available workflows:
 - InteractiveWorkflow: Step-by-step interactive navigation (internal)
 - ReadDataDisplayAgentWorkflow: CLI workflow wrapper
 
-Note: Legacy PyAutoGUI-based workflows have been archived to archive/src/workflows/
+Note: Legacy PyAutoGUI-based workflows were removed from the active codebase.
 """
 
 from .interactive_workflow import InteractiveWorkflow

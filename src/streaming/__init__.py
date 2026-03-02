@@ -8,7 +8,7 @@ Collection:
 Navigation:
 - AgentNavigator - Java Agent based navigation
 
-Note: Legacy RealtimeDataCollector (PyAutoGUI-based) has been archived to archive/src/streaming/
+Note: Legacy PyAutoGUI-based collectors were removed from the active codebase.
 """
 
 from .agent_data_collector import AgentDataCollector, AgentSnapshot, DTCInfo
