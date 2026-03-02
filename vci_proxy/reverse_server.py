@@ -143,9 +143,8 @@ class ReverseProxyServer:
                 # Auth not required, but client sent AUTH_REQ -- accept it
                 logger.info("Auth not required, accepting AUTH_REQ")
                 rsp = ProtocolEncoder.encode_auth_rsp(True, "ok", sequence)
-                async with self.vci_lock:
-                    writer.write(rsp)
-                    await writer.drain()
+                writer.write(rsp)
+                await writer.drain()
                 return True
 
             timestamp, signature = ProtocolDecoder.decode_auth_req(body)
@@ -153,9 +152,8 @@ class ReverseProxyServer:
                 self.config.auth.token, timestamp, signature
             )
             rsp = ProtocolEncoder.encode_auth_rsp(success, reason, sequence)
-            async with self.vci_lock:
-                writer.write(rsp)
-                await writer.drain()
+            writer.write(rsp)
+            await writer.drain()
 
             if success:
                 logger.info("VCI client authenticated successfully")
@@ -174,9 +172,8 @@ class ReverseProxyServer:
             ack_header = struct.pack(
                 '>IIHI', MAGIC, HEADER_SIZE, MsgType.HEARTBEAT_ACK, sequence
             )
-            async with self.vci_lock:
-                writer.write(ack_header)
-                await writer.drain()
+            writer.write(ack_header)
+            await writer.drain()
 
             # Phase 2: require a second heartbeat within 5 seconds.
             # Real VCI clients will respond; port scanners won't.
@@ -209,9 +206,8 @@ class ReverseProxyServer:
             ack2 = struct.pack(
                 '>IIHI', MAGIC, HEADER_SIZE, MsgType.HEARTBEAT_ACK, seq2
             )
-            async with self.vci_lock:
-                writer.write(ack2)
-                await writer.drain()
+            writer.write(ack2)
+            await writer.drain()
 
             logger.info("VCI client registered via two-phase heartbeat handshake")
             return True
