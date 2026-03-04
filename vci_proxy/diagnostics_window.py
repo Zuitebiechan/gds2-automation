@@ -159,8 +159,6 @@ class DiagnosticsWindow:
         root_frame.pack(fill=tk.BOTH, expand=True)
 
         root_frame.rowconfigure(3, weight=1)
-        root_frame.rowconfigure(5, weight=1)
-        root_frame.rowconfigure(6, weight=1)
         root_frame.columnconfigure(0, weight=1)
 
         self._build_header(root_frame)
@@ -204,9 +202,10 @@ class DiagnosticsWindow:
 
         self._start_button = ttk.Button(
             frame,
-            text="▶ Start Diagnostics",
+            text="▶ Start Agent Diagnostics",
             style="Big.TButton",
             command=self._on_start_clicked,
+            state=tk.DISABLED,
         )
         self._start_button.grid(row=0, column=0, sticky="w", padx=(0, 16))
 
@@ -217,7 +216,7 @@ class DiagnosticsWindow:
         frame = ttk.LabelFrame(parent, text="Session Diagnostics (New)", padding=(12, 6))
         frame.grid(row=2, column=0, sticky="ew", pady=(0, 6))
         frame.columnconfigure(1, weight=1)
-        frame.columnconfigure(5, weight=1)
+        frame.columnconfigure(4, weight=1)
 
         ttk.Label(frame, text="Brand:", style="Subtle.TLabel").grid(
             row=0, column=0, sticky="w", padx=(0, 6),
@@ -241,20 +240,12 @@ class DiagnosticsWindow:
         )
         self._session_abort_button.grid(row=0, column=3, sticky="w", padx=(0, 12))
 
-        self._session_start_diag_button = ttk.Button(
-            frame,
-            text="\u25b6 Start Agent Diagnostics",
-            command=self._on_start_clicked,
-            state=tk.DISABLED,
-        )
-        self._session_start_diag_button.grid(row=0, column=4, sticky="w", padx=(0, 12))
-
         ttk.Label(frame, textvariable=self._session_status_var, style="Subtle.TLabel").grid(
-            row=0, column=5, sticky="w",
+            row=0, column=4, sticky="w",
         )
 
         ttk.Label(frame, textvariable=self._session_hint_var, style="Subtle.TLabel").grid(
-            row=1, column=0, columnspan=6, sticky="w", pady=(6, 0),
+            row=1, column=0, columnspan=5, sticky="w", pady=(6, 0),
         )
 
     def _build_agent_dialog_section(self, parent: ttk.Frame) -> None:
@@ -344,6 +335,9 @@ class DiagnosticsWindow:
         dtc_scroll.grid(row=1, column=1, sticky="ns")
         self._dtc_tree.configure(yscrollcommand=dtc_scroll.set)
 
+        # Agentic-only mode: keep widgets for compatibility, hide legacy panel.
+        dtc_frame.grid_remove()
+
     def _build_live_data_section(self, parent: ttk.Frame) -> None:
         live_frame = ttk.LabelFrame(parent, text="Live Data", padding=12)
         live_frame.grid(row=5, column=0, sticky="nsew")
@@ -391,7 +385,7 @@ class DiagnosticsWindow:
         )
         self._select_data_category_button.grid(row=1, column=2, sticky="w", pady=(0, 8))
 
-        # Row 3: Primary controls
+        # Row 3: Primary controls (legacy controls hidden in agentic-only mode)
         primary_controls = ttk.Frame(live_frame, style="Card.TFrame")
         primary_controls.grid(row=2, column=0, columnspan=3, sticky="w", pady=(4, 5))
 
@@ -403,12 +397,13 @@ class DiagnosticsWindow:
             state=tk.DISABLED,
         )
         self._ai_diagnose_button.grid(row=0, column=0, sticky="w")
+        self._ai_diagnose_button.grid_remove()
 
-        # Row 4: Secondary controls (Advanced)
+        # Row 4: Secondary controls
         secondary_controls = ttk.Frame(live_frame, style="Card.TFrame")
         secondary_controls.grid(row=3, column=0, columnspan=3, sticky="w", pady=(0, 10))
-        
-        ttk.Label(secondary_controls, text="Advanced:", style="Subtle.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 8))
+
+        ttk.Label(secondary_controls, text="Actions:", style="Subtle.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 8))
 
         self._read_dtc_button = ttk.Button(
             secondary_controls,
@@ -425,6 +420,7 @@ class DiagnosticsWindow:
             state=tk.DISABLED,
         )
         self._start_stream_button.grid(row=0, column=2, sticky="w", padx=(0, 8))
+        self._start_stream_button.grid_remove()
 
         self._stop_stream_button = ttk.Button(
             secondary_controls,
@@ -433,6 +429,7 @@ class DiagnosticsWindow:
             state=tk.DISABLED,
         )
         self._stop_stream_button.grid(row=0, column=3, sticky="w")
+        self._stop_stream_button.grid_remove()
 
         # Row 4+: live table
         live_cols = ("parameter", "value", "unit")
@@ -450,6 +447,9 @@ class DiagnosticsWindow:
         live_scroll = ttk.Scrollbar(live_frame, orient=tk.VERTICAL, command=self._live_tree.yview)
         live_scroll.grid(row=4, column=2, sticky="ns")
         self._live_tree.configure(yscrollcommand=live_scroll.set)
+
+        # Agentic-only mode: keep widgets for compatibility, hide legacy panel.
+        live_frame.grid_remove()
 
     def _build_ai_result_section(self, parent: ttk.Frame) -> None:
         ai_frame = ttk.LabelFrame(parent, text="AI Diagnosis Result", padding=12)
@@ -478,6 +478,9 @@ class DiagnosticsWindow:
         ai_scroll = ttk.Scrollbar(ai_frame, orient=tk.VERTICAL, command=self._ai_result_text.yview)
         ai_scroll.grid(row=1, column=1, sticky="ns")
         self._ai_result_text.configure(yscrollcommand=ai_scroll.set)
+
+        # Legacy AI diagnosis panel hidden in agentic-only simplified UI.
+        ai_frame.grid_remove()
     # ------------------------------------------------------------------
     # Generic threaded API helpers
     # ------------------------------------------------------------------
@@ -612,7 +615,7 @@ class DiagnosticsWindow:
         has_category = bool(self._selected_data_category.get().strip())
         session_mode = bool(self._session_id)
 
-        can_select_module = has_module and not self._stream_active
+        can_select_module = session_mode and has_module and not self._stream_active
         self._select_module_button.configure(
             state=tk.NORMAL if can_select_module else tk.DISABLED
         )
@@ -622,19 +625,19 @@ class DiagnosticsWindow:
             state=tk.NORMAL if can_select_category else tk.DISABLED
         )
 
-        can_run_actions = has_category and not self._stream_active
-        if session_mode and not self._session_category_confirmed:
-            can_run_actions = False
+        can_run_actions = (
+            session_mode
+            and has_category
+            and self._session_category_confirmed
+            and not self._stream_active
+        )
 
         self._read_dtc_button.configure(
             state=tk.NORMAL if can_run_actions else tk.DISABLED
         )
-        self._start_stream_button.configure(
-            state=tk.NORMAL if can_run_actions else tk.DISABLED
-        )
-        self._ai_diagnose_button.configure(
-            state=tk.NORMAL if can_run_actions else tk.DISABLED
-        )
+        # Legacy controls hidden in agentic-only mode.
+        self._start_stream_button.configure(state=tk.DISABLED)
+        self._ai_diagnose_button.configure(state=tk.DISABLED)
 
     def _error_message(self, payload: dict[str, Any], fallback: str) -> str:
         value = payload.get("error") if isinstance(payload, dict) else None
@@ -707,6 +710,18 @@ class DiagnosticsWindow:
         )
         self._append_agent_message("agent", f"模块已进入数据页，发现 {len(categories)} 个数据分类。")
 
+    def _prompt_action_choices(self) -> None:
+        """Prompt next-step actions in dialogue-only mode."""
+        options = [
+            {"value": "read_dtcs", "display": "Read DTCs"},
+        ]
+        self._set_agent_prompt(
+            "action",
+            "请选择下一步操作（下拉后点 Submit）",
+            options,
+        )
+        self._append_agent_message("agent", "请选择下一步操作：Read DTCs。")
+
     def _prompt_decision(self, decision: dict[str, Any]) -> bool:
         """Show decision options in chat prompt dropdown. Returns True when shown."""
         decision_id = str(decision.get("decision_id") or "").strip()
@@ -775,6 +790,13 @@ class DiagnosticsWindow:
             self._session_submit_decision(decision_id, value)
             return
 
+        if kind == "action":
+            self._append_agent_message("user", f"执行操作：{selected_display}")
+            self._set_agent_prompt(None, "", [])
+            if value == "read_dtcs":
+                self._on_read_dtcs_clicked()
+            return
+
         self._set_agent_prompt(None, "", [])
 
     # ------------------------------------------------------------------
@@ -783,8 +805,6 @@ class DiagnosticsWindow:
 
     def _on_start_clicked(self) -> None:
         self._start_button.configure(state=tk.DISABLED)
-        if hasattr(self, "_session_start_diag_button"):
-            self._session_start_diag_button.configure(state=tk.DISABLED)
         self._set_status_text("Connecting...")
         self._set_server_connected(False)
 
@@ -800,26 +820,27 @@ class DiagnosticsWindow:
         self._selected_data_category.set("")
         self._session_category_confirmed = False
         self._refresh_action_buttons()
-        self._set_session_hint("Hint: 先 Start Diagnostics 或 Start Session，再进行选择。")
+        self._set_session_hint("Hint: 请先 Start Session，再执行 Start Agent Diagnostics。")
         self._set_agent_prompt(None, "", [])
 
-        # Session mode (new agentic path): keep GUI as simple as old one-click start.
-        if self._session_id:
-            self._set_session_hint("Session 模式：正在通过新 Agentic 路径启动诊断...")
-            self._append_agent_message("agent", "正在启动诊断流程并检测设备连接状态...")
-            self._api_call(
-                "POST",
-                "/api/session/execute",
-                json_data={
-                    "session_id": self._session_id,
-                    "action": "start_diagnostics",
-                },
-                callback_event="session_start_exec_result",
-            )
+        if not self._session_id:
+            self._start_button.configure(state=tk.DISABLED)
+            self._set_status_text("Please start a session first.")
+            self._set_session_hint("请先点击 Start Session，并在需要时完成决策选择。")
+            self._append_agent_message("agent", "未检测到 Session。请先点击 Start Session。")
             return
 
-        self._append_agent_message("agent", "正在执行旧版快速启动流程（非 Session 模式）...")
-        self._api_call("POST", "/api/diagnose/start", callback_event="start_result")
+        self._set_session_hint("Session 模式：正在通过新 Agentic 路径启动诊断...")
+        self._append_agent_message("agent", "正在启动诊断流程并检测设备连接状态...")
+        self._api_call(
+            "POST",
+            "/api/session/execute",
+            json_data={
+                "session_id": self._session_id,
+                "action": "start_diagnostics",
+            },
+            callback_event="session_start_exec_result",
+        )
 
     def _on_ai_diagnose_clicked(self) -> None:
         module = self._selected_module.get().strip()
@@ -881,12 +902,29 @@ class DiagnosticsWindow:
             messagebox.showwarning("Data Category Required", "Please select a data category first.")
             return
 
+        if not self._session_id:
+            messagebox.showwarning("Session Required", "Please click Start Session first.")
+            self._set_session_hint("先点击 Start Session，再执行 Read DTCs。")
+            return
+
+        if not self._session_category_confirmed:
+            messagebox.showwarning(
+                "Category Not Confirmed",
+                "Please submit Data Category first (Select), then run Read DTCs.",
+            )
+            self._set_session_hint("请先确认 Data Category（点击 Select）后再执行 Read DTCs。")
+            return
+
         self._read_dtc_button.configure(state=tk.DISABLED)
         self._set_status_text("Reading fault codes...")
+        self._append_agent_message("user", "执行 Read DTCs")
         self._api_call(
-            "GET",
-            "/api/diagnose/dtcs",
-            query_params={"data_category": category},
+            "POST",
+            "/api/session/execute",
+            json_data={
+                "session_id": self._session_id,
+                "action": "read_dtcs",
+            },
             callback_event="dtcs_result",
         )
 
@@ -905,21 +943,19 @@ class DiagnosticsWindow:
         self._data_combo.configure(values=[])
         self._selected_data_category.set("")
         self._set_status_text("Selecting module...")
-        if self._session_id:
-            self._set_session_hint("正在提交 Module 选择到 Session...")
-            self._api_call(
-                "POST",
-                "/api/session/select_module",
-                json_data={"session_id": self._session_id, "module": module},
-                callback_event="session_select_module_result",
-            )
-        else:
-            self._api_call(
-                "POST",
-                "/api/diagnose/select_module",
-                json_data={"module": module},
-                callback_event="module_result",
-            )
+        if not self._session_id:
+            self._set_status_text("Session mode not active. Use Start Session first.")
+            self._set_session_hint("先点击 Start Session，再选择 Module。")
+            self._append_agent_message("agent", "当前没有活动 Session，无法选择模块。")
+            return
+
+        self._set_session_hint("正在提交 Module 选择到 Session...")
+        self._api_call(
+            "POST",
+            "/api/session/select_module",
+            json_data={"session_id": self._session_id, "module": module},
+            callback_event="session_select_module_result",
+        )
 
     def _on_select_data_category_clicked(self) -> None:
         category = self._selected_data_category.get().strip()
@@ -929,14 +965,6 @@ class DiagnosticsWindow:
 
         if self._session_id:
             self._append_agent_message("user", f"选择数据分类：{category}")
-
-        if self._session_id and not self._session_category_confirmed:
-            messagebox.showwarning(
-                "Category Not Confirmed",
-                "In Session mode, please click Select next to Data Category first.",
-            )
-            self._set_session_hint("请先提交 Data Category（点右侧 Select）再执行 Read DTCs。")
-            return
 
         if not self._session_id:
             self._set_status_text("Session mode not active. Use Start Session first.")
@@ -1008,8 +1036,6 @@ class DiagnosticsWindow:
 
     def _handle_start_result(self, payload: dict[str, Any]) -> None:
         self._start_button.configure(state=tk.NORMAL)
-        if hasattr(self, "_session_start_diag_button") and self._session_id:
-            self._session_start_diag_button.configure(state=tk.NORMAL)
 
         if payload.get("success"):
             modules = payload.get("modules") or []
@@ -1040,8 +1066,7 @@ class DiagnosticsWindow:
 
     def _handle_session_start_exec_result(self, payload: dict[str, Any]) -> None:
         """Handle session-mode start diagnostics via /api/session/execute."""
-        if hasattr(self, "_session_start_diag_button"):
-            self._session_start_diag_button.configure(state=tk.NORMAL)
+        self._start_button.configure(state=tk.NORMAL)
 
         if not payload.get("success"):
             error_text = self._error_message(payload, "Unable to start diagnostics in session mode.")
@@ -1124,8 +1149,6 @@ class DiagnosticsWindow:
     def _handle_session_connect_device_result(self, payload: dict[str, Any]) -> None:
         """Handle connect_device result in session mode and populate module list."""
         self._start_button.configure(state=tk.NORMAL)
-        if hasattr(self, "_session_start_diag_button"):
-            self._session_start_diag_button.configure(state=tk.NORMAL)
 
         if not payload.get("success"):
             self._set_server_connected(False)
@@ -1145,7 +1168,7 @@ class DiagnosticsWindow:
             self._set_server_connected(False)
             self._refresh_action_buttons()
             self._set_status_text("Session connected but no module list returned.")
-            self._set_session_hint("连接成功但模块列表为空，请重试 Start Diagnostics。")
+            self._set_session_hint("连接成功但模块列表为空，请重试 Start Agent Diagnostics。")
             self._append_agent_message("agent", "连接成功但没有拿到模块列表。")
             return
 
@@ -1172,14 +1195,21 @@ class DiagnosticsWindow:
         if not payload.get("success"):
             self._set_server_connected(False)
             self._set_status_text(f"Failed to read DTCs: {self._error_message(payload, 'Request failed.')}")
+            self._append_agent_message("agent", "Read DTCs 失败，请检查当前页面是否为 Data Display。")
             return
 
         self._set_server_connected(True)
 
+        # New session execute format wraps handler output in payload['result'].
+        result: dict[str, Any] = payload
+        raw_result = payload.get("result")
+        if isinstance(raw_result, dict):
+            result = raw_result
+
         for item_id in self._dtc_tree.get_children(""):
             self._dtc_tree.delete(item_id)
 
-        dtcs = payload.get("dtcs") or []
+        dtcs = result.get("dtcs") or []
         if not isinstance(dtcs, list):
             dtcs = []
 
@@ -1197,11 +1227,12 @@ class DiagnosticsWindow:
                 ),
             )
 
-        count = payload.get("dtc_count")
+        count = result.get("dtc_count")
         if not isinstance(count, int):
             count = len(dtcs)
         self._dtc_count_text.set(f"Found {count} fault code(s)")
         self._set_status_text("Fault code read completed.")
+        self._append_agent_message("agent", f"Read DTCs 完成，共 {count} 条。")
 
     def _handle_select_module_result(self, payload: dict[str, Any]) -> None:
         if payload.get("success"):
@@ -1287,14 +1318,15 @@ class DiagnosticsWindow:
             return
 
         self._set_server_connected(True)
-        self._set_status_text("Session data category selected. Ready for DTC/Stream/AI Diagnose.")
+        self._set_status_text("Session data category selected. Ready for Read DTCs.")
         self._session_category_confirmed = True
         has_category = bool(self._selected_data_category.get().strip())
         self._read_dtc_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
         self._start_stream_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
         self._ai_diagnose_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
-        self._set_session_hint("已确认 Category：现在可执行 Read DTCs / Start Stream / AI Diagnose。")
-        self._append_agent_message("agent", "数据分类已确认。现在可以执行 Read DTCs / Start Stream / AI Diagnose。")
+        self._set_session_hint("已确认 Category：现在可执行 Read DTCs。")
+        self._append_agent_message("agent", "数据分类已确认。现在可以执行 Read DTCs。")
+        self._prompt_action_choices()
         self._refresh_action_buttons()
 
     def _handle_live_start_result(self, payload: dict[str, Any]) -> None:
@@ -1669,6 +1701,7 @@ class DiagnosticsWindow:
             return
 
         self._session_start_button.configure(state=tk.DISABLED)
+        self._start_button.configure(state=tk.DISABLED)
         self._session_status_var.set("Starting session...")
         self._append_agent_message("user", f"Start Session (brand={brand})")
         self._api_call(
@@ -1682,6 +1715,7 @@ class DiagnosticsWindow:
         if not self._session_id:
             return
         self._session_abort_button.configure(state=tk.DISABLED)
+        self._start_button.configure(state=tk.DISABLED)
         self._session_status_var.set("Aborting...")
         self._append_agent_message("user", "Abort Session")
         self._api_call(
@@ -1698,8 +1732,7 @@ class DiagnosticsWindow:
     def _handle_session_start_result(self, payload: dict[str, Any]) -> None:
         if not payload.get("success"):
             self._session_start_button.configure(state=tk.NORMAL)
-            if hasattr(self, "_session_start_diag_button"):
-                self._session_start_diag_button.configure(state=tk.DISABLED)
+            self._start_button.configure(state=tk.DISABLED)
             self._session_status_var.set(
                 f"Failed: {self._error_message(payload, 'Could not start session.')}"
             )
@@ -1714,8 +1747,6 @@ class DiagnosticsWindow:
 
         self._session_start_button.configure(state=tk.DISABLED)
         self._session_abort_button.configure(state=tk.NORMAL)
-        if hasattr(self, "_session_start_diag_button"):
-            self._session_start_diag_button.configure(state=tk.NORMAL)
         self._session_category_confirmed = False
         self._set_agent_prompt(None, "", [])
         self._refresh_action_buttons()
@@ -1723,11 +1754,20 @@ class DiagnosticsWindow:
             f"Session {sid_preview}... status={status}"
             + (f" workflow={workflow}" if workflow else "")
         )
-        self._set_session_hint("Session 已启动：下一步点击 Start Agent Diagnostics。")
-        self._append_agent_message(
-            "agent",
-            f"Session 已启动 (ID={sid_preview}...)。请点击 Start Agent Diagnostics。",
-        )
+        is_running = str(status).lower() == "running"
+        self._start_button.configure(state=tk.NORMAL if is_running else tk.DISABLED)
+        if is_running:
+            self._set_session_hint("Session 已启动：下一步点击 Start Agent Diagnostics。")
+            self._append_agent_message(
+                "agent",
+                f"Session 已启动 (ID={sid_preview}...)。请点击 Start Agent Diagnostics。",
+            )
+        else:
+            self._set_session_hint("Session 需要先完成决策选择，然后才能启动诊断。")
+            self._append_agent_message(
+                "agent",
+                "Session 当前处于待决策状态。请先在下方下拉框里完成选择。",
+            )
 
         # If the start response already includes a decision, show it
         decision = payload.get("decision")
@@ -1753,7 +1793,7 @@ class DiagnosticsWindow:
         if decision:
             if not self._prompt_decision(decision):
                 self._show_decision_modal(decision)
-            self._set_session_hint("出现歧义，请在下拉框或弹窗中选择一个候选项。")
+            self._set_session_hint("出现歧义，请在 AI Agent Dialogue 下拉框中选择一个候选项。")
         else:
             self._session_status_var.set("Decision required but no details received.")
 
@@ -1762,6 +1802,7 @@ class DiagnosticsWindow:
         self._set_agent_prompt(None, "", [])
         option_id = payload.get("option_id", "?")
         self._session_status_var.set(f"Decision resolved: {option_id}")
+        self._start_button.configure(state=tk.NORMAL)
         self._set_session_hint("决策已提交，系统正在继续执行。")
         self._append_agent_message("agent", f"决策已应用：{option_id}")
 
@@ -1773,12 +1814,14 @@ class DiagnosticsWindow:
         if fallback:
             message = f"{message} [{fallback}]"
         self._session_status_var.set(message)
+        self._start_button.configure(state=tk.NORMAL)
         self._set_session_hint("未及时选择，系统已按兜底选项继续。")
         self._append_agent_message("agent", message)
 
     def _handle_session_error(self, payload: dict[str, Any]) -> None:
         error = payload.get("error", "Unknown error")
         self._session_status_var.set(f"Session error: {error}")
+        self._start_button.configure(state=tk.DISABLED)
         self._set_session_hint("Session 发生错误，请检查网络或重新 Start Session。")
         self._append_agent_message("agent", f"Session 错误：{error}")
 
@@ -1796,11 +1839,11 @@ class DiagnosticsWindow:
             self._append_agent_message("agent", "Session 已完成。")
         self._session_start_button.configure(state=tk.NORMAL)
         self._session_abort_button.configure(state=tk.DISABLED)
-        if hasattr(self, "_session_start_diag_button"):
-            self._session_start_diag_button.configure(state=tk.DISABLED)
+        self._start_button.configure(state=tk.DISABLED)
         self._select_data_category_button.configure(state=tk.DISABLED)
         self._session_category_confirmed = False
         self._session_id = None
+        self._set_agent_prompt(None, "", [])
         self._refresh_action_buttons()
         self._set_session_hint("Session 已结束。可重新 Start Session。")
 
@@ -1814,6 +1857,10 @@ class DiagnosticsWindow:
                 self._session_status_var.set("More decisions required...")
                 self._set_session_hint("仍有歧义，请继续在 AI Agent Dialogue 下拉框中选择。")
                 return
+
+            # Decision resolved and session is resumable/running.
+            if str(payload.get("status", "")).lower() == "running":
+                self._start_button.configure(state=tk.NORMAL)
 
             if payload.get("resumed"):
                 resume_action = payload.get("resume_action", "")
@@ -1868,6 +1915,7 @@ class DiagnosticsWindow:
             self._append_agent_message("agent", "Abort 请求已发送，正在结束 Session。")
         else:
             self._session_abort_button.configure(state=tk.NORMAL)
+            self._start_button.configure(state=tk.NORMAL)
             self._session_status_var.set(
                 f"Abort failed: {self._error_message(payload, 'Request failed.')}"
             )
