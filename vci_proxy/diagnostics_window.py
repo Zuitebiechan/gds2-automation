@@ -51,6 +51,14 @@ class DiagnosticsWindow:
         self._vin = ""
         self._cached_payload_id = ""
 
+        # Session flow state
+        self._session_id: Optional[str] = None
+        self._session_sse_running = False
+        self._session_sse_thread: Optional[threading.Thread] = None
+        self._session_sse_response: Optional[requests.Response] = None
+        self._session_decision_window: Optional[tk.Toplevel] = None
+        self._session_category_confirmed = False
+
         self._live_param_rows: dict[str, str] = {}
 
         self._status_message = tk.StringVar(value="Ready")
@@ -59,6 +67,11 @@ class DiagnosticsWindow:
 
         self._selected_module = tk.StringVar(value="")
         self._selected_data_category = tk.StringVar(value="")
+        self._session_brand = tk.StringVar(value="")
+        self._session_status_var = tk.StringVar(value="")
+        self._session_hint_var = tk.StringVar(
+            value="Hint: Start Session 后按 Module -> Select -> Data Category -> Select。"
+        )
 
         self._build_window_geometry()
         self._build_style()
@@ -84,6 +97,8 @@ class DiagnosticsWindow:
         self._is_destroying = True
         self._stop_sse_thread()
         self._stop_ai_sse_thread()
+        self._stop_session_sse_thread()
+        self._close_decision_modal()
 
         try:
             self._root.quit()
@@ -136,12 +151,13 @@ class DiagnosticsWindow:
         root_frame = ttk.Frame(self._root, style="App.TFrame", padding=18)
         root_frame.pack(fill=tk.BOTH, expand=True)
 
-        root_frame.rowconfigure(3, weight=1)
         root_frame.rowconfigure(4, weight=1)
+        root_frame.rowconfigure(5, weight=1)
         root_frame.columnconfigure(0, weight=1)
 
         self._build_header(root_frame)
         self._build_start_section(root_frame)
+        self._build_session_section(root_frame)
         self._build_dtc_section(root_frame)
         self._build_live_data_section(root_frame)
         self._build_ai_result_section(root_frame)
@@ -188,9 +204,44 @@ class DiagnosticsWindow:
         self._status_label = ttk.Label(frame, textvariable=self._status_message, style="Status.TLabel")
         self._status_label.grid(row=0, column=1, sticky="w")
 
+    def _build_session_section(self, parent: ttk.Frame) -> None:
+        frame = ttk.LabelFrame(parent, text="Session Diagnostics (New)", padding=(12, 6))
+        frame.grid(row=2, column=0, sticky="ew", pady=(0, 6))
+        frame.columnconfigure(1, weight=1)
+
+        ttk.Label(frame, text="Brand:", style="Subtle.TLabel").grid(
+            row=0, column=0, sticky="w", padx=(0, 6),
+        )
+
+        brand_entry = ttk.Entry(frame, textvariable=self._session_brand, width=18)
+        brand_entry.grid(row=0, column=1, sticky="w", padx=(0, 12))
+
+        self._session_start_button = ttk.Button(
+            frame,
+            text="\u25b6 Start Session",
+            command=self._on_session_start_clicked,
+        )
+        self._session_start_button.grid(row=0, column=2, sticky="w", padx=(0, 12))
+
+        self._session_abort_button = ttk.Button(
+            frame,
+            text="\u23f9 Abort",
+            command=self._on_session_abort_clicked,
+            state=tk.DISABLED,
+        )
+        self._session_abort_button.grid(row=0, column=3, sticky="w", padx=(0, 12))
+
+        ttk.Label(frame, textvariable=self._session_status_var, style="Subtle.TLabel").grid(
+            row=0, column=4, sticky="w",
+        )
+
+        ttk.Label(frame, textvariable=self._session_hint_var, style="Subtle.TLabel").grid(
+            row=1, column=0, columnspan=5, sticky="w", pady=(6, 0),
+        )
+
     def _build_dtc_section(self, parent: ttk.Frame) -> None:
         dtc_frame = ttk.LabelFrame(parent, text="Fault Codes (DTCs)", padding=12)
-        dtc_frame.grid(row=2, column=0, sticky="nsew", pady=(0, 12))
+        dtc_frame.grid(row=3, column=0, sticky="nsew", pady=(0, 12))
         dtc_frame.columnconfigure(0, weight=1)
         dtc_frame.rowconfigure(1, weight=1)
 
@@ -224,7 +275,7 @@ class DiagnosticsWindow:
 
     def _build_live_data_section(self, parent: ttk.Frame) -> None:
         live_frame = ttk.LabelFrame(parent, text="Live Data", padding=12)
-        live_frame.grid(row=3, column=0, sticky="nsew")
+        live_frame.grid(row=4, column=0, sticky="nsew")
         live_frame.columnconfigure(1, weight=1)
         live_frame.rowconfigure(4, weight=1)
 
@@ -260,6 +311,14 @@ class DiagnosticsWindow:
         )
         self._data_combo.grid(row=1, column=1, sticky="ew", pady=(0, 8), padx=(8, 8))
         self._data_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_data_category_selected())
+
+        self._select_data_category_button = ttk.Button(
+            live_frame,
+            text="Select",
+            command=self._on_select_data_category_clicked,
+            state=tk.DISABLED,
+        )
+        self._select_data_category_button.grid(row=1, column=2, sticky="w", pady=(0, 8))
 
         # Row 3: Primary controls
         primary_controls = ttk.Frame(live_frame, style="Card.TFrame")
@@ -323,7 +382,7 @@ class DiagnosticsWindow:
 
     def _build_ai_result_section(self, parent: ttk.Frame) -> None:
         ai_frame = ttk.LabelFrame(parent, text="AI Diagnosis Result", padding=12)
-        ai_frame.grid(row=4, column=0, sticky="nsew", pady=(12, 0))
+        ai_frame.grid(row=5, column=0, sticky="nsew", pady=(12, 0))
         ai_frame.columnconfigure(0, weight=1)
         ai_frame.rowconfigure(1, weight=1)
 
@@ -415,6 +474,10 @@ class DiagnosticsWindow:
             self._handle_dtcs_result(data)
         elif event == "module_result":
             self._handle_select_module_result(data)
+        elif event == "session_select_module_result":
+            self._handle_session_select_module_result(data)
+        elif event == "session_select_data_category_result":
+            self._handle_session_select_data_category_result(data)
         elif event == "live_start_result":
             self._handle_live_start_result(data)
         elif event == "live_stop_result":
@@ -435,6 +498,26 @@ class DiagnosticsWindow:
             self._handle_ai_error(data)
         elif event == "ai_done":
             self._handle_ai_done(data)
+        elif event == "session_start_result":
+            self._handle_session_start_result(data)
+        elif event == "session_connected":
+            self._session_status_var.set("Connected. Waiting for events...")
+        elif event == "session_progress":
+            self._handle_session_progress(data)
+        elif event == "session_decision_required":
+            self._handle_session_decision_required(data)
+        elif event == "session_decision_resolved":
+            self._handle_session_decision_resolved(data)
+        elif event == "session_decision_timeout":
+            self._handle_session_decision_timeout(data)
+        elif event == "session_error":
+            self._handle_session_error(data)
+        elif event == "session_done":
+            self._handle_session_done(data)
+        elif event == "session_decision_submit_result":
+            self._handle_session_decision_submit_result(data)
+        elif event == "session_abort_result":
+            self._handle_session_abort_result(data)
     # ------------------------------------------------------------------
     # Header/status helpers
     # ------------------------------------------------------------------
@@ -444,6 +527,39 @@ class DiagnosticsWindow:
 
     def _set_status_text(self, message: str) -> None:
         self._status_message.set(message)
+
+    def _set_session_hint(self, message: str) -> None:
+        self._session_hint_var.set(message)
+
+    def _refresh_action_buttons(self) -> None:
+        """Refresh module/category/diagnostic action buttons from current state."""
+        has_module = bool(self._selected_module.get().strip())
+        has_category = bool(self._selected_data_category.get().strip())
+        session_mode = bool(self._session_id)
+
+        can_select_module = has_module and not self._stream_active
+        self._select_module_button.configure(
+            state=tk.NORMAL if can_select_module else tk.DISABLED
+        )
+
+        can_select_category = has_category and session_mode and not self._stream_active
+        self._select_data_category_button.configure(
+            state=tk.NORMAL if can_select_category else tk.DISABLED
+        )
+
+        can_run_actions = has_category and not self._stream_active
+        if session_mode and not self._session_category_confirmed:
+            can_run_actions = False
+
+        self._read_dtc_button.configure(
+            state=tk.NORMAL if can_run_actions else tk.DISABLED
+        )
+        self._start_stream_button.configure(
+            state=tk.NORMAL if can_run_actions else tk.DISABLED
+        )
+        self._ai_diagnose_button.configure(
+            state=tk.NORMAL if can_run_actions else tk.DISABLED
+        )
 
     def _error_message(self, payload: dict[str, Any], fallback: str) -> str:
         value = payload.get("error") if isinstance(payload, dict) else None
@@ -461,12 +577,16 @@ class DiagnosticsWindow:
         # Reset dependent controls until start succeeds.
         self._read_dtc_button.configure(state=tk.DISABLED)
         self._select_module_button.configure(state=tk.DISABLED)
+        self._select_data_category_button.configure(state=tk.DISABLED)
         self._start_stream_button.configure(state=tk.DISABLED)
         self._stop_stream_button.configure(state=tk.DISABLED)
         self._module_combo.configure(values=[])
         self._data_combo.configure(values=[])
         self._selected_module.set("")
         self._selected_data_category.set("")
+        self._session_category_confirmed = False
+        self._refresh_action_buttons()
+        self._set_session_hint("Hint: 先 Start Diagnostics 或 Start Session，再进行选择。")
 
         self._api_call("POST", "/api/diagnose/start", callback_event="start_result")
 
@@ -480,6 +600,14 @@ class DiagnosticsWindow:
 
         if not category:
             messagebox.showwarning("Data Category Required", "Please select a data category.")
+            return
+
+        if self._session_id and not self._session_category_confirmed:
+            messagebox.showwarning(
+                "Category Not Confirmed",
+                "In Session mode, please click Select next to Data Category before AI Diagnose.",
+            )
+            self._set_session_hint("请先提交 Data Category（点右侧 Select）再执行 AI Diagnose。")
             return
 
         self._ai_diagnose_button.configure(state=tk.DISABLED)
@@ -543,11 +671,52 @@ class DiagnosticsWindow:
         self._data_combo.configure(values=[])
         self._selected_data_category.set("")
         self._set_status_text("Selecting module...")
+        if self._session_id:
+            self._set_session_hint("正在提交 Module 选择到 Session...")
+            self._api_call(
+                "POST",
+                "/api/session/select_module",
+                json_data={"session_id": self._session_id, "module": module},
+                callback_event="session_select_module_result",
+            )
+        else:
+            self._api_call(
+                "POST",
+                "/api/diagnose/select_module",
+                json_data={"module": module},
+                callback_event="module_result",
+            )
+
+    def _on_select_data_category_clicked(self) -> None:
+        category = self._selected_data_category.get().strip()
+        if not category:
+            messagebox.showwarning("Data Category Required", "Please select a data category first.")
+            return
+
+        if self._session_id and not self._session_category_confirmed:
+            messagebox.showwarning(
+                "Category Not Confirmed",
+                "In Session mode, please click Select next to Data Category first.",
+            )
+            self._set_session_hint("请先提交 Data Category（点右侧 Select）再执行 Read DTCs。")
+            return
+
+        if not self._session_id:
+            self._set_status_text("Session mode not active. Use Start Session first.")
+            self._set_session_hint("先点击 Start Session，再进行 Category 提交。")
+            return
+
+        self._select_data_category_button.configure(state=tk.DISABLED)
+        self._start_stream_button.configure(state=tk.DISABLED)
+        self._read_dtc_button.configure(state=tk.DISABLED)
+        self._ai_diagnose_button.configure(state=tk.DISABLED)
+        self._set_status_text("Selecting data category in session...")
+        self._set_session_hint("正在提交 Data Category 选择到 Session...")
         self._api_call(
             "POST",
-            "/api/diagnose/select_module",
-            json_data={"module": module},
-            callback_event="module_result",
+            "/api/session/select_data_category",
+            json_data={"session_id": self._session_id, "data_category": category},
+            callback_event="session_select_data_category_result",
         )
 
     def _on_start_stream_clicked(self) -> None:
@@ -560,6 +729,14 @@ class DiagnosticsWindow:
 
         if not category:
             messagebox.showwarning("Data Category Required", "Please select a data category.")
+            return
+
+        if self._session_id and not self._session_category_confirmed:
+            messagebox.showwarning(
+                "Category Not Confirmed",
+                "In Session mode, please click Select next to Data Category before Start Stream.",
+            )
+            self._set_session_hint("请先提交 Data Category（点右侧 Select）再执行 Start Stream。")
             return
 
         self._start_stream_button.configure(state=tk.DISABLED)
@@ -581,9 +758,13 @@ class DiagnosticsWindow:
     def _on_data_category_selected(self) -> None:
         """Enable actions only after user selects a data category."""
         has_category = bool(self._selected_data_category.get().strip())
-        self._start_stream_button.configure(state=tk.NORMAL if has_category and not self._stream_active else tk.DISABLED)
-        self._read_dtc_button.configure(state=tk.NORMAL if has_category and not self._stream_active else tk.DISABLED)
-        self._ai_diagnose_button.configure(state=tk.NORMAL if has_category and not self._stream_active else tk.DISABLED)
+        session_mode = bool(self._session_id)
+        if session_mode:
+            # In session mode, category must be confirmed via /api/session/select_data_category.
+            self._session_category_confirmed = False
+        self._refresh_action_buttons()
+        if session_mode and has_category:
+            self._set_session_hint("已选择 Data Category，请点击右侧 Select 提交到 Session。")
     # ------------------------------------------------------------------
     # API event handlers
     # ------------------------------------------------------------------
@@ -602,18 +783,18 @@ class DiagnosticsWindow:
             self._selected_module.set(modules[0] if modules else "")
             self._data_combo.configure(values=[])
             self._selected_data_category.set("")
+            self._session_category_confirmed = False
 
-            self._read_dtc_button.configure(state=tk.DISABLED)
-            self._start_stream_button.configure(state=tk.DISABLED)
             self._stop_stream_button.configure(state=tk.DISABLED)
-            self._ai_diagnose_button.configure(state=tk.DISABLED)
-            self._select_module_button.configure(state=tk.NORMAL if modules else tk.DISABLED)
+            self._refresh_action_buttons()
             self._set_server_connected(True)
             self._set_status_text(f"Connected — VIN: {vin}. Select module and data category.")
+            self._set_session_hint("Hint: 选择 Module 后点 Select，再选择 Data Category。")
             self._vin = vin
             return
 
         self._set_server_connected(False)
+        self._refresh_action_buttons()
         self._set_status_text(f"Connection failed: {self._error_message(payload, 'Unable to start diagnostics.')}")
 
     def _handle_dtcs_result(self, payload: dict[str, Any]) -> None:
@@ -662,26 +843,90 @@ class DiagnosticsWindow:
 
             self._data_combo.configure(values=categories)
             self._selected_data_category.set("")
-            self._start_stream_button.configure(state=tk.DISABLED)
-            self._read_dtc_button.configure(state=tk.DISABLED)
+            self._session_category_confirmed = False
             self._stop_stream_button.configure(state=tk.DISABLED)
-            self._ai_diagnose_button.configure(state=tk.DISABLED)
-            self._select_module_button.configure(state=tk.NORMAL)
+            self._refresh_action_buttons()
             self._set_server_connected(True)
             self._set_status_text("Module selected. Choose a data category.")
+            self._set_session_hint("Hint: 选择 Data Category 后可直接开始 DTC/Stream/AI。")
             return
 
         self._set_server_connected(False)
-        self._select_module_button.configure(state=tk.NORMAL)
+        self._refresh_action_buttons()
         self._set_status_text(f"Module select failed: {self._error_message(payload, 'Request failed.')}")
+
+    def _handle_session_select_module_result(self, payload: dict[str, Any]) -> None:
+        self._refresh_action_buttons()
+
+        if not payload.get("success"):
+            self._set_server_connected(False)
+            self._set_status_text(
+                f"Session module select failed: {self._error_message(payload, 'Request failed.')}"
+            )
+            self._set_session_hint("Module 选择失败，请重试或检查 Session 状态。")
+            return
+
+        if payload.get("decision_required"):
+            decision = payload.get("decision")
+            if decision:
+                self._show_decision_modal(decision)
+            self._session_status_var.set("Module selection requires your decision.")
+            self._set_status_text("Session awaiting module decision...")
+            self._set_session_hint("Module 存在多个候选，请在弹窗中选择。")
+            return
+
+        result = payload.get("result") or {}
+        categories = result.get("data_categories") or []
+        if not isinstance(categories, list):
+            categories = []
+
+        self._data_combo.configure(values=categories)
+        self._selected_data_category.set("")
+        self._session_category_confirmed = False
+        self._select_data_category_button.configure(state=tk.DISABLED)
+        self._start_stream_button.configure(state=tk.DISABLED)
+        self._read_dtc_button.configure(state=tk.DISABLED)
+        self._ai_diagnose_button.configure(state=tk.DISABLED)
+        self._set_server_connected(True)
+        self._set_status_text("Session module selected. Choose a data category.")
+        self._set_session_hint("下一步：选择 Data Category 后点击右侧 Select。")
+        self._refresh_action_buttons()
+
+    def _handle_session_select_data_category_result(self, payload: dict[str, Any]) -> None:
+        self._refresh_action_buttons()
+
+        if not payload.get("success"):
+            self._set_server_connected(False)
+            self._set_status_text(
+                f"Session category select failed: {self._error_message(payload, 'Request failed.')}"
+            )
+            self._set_session_hint("Data Category 选择失败，请重试。")
+            return
+
+        if payload.get("decision_required"):
+            decision = payload.get("decision")
+            if decision:
+                self._show_decision_modal(decision)
+            self._session_status_var.set("Data category selection requires your decision.")
+            self._set_status_text("Session awaiting category decision...")
+            self._set_session_hint("Category 存在多个候选，请在弹窗中选择。")
+            return
+
+        self._set_server_connected(True)
+        self._set_status_text("Session data category selected. Ready for DTC/Stream/AI Diagnose.")
+        self._session_category_confirmed = True
+        has_category = bool(self._selected_data_category.get().strip())
+        self._read_dtc_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
+        self._start_stream_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
+        self._ai_diagnose_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
+        self._set_session_hint("已确认 Category：现在可执行 Read DTCs / Start Stream / AI Diagnose。")
+        self._refresh_action_buttons()
 
     def _handle_live_start_result(self, payload: dict[str, Any]) -> None:
         if payload.get("success"):
             self._set_server_connected(True)
             self._stream_active = True
-            self._start_stream_button.configure(state=tk.DISABLED)
-            self._read_dtc_button.configure(state=tk.DISABLED)
-            self._ai_diagnose_button.configure(state=tk.DISABLED)
+            self._refresh_action_buttons()
             self._stop_stream_button.configure(state=tk.NORMAL)
             self._set_status_text(payload.get("message") or "Live stream started.")
             self._start_sse_thread()
@@ -689,10 +934,7 @@ class DiagnosticsWindow:
 
         self._stream_active = False
         self._set_server_connected(False)
-        can_start = bool(self._selected_data_category.get().strip())
-        self._start_stream_button.configure(state=tk.NORMAL if can_start else tk.DISABLED)
-        self._read_dtc_button.configure(state=tk.NORMAL if can_start else tk.DISABLED)
-        self._ai_diagnose_button.configure(state=tk.NORMAL if can_start else tk.DISABLED)
+        self._refresh_action_buttons()
         self._stop_stream_button.configure(state=tk.DISABLED)
         self._set_status_text(f"Live stream failed: {self._error_message(payload, 'Request failed.')}")
 
@@ -700,10 +942,7 @@ class DiagnosticsWindow:
         self._stop_sse_thread()
         self._stream_active = False
 
-        can_start = bool(self._selected_data_category.get().strip())
-        self._start_stream_button.configure(state=tk.NORMAL if can_start else tk.DISABLED)
-        self._read_dtc_button.configure(state=tk.NORMAL if can_start else tk.DISABLED)
-        self._ai_diagnose_button.configure(state=tk.NORMAL if can_start else tk.DISABLED)
+        self._refresh_action_buttons()
         self._stop_stream_button.configure(state=tk.DISABLED)
         if payload.get("success"):
             self._set_server_connected(True)
@@ -1043,3 +1282,340 @@ class DiagnosticsWindow:
             else:
                 item_id = self._live_tree.insert("", tk.END, values=(name, value, unit))
                 self._live_param_rows[name] = item_id
+
+    # ------------------------------------------------------------------
+    # Session flow: UI callbacks
+    # ------------------------------------------------------------------
+
+    def _on_session_start_clicked(self) -> None:
+        brand = self._session_brand.get().strip()
+        if not brand:
+            messagebox.showwarning("Brand Required", "Please enter a vehicle brand.")
+            return
+
+        self._session_start_button.configure(state=tk.DISABLED)
+        self._session_status_var.set("Starting session...")
+        self._api_call(
+            "POST",
+            "/api/session/start",
+            json_data={"brand": brand},
+            callback_event="session_start_result",
+        )
+
+    def _on_session_abort_clicked(self) -> None:
+        if not self._session_id:
+            return
+        self._session_abort_button.configure(state=tk.DISABLED)
+        self._session_status_var.set("Aborting...")
+        self._api_call(
+            "POST",
+            "/api/session/abort",
+            json_data={"session_id": self._session_id},
+            callback_event="session_abort_result",
+        )
+
+    # ------------------------------------------------------------------
+    # Session flow: event handlers
+    # ------------------------------------------------------------------
+
+    def _handle_session_start_result(self, payload: dict[str, Any]) -> None:
+        if not payload.get("success"):
+            self._session_start_button.configure(state=tk.NORMAL)
+            self._session_status_var.set(
+                f"Failed: {self._error_message(payload, 'Could not start session.')}"
+            )
+            self._set_session_hint("Hint: 请输入品牌后重试 Start Session。")
+            return
+
+        self._session_id = payload.get("session_id", "")
+        status = payload.get("status", "")
+        workflow = payload.get("workflow")
+        sid_preview = (self._session_id or "")[:8]
+
+        self._session_start_button.configure(state=tk.DISABLED)
+        self._session_abort_button.configure(state=tk.NORMAL)
+        self._session_category_confirmed = False
+        self._refresh_action_buttons()
+        self._session_status_var.set(
+            f"Session {sid_preview}... status={status}"
+            + (f" workflow={workflow}" if workflow else "")
+        )
+        self._set_session_hint("Session 已启动：1) 选 Module 并点 Select；2) 选 Category 并点 Select。")
+
+        # If the start response already includes a decision, show it
+        decision = payload.get("decision")
+        if decision:
+            self._show_decision_modal(decision)
+
+        # Start SSE listener
+        if self._session_id:
+            self._start_session_sse_thread(self._session_id)
+
+    def _handle_session_progress(self, payload: dict[str, Any]) -> None:
+        message = payload.get("message", "Processing...")
+        workflow = payload.get("workflow")
+        text = message
+        if workflow:
+            text += f" [{workflow}]"
+        self._session_status_var.set(text)
+
+    def _handle_session_decision_required(self, payload: dict[str, Any]) -> None:
+        decision = payload.get("decision")
+        if decision:
+            self._show_decision_modal(decision)
+            self._set_session_hint("出现歧义，请在弹窗中选择一个候选项。")
+        else:
+            self._session_status_var.set("Decision required but no details received.")
+
+    def _handle_session_decision_resolved(self, payload: dict[str, Any]) -> None:
+        self._close_decision_modal()
+        option_id = payload.get("option_id", "?")
+        self._session_status_var.set(f"Decision resolved: {option_id}")
+        self._set_session_hint("决策已提交，系统正在继续执行。")
+
+    def _handle_session_decision_timeout(self, payload: dict[str, Any]) -> None:
+        self._close_decision_modal()
+        message = payload.get("message") or "Decision timed out. Applying fallback option."
+        fallback = payload.get("fallback_option")
+        if fallback:
+            message = f"{message} [{fallback}]"
+        self._session_status_var.set(message)
+        self._set_session_hint("未及时选择，系统已按兜底选项继续。")
+
+    def _handle_session_error(self, payload: dict[str, Any]) -> None:
+        error = payload.get("error", "Unknown error")
+        self._session_status_var.set(f"Session error: {error}")
+        self._set_session_hint("Session 发生错误，请检查网络或重新 Start Session。")
+
+    def _handle_session_done(self, payload: dict[str, Any]) -> None:
+        self._stop_session_sse_thread()
+        self._close_decision_modal()
+        aborted = payload.get("aborted", False)
+        if aborted:
+            reason = payload.get("reason", "")
+            self._session_status_var.set(f"Session aborted. {reason}".strip())
+        else:
+            self._session_status_var.set("Session completed.")
+        self._session_start_button.configure(state=tk.NORMAL)
+        self._session_abort_button.configure(state=tk.DISABLED)
+        self._select_data_category_button.configure(state=tk.DISABLED)
+        self._session_category_confirmed = False
+        self._session_id = None
+        self._refresh_action_buttons()
+        self._set_session_hint("Session 已结束。可重新 Start Session。")
+
+    def _handle_session_decision_submit_result(self, payload: dict[str, Any]) -> None:
+        if payload.get("success"):
+            if payload.get("decision_required"):
+                decision = payload.get("decision")
+                if decision:
+                    self._show_decision_modal(decision)
+                self._session_status_var.set("More decisions required...")
+                self._set_session_hint("仍有歧义，请继续在弹窗中选择。")
+                return
+
+            if payload.get("resumed"):
+                resume_action = payload.get("resume_action", "")
+                result = payload.get("result") or {}
+
+                if resume_action == "select_module":
+                    categories = result.get("data_categories") or []
+                    if not isinstance(categories, list):
+                        categories = []
+                    self._data_combo.configure(values=categories)
+                    self._selected_data_category.set("")
+                    self._session_category_confirmed = False
+                    self._select_data_category_button.configure(state=tk.DISABLED)
+                    self._set_status_text("Decision applied. Module resolved; choose data category.")
+                    self._set_session_hint("Module 已确定。请选择 Data Category 并点击 Select。")
+                elif resume_action == "select_data_category":
+                    self._session_category_confirmed = True
+                    has_category = bool(self._selected_data_category.get().strip())
+                    self._read_dtc_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
+                    self._start_stream_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
+                    self._ai_diagnose_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
+                    self._set_status_text("Decision applied. Data category resolved.")
+                    self._set_session_hint("Category 已确定。现在可执行诊断动作。")
+
+                self._session_status_var.set("Decision applied. Continuing...")
+                self._refresh_action_buttons()
+                return
+
+            self._session_status_var.set("Decision submitted. Continuing...")
+            self._set_session_hint("决策已提交，等待后续进度事件。")
+        else:
+            self._session_status_var.set(
+                f"Decision failed: {self._error_message(payload, 'Request failed.')}"
+            )
+            self._set_session_hint("决策提交失败，请重试。")
+            # Re-enable submit button if modal is still open
+            if (self._session_decision_window is not None
+                    and self._session_decision_window.winfo_exists()):
+                for child in self._session_decision_window.winfo_children():
+                    if isinstance(child, ttk.Button):
+                        child.configure(state=tk.NORMAL)
+
+    def _handle_session_abort_result(self, payload: dict[str, Any]) -> None:
+        if payload.get("success"):
+            self._session_status_var.set("Abort request sent.")
+            self._set_session_hint("正在结束 Session...")
+        else:
+            self._session_abort_button.configure(state=tk.NORMAL)
+            self._session_status_var.set(
+                f"Abort failed: {self._error_message(payload, 'Request failed.')}"
+            )
+            self._set_session_hint("Abort 失败，请重试。")
+
+    # ------------------------------------------------------------------
+    # Session flow: decision modal
+    # ------------------------------------------------------------------
+
+    def _show_decision_modal(self, decision: dict[str, Any]) -> None:
+        self._close_decision_modal()
+
+        prompt = decision.get("prompt", "Please make a selection:")
+        decision_id = decision.get("decision_id", "")
+        options = decision.get("options", [])
+
+        win = tk.Toplevel(self._root)
+        win.title("Decision Required")
+        win.configure(bg="white")
+        win.resizable(False, False)
+        win.transient(self._root)
+        win.grab_set()
+
+        # Center relative to main window
+        win.update_idletasks()
+        x = self._root.winfo_x() + (self._root.winfo_width() - 400) // 2
+        y = self._root.winfo_y() + (self._root.winfo_height() - 250) // 2
+        win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+
+        self._session_decision_window = win
+
+        frame = ttk.Frame(win, style="App.TFrame", padding=18)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(frame, text=prompt, wraplength=380, style="Subtle.TLabel").pack(
+            anchor="w", pady=(0, 12),
+        )
+
+        selected_option = tk.StringVar(value="")
+
+        for opt in options:
+            opt_id = opt.get("option_id", "")
+            label = opt.get("label", opt_id)
+            desc = opt.get("description", "")
+            display = f"{label} \u2014 {desc}" if desc else label
+            rb = ttk.Radiobutton(frame, text=display, variable=selected_option, value=opt_id)
+            rb.pack(anchor="w", pady=2)
+
+        if options:
+            selected_option.set(options[0].get("option_id", ""))
+
+        btn_frame = ttk.Frame(frame, style="Card.TFrame")
+        btn_frame.pack(anchor="e", pady=(12, 0))
+
+        def _submit() -> None:
+            choice = selected_option.get()
+            if not choice:
+                messagebox.showwarning(
+                    "Selection Required", "Please select an option.", parent=win,
+                )
+                return
+            submit_btn.configure(state=tk.DISABLED)
+            self._session_submit_decision(decision_id, choice)
+
+        submit_btn = ttk.Button(btn_frame, text="Submit", command=_submit)
+        submit_btn.pack(side=tk.RIGHT, padx=(8, 0))
+
+        ttk.Button(
+            btn_frame, text="Cancel", command=self._close_decision_modal,
+        ).pack(side=tk.RIGHT)
+
+        self._session_status_var.set("Awaiting your decision...")
+        self._set_session_hint("请选择最符合当前车辆的候选项并提交。")
+
+    def _close_decision_modal(self) -> None:
+        if self._session_decision_window is not None:
+            try:
+                self._session_decision_window.destroy()
+            except tk.TclError:
+                pass
+            self._session_decision_window = None
+
+    def _session_submit_decision(self, decision_id: str, option_id: str) -> None:
+        if not self._session_id:
+            return
+        self._api_call(
+            "POST",
+            "/api/session/decision",
+            json_data={
+                "session_id": self._session_id,
+                "decision_id": decision_id,
+                "option_id": option_id,
+            },
+            callback_event="session_decision_submit_result",
+        )
+
+    # ------------------------------------------------------------------
+    # Session flow: SSE thread
+    # ------------------------------------------------------------------
+
+    def _start_session_sse_thread(self, session_id: str) -> None:
+        """Start background thread consuming session SSE events."""
+        self._stop_session_sse_thread()
+        self._session_sse_running = True
+
+        def _session_sse_worker() -> None:
+            url = f"{self._api_base}/api/session/events?session_id={session_id}"
+            try:
+                with requests.get(url, stream=True, timeout=(10, None)) as response:
+                    self._session_sse_response = response
+                    response.raise_for_status()
+
+                    current_event = None
+                    for raw_line in response.iter_lines(decode_unicode=True):
+                        if not self._session_sse_running:
+                            break
+                        if not raw_line:
+                            continue
+
+                        line = raw_line.strip()
+                        if line.startswith(":"):
+                            continue  # keepalive
+                        if line.startswith("event: "):
+                            current_event = line[7:]
+                        elif line.startswith("data: "):
+                            chunk = line[6:]
+                            try:
+                                payload = json.loads(chunk)
+                                if current_event:
+                                    self._queue.put(
+                                        (f"session_{current_event}", payload)
+                                    )
+                            except json.JSONDecodeError:
+                                continue
+            except Exception as exc:
+                if self._session_sse_running:
+                    self._queue.put(("session_error", {"error": str(exc)}))
+            finally:
+                self._session_sse_response = None
+
+        self._session_sse_thread = threading.Thread(
+            target=_session_sse_worker, daemon=True, name="diag-session-sse",
+        )
+        self._session_sse_thread.start()
+
+    def _stop_session_sse_thread(self) -> None:
+        self._session_sse_running = False
+
+        if self._session_sse_response is not None:
+            try:
+                self._session_sse_response.close()
+            except Exception:
+                pass
+            self._session_sse_response = None
+
+        if self._session_sse_thread and self._session_sse_thread.is_alive():
+            self._session_sse_thread.join(timeout=1.5)
+        self._session_sse_thread = None
