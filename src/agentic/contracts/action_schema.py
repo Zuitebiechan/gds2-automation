@@ -11,6 +11,11 @@ class GDS2Action(str, Enum):
     SELECT_MODULE = "select_module"
     GO_HOME = "go_home"
     START_LIVE_STREAM = "start_live_stream"
+    CONNECT_DEVICE = "connect_device"
+    SELECT_DATA_CATEGORY = "select_data_category"
+    SELECT_SUB_CATEGORY = "select_sub_category"
+    GO_BACK = "go_back"
+    STOP_LIVE_STREAM = "stop_live_stream"
 
 
 class RiskLevel(str, Enum):

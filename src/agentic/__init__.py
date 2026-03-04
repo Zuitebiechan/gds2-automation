@@ -18,6 +18,7 @@ from .session_orchestrator import (
     SessionStatus,
     sse_event,
 )
+from .adapters import GDS2ActionAdapter
 
 __all__ = [
     "CapabilityRegistry",
@@ -38,4 +39,5 @@ __all__ = [
     "SessionOrchestrator",
     "SessionStatus",
     "sse_event",
+    "GDS2ActionAdapter",
 ]

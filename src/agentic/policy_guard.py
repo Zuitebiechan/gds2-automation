@@ -18,6 +18,21 @@ class PolicyGuard:
             if "module_name" not in step.args:
                 return False, "Action select_module requires 'module_name' argument"
 
+        # 2b. Validation for SELECT_DATA_CATEGORY
+        if step.action == GDS2Action.SELECT_DATA_CATEGORY:
+            if "category_name" not in step.args:
+                return False, "Action select_data_category requires 'category_name' argument"
+
+        # 2c. Validation for SELECT_SUB_CATEGORY
+        if step.action == GDS2Action.SELECT_SUB_CATEGORY:
+            if "sub_category_name" not in step.args:
+                return False, "Action select_sub_category requires 'sub_category_name' argument"
+
+        # 2d. Validation for SELECT_DEVICE / CONNECT_DEVICE
+        if step.action in (GDS2Action.SELECT_DEVICE, GDS2Action.CONNECT_DEVICE):
+            if "device_name" not in step.args:
+                return False, f"Action {step.action.value} requires 'device_name' argument"
+
         # 3. High risk actions require human approval
         if step.risk_level == RiskLevel.HIGH:
             if not step.metadata.get("human_approved"):

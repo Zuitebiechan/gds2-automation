@@ -14,6 +14,9 @@ import uuid
 
 from flask import Blueprint, Response, jsonify, request
 
+from src.agentic.contracts.action_schema import ActionStep, GDS2Action
+from src.agentic.executor import DeterministicExecutor
+from src.agentic.adapters.gds2_adapter import GDS2ActionAdapter
 from src.agentic.planner import BranchDecisionRequiredError
 from src.agentic.session_orchestrator import (
     DecisionGate,
@@ -30,7 +33,8 @@ session_bp = Blueprint("session", __name__, url_prefix="/api/session")
 # Module-level orchestrator instance (in-memory, single-process).
 _orchestrator = SessionOrchestrator()
 _data_viewer_getter = None
-
+_executor: DeterministicExecutor | None = None
+_adapter: GDS2ActionAdapter | None = None
 
 def get_orchestrator() -> SessionOrchestrator:
     """Return the module-level orchestrator.
@@ -62,6 +66,33 @@ def set_data_viewer_getter(getter) -> None:
     global _data_viewer_getter
     _data_viewer_getter = getter
 
+
+def get_executor() -> DeterministicExecutor:
+    """Return the module-level executor, lazily wired with the GDS2 adapter.
+
+    Creates a DeterministicExecutor + GDS2ActionAdapter on first call,
+    using the current DataViewerWorkflow from get_data_viewer().
+    """
+    global _executor, _adapter
+    if _executor is None:
+        viewer = get_data_viewer()
+        _adapter = GDS2ActionAdapter(viewer)
+        _executor = DeterministicExecutor()
+        _adapter.register_all(_executor)
+        logger.info("Session API: executor wired with GDS2ActionAdapter")
+    return _executor
+
+
+def get_adapter() -> GDS2ActionAdapter | None:
+    """Return the current adapter (available after get_executor() is called)."""
+    return _adapter
+
+
+def reset_executor() -> None:
+    """Reset executor/adapter (for testing or when DataViewerWorkflow changes)."""
+    global _executor, _adapter
+    _executor = None
+    _adapter = None
 
 def _build_branch_gate(
     *,
@@ -164,6 +195,204 @@ def session_start():
         return jsonify({"success": False, "error": str(exc)}), 500
 
 
+# ---------------------------------------------------------------------------
+# POST /api/session/start_diagnostics
+# ---------------------------------------------------------------------------
+
+@session_bp.route("/start_diagnostics", methods=["POST"])
+def session_start_diagnostics():
+    """Start GDS2 diagnostics via the agentic executor.
+
+    Executes START_DIAGNOSTICS through the DeterministicExecutor,
+    which dispatches to the real DataViewerWorkflow.start().
+
+    Request body (JSON)::
+
+        {
+            "session_id": "abc123..."
+        }
+
+    Response::
+
+        {
+            "success": true,
+            "session_id": "abc123...",
+            "result": { ... }  // modules or devices from GDS2
+        }
+    """
+    data = request.json or {}
+    session_id = (data.get("session_id") or "").strip()
+
+    if not session_id:
+        return jsonify({"success": False, "error": "session_id required"}), 400
+
+    try:
+        orch = get_orchestrator()
+        session = orch.get_session(session_id)
+        if session.status != SessionStatus.RUNNING:
+            return jsonify({
+                "success": False,
+                "error": f"Session not running (status={session.status.value})",
+            }), 409
+        if session.workflow != "gds2":
+            return jsonify({
+                "success": False,
+                "error": f"Session workflow is '{session.workflow}', not 'gds2'",
+            }), 409
+
+        executor = get_executor()
+        adapter = get_adapter()
+        assert adapter is not None, "Adapter not initialized"
+
+        # Build the action step
+        step = ActionStep(
+            action=GDS2Action.START_DIAGNOSTICS,
+            timeout_sec=60.0,
+        )
+
+        # Get current UI state from GDS2
+        ui_state = adapter.get_current_ui_state()
+
+        orch.emit_progress(session_id, "Starting GDS2 diagnostics...")
+        exec_result = executor.execute_step(step, ui_state)
+
+        if not exec_result.success:
+            orch.emit_progress(session_id, f"Start diagnostics failed: {exec_result.error}")
+            return jsonify({
+                "success": False,
+                "session_id": session_id,
+                "error": exec_result.error,
+            }), 500
+
+        orch.emit_progress(
+            session_id,
+            "GDS2 diagnostics started",
+            exec_result.metadata,
+        )
+        return jsonify({
+            "success": True,
+            "session_id": session_id,
+            "result": exec_result.metadata,
+        })
+
+    except KeyError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 404
+    except Exception as exc:
+        logger.exception("session_start_diagnostics failed")
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
+# POST /api/session/execute
+# ---------------------------------------------------------------------------
+
+@session_bp.route("/execute", methods=["POST"])
+def session_execute():
+    """Execute a single GDS2 action through the agentic executor.
+
+    Generic endpoint for any GDS2Action.  The action is validated
+    by the PolicyGuard against current GDS2 UI state before execution.
+
+    Request body (JSON)::
+
+        {
+            "session_id": "abc123...",
+            "action": "select_module",    // GDS2Action enum value
+            "args": {"module_name": "ECM"},  // action-specific arguments
+            "timeout_sec": 30.0             // optional
+        }
+    """
+    data = request.json or {}
+    session_id = (data.get("session_id") or "").strip()
+    action_name = (data.get("action") or "").strip()
+
+    if not session_id:
+        return jsonify({"success": False, "error": "session_id required"}), 400
+    if not action_name:
+        return jsonify({"success": False, "error": "action required"}), 400
+
+    try:
+        # Validate action name
+        try:
+            action = GDS2Action(action_name)
+        except ValueError:
+            valid = [a.value for a in GDS2Action]
+            return jsonify({
+                "success": False,
+                "error": f"Unknown action '{action_name}'. Valid: {valid}",
+            }), 400
+
+        orch = get_orchestrator()
+        session = orch.get_session(session_id)
+        if session.status != SessionStatus.RUNNING:
+            return jsonify({
+                "success": False,
+                "error": f"Session not running (status={session.status.value})",
+            }), 409
+
+        executor = get_executor()
+        adapter = get_adapter()
+        assert adapter is not None, "Adapter not initialized"
+
+        step = ActionStep(
+            action=action,
+            args=data.get("args") or {},
+            timeout_sec=float(data.get("timeout_sec", 30.0)),
+        )
+
+        # Get current UI state from real GDS2
+        ui_state = adapter.get_current_ui_state()
+
+        orch.emit_progress(session_id, f"Executing {action_name}...")
+
+        # Handle BranchDecisionRequiredError for select_module/select_data_category
+        try:
+            exec_result = executor.execute_step(step, ui_state)
+        except BranchDecisionRequiredError as exc:
+            gate = _build_branch_gate(
+                domain=exc.decision.domain.value,
+                target=exc.decision.target,
+                choices=exc.choices,
+                reason=exc.decision.reason,
+                resume_action=action_name,
+            )
+            session = orch.raise_decision(session_id, gate)
+            return jsonify({
+                "success": True,
+                "session_id": session.session_id,
+                "status": session.status.value,
+                "decision_required": True,
+                "decision": gate.to_dict(),
+            })
+
+        if not exec_result.success:
+            orch.emit_progress(session_id, f"{action_name} failed: {exec_result.error}")
+            return jsonify({
+                "success": False,
+                "session_id": session_id,
+                "action": action_name,
+                "error": exec_result.error,
+                "attempts": exec_result.attempts,
+                "elapsed_time": exec_result.elapsed_time,
+            }), 500
+
+        orch.emit_progress(session_id, f"{action_name} completed")
+        return jsonify({
+            "success": True,
+            "session_id": session_id,
+            "action": action_name,
+            "result": exec_result.metadata,
+            "attempts": exec_result.attempts,
+            "elapsed_time": exec_result.elapsed_time,
+        })
+
+    except KeyError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except Exception as exc:
+        logger.exception("session_execute failed")
+        return jsonify({"success": False, "error": str(exc)}), 500
 # ---------------------------------------------------------------------------
 # GET /api/session/events?session_id=...
 # ---------------------------------------------------------------------------
