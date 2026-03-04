@@ -14,6 +14,11 @@ import json
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Any
 
+from ..agentic.planner import (
+    BranchDecisionRequiredError,
+    ConstrainedPlanner,
+    DecisionDomain,
+)
 from ..navigation import NavigationController, NavigationResult, GDS2Page
 from ..recovery.decorators import with_recovery
 
@@ -27,6 +32,7 @@ class DataViewerWorkflow:
 
     def __init__(self, nav=None, enable_ai_recovery=False):
         self.controller = NavigationController(nav)
+        self._branch_planner = ConstrainedPlanner()
         self._mapping = None
         self._vehicle_id = "current_vehicle"
         self._vin = None
@@ -350,7 +356,13 @@ class DataViewerWorkflow:
         if not items:
             raise RuntimeError("No modules found")
 
-        target_index = self._find_item_index(items, module_name)
+        resolved_module = self._resolve_branch_choice(
+            domain=DecisionDomain.MODULE,
+            target=module_name,
+            choices=items,
+            fallback_to_first=False,
+        )
+        target_index = self._find_item_index(items, resolved_module)
         if target_index is None:
             raise RuntimeError(f"Module '{module_name}' not found")
 
@@ -431,24 +443,40 @@ class DataViewerWorkflow:
             # go_back now uses wait_for_page_transition internally
 
         # Select data category
-        status(f"Selecting {data_category}...")
-        result = self.controller.select_data_category(data_category)
+        list_items = self.controller.wait_for_list()
+        if not list_items:
+            raise RuntimeError("No data categories found")
+
+        resolved_category = self._resolve_branch_choice(
+            domain=DecisionDomain.DATA_CATEGORY,
+            target=data_category,
+            choices=list_items,
+            fallback_to_first=False,
+        )
+        status(f"Selecting {resolved_category}...")
+        result = self.controller.select_data_category(resolved_category)
         if not result.success:
             raise RuntimeError(f"Failed to select data category: {result.error}")
 
         sub_categories = None
         if result.page == GDS2Page.SUB_DATA_LIST:
             sub_categories = result.choices
-            # Auto-select first sub-category
             if result.choices:
-                status(f"Selecting {result.choices[0]}...")
-                result = self.controller.select_sub_category(result.choices[0])
+                chosen_sub = self._resolve_branch_choice(
+                    domain=DecisionDomain.SUB_CATEGORY,
+                    target=resolved_category,
+                    choices=result.choices,
+                    fallback_to_first=True,
+                )
+                if chosen_sub is not None:
+                    status(f"Selecting {chosen_sub}...")
+                    result = self.controller.select_sub_category(chosen_sub)
                 if not result.success:
                     raise RuntimeError(f"Failed to select sub-category: {result.error}")
 
-        self._data_category = data_category
+        self._data_category = resolved_category
 
-        status(f"Monitoring {data_category}")
+        status(f"Monitoring {resolved_category}")
 
         return {
             "monitoring": True,
@@ -970,6 +998,54 @@ class DataViewerWorkflow:
                     logger.debug(f"VIN extraction from report failed: {e}")
 
         return None
+
+    def _resolve_branch_choice(
+        self,
+        domain: DecisionDomain,
+        target: str,
+        choices: List[str],
+        fallback_to_first: bool,
+    ) -> str:
+        """Resolve a branch choice using constrained planner heuristics."""
+        if not choices:
+            raise RuntimeError(f"No choices available for {domain.value} resolution")
+
+        if domain == DecisionDomain.MODULE:
+            decision = self._branch_planner.decide_module(target, choices)
+        elif domain == DecisionDomain.DATA_CATEGORY:
+            decision = self._branch_planner.decide_data_category(target, choices)
+        else:
+            decision = self._branch_planner.decide_sub_category(target, choices)
+
+        if decision.requires_human:
+            logger.warning(
+                "Planner requires human decision for %s target '%s': %s",
+                domain.value,
+                target,
+                decision.reason,
+            )
+            if fallback_to_first:
+                fallback = choices[0]
+                logger.warning(
+                    "Using deterministic fallback for %s: '%s'",
+                    domain.value,
+                    fallback,
+                )
+                return fallback
+            raise BranchDecisionRequiredError(decision=decision, choices=choices)
+
+        logger.info(
+            "Planner selected %s '%s' for target '%s' (confidence=%.2f)",
+            domain.value,
+            decision.selected_option,
+            target,
+            decision.confidence,
+        )
+        if decision.selected_option is None:
+            raise RuntimeError(
+                f"Planner returned no selection for {domain.value} target '{target}'"
+            )
+        return decision.selected_option
 
     @staticmethod
     def _find_item_index(items: List[str], target: str) -> Optional[int]:

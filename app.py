@@ -52,6 +52,9 @@ CORS(app)
 from diagnostics_api import diagnostics_bp
 app.register_blueprint(diagnostics_bp)
 
+from session_api import session_bp
+app.register_blueprint(session_bp)
+
 
 # =============================================================================
 # Flask Routes - Basic
