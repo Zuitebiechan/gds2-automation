@@ -86,3 +86,17 @@ The mechanic-facing product path is local exe UI + diagnostics APIs. Web UI rema
 - GDS2 frequently uses **GBK** encoding
 - One GDS2 instance per machine (single-instance lock)
 - DTC/Live data are valid only when page context is correct (Data Display)
+
+## Session APIs (G3, Agentic Orchestration)
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/api/session/start` | POST | Start session and route workflow by brand/model/VIN |
+| `/api/session/events` | GET | SSE events (progress, decision_required, decision_timeout, decision_resolved, error, done) |
+| `/api/session/decision` | POST | Submit user decision option |
+| `/api/session/abort` | POST | Abort session |
+| `/api/session/status` | GET | Query session state snapshot |
+| `/api/session/select_module` | POST | Execute module selection; if ambiguous emits `decision_required` |
+| `/api/session/select_data_category` | POST | Execute data category selection; if ambiguous emits `decision_required` |
+
+These APIs are additive and do not replace existing `/api/diagnose/*` endpoints.

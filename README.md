@@ -140,6 +140,16 @@ Remove-Item "$env:APPDATA\VCI_Proxy\config.json" -Force
 - `/api/stream/*`
 - `/api/agent/*`
 
+### Session API (G3, in progress)
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/session/start` | POST | Start agentic session and route app by brand/model/VIN |
+| `/api/session/events` | GET | SSE stream: progress / decision_required / decision_resolved / done |
+| `/api/session/decision` | POST | Submit user choice for pending decision |
+| `/api/session/abort` | POST | Abort current session safely |
+| `/api/session/status` | GET | Query current session status |
+
 ---
 
 ## Troubleshooting
@@ -174,3 +184,6 @@ Use latest client build; errors are now surfaced with explicit dialogs instead o
 - `agent_docs/vci_proxy.md` — tunnel/protocol/cache details
 - `agent_docs/rpa_automation.md` — workflow/page/API details
 - `agent_docs/roadmap.md` — delivery status and next phases
+- `agent_docs/agentic_refactor_master_plan.md` — reusable agentic architecture and phased migration
+- `agent_docs/gds2_agentic_refactor_execution_plan.md` — GDS2-specific implementation and rollout plan
+- `agent_docs/session_hitl_manual_test_plan.md` — manual acceptance checklist for Session + HITL loop
