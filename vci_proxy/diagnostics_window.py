@@ -500,6 +500,10 @@ class DiagnosticsWindow:
             self._handle_ai_done(data)
         elif event == "session_start_result":
             self._handle_session_start_result(data)
+        elif event == "session_start_exec_result":
+            self._handle_session_start_exec_result(data)
+        elif event == "session_connect_device_result":
+            self._handle_session_connect_device_result(data)
         elif event == "session_connected":
             self._session_status_var.set("Connected. Waiting for events...")
         elif event == "session_progress":
@@ -587,6 +591,20 @@ class DiagnosticsWindow:
         self._session_category_confirmed = False
         self._refresh_action_buttons()
         self._set_session_hint("Hint: 先 Start Diagnostics 或 Start Session，再进行选择。")
+
+        # Session mode (new agentic path): keep GUI as simple as old one-click start.
+        if self._session_id:
+            self._set_session_hint("Session 模式：正在通过新 Agentic 路径启动诊断...")
+            self._api_call(
+                "POST",
+                "/api/session/execute",
+                json_data={
+                    "session_id": self._session_id,
+                    "action": "start_diagnostics",
+                },
+                callback_event="session_start_exec_result",
+            )
+            return
 
         self._api_call("POST", "/api/diagnose/start", callback_event="start_result")
 
@@ -796,6 +814,118 @@ class DiagnosticsWindow:
         self._set_server_connected(False)
         self._refresh_action_buttons()
         self._set_status_text(f"Connection failed: {self._error_message(payload, 'Unable to start diagnostics.')}")
+
+    def _handle_session_start_exec_result(self, payload: dict[str, Any]) -> None:
+        """Handle session-mode start diagnostics via /api/session/execute."""
+        if not payload.get("success"):
+            error_text = self._error_message(payload, "Unable to start diagnostics in session mode.")
+
+            # Common runtime case: already at vehicle_selection; continue by connect_device(default).
+            if self._session_id and "start_diagnostics is not allowed on page vehicle_selection" in error_text:
+                self._set_status_text("Detected Vehicle Selection. Continuing connect flow...")
+                self._set_session_hint("检测到已在 Vehicle Selection，正在自动继续连接流程。")
+                self._api_call(
+                    "POST",
+                    "/api/session/execute",
+                    json_data={
+                        "session_id": self._session_id,
+                        "action": "connect_device",
+                        "args": {"device_name": "default"},
+                    },
+                    callback_event="session_connect_device_result",
+                )
+                return
+
+            self._start_button.configure(state=tk.NORMAL)
+            self._set_server_connected(False)
+            self._refresh_action_buttons()
+            self._set_status_text(f"Session start failed: {error_text}")
+            self._set_session_hint("Session 启动失败，请确认 GDS2 页面后重试。")
+            return
+
+        result = payload.get("result") or {}
+        modules = result.get("modules") or []
+        devices = result.get("devices") or []
+
+        if isinstance(modules, list) and modules:
+            vin = result.get("vin") or self._vin or "Unknown"
+
+            self._module_combo.configure(values=modules)
+            self._selected_module.set(modules[0])
+            self._data_combo.configure(values=[])
+            self._selected_data_category.set("")
+            self._session_category_confirmed = False
+
+            self._stop_stream_button.configure(state=tk.DISABLED)
+            self._refresh_action_buttons()
+            self._set_server_connected(True)
+            self._set_status_text(f"Session ready — VIN: {vin}. Select module and data category.")
+            self._set_session_hint("Session 已就绪：选择 Module -> Select，再选择 Category -> Select。")
+            self._start_button.configure(state=tk.NORMAL)
+            if vin != "Unknown":
+                self._vin = vin
+            return
+
+        if isinstance(devices, list) and devices:
+            preferred = "VCI Proxy (Remote)"
+            selected_device = preferred if preferred in devices else devices[0]
+            self._set_status_text(f"Found {len(devices)} device(s). Auto-connecting {selected_device}...")
+            self._set_session_hint("Session 模式：正在自动连接设备。")
+            self._api_call(
+                "POST",
+                "/api/session/execute",
+                json_data={
+                    "session_id": self._session_id,
+                    "action": "connect_device",
+                    "args": {"device_name": selected_device},
+                },
+                callback_event="session_connect_device_result",
+            )
+            return
+
+        self._start_button.configure(state=tk.NORMAL)
+        self._set_server_connected(False)
+        self._refresh_action_buttons()
+        self._set_status_text("Session start returned no modules or devices.")
+        self._set_session_hint("后端返回缺少模块/设备信息，请重试或检查日志。")
+
+    def _handle_session_connect_device_result(self, payload: dict[str, Any]) -> None:
+        """Handle connect_device result in session mode and populate module list."""
+        self._start_button.configure(state=tk.NORMAL)
+
+        if not payload.get("success"):
+            self._set_server_connected(False)
+            self._refresh_action_buttons()
+            self._set_status_text(
+                f"Session connect failed: {self._error_message(payload, 'Unable to connect device.')}"
+            )
+            self._set_session_hint("设备连接失败，请检查 VCI Proxy 与 GDS2 状态后重试。")
+            return
+
+        result = payload.get("result") or {}
+        modules = result.get("modules") or []
+        vin = result.get("vin") or self._vin or "Unknown"
+
+        if not isinstance(modules, list) or not modules:
+            self._set_server_connected(False)
+            self._refresh_action_buttons()
+            self._set_status_text("Session connected but no module list returned.")
+            self._set_session_hint("连接成功但模块列表为空，请重试 Start Diagnostics。")
+            return
+
+        self._module_combo.configure(values=modules)
+        self._selected_module.set(modules[0])
+        self._data_combo.configure(values=[])
+        self._selected_data_category.set("")
+        self._session_category_confirmed = False
+
+        self._stop_stream_button.configure(state=tk.DISABLED)
+        self._refresh_action_buttons()
+        self._set_server_connected(True)
+        self._set_status_text(f"Connected — VIN: {vin}. Select module and data category.")
+        self._set_session_hint("模块列表已加载：请选择 Module 并点击 Select。")
+        if vin != "Unknown":
+            self._vin = vin
 
     def _handle_dtcs_result(self, payload: dict[str, Any]) -> None:
         can_read = bool(self._selected_data_category.get().strip()) and not self._stream_active

@@ -183,7 +183,13 @@ class NavigationController:
                     return self._current_page
 
                 # 8. Also check for "Disconnect" or "Select Device" buttons for VEHICLE_SELECTION
-                if "Disconnect" in button_texts or "Select Device" in button_texts:
+                #    Guard against false positives on deep pages where toolbar buttons may persist.
+                if (
+                    ("Disconnect" in button_texts or "Select Device" in button_texts)
+                    and not items
+                    and "Back" not in button_texts
+                    and "Create Report" not in button_texts
+                ):
                     self._current_page = GDS2Page.VEHICLE_SELECTION
                     return self._current_page
 
@@ -450,10 +456,24 @@ class NavigationController:
         """
         start = time.time()
         last_detected = from_page
+        transition_candidate = GDS2Page.UNKNOWN
+        transition_candidate_hits = 0
         while time.time() - start < timeout:
             current = self.detect_current_page(retries=0)
             last_detected = current
             if current != from_page and current != GDS2Page.UNKNOWN:
+                # Require two consecutive identical detections before accepting
+                # transition. This prevents transient misdetections during UI load.
+                if current == transition_candidate:
+                    transition_candidate_hits += 1
+                else:
+                    transition_candidate = current
+                    transition_candidate_hits = 1
+
+                if transition_candidate_hits < 2:
+                    time.sleep(poll_interval)
+                    continue
+
                 logger.info(
                     f"Page transitioned from {from_page.value} to {current.value} "
                     f"in {time.time() - start:.1f}s"
@@ -463,6 +483,8 @@ class NavigationController:
             # If UNKNOWN, try dismissing warning dialog (may be blocking detection)
             if current == GDS2Page.UNKNOWN:
                 self.dismiss_warning_dialog()
+            transition_candidate = GDS2Page.UNKNOWN
+            transition_candidate_hits = 0
             time.sleep(poll_interval)
         raise TimeoutError(
             f"Page did not transition from {from_page.value} within {timeout}s. "
