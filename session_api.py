@@ -343,6 +343,29 @@ def session_execute():
         # Get current UI state from real GDS2
         ui_state = adapter.get_current_ui_state()
 
+        # Guarded fallback for transient UNKNOWN during Device Explorer popup.
+        # This commonly occurs right after start_diagnostics when native dialog
+        # is visible but Java page detection hasn't stabilized yet.
+        if action == GDS2Action.CONNECT_DEVICE and ui_state.current_page == "unknown":
+            orch.emit_progress(
+                session_id,
+                "Current page unknown; retrying detection before connect_device...",
+            )
+            ui_state = adapter.get_current_ui_state()
+            if ui_state.current_page == "unknown":
+                try:
+                    from src.native import DeviceExplorerController
+
+                    if DeviceExplorerController().is_visible():
+                        ui_state.current_page = "device_explorer"
+                        orch.emit_progress(
+                            session_id,
+                            "Device Explorer detected via native check; continuing connect_device.",
+                        )
+                except Exception:
+                    # Leave UNKNOWN as-is; policy guard will block unsafe action.
+                    pass
+
         orch.emit_progress(session_id, f"Executing {action_name}...")
 
         # Handle BranchDecisionRequiredError for select_module/select_data_category

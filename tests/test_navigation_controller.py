@@ -60,6 +60,13 @@ def controller(mock_nav):
     return NavigationController(nav=mock_nav)
 
 
+@pytest.fixture(autouse=True)
+def mock_device_explorer_visibility():
+    """Default native dialog visibility to False for deterministic tests."""
+    with patch("src.native.DeviceExplorerController.is_visible", return_value=False):
+        yield
+
+
 class TestPageDetection:
     """Tests for page detection logic."""
 
@@ -71,6 +78,16 @@ class TestPageDetection:
         page = controller.detect_current_page()
 
         assert page == GDS2Page.MAIN_MENU
+
+    def test_detect_device_explorer_via_native_dialog(self, controller, mock_nav):
+        """Native Device Explorer visibility should override Java-agent UNKNOWN."""
+        mock_nav.set_buttons([])
+        mock_nav.set_list_items([])
+
+        with patch("src.native.DeviceExplorerController.is_visible", return_value=True):
+            page = controller.detect_current_page()
+
+        assert page == GDS2Page.DEVICE_EXPLORER
 
     def test_detect_data_display(self, controller, mock_nav):
         """Test detection of Data Display page (has Create Report button)."""

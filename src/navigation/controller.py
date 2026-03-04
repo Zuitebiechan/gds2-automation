@@ -134,6 +134,18 @@ class NavigationController:
         """
         for attempt in range(1 + retries):
             try:
+                # 0. Native Device Explorer (Win32 dialog) takes precedence.
+                # Java Agent cannot see this dialog, so without this check
+                # page detection may incorrectly return UNKNOWN.
+                try:
+                    from ..native import DeviceExplorerController
+
+                    if DeviceExplorerController().is_visible():
+                        self._current_page = GDS2Page.DEVICE_EXPLORER
+                        return self._current_page
+                except Exception as native_err:
+                    logger.debug(f"Native dialog visibility check failed: {native_err}")
+
                 buttons = self.nav.get_buttons()
                 button_texts = {b.get('text', '') for b in buttons if b.get('text')}
 
