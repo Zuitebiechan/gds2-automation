@@ -14,6 +14,7 @@ class DecisionDomain(str, Enum):
     """Supported branch-decision domains in narrow planner scope."""
 
     MODULE = "module"
+    SUB_MODULE = "sub_module"
     DATA_CATEGORY = "data_category"
     SUB_CATEGORY = "sub_category"
 
@@ -105,6 +106,9 @@ class ConstrainedPlanner:
 
     def decide_module(self, target: str, choices: List[str]) -> BranchDecision:
         return self._decide(DecisionDomain.MODULE, target, choices)
+
+    def decide_sub_module(self, target: str, choices: List[str]) -> BranchDecision:
+        return self._decide(DecisionDomain.SUB_MODULE, target, choices)
 
     def decide_data_category(self, target: str, choices: List[str]) -> BranchDecision:
         return self._decide(DecisionDomain.DATA_CATEGORY, target, choices)

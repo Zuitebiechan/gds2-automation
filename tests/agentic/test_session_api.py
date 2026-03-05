@@ -422,6 +422,18 @@ class _FakeViewer:
             "selected": data_category,
         }
 
+    def select_sub_module(self, sub_module_name: str):
+        return {
+            "data_categories": ["Fuel Pressure", "Engine Speed"],
+            "sub_module": sub_module_name,
+        }
+
+    def select_sub_category(self, sub_category: str):
+        return {
+            "monitoring": True,
+            "sub_category": sub_category,
+        }
+
 
 class TestSessionBranchDecisionLoop:
     def test_module_ambiguity_triggers_decision_and_resumes(self, client):
@@ -469,3 +481,145 @@ class TestSessionBranchDecisionLoop:
             "module": "Engine",
         })
         assert resp.status_code == 409
+
+
+class _FakeViewerSubModuleDecision:
+    def __init__(self):
+        self._sub_module_ambiguous_once = True
+        self.last_sub_module = None
+
+    def select_module(self, module_name: str):
+        if module_name == "Engine" and self._sub_module_ambiguous_once:
+            self._sub_module_ambiguous_once = False
+            decision = BranchDecision(
+                domain=DecisionDomain.SUB_MODULE,
+                target="Data Display",
+                selected_option=None,
+                requires_human=True,
+                confidence=0.49,
+                ranked_options=[
+                    RankedOption("Data Display", 0.49, ["label_match"]),
+                    RankedOption("Snapshot", 0.47, ["token_overlap"]),
+                ],
+                reason="Ambiguous sub-module entries",
+            )
+            raise BranchDecisionRequiredError(
+                decision=decision,
+                choices=["Data Display", "Snapshot"],
+            )
+
+        return {"data_categories": ["Fuel Pressure", "Engine Speed"]}
+
+    def select_sub_module(self, sub_module_name: str):
+        self.last_sub_module = sub_module_name
+        return {
+            "data_categories": ["Fuel Pressure", "Engine Speed"],
+            "sub_module": sub_module_name,
+        }
+
+
+class _FakeViewerSubCategoryDecision:
+    def __init__(self):
+        self._sub_category_ambiguous_once = True
+        self.last_sub_category = None
+
+    def select_data_category(self, data_category: str):
+        if data_category == "Engine Data" and self._sub_category_ambiguous_once:
+            self._sub_category_ambiguous_once = False
+            decision = BranchDecision(
+                domain=DecisionDomain.SUB_CATEGORY,
+                target="Engine Data",
+                selected_option=None,
+                requires_human=True,
+                confidence=0.50,
+                ranked_options=[
+                    RankedOption("PID Group A", 0.50, ["token_overlap"]),
+                    RankedOption("PID Group B", 0.48, ["token_overlap"]),
+                ],
+                reason="Ambiguous sub-data entries",
+            )
+            raise BranchDecisionRequiredError(
+                decision=decision,
+                choices=["PID Group A", "PID Group B"],
+            )
+
+        return {
+            "monitoring": True,
+            "sub_categories": None,
+            "selected": data_category,
+        }
+
+    def select_sub_category(self, sub_category: str):
+        self.last_sub_category = sub_category
+        return {
+            "monitoring": True,
+            "sub_category": sub_category,
+        }
+
+
+class TestSessionNestedBranchResumeActions:
+    def test_sub_module_branch_maps_to_select_sub_module(self, client):
+        fake_viewer = _FakeViewerSubModuleDecision()
+        set_data_viewer_getter(lambda: fake_viewer)
+
+        start = _start_gm(client)
+        sid = start["session_id"]
+
+        sel_resp = client.post("/api/session/select_module", json={
+            "session_id": sid,
+            "module": "Engine",
+        })
+        assert sel_resp.status_code == 200
+        sel_data = sel_resp.get_json()
+        assert sel_data["success"] is True
+        assert sel_data["decision_required"] is True
+        assert sel_data["decision"]["context"]["resume_action"] == "select_sub_module"
+
+        decision_id = sel_data["decision"]["decision_id"]
+        option_id = sel_data["decision"]["options"][0]["option_id"]
+
+        decide_resp = client.post("/api/session/decision", json={
+            "session_id": sid,
+            "decision_id": decision_id,
+            "option_id": option_id,
+        })
+        assert decide_resp.status_code == 200
+        decide_data = decide_resp.get_json()
+        assert decide_data["success"] is True
+        assert decide_data["resumed"] is True
+        assert decide_data["resume_action"] == "select_sub_module"
+        assert decide_data["result"]["sub_module"] in ("Data Display", "Snapshot")
+        assert fake_viewer.last_sub_module in ("Data Display", "Snapshot")
+
+    def test_sub_category_branch_maps_to_select_sub_category(self, client):
+        fake_viewer = _FakeViewerSubCategoryDecision()
+        set_data_viewer_getter(lambda: fake_viewer)
+
+        start = _start_gm(client)
+        sid = start["session_id"]
+
+        sel_resp = client.post("/api/session/select_data_category", json={
+            "session_id": sid,
+            "data_category": "Engine Data",
+        })
+        assert sel_resp.status_code == 200
+        sel_data = sel_resp.get_json()
+        assert sel_data["success"] is True
+        assert sel_data["decision_required"] is True
+        assert sel_data["decision"]["context"]["resume_action"] == "select_sub_category"
+
+        decision_id = sel_data["decision"]["decision_id"]
+        option_id = sel_data["decision"]["options"][0]["option_id"]
+
+        decide_resp = client.post("/api/session/decision", json={
+            "session_id": sid,
+            "decision_id": decision_id,
+            "option_id": option_id,
+        })
+        assert decide_resp.status_code == 200
+        decide_data = decide_resp.get_json()
+        assert decide_data["success"] is True
+        assert decide_data["resumed"] is True
+        assert decide_data["resume_action"] == "select_sub_category"
+        assert decide_data["result"]["sub_category"] in ("PID Group A", "PID Group B")
+        assert fake_viewer.last_sub_category in ("PID Group A", "PID Group B")

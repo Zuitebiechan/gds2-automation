@@ -133,6 +133,15 @@ def _build_branch_gate(
     )
 
 
+def _resume_action_for_domain(domain: str, default_action: str) -> str:
+    """Map branch domain to resume action for /api/session/decision."""
+    mapping = {
+        "sub_module": "select_sub_module",
+        "sub_category": "select_sub_category",
+    }
+    return mapping.get(domain, default_action)
+
+
 # ---------------------------------------------------------------------------
 # POST /api/session/start
 # ---------------------------------------------------------------------------
@@ -372,12 +381,16 @@ def session_execute():
         try:
             exec_result = executor.execute_step(step, ui_state)
         except BranchDecisionRequiredError as exc:
+            resume_action = _resume_action_for_domain(
+                exc.decision.domain.value,
+                action_name,
+            )
             gate = _build_branch_gate(
                 domain=exc.decision.domain.value,
                 target=exc.decision.target,
                 choices=exc.choices,
                 reason=exc.decision.reason,
-                resume_action=action_name,
+                resume_action=resume_action,
             )
             session = orch.raise_decision(session_id, gate)
             return jsonify({
@@ -520,17 +533,25 @@ def session_decision():
             try:
                 if resume_action == "select_module":
                     resume_result = viewer.select_module(selected_choice)
+                elif resume_action == "select_sub_module":
+                    resume_result = viewer.select_sub_module(selected_choice)
                 elif resume_action == "select_data_category":
                     resume_result = viewer.select_data_category(selected_choice)
+                elif resume_action == "select_sub_category":
+                    resume_result = viewer.select_sub_category(selected_choice)
                 else:
                     raise ValueError(f"Unsupported resume action: {resume_action}")
             except BranchDecisionRequiredError as exc:
+                nested_resume_action = _resume_action_for_domain(
+                    exc.decision.domain.value,
+                    resume_action,
+                )
                 nested_gate = _build_branch_gate(
                     domain=exc.decision.domain.value,
                     target=exc.decision.target,
                     choices=exc.choices,
                     reason=exc.decision.reason,
-                    resume_action=resume_action,
+                    resume_action=nested_resume_action,
                 )
                 # session is RUNNING after submit; raise next gate
                 session = orch.raise_decision(session_id, nested_gate)
@@ -610,12 +631,16 @@ def session_select_module():
         try:
             result = viewer.select_module(module)
         except BranchDecisionRequiredError as exc:
+            resume_action = _resume_action_for_domain(
+                exc.decision.domain.value,
+                "select_module",
+            )
             gate = _build_branch_gate(
                 domain=exc.decision.domain.value,
                 target=exc.decision.target,
                 choices=exc.choices,
                 reason=exc.decision.reason,
-                resume_action="select_module",
+                resume_action=resume_action,
             )
             session = orch.raise_decision(session_id, gate)
             return jsonify({
@@ -667,12 +692,16 @@ def session_select_data_category():
         try:
             result = viewer.select_data_category(data_category)
         except BranchDecisionRequiredError as exc:
+            resume_action = _resume_action_for_domain(
+                exc.decision.domain.value,
+                "select_data_category",
+            )
             gate = _build_branch_gate(
                 domain=exc.decision.domain.value,
                 target=exc.decision.target,
                 choices=exc.choices,
                 reason=exc.decision.reason,
-                resume_action="select_data_category",
+                resume_action=resume_action,
             )
             session = orch.raise_decision(session_id, gate)
             return jsonify({

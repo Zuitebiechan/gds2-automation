@@ -377,29 +377,45 @@ class DataViewerWorkflow:
         except TimeoutError:
             logger.warning("Page did not transition after module selection")
         self.controller.set_context(module=matched)
+        self._module = matched
         self.controller._current_page = self.controller.detect_current_page()
 
-        # Select Data Display from submenu
-        status("Opening Data Display...")
+        # Select target submenu entry (typically Data Display) from Module Submenu.
+        # If ambiguous, raise BranchDecisionRequiredError for HITL decision flow.
+        status("Opening module submenu target...")
         submenu = self.controller.wait_for_list(previous_items=items)
+        previous_for_data_scan = submenu if submenu else None
         if submenu:
-            for i, item in enumerate(submenu):
-                if "Data Display" in item:
-                    self.controller.nav.select_list_item(0, i, double_click=True)
-                    try:
-                        self.controller.wait_for_page_transition(
-                            GDS2Page.MODULE_SUBMENU, timeout=30
-                        )
-                    except TimeoutError:
-                        logger.warning("Page did not transition after Data Display selection")
-                    break
+            resolved_sub_module = self._resolve_branch_choice(
+                domain=DecisionDomain.SUB_MODULE,
+                target="Data Display",
+                choices=submenu,
+                fallback_to_first=False,
+            )
+            status(f"Opening {resolved_sub_module}...")
+            sub_index = self._find_item_index(submenu, resolved_sub_module)
+            if sub_index is None:
+                raise RuntimeError(f"Sub-module '{resolved_sub_module}' not found")
+
+            nav_result = self.controller.nav.select_list_item(0, sub_index, double_click=True)
+            if not nav_result.get("success"):
+                raise RuntimeError(
+                    f"Failed to select sub-module: {nav_result.get('message')}"
+                )
+
+            try:
+                self.controller.wait_for_page_transition(
+                    GDS2Page.MODULE_SUBMENU, timeout=30
+                )
+            except TimeoutError:
+                logger.warning("Page did not transition after sub-module selection")
 
         # Handle warning dialog
         self.controller.dismiss_warning_dialog()
 
         # Discover data categories
         status("Scanning data categories...")
-        data_categories = self.controller.wait_for_list(previous_items=submenu if submenu else None)
+        data_categories = self.controller.wait_for_list(previous_items=previous_for_data_scan)
         if not data_categories:
             raise RuntimeError("No data categories found")
 
@@ -411,7 +427,6 @@ class DataViewerWorkflow:
         }
         self.mapping.update_data_categories(self._vehicle_id, matched, cat_indices)
 
-        self._module = matched
         self._data_category = None
 
         status("Ready")
@@ -466,7 +481,7 @@ class DataViewerWorkflow:
                     domain=DecisionDomain.SUB_CATEGORY,
                     target=resolved_category,
                     choices=result.choices,
-                    fallback_to_first=True,
+                    fallback_to_first=False,
                 )
                 if chosen_sub is not None:
                     status(f"Selecting {chosen_sub}...")
@@ -481,6 +496,108 @@ class DataViewerWorkflow:
         return {
             "monitoring": True,
             "sub_categories": sub_categories,
+        }
+
+    @with_recovery
+    def select_sub_module(self, sub_module_name: str, on_status: StatusCallback = None) -> dict:
+        """Select sub-module entry (Module Submenu -> Data List).
+
+        Used when module submenu requires explicit user choice.
+
+        Returns: {"data_categories": [...], "sub_module": "..."}
+        """
+
+        def status(msg):
+            logger.info(msg)
+            if on_status:
+                on_status(msg)
+
+        self.stop_monitoring()
+
+        current = self.controller.detect_current_page()
+        if current != GDS2Page.MODULE_SUBMENU:
+            raise RuntimeError(
+                f"Not at Module Submenu page (current={current.value}). "
+                "Please re-select module first."
+            )
+
+        submenu = self.controller.wait_for_list()
+        if not submenu:
+            raise RuntimeError("No sub-module choices found")
+
+        resolved_sub_module = self._resolve_branch_choice(
+            domain=DecisionDomain.SUB_MODULE,
+            target=sub_module_name,
+            choices=submenu,
+            fallback_to_first=False,
+        )
+
+        status(f"Opening {resolved_sub_module}...")
+        sub_index = self._find_item_index(submenu, resolved_sub_module)
+        if sub_index is None:
+            raise RuntimeError(f"Sub-module '{resolved_sub_module}' not found")
+
+        nav_result = self.controller.nav.select_list_item(0, sub_index, double_click=True)
+        if not nav_result.get("success"):
+            raise RuntimeError(f"Failed to select sub-module: {nav_result.get('message')}")
+
+        try:
+            self.controller.wait_for_page_transition(GDS2Page.MODULE_SUBMENU, timeout=30)
+        except TimeoutError:
+            logger.warning("Page did not transition after sub-module selection")
+
+        self.controller.dismiss_warning_dialog()
+
+        status("Scanning data categories...")
+        data_categories = self.controller.wait_for_list(previous_items=submenu)
+        if not data_categories:
+            raise RuntimeError("No data categories found")
+
+        self.controller._current_page = GDS2Page.DATA_LIST
+        self._data_category = None
+
+        status("Ready")
+        return {
+            "data_categories": data_categories,
+            "sub_module": resolved_sub_module,
+        }
+
+    @with_recovery
+    def select_sub_category(self, sub_category: str, on_status: StatusCallback = None) -> dict:
+        """Select sub-data category from Sub Data List to Data Display.
+
+        Returns: {"monitoring": True, "sub_category": "..."}
+        """
+
+        def status(msg):
+            logger.info(msg)
+            if on_status:
+                on_status(msg)
+
+        self.stop_monitoring()
+
+        current = self.controller.detect_current_page()
+        if current != GDS2Page.SUB_DATA_LIST:
+            raise RuntimeError(
+                f"Not at Sub Data List page (current={current.value}). "
+                "Please re-select data category first."
+            )
+
+        status(f"Selecting {sub_category}...")
+        result = self.controller.select_sub_category(sub_category)
+        if not result.success:
+            raise RuntimeError(f"Failed to select sub-category: {result.error}")
+
+        if result.page != GDS2Page.DATA_DISPLAY:
+            logger.warning(
+                "After sub-category selection, expected data_display but got %s",
+                result.page.value,
+            )
+
+        status("Monitoring data display")
+        return {
+            "monitoring": True,
+            "sub_category": sub_category,
         }
 
     def stop_monitoring(self):
@@ -1012,6 +1129,8 @@ class DataViewerWorkflow:
 
         if domain == DecisionDomain.MODULE:
             decision = self._branch_planner.decide_module(target, choices)
+        elif domain == DecisionDomain.SUB_MODULE:
+            decision = self._branch_planner.decide_sub_module(target, choices)
         elif domain == DecisionDomain.DATA_CATEGORY:
             decision = self._branch_planner.decide_data_category(target, choices)
         else:

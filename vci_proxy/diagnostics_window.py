@@ -1877,6 +1877,17 @@ class DiagnosticsWindow:
                     self._set_status_text("Decision applied. Module resolved; choose data category.")
                     self._set_session_hint("Module 已确定。请选择 Data Category 并点击 Select。")
                     self._prompt_category_choices(categories)
+                elif resume_action == "select_sub_module":
+                    categories = result.get("data_categories") or []
+                    if not isinstance(categories, list):
+                        categories = []
+                    self._data_combo.configure(values=categories)
+                    self._selected_data_category.set("")
+                    self._session_category_confirmed = False
+                    self._select_data_category_button.configure(state=tk.DISABLED)
+                    self._set_status_text("Decision applied. Sub-module resolved; choose data category.")
+                    self._set_session_hint("Sub-module 已确定。请选择 Data Category 并点击 Select。")
+                    self._prompt_category_choices(categories)
                 elif resume_action == "select_data_category":
                     self._session_category_confirmed = True
                     has_category = bool(self._selected_data_category.get().strip())
@@ -1885,6 +1896,16 @@ class DiagnosticsWindow:
                     self._ai_diagnose_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
                     self._set_status_text("Decision applied. Data category resolved.")
                     self._set_session_hint("Category 已确定。现在可执行诊断动作。")
+                    self._prompt_action_choices()
+                elif resume_action == "select_sub_category":
+                    self._session_category_confirmed = True
+                    has_category = bool(self._selected_data_category.get().strip())
+                    self._read_dtc_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
+                    self._start_stream_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
+                    self._ai_diagnose_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
+                    self._set_status_text("Decision applied. Sub-data category resolved.")
+                    self._set_session_hint("Sub-data 已确定。现在可执行诊断动作。")
+                    self._prompt_action_choices()
 
                 self._session_status_var.set("Decision applied. Continuing...")
                 self._refresh_action_buttons()
