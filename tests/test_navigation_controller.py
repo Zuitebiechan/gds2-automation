@@ -112,6 +112,31 @@ class TestPageDetection:
 
         assert page == GDS2Page.MODULE_SUBMENU
 
+    def test_data_display_alone_not_module_submenu(self, controller, mock_nav):
+        """Data Display-only lists should be treated as Data List, not Module Submenu."""
+        mock_nav.set_buttons(["Back", "Home"])
+        mock_nav.set_list_items([
+            "Data Display",
+            "Snapshot",
+        ])
+
+        page = controller.detect_current_page()
+
+        assert page == GDS2Page.DATA_LIST
+
+    def test_detect_module_submenu_with_chinese_markers(self, controller, mock_nav):
+        """Chinese function markers should still classify as Module Submenu."""
+        mock_nav.set_buttons(["Back", "Home"])
+        mock_nav.set_list_items([
+            "数据显示",
+            "故障码",
+            "模块信息",
+        ])
+
+        page = controller.detect_current_page()
+
+        assert page == GDS2Page.MODULE_SUBMENU
+
     def test_detect_diagnostics_menu(self, controller, mock_nav):
         """Test detection of Diagnostics Menu (list contains Module Diagnostics)."""
         mock_nav.set_buttons(["Back", "Home"])

@@ -60,6 +60,23 @@ class NavigationController:
     using the Java Agent's button and list enumeration capabilities.
     """
 
+    _MODULE_SUBMENU_REQUIRED_MARKERS = (
+        "diagnostic trouble codes",
+        "dtc",
+        "module information",
+        "special functions",
+        "special function",
+        "故障码",
+        "模块信息",
+        "特殊功能",
+    )
+
+    _MODULE_SUBMENU_DISPLAY_MARKERS = (
+        "data display",
+        "数据显示",
+        "数据展示",
+    )
+
     def __init__(self, nav=None):
         """
         Initialize navigation controller.
@@ -113,6 +130,36 @@ class NavigationController:
     def check_agent(self) -> bool:
         """Check if Java Agent is available."""
         return self.nav.check_agent()
+
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        """Normalize UI labels for robust marker matching."""
+        return " ".join(text.lower().strip().split())
+
+    def _is_module_submenu_items(self, items: List[str]) -> bool:
+        """Detect module-submenu by function markers, not by Data Display alone."""
+        if not items:
+            return False
+
+        normalized_items = [self._normalize_text(item) for item in items if item]
+        if not normalized_items:
+            return False
+
+        # Module list rows like [K20] should never be treated as submenu.
+        if any("[" in item and "]" in item for item in items if item):
+            return False
+
+        has_display_marker = any(
+            any(marker in label for marker in self._MODULE_SUBMENU_DISPLAY_MARKERS)
+            for label in normalized_items
+        )
+        has_required_marker = any(
+            any(marker in label for marker in self._MODULE_SUBMENU_REQUIRED_MARKERS)
+            for label in normalized_items
+        )
+
+        # IMPORTANT: Data Display alone is not enough to classify as MODULE_SUBMENU.
+        return has_display_marker and has_required_marker
 
     # =========================================================================
     # Page Detection
@@ -168,8 +215,8 @@ class NavigationController:
                     self._current_page = GDS2Page.MAIN_MENU
                     return self._current_page
 
-                # 3. MODULE_SUBMENU: List contains "Data Display"
-                if items and any("Data Display" in item for item in items):
+                # 3. MODULE_SUBMENU: Must look like function menu (not Data Display alone)
+                if items and "Back" in button_texts and self._is_module_submenu_items(items):
                     self._current_page = GDS2Page.MODULE_SUBMENU
                     return self._current_page
 
