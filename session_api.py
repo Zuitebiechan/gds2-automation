@@ -461,6 +461,19 @@ def session_events():
                     pass
 
                 message = event_queue.get(timeout=1)
+
+                # A pending decision may have timed out before this queued
+                # decision_required event is consumed. In that case the session
+                # has already advanced out of AWAITING_DECISION and the stale
+                # decision_required should not be shown to the client.
+                if message.startswith("event: decision_required\n"):
+                    try:
+                        session = orch.get_session(session_id)
+                    except KeyError:
+                        break
+                    if session.status != SessionStatus.AWAITING_DECISION:
+                        continue
+
                 yield message
 
                 # Terminal events — close the stream

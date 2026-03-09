@@ -1,5 +1,13 @@
 # Architecture Overview
 
+**Status note (2026-03-09)**: this document still accurately describes the core cloud ↔ local tunnel and diagnostics stack, but it predates the newer agentic/session overlay. The branch now also contains:
+
+- `src/agentic/` Action DSL, executor, planner, policy guard, and session orchestrator
+- `session_api.py` registered in `app.py` under `/api/session/*`
+- a separate LangGraph-based local hybrid navigation prototype for GDS2
+
+So this file should be read as the **base platform architecture**, not the complete picture of the in-progress agentic refactor.
+
 ## High-Level Architecture
 
 ```

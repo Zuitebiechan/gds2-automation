@@ -1,7 +1,18 @@
 # Agentic UI Automation Refactor Master Plan
 
-**Last Updated**: 2026-03-03  
-**Status**: Planning complete ✅ (ready to implement)
+**Last Updated**: 2026-03-09  
+**Status**: Planning complete; branch now contains partial implementation of the planned architecture
+
+## Implementation Snapshot (2026-03-09)
+
+Since this plan was written, the branch has moved beyond planning:
+
+- A typed **Action DSL** exists under `src/agentic/contracts/`
+- A **deterministic executor** + **policy guard** + **GDS2 adapter** exist under `src/agentic/`
+- A **session orchestrator** and `/api/session/*` Flask blueprint exist and are test-covered
+- A separate **LangGraph-based hybrid navigation prototype** exists for local GDS2 validation
+
+What is still not complete is the full end-to-end convergence of these layers into one production-default orchestration path with complete observability, replay, and broad runtime validation.
 
 ## WHY
 

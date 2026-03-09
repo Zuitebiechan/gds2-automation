@@ -1,8 +1,42 @@
 # GDS2 Agentic Refactor Execution Plan
 
-**Last Updated**: 2026-03-03  
+**Last Updated**: 2026-03-09  
 **Scope**: GDS2 only (first migration target)  
-**Status**: Ready to start implementation ✅
+**Status**: Partial implementation delivered; full rollout still in progress
+
+## Current Branch Status (2026-03-09)
+
+This execution plan is no longer purely aspirational. The current branch already contains a meaningful subset of the target architecture:
+
+### Already implemented in code
+
+- **G1 contracts/scaffolding**
+  - `src/agentic/contracts/action_schema.py`
+  - `src/agentic/contracts/state_schema.py`
+  - `src/agentic/capability_registry.py`
+  - `src/agentic/policy_guard.py`
+- **G2 deterministic execution core**
+  - `src/agentic/executor.py`
+  - `src/agentic/adapters/gds2_adapter.py`
+- **G3 session/HITL backend foundation**
+  - `src/agentic/session_orchestrator.py`
+  - `session_api.py`
+  - `app.py` blueprint registration for `/api/session/*`
+- **Narrow branch planner**
+  - `src/agentic/planner.py`
+- **Separate local hybrid navigator prototype**
+  - `src/agentic/graph.py`, `nodes.py`, `tools.py`, `knowledge_base.py`
+  - `scripts/test_local_navigation.py`
+
+### Verified today vs not yet fully proven
+
+- **Verified in code/tests**: action schema, policy guard, executor, planner, adapter, session orchestrator, session API, graph compilation/imports
+- **Verified locally with real GDS2**: LangGraph-based local navigation flow to `data_display`
+- **Not yet fully closed out**: complete product-path integration, replay/observability depth, and full manual acceptance of session-mode GUI + cloud workflow
+
+### Practical interpretation
+
+Treat G1 as **mostly complete**, G2 as **core complete but still light on observability/postcondition rigor**, G3 as **backend largely present with remaining end-to-end/manual validation**, and G4/G5 as **partially started but not fully finished**.
 
 ## WHY
 

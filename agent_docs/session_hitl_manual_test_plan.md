@@ -2,6 +2,8 @@
 
 **Goal**: Verify end-to-end session flow with branch ambiguity handling in client GUI.
 
+**Status note (2026-03-09)**: the backend/session foundation described here now exists in code (`session_api.py`, `src/agentic/session_orchestrator.py`, client session-mode hooks, and tests). What remains is manual end-to-end validation of the integrated runtime flow, especially GUI behavior, SSE progression, and timeout/fallback UX.
+
 ## Preconditions
 
 - Cloud services running:

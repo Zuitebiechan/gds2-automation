@@ -41,3 +41,25 @@ __all__ = [
     "sse_event",
     "GDS2ActionAdapter",
 ]
+
+# Agentic Navigation (LangGraph-based)
+from .graph import create_navigation_graph, visualize_graph, make_initial_state, run_local_interactive
+from .state import NavigationState
+from .llm_factory import create_llm, LLMFactory
+from .knowledge_base import get_knowledge_base, query_similar_pages, query_error_patterns
+from .tools import ALL_TOOLS
+
+# Update __all__ to include new exports
+__all__.extend([
+    "create_navigation_graph",
+    "visualize_graph",
+    "make_initial_state",
+    "run_local_interactive",
+    "NavigationState",
+    "create_llm",
+    "LLMFactory",
+    "get_knowledge_base",
+    "query_similar_pages",
+    "query_error_patterns",
+    "ALL_TOOLS",
+])
