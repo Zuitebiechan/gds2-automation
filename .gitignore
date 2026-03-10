@@ -70,8 +70,9 @@ test_results/
 # Temporary JSON files
 gds2_inspect.json
 
-# Vendor binaries
-vendor/
+# Vendor binaries (but keep gds2-agent source code)
+vendor/*
+!vendor/gds2-agent/
 
 # Auto-generated mappings (keep template in repo)
 mappings/*.json

@@ -17,6 +17,7 @@ class MockAgentNavigator:
         self._buttons = []
         self._list_items = []
         self._click_results = {}
+        self._page_id_result = {}  # Empty = fallback to heuristic
 
     def set_buttons(self, buttons: list):
         """Set mock buttons (list of dicts with 'text' key)."""
@@ -46,6 +47,26 @@ class MockAgentNavigator:
 
     def select_list_item(self, list_index: int, item_index: int, double_click: bool = True) -> dict:
         return {"success": True, "message": ""}
+
+    def get_page_id(self) -> dict:
+        """Return mock page identification result."""
+        return self._page_id_result
+
+    def set_page_id_result(self, page_id: str = '', confidence: str = 'high',
+                           evidence: str = ''):
+        """Set mock get_page_id result."""
+        if page_id:
+            self._page_id_result = {
+                'page_id': page_id,
+                'confidence': confidence,
+                'evidence': evidence,
+                'window_title': '',
+                'buttons': [],
+                'list_item_count': 0,
+                'has_modal': False,
+            }
+        else:
+            self._page_id_result = {}
 
 
 @pytest.fixture
@@ -387,3 +408,85 @@ class TestListSelection:
         assert not result.success
         assert "not found" in result.error
         assert result.choices == ["Engine Data", "Fuel Data"]
+
+
+class TestAgentPageDetection:
+    """Tests for Java Agent-based page detection (get_page_id)."""
+
+    def test_agent_detection_main_menu(self, controller, mock_nav):
+        """Test Agent-based detection of Main Menu."""
+        mock_nav.set_page_id_result('main_menu', 'high', 'buttons Diagnostics + Update')
+        page = controller.detect_current_page()
+        assert page == GDS2Page.MAIN_MENU
+
+    def test_agent_detection_data_display(self, controller, mock_nav):
+        """Test Agent-based detection of Data Display."""
+        mock_nav.set_page_id_result('data_display', 'high', 'Create Report button')
+        page = controller.detect_current_page()
+        assert page == GDS2Page.DATA_DISPLAY
+
+    def test_agent_detection_module_list(self, controller, mock_nav):
+        """Test Agent-based detection of Module List."""
+        mock_nav.set_page_id_result('module_list', 'high', 'list items with [...] patterns')
+        page = controller.detect_current_page()
+        assert page == GDS2Page.MODULE_LIST
+
+    def test_agent_detection_module_submenu(self, controller, mock_nav):
+        """Test Agent-based detection of Module Submenu."""
+        mock_nav.set_page_id_result('module_submenu', 'high', 'Data Display in list')
+        page = controller.detect_current_page()
+        assert page == GDS2Page.MODULE_SUBMENU
+
+    def test_agent_detection_diagnostics_menu(self, controller, mock_nav):
+        """Test Agent-based detection of Diagnostics Menu."""
+        mock_nav.set_page_id_result('diagnostics_menu', 'high', 'Module Diagnostics in list')
+        page = controller.detect_current_page()
+        assert page == GDS2Page.DIAGNOSTICS_MENU
+
+    def test_agent_detection_vehicle_selection(self, controller, mock_nav):
+        """Test Agent-based detection of Vehicle Selection."""
+        mock_nav.set_page_id_result('vehicle_selection', 'high', 'Enter + Disconnect')
+        page = controller.detect_current_page()
+        assert page == GDS2Page.VEHICLE_SELECTION
+
+    def test_agent_detection_data_list(self, controller, mock_nav):
+        """Test Agent-based detection of Data List."""
+        mock_nav.set_page_id_result('data_list', 'medium', 'list + Back, no markers')
+        page = controller.detect_current_page()
+        assert page == GDS2Page.DATA_LIST
+
+    def test_agent_detection_unknown_falls_back_to_heuristic(self, controller, mock_nav):
+        """Test that UNKNOWN from Agent falls back to heuristic."""
+        mock_nav.set_page_id_result('unknown', 'low', 'no matching rule')
+        # Set up heuristic data
+        mock_nav.set_buttons(["Diagnostics", "Update", "Settings"])
+        mock_nav.set_list_items([])
+        page = controller.detect_current_page()
+        assert page == GDS2Page.MAIN_MENU
+
+    def test_agent_detection_empty_falls_back_to_heuristic(self, controller, mock_nav):
+        """Test that empty result from Agent falls back to heuristic."""
+        # Empty page_id_result (simulates older Agent without get_page_id)
+        mock_nav.set_page_id_result()
+        mock_nav.set_buttons(["Back", "Home", "Create Report"])
+        mock_nav.set_list_items([])
+        page = controller.detect_current_page()
+        assert page == GDS2Page.DATA_DISPLAY
+
+    def test_agent_detection_all_page_ids(self, controller, mock_nav):
+        """Test all page_id values map to correct GDS2Page enums."""
+        page_id_to_enum = {
+            'main_menu': GDS2Page.MAIN_MENU,
+            'device_explorer': GDS2Page.DEVICE_EXPLORER,
+            'vehicle_selection': GDS2Page.VEHICLE_SELECTION,
+            'diagnostics_menu': GDS2Page.DIAGNOSTICS_MENU,
+            'module_list': GDS2Page.MODULE_LIST,
+            'module_submenu': GDS2Page.MODULE_SUBMENU,
+            'data_list': GDS2Page.DATA_LIST,
+            'sub_data_list': GDS2Page.SUB_DATA_LIST,
+            'data_display': GDS2Page.DATA_DISPLAY,
+        }
+        for page_id, expected_enum in page_id_to_enum.items():
+            mock_nav.set_page_id_result(page_id, 'high', f'test {page_id}')
+            page = controller.detect_current_page()
+            assert page == expected_enum, f"{page_id} should map to {expected_enum}"

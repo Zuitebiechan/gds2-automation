@@ -120,10 +120,10 @@ class NavigationController:
 
     def detect_current_page(self, retries: int = 1, retry_delay: float = 1.5) -> GDS2Page:
         """
-        Detect current page from visible buttons and list items.
+        Detect current page using Java Agent's get_page_id command.
 
-        Uses heuristics based on button combinations and list contents.
-        Does NOT require any Java Agent changes - uses existing APIs.
+        Primary method: get_page_id (scene graph analysis on Java side)
+        Fallback: button/list heuristics (if Agent doesn't support get_page_id)
 
         Args:
             retries: Number of additional attempts if UNKNOWN (default: 1)
@@ -134,67 +134,25 @@ class NavigationController:
         """
         for attempt in range(1 + retries):
             try:
-                buttons = self.nav.get_buttons()
-                button_texts = {b.get('text', '') for b in buttons if b.get('text')}
+                page = self._detect_via_agent()
+                if page != GDS2Page.UNKNOWN:
+                    self._current_page = page
+                    return page
 
-                items = self.nav.get_list_items(0)
+                # If Agent returned UNKNOWN, try fallback heuristic
+                page = self._detect_via_heuristic()
+                if page != GDS2Page.UNKNOWN:
+                    self._current_page = page
+                    return page
 
-                logger.debug(f"Page detection attempt {attempt + 1} - Buttons: {button_texts}")
-                logger.debug(f"Page detection attempt {attempt + 1} - List items count: {len(items)}, items: {items[:5] if items else []}")
-
-                # Detection rules - ORDER MATTERS!
-                # More specific rules (with list content checks) come FIRST
-                # Generic button-only rules come LAST
-
-                # 1. DATA_DISPLAY: Has "Create Report" button (most specific)
-                if "Create Report" in button_texts:
-                    self._current_page = GDS2Page.DATA_DISPLAY
-                    return self._current_page
-
-                # 2. MAIN_MENU: Has "Diagnostics" and "Update" buttons
-                if "Diagnostics" in button_texts and "Update" in button_texts:
-                    self._current_page = GDS2Page.MAIN_MENU
-                    return self._current_page
-
-                # 3. MODULE_SUBMENU: List contains "Data Display"
-                if items and any("Data Display" in item for item in items):
-                    self._current_page = GDS2Page.MODULE_SUBMENU
-                    return self._current_page
-
-                # 4. DIAGNOSTICS_MENU: List contains "Module Diagnostics"
-                if items and any("Module Diagnostics" in item for item in items):
-                    self._current_page = GDS2Page.DIAGNOSTICS_MENU
-                    return self._current_page
-
-                # 5. MODULE_LIST: List items look like modules (contain brackets like [K20])
-                if items and any("[" in item and "]" in item for item in items):
-                    self._current_page = GDS2Page.MODULE_LIST
-                    return self._current_page
-
-                # 6. DATA_LIST: Has list items and Back button (but not specific markers above)
-                if items and "Back" in button_texts:
-                    self._current_page = GDS2Page.DATA_LIST
-                    return self._current_page
-
-                # 7. VEHICLE_SELECTION: Has "Enter" button but NO list items
-                #    (Important: must come AFTER list-based checks)
-                if "Enter" in button_texts and not items:
-                    self._current_page = GDS2Page.VEHICLE_SELECTION
-                    return self._current_page
-
-                # 8. Also check for "Disconnect" or "Select Device" buttons for VEHICLE_SELECTION
-                if "Disconnect" in button_texts or "Select Device" in button_texts:
-                    self._current_page = GDS2Page.VEHICLE_SELECTION
-                    return self._current_page
-
-                # If UNKNOWN and we have retries left, wait and try again
+                # Still UNKNOWN - retry if attempts remain
                 if attempt < retries:
                     logger.info(f"Page detection returned UNKNOWN, retrying in {retry_delay}s...")
                     time.sleep(retry_delay)
                     continue
 
                 self._current_page = GDS2Page.UNKNOWN
-                return self._current_page
+                return GDS2Page.UNKNOWN
 
             except Exception as e:
                 logger.error(f"Page detection failed: {e}")
@@ -206,6 +164,101 @@ class NavigationController:
 
         self._current_page = GDS2Page.UNKNOWN
         return GDS2Page.UNKNOWN
+
+    def _detect_via_agent(self) -> GDS2Page:
+        """
+        Use Java Agent's get_page_id command for reliable page detection.
+
+        The Agent inspects the full JavaFX scene graph atomically:
+        window title, all buttons (including disabled), list contents.
+        """
+        try:
+            page_info = self.nav.get_page_id()
+            if not page_info:
+                logger.debug("get_page_id returned empty (Agent may not support it)")
+                return GDS2Page.UNKNOWN
+
+            page_id = page_info.get('page_id', 'unknown')
+            confidence = page_info.get('confidence', 'none')
+            evidence = page_info.get('evidence', '')
+
+            logger.info(f"Agent page detection: {page_id} (confidence={confidence}, evidence={evidence})")
+
+            # Map page_id string to GDS2Page enum
+            page_map = {
+                'main_menu': GDS2Page.MAIN_MENU,
+                'device_explorer': GDS2Page.DEVICE_EXPLORER,
+                'vehicle_selection': GDS2Page.VEHICLE_SELECTION,
+                'diagnostics_menu': GDS2Page.DIAGNOSTICS_MENU,
+                'module_list': GDS2Page.MODULE_LIST,
+                'module_submenu': GDS2Page.MODULE_SUBMENU,
+                'data_list': GDS2Page.DATA_LIST,
+                'sub_data_list': GDS2Page.SUB_DATA_LIST,
+                'data_display': GDS2Page.DATA_DISPLAY,
+            }
+
+            return page_map.get(page_id, GDS2Page.UNKNOWN)
+
+        except TimeoutError:
+            logger.warning("get_page_id timed out, falling back to heuristic")
+            return GDS2Page.UNKNOWN
+        except Exception as e:
+            logger.debug(f"get_page_id failed: {e}, falling back to heuristic")
+            return GDS2Page.UNKNOWN
+
+    def _detect_via_heuristic(self) -> GDS2Page:
+        """
+        Fallback page detection using button/list heuristics.
+
+        This is the original detection logic, kept as fallback for when
+        the Java Agent doesn't support get_page_id (older JAR versions).
+        """
+        try:
+            buttons = self.nav.get_buttons()
+            button_texts = {b.get('text', '') for b in buttons if b.get('text')}
+
+            items = self.nav.get_list_items(0)
+
+            logger.debug(f"Heuristic detection - Buttons: {button_texts}")
+            logger.debug(f"Heuristic detection - List items: {len(items)}, first 5: {items[:5] if items else []}")
+
+            # 1. DATA_DISPLAY: Has "Create Report" button
+            if "Create Report" in button_texts:
+                return GDS2Page.DATA_DISPLAY
+
+            # 2. MAIN_MENU: Has "Diagnostics" and "Update" buttons
+            if "Diagnostics" in button_texts and "Update" in button_texts:
+                return GDS2Page.MAIN_MENU
+
+            # 3. MODULE_SUBMENU: List contains "Data Display"
+            if items and any("Data Display" in item for item in items):
+                return GDS2Page.MODULE_SUBMENU
+
+            # 4. DIAGNOSTICS_MENU: List contains "Module Diagnostics"
+            if items and any("Module Diagnostics" in item for item in items):
+                return GDS2Page.DIAGNOSTICS_MENU
+
+            # 5. MODULE_LIST: Items contain brackets like [K20]
+            if items and any("[" in item and "]" in item for item in items):
+                return GDS2Page.MODULE_LIST
+
+            # 6. DATA_LIST: Has list items and Back button
+            if items and "Back" in button_texts:
+                return GDS2Page.DATA_LIST
+
+            # 7. VEHICLE_SELECTION: Has "Enter" but no list items
+            if "Enter" in button_texts and not items:
+                return GDS2Page.VEHICLE_SELECTION
+
+            # 8. "Disconnect" or "Select Device" -> VEHICLE_SELECTION
+            if "Disconnect" in button_texts or "Select Device" in button_texts:
+                return GDS2Page.VEHICLE_SELECTION
+
+            return GDS2Page.UNKNOWN
+
+        except Exception as e:
+            logger.error(f"Heuristic page detection failed: {e}")
+            return GDS2Page.UNKNOWN
 
     def refresh_state(self) -> GDS2Page:
         """Refresh and return current page state."""
