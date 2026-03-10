@@ -62,6 +62,11 @@ class GDS2KnowledgeBase:
 
             logger.info(f"Initializing knowledge base at {self.db_path}")
 
+            # Use HF mirror for China mainland if not set
+            if not os.environ.get("HF_ENDPOINT"):
+                os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+                logger.info("Set HF_ENDPOINT=https://hf-mirror.com (China mirror)")
+
             self._db = lancedb.connect(self.db_path)
             self._text_model = SentenceTransformer('all-MiniLM-L6-v2')
 

@@ -198,8 +198,8 @@ class NavigationController:
 
                 items = self.nav.get_list_items(0)
 
-                logger.debug(f"Page detection attempt {attempt + 1} - Buttons: {button_texts}")
-                logger.debug(f"Page detection attempt {attempt + 1} - List items count: {len(items)}, items: {items[:5] if items else []}")
+                logger.info(f"Page detection attempt {attempt + 1} - Buttons: {button_texts}")
+                logger.info(f"Page detection attempt {attempt + 1} - List items count: {len(items)}, items: {items[:5] if items else []}")
 
                 # Detection rules - ORDER MATTERS!
                 # More specific rules (with list content checks) come FIRST
@@ -239,14 +239,15 @@ class NavigationController:
                 #    Exclude deep pages where list hasn't loaded yet.
                 #    "Back" and "Vehicle Menu" only appear on deep pages,
                 #    never on vehicle_selection.
-                if (
-                    "Enter" in button_texts
-                    and not items
-                    and "Back" not in button_texts
-                    and "Vehicle Menu" not in button_texts
-                ):
-                    self._current_page = GDS2Page.VEHICLE_SELECTION
-                    return self._current_page
+                if "Enter" in button_texts and not items:
+                    if "Back" not in button_texts and "Vehicle Menu" not in button_texts:
+                        self._current_page = GDS2Page.VEHICLE_SELECTION
+                        return self._current_page
+                    else:
+                        logger.info(
+                            f"Rule 7 blocked: Enter+empty list but deep-page buttons present "
+                            f"(Back={'Back' in button_texts}, VehicleMenu={'Vehicle Menu' in button_texts})"
+                        )
 
                 # 8. Also check for "Disconnect" or "Select Device" buttons for VEHICLE_SELECTION
                 #    Guard against false positives on deep pages where toolbar buttons may persist.
