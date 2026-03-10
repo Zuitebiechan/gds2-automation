@@ -1,7 +1,7 @@
 # Roadmap
 
 **Last Updated**: 2026-03-10  
-**Status**: Phase 1 complete, Phase 3 complete, Phase 3.5 complete, agentic refactor partially implemented
+**Status**: Phase 1 complete, Phase 3 complete, Phase 3.5 complete, agentic navigation implemented (navigate API + client wired)
 
 ## Completed Foundations
 
@@ -135,13 +135,15 @@ Goal: replace brittle hardcoded navigation assumptions with a safer hybrid archi
 - [x] GDS2 action adapter bridging executor to real workflow/controller
 - [x] Session orchestrator + `/api/session/*` backend blueprint + unit tests (Stack B, session API path, retained for future use)
 - [x] Client session-mode call sites / decision handling hooks in `vci_proxy/diagnostics_window.py`
+- [x] Navigate API blueprint (`/api/navigate/*`) with SSE event stream and HITL decision flow
+- [x] `run_with_event_queue()` in `graph.py` — queue-based IPC for Flask integration
+- [x] Client GUI rewired: Start Agent Diagnostics calls `/api/navigate/start`, consumes SSE events, handles HITL decisions via dropdown
 
 ### Still remaining
 
-- [ ] Replace console HITL with SSE/DecisionGate for production client
-- [ ] Connect LangGraph to `/api/session/*` endpoints (session lifecycle integration)
 - [ ] Broader coverage for device explorer / error dialogs / unknown intermediate pages
-- [ ] Full manual acceptance of session-mode GUI + cloud flow
+- [ ] Full manual acceptance of navigate-mode GUI + cloud flow
+- [ ] End-to-end in-vehicle test with real GDS2
 
 ## Phase 4: Session Manager / Session Productization (Planned)
 

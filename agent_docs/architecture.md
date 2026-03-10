@@ -1,6 +1,6 @@
 # Architecture Overview
 
-**Status note (2026-03-10)**: this document covers the full system, including the core cloud-to-local tunnel, diagnostics stack, and the LangGraph-based agentic navigation layer. The agentic layer lives in `src/agentic/` with these files: `graph.py`, `nodes.py`, `tools.py`, `knowledge_base.py`, `state.py`, `llm_factory.py`.
+**Status note (2026-03-10)**: this document covers the full system, including the core cloud-to-local tunnel, diagnostics stack, and the LangGraph-based agentic navigation layer. The agentic layer lives in `src/agentic/` with these files: `graph.py`, `nodes.py`, `tools.py`, `knowledge_base.py`, `state.py`, `llm_factory.py`. The navigate API blueprint (`navigate_api.py`) exposes the LangGraph graph over HTTP/SSE at `/api/navigate/*`.
 
 ## High-Level Architecture
 
@@ -200,11 +200,13 @@ RPA_demo/
 │   ├── gds2_knowledge.lance/       # LanceDB vector database (4 tables)
 │   └── screenshots/                # GDS2 page screenshots for visual reference
 │
-├── app.py                          # Flask service/debug backend (includes /api/diagnose)
+├── app.py                          # Flask service/debug backend (includes /api/diagnose, /api/navigate)
+├── navigate_api.py                 # Navigate API blueprint (/api/navigate/*) — LangGraph SSE + HITL
+├── diagnostics_api.py              # Phase 3 diagnostics API blueprint
 ├── diagnostics_api.py              # Phase 3 diagnostics API blueprint
 ├── templates/index.html            # Debug Web UI frontend
 ├── vci_proxy/client_gui.py         # Local tray client (mechanic-facing)
-├── vci_proxy/diagnostics_window.py # Local diagnostics UX (module/category/DTC/live)
+├── vci_proxy/diagnostics_window.py # Local diagnostics UX (module/category/DTC/live/navigate)
 └── tests/                          # pytest test suite
 ```
 
@@ -226,15 +228,21 @@ AI Diagnosis flow (Phase 3.5):
 
 Agentic Navigation flow:
   Goal: reach Data Display page from any starting point
+  Client clicks "Start Agent Diagnostics"
+  -> POST /api/navigate/start (creates NavSession, launches graph thread)
+  -> GET /api/navigate/events?session_id=... (SSE stream)
   -> LangGraph StateGraph starts at deterministic_node
   -> Router checks current page after each node:
        known page (main_menu, diagnostics_menu, module_submenu)
          -> deterministic_node executes fixed action, no LLM needed
        user decision page (module_list, data_list, sub_data_list)
-         -> human_node pauses for HITL, user picks from list
+         -> human_node pauses, SSE emits decision_required event
+         -> Client shows dropdown, user picks, POST /api/navigate/decision
+         -> Graph resumes with user's selection
        unknown/error page
          -> agent_node queries LanceDB RAG, calls ZhipuAI with bound tools
   -> Loop continues until data_display is reached or limits exceeded
+  -> SSE emits done event with final_page, steps, and selections
   -> Navigation trace recorded to LanceDB for future reference
 ```
 

@@ -28,14 +28,15 @@ This project has three product layers:
   - Structured JSON verdict parsing with multiple fallback strategies
   - Streaming timeout protection (60s per-chunk, 180s total)
   - Deferred event queue cleanup (30s Timer) to prevent SSE race conditions
-- Agentic UI Navigation refactor is **partially implemented**:
+- Agentic UI Navigation refactor is **implemented**:
   - LangGraph hybrid navigator: deterministic (3 steps) + HITL (user choices) + AI agent (fallback)
   - LanceDB knowledge base with 12 page records, 4 error patterns, 186 icons, 7 page screenshots
   - ZhipuAI native tool-calling (9 tools: action + observation + signal)
   - RAG-guided agent: similar pages, error patterns, tool suggestions, auto-learning
   - Retry (2 attempts), wall-clock timeout (300s), step limit (50), recovery wiring
   - Navigation trace recording to LanceDB
-  - Session API (`/api/session/*`) + session orchestrator (backend ready, not yet production-default)
+  - Navigate API (`/api/navigate/*`) + Flask blueprint with SSE event stream
+  - Client GUI rewired: Start Agent Diagnostics uses LangGraph navigate flow with SSE progress + HITL decisions
 - Local diagnostics window is integrated into exe:
   - Start Diagnostics
   - Select Module
@@ -70,7 +71,7 @@ python app.py --port 8080
 Expected listening ports:
 - `9000`: reverse_server VCI listener
 - `9001`: reverse_server local proxy listener (for virtual DLL)
-- `8080`: Flask API (`/api/diagnose/*`, `/api/session/*`)
+- `8080`: Flask API (`/api/diagnose/*`, `/api/navigate/*`)
 
 ### Local client runtime
 
@@ -113,6 +114,16 @@ All endpoints are under `/api/diagnose`:
 - `POST /ai_diagnose` — start 30s collection + AI analysis, return session_id
 - `GET /ai_diagnose/events?session_id=...` — SSE progress + streamed LLM verdict
 - `POST /ai_diagnose/retry` — retry LLM with cached payload
+
+## NAVIGATE API CONTRACT
+
+All endpoints are under `/api/navigate`:
+
+- `POST /start` — start LangGraph navigation session, returns session_id
+- `GET /events?session_id=...` — SSE stream (progress, decision_required, done, error)
+- `POST /decision` — submit user selection for paused HITL decision
+- `GET /status?session_id=...` — query session status
+- `POST /abort` — abort running navigation session
 
 ## REQUIRED UX FLOW (MECHANIC)
 

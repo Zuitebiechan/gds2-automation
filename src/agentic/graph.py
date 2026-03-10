@@ -325,3 +325,139 @@ def visualize_graph(graph=None):
     except Exception as e:
         logger.warning(f"Failed to generate graph visualization: {e}")
         return None
+
+
+def run_with_event_queue(
+    goal: str,
+    event_queue: "queue.Queue",
+    decision_queue: "queue.Queue",
+    thread_id: str | None = None,
+) -> dict:
+    """
+    Run the navigation graph driven by queues instead of console input.
+
+    This is the server-side entry point for Flask API integration.
+    A background thread runs this function; HITL pauses put events
+    into event_queue and block on decision_queue for the user's choice.
+
+    Args:
+        goal: Navigation goal (e.g. 'Navigate to Data Display').
+        event_queue: Queue to push SSE-style events (dict) to the caller.
+        decision_queue: Queue from which user decisions are received.
+        thread_id: LangGraph thread/checkpoint id (auto-generated if None).
+
+    Returns:
+        Final graph state dict.
+
+    Event types pushed to event_queue:
+        {"type": "progress", "node": str, "page": str, "action": str}
+        {"type": "decision_required", "decision_id": str, "page": str, "items": list}
+        {"type": "done", "final_page": str, "steps": int, "selections": dict}
+        {"type": "error", "error": str}
+    """
+    import queue as _queue_mod
+    import uuid as _uuid
+
+    if thread_id is None:
+        thread_id = f"api_{_uuid.uuid4().hex[:8]}"
+
+    graph = create_navigation_graph()
+    config = {"configurable": {"thread_id": thread_id}}
+    initial_state = make_initial_state(goal)
+
+    current_input: dict | None = initial_state
+    decision_counter = 0
+
+    try:
+        while True:
+            # Stream graph events
+            for event in graph.stream(current_input, config):
+                if not isinstance(event, dict):
+                    continue
+                for node_name, node_output in event.items():
+                    if node_name == "__end__" or not isinstance(node_output, dict):
+                        continue
+                    history = node_output.get("navigation_history", [])
+                    last_step = history[-1] if history else {}
+                    event_queue.put({
+                        "type": "progress",
+                        "node": node_name,
+                        "page": node_output.get("current_page", ""),
+                        "action": last_step.get("action", ""),
+                        "error": node_output.get("error"),
+                    })
+
+            # Check graph state after streaming completes
+            state = graph.get_state(config)
+
+            if not state.next:
+                # Graph finished
+                final = state.values
+                _record_trace(final)
+                event_queue.put({
+                    "type": "done",
+                    "final_page": final.get("current_page", "unknown"),
+                    "steps": len(final.get("navigation_history", [])),
+                    "selections": final.get("user_selections", {}),
+                    "error": final.get("error"),
+                })
+                return final
+
+            # Graph paused for HITL
+            if "human" in state.next:
+                snapshot = state.values.get("page_snapshot", {})
+                current_page = state.values.get("current_page", "unknown")
+                items = snapshot.get("lists", [])
+
+                decision_counter += 1
+                decision_id = f"nav_decision_{decision_counter}"
+
+                event_queue.put({
+                    "type": "decision_required",
+                    "decision_id": decision_id,
+                    "page": current_page,
+                    "items": items,
+                    "prompt": state.values.get("agent_reasoning", "Please make a selection"),
+                })
+
+                # Block until user submits a decision
+                try:
+                    decision = decision_queue.get(timeout=300)  # 5 min timeout
+                except _queue_mod.Empty:
+                    event_queue.put({
+                        "type": "error",
+                        "error": "Decision timeout: no user response within 5 minutes",
+                    })
+                    return state.values
+
+                selected_item = decision.get("selected_item", "")
+                if not selected_item:
+                    event_queue.put({
+                        "type": "error",
+                        "error": "Empty selection received",
+                    })
+                    return state.values
+
+                # Resume graph with user's selection
+                graph.update_state(
+                    config,
+                    {"user_selections": {"selected_item": selected_item}},
+                )
+
+                # Continue streaming (None = resume from checkpoint)
+                current_input = None
+            else:
+                # Unexpected pause
+                event_queue.put({
+                    "type": "error",
+                    "error": f"Graph paused at unexpected node(s): {state.next}",
+                })
+                return state.values
+
+    except Exception as exc:
+        logger.exception(f"run_with_event_queue failed: {exc}")
+        event_queue.put({"type": "error", "error": str(exc)})
+        try:
+            return graph.get_state(config).values
+        except Exception:
+            return {}

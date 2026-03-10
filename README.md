@@ -140,7 +140,17 @@ Remove-Item "$env:APPDATA\VCI_Proxy\config.json" -Force
 - `/api/stream/*`
 - `/api/agent/*`
 
-### Session API (G3, in progress)
+### Navigate API (LangGraph navigation)
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/navigate/start` | POST | Start LangGraph navigation session, returns session_id |
+| `/api/navigate/events` | GET | SSE stream: progress / decision_required / done / error |
+| `/api/navigate/decision` | POST | Submit user selection for paused HITL decision |
+| `/api/navigate/status` | GET | Query navigation session status |
+| `/api/navigate/abort` | POST | Abort running navigation session |
+
+### Session API (legacy, retained)
 
 | Endpoint | Method | Description |
 |---|---|---|

@@ -55,6 +55,9 @@ app.register_blueprint(diagnostics_bp)
 from session_api import session_bp
 app.register_blueprint(session_bp)
 
+from navigate_api import navigate_bp
+app.register_blueprint(navigate_bp)
+
 
 # =============================================================================
 # Flask Routes - Basic
@@ -719,8 +722,9 @@ if __name__ == '__main__':
         print(f"  Remote: http://{local_ip}:{port}")
     else:
         print(f"\n  http://localhost:{port}")
-    print(f"\n  Data Viewer: /api/viewer/*")
+    print(f"\n  Data Viewer:  /api/viewer/*")
     print(f"  Diagnostics: /api/diagnose/*")
+    print(f"  Navigate:    /api/navigate/*")
     print(f"  Streaming:   /api/stream/*")
     print(f"  Agent:       /api/agent/*")
     print(f"{'='*60}\n")

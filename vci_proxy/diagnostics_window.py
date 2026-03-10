@@ -59,6 +59,11 @@ class DiagnosticsWindow:
         self._session_decision_window: Optional[tk.Toplevel] = None
         self._session_category_confirmed = False
 
+        self._navigate_session_id: Optional[str] = None
+        self._navigate_sse_running = False
+        self._navigate_sse_thread: Optional[threading.Thread] = None
+        self._navigate_sse_response: Optional[requests.Response] = None
+
         # Agent dialogue mode state (chat-like interaction)
         self._agent_prompt_kind: Optional[str] = None  # module/category/decision
         self._agent_prompt_options: list[dict[str, str]] = []
@@ -105,6 +110,7 @@ class DiagnosticsWindow:
         self._stop_sse_thread()
         self._stop_ai_sse_thread()
         self._stop_session_sse_thread()
+        self._stop_navigate_sse_thread()
         self._close_decision_modal()
 
         try:
@@ -596,6 +602,20 @@ class DiagnosticsWindow:
             self._handle_session_decision_submit_result(data)
         elif event == "session_abort_result":
             self._handle_session_abort_result(data)
+        elif event == "navigate_start_result":
+            self._handle_navigate_start_result(data)
+        elif event == "navigate_progress":
+            self._handle_navigate_progress(data)
+        elif event == "navigate_decision_required":
+            self._handle_navigate_decision_required(data)
+        elif event == "navigate_done":
+            self._handle_navigate_done(data)
+        elif event == "navigate_error":
+            self._handle_navigate_error(data)
+        elif event == "navigate_decision_submit_result":
+            self._handle_navigate_decision_submit_result(data)
+        elif event == "navigate_abort_result":
+            pass
     # ------------------------------------------------------------------
     # Header/status helpers
     # ------------------------------------------------------------------
@@ -790,6 +810,16 @@ class DiagnosticsWindow:
             self._session_submit_decision(decision_id, value)
             return
 
+        if kind == "navigate_decision":
+            if not self._navigate_session_id or not self._agent_prompt_decision_id:
+                self._set_agent_prompt(None, "", [])
+                return
+            self._append_agent_message("user", f"导航选择：{selected_display}")
+            decision_id = self._agent_prompt_decision_id
+            self._set_agent_prompt(None, "", [])
+            self._navigate_submit_decision(decision_id, value)
+            return
+
         if kind == "action":
             self._append_agent_message("user", f"执行操作：{selected_display}")
             self._set_agent_prompt(None, "", [])
@@ -830,16 +860,13 @@ class DiagnosticsWindow:
             self._append_agent_message("agent", "未检测到 Session。请先点击 Start Session。")
             return
 
-        self._set_session_hint("Session 模式：正在通过新 Agentic 路径启动诊断...")
-        self._append_agent_message("agent", "正在启动诊断流程并检测设备连接状态...")
+        self._set_session_hint("正在通过 LangGraph Agent 导航到诊断页面...")
+        self._append_agent_message("agent", "正在启动 LangGraph 导航流程...")
         self._api_call(
             "POST",
-            "/api/session/execute",
-            json_data={
-                "session_id": self._session_id,
-                "action": "start_diagnostics",
-            },
-            callback_event="session_start_exec_result",
+            "/api/navigate/start",
+            json_data={"goal": "Navigate to Data Display"},
+            callback_event="navigate_start_result",
         )
 
     def _on_ai_diagnose_clicked(self) -> None:
@@ -1712,6 +1739,15 @@ class DiagnosticsWindow:
         )
 
     def _on_session_abort_clicked(self) -> None:
+        if self._navigate_session_id:
+            self._api_call(
+                "POST",
+                "/api/navigate/abort",
+                json_data={"session_id": self._navigate_session_id},
+                callback_event="navigate_abort_result",
+            )
+            self._navigate_session_id = None
+
         if not self._session_id:
             return
         self._session_abort_button.configure(state=tk.DISABLED)
@@ -1943,6 +1979,136 @@ class DiagnosticsWindow:
             self._set_session_hint("Abort 失败，请重试。")
             self._append_agent_message("agent", "Abort 失败，请重试。")
 
+    def _handle_navigate_start_result(self, payload: dict[str, Any]) -> None:
+        self._start_button.configure(state=tk.NORMAL)
+        if not payload.get("success"):
+            error_text = self._error_message(payload, "Failed to start navigation.")
+            self._set_server_connected(False)
+            self._set_status_text(f"Navigate start failed: {error_text}")
+            self._append_agent_message("agent", f"导航启动失败：{error_text}")
+            return
+
+        session_id = payload.get("session_id", "")
+        self._navigate_session_id = session_id
+        self._set_server_connected(True)
+        self._set_status_text("Navigation started. Waiting for progress...")
+        self._set_session_hint("LangGraph Agent 正在自动导航中...")
+        self._append_agent_message("agent", "LangGraph 导航已启动，正在自动化中...")
+        self._start_navigate_sse_thread(session_id)
+
+    def _handle_navigate_progress(self, payload: dict[str, Any]) -> None:
+        node = payload.get("node", "")
+        page = payload.get("page", "")
+        action = payload.get("action", "")
+        error = payload.get("error")
+
+        parts = []
+        if node:
+            parts.append(f"[{node}]")
+        if page:
+            parts.append(f"page={page}")
+        if action:
+            parts.append(action)
+        message = " ".join(parts) or "Processing..."
+
+        self._session_status_var.set(message)
+        self._append_agent_message("agent", message)
+
+        if error:
+            self._append_agent_message("agent", f"Warning: {error}")
+
+    def _handle_navigate_decision_required(self, payload: dict[str, Any]) -> None:
+        decision_id = payload.get("decision_id", "")
+        page = payload.get("page", "")
+        items = payload.get("items", [])
+        prompt = payload.get("prompt", "请选择一个选项")
+
+        self._session_status_var.set(f"Awaiting your selection on {page}...")
+        self._set_session_hint("Agent 需要你做出选择。请在下方下拉框中选取后点击 Submit。")
+        self._append_agent_message("agent", prompt)
+
+        options = [{"value": item, "display": item} for item in items]
+        self._set_agent_prompt(
+            "navigate_decision",
+            "请选择（下拉后点 Submit）",
+            options,
+            decision_id=decision_id,
+        )
+
+    def _handle_navigate_done(self, payload: dict[str, Any]) -> None:
+        self._stop_navigate_sse_thread()
+
+        final_page = payload.get("final_page", "unknown")
+        steps = payload.get("steps", 0)
+        selections = payload.get("selections", {})
+        error = payload.get("error")
+        status = payload.get("status", "")
+
+        if status == "aborted" or error == "Aborted by user":
+            self._session_status_var.set("Navigation aborted.")
+            self._append_agent_message("agent", "导航已中止。")
+            self._navigate_session_id = None
+            return
+
+        if error and final_page != "data_display":
+            self._set_status_text(f"Navigation ended with error: {error}")
+            self._append_agent_message("agent", f"导航完成但有错误：{error}")
+            self._navigate_session_id = None
+            return
+
+        self._set_server_connected(True)
+        self._set_status_text(f"Navigation complete. Page: {final_page}, {steps} steps.")
+        self._append_agent_message(
+            "agent",
+            f"导航完成！最终页面: {final_page}，共 {steps} 步。",
+        )
+
+        selected_module = selections.get("module", "")
+        selected_category = selections.get("data_category", "")
+        selected_item = selections.get("selected_item", "")
+
+        if selected_module:
+            self._selected_module.set(selected_module)
+            self._module_combo.configure(values=[selected_module])
+        if selected_category:
+            self._selected_data_category.set(selected_category)
+            self._data_combo.configure(values=[selected_category])
+            self._session_category_confirmed = True
+        elif selected_item:
+            self._selected_data_category.set(selected_item)
+            self._data_combo.configure(values=[selected_item])
+            self._session_category_confirmed = True
+
+        self._refresh_action_buttons()
+
+        if self._session_category_confirmed:
+            self._set_session_hint("导航完成。现在可以执行 Read DTCs。")
+            self._prompt_action_choices()
+        else:
+            self._set_session_hint("导航完成。请选择 Module 和 Data Category。")
+
+        self._navigate_session_id = None
+
+    def _handle_navigate_error(self, payload: dict[str, Any]) -> None:
+        self._stop_navigate_sse_thread()
+        error = payload.get("error", "Unknown error")
+        self._set_status_text(f"Navigation error: {error}")
+        self._session_status_var.set(f"Navigation error: {error}")
+        self._append_agent_message("agent", f"导航错误：{error}")
+        self._start_button.configure(state=tk.NORMAL)
+        self._navigate_session_id = None
+
+    def _handle_navigate_decision_submit_result(self, payload: dict[str, Any]) -> None:
+        if payload.get("success"):
+            self._session_status_var.set("Decision submitted. Continuing navigation...")
+            self._append_agent_message("agent", "选择已提交，导航继续中...")
+        else:
+            error = self._error_message(payload, "Decision submission failed.")
+            self._session_status_var.set(f"Decision failed: {error}")
+            self._append_agent_message("agent", f"选择提交失败：{error}")
+            if self._agent_prompt_kind == "navigate_decision":
+                self._agent_prompt_submit_button.configure(state=tk.NORMAL)
+
     # ------------------------------------------------------------------
     # Session flow: decision modal
     # ------------------------------------------------------------------
@@ -2038,6 +2204,20 @@ class DiagnosticsWindow:
             callback_event="session_decision_submit_result",
         )
 
+    def _navigate_submit_decision(self, decision_id: str, selected_item: str) -> None:
+        if not self._navigate_session_id:
+            return
+        self._api_call(
+            "POST",
+            "/api/navigate/decision",
+            json_data={
+                "session_id": self._navigate_session_id,
+                "decision_id": decision_id,
+                "selected_item": selected_item,
+            },
+            callback_event="navigate_decision_submit_result",
+        )
+
     # ------------------------------------------------------------------
     # Session flow: SSE thread
     # ------------------------------------------------------------------
@@ -2100,3 +2280,62 @@ class DiagnosticsWindow:
         if self._session_sse_thread and self._session_sse_thread.is_alive():
             self._session_sse_thread.join(timeout=1.5)
         self._session_sse_thread = None
+
+    def _start_navigate_sse_thread(self, session_id: str) -> None:
+        """Start background thread consuming navigate SSE events."""
+        self._stop_navigate_sse_thread()
+        self._navigate_sse_running = True
+
+        def _navigate_sse_worker() -> None:
+            url = f"{self._api_base}/api/navigate/events?session_id={session_id}"
+            try:
+                with requests.get(url, stream=True, timeout=(10, None)) as response:
+                    self._navigate_sse_response = response
+                    response.raise_for_status()
+
+                    current_event = None
+                    for raw_line in response.iter_lines(decode_unicode=True):
+                        if not self._navigate_sse_running:
+                            break
+                        if not raw_line:
+                            continue
+
+                        line = raw_line.strip()
+                        if line.startswith(":"):
+                            continue
+                        if line.startswith("event: "):
+                            current_event = line[7:]
+                        elif line.startswith("data: "):
+                            chunk = line[6:]
+                            try:
+                                payload = json.loads(chunk)
+                                if current_event:
+                                    self._queue.put(
+                                        (f"navigate_{current_event}", payload)
+                                    )
+                            except json.JSONDecodeError:
+                                continue
+            except Exception as exc:
+                if self._navigate_sse_running:
+                    self._queue.put(("navigate_error", {"error": str(exc)}))
+            finally:
+                self._navigate_sse_response = None
+
+        self._navigate_sse_thread = threading.Thread(
+            target=_navigate_sse_worker, daemon=True, name="diag-navigate-sse",
+        )
+        self._navigate_sse_thread.start()
+
+    def _stop_navigate_sse_thread(self) -> None:
+        self._navigate_sse_running = False
+
+        if self._navigate_sse_response is not None:
+            try:
+                self._navigate_sse_response.close()
+            except Exception:
+                pass
+            self._navigate_sse_response = None
+
+        if self._navigate_sse_thread and self._navigate_sse_thread.is_alive():
+            self._navigate_sse_thread.join(timeout=1.5)
+        self._navigate_sse_thread = None
