@@ -236,12 +236,14 @@ class NavigationController:
                     return self._current_page
 
                 # 7. VEHICLE_SELECTION: Has "Enter" button but NO list items
-                #    Must also exclude pages with "Back" button — those are deep
-                #    pages (like diagnostics_menu) where list hasn't loaded yet.
+                #    Exclude deep pages where list hasn't loaded yet.
+                #    "Back" and "Vehicle Menu" only appear on deep pages,
+                #    never on vehicle_selection.
                 if (
                     "Enter" in button_texts
                     and not items
                     and "Back" not in button_texts
+                    and "Vehicle Menu" not in button_texts
                 ):
                     self._current_page = GDS2Page.VEHICLE_SELECTION
                     return self._current_page
@@ -252,6 +254,7 @@ class NavigationController:
                     ("Disconnect" in button_texts or "Select Device" in button_texts)
                     and not items
                     and "Back" not in button_texts
+                    and "Vehicle Menu" not in button_texts
                     and "Create Report" not in button_texts
                 ):
                     self._current_page = GDS2Page.VEHICLE_SELECTION
