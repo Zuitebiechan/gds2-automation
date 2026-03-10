@@ -4,15 +4,46 @@ Per-OEM-tool UI automation. Currently: **GDS2 (General Motors)**. Future OEM too
 
 ## GDS2 Automation Stack
 
+### Navigation Layer (Agentic)
+
 | Component | File | Purpose |
 |---|---|---|
-| **DataViewerWorkflow** | `src/workflows/data_viewer.py` | Main orchestration: Device → Module → Data |
+| **NavigationGraph** | `src/agentic/graph.py` | LangGraph StateGraph: deterministic + agent + human nodes |
+| **NavigationNodes** | `src/agentic/nodes.py` | 3 node implementations + routing logic (`should_continue`) |
+| **NavigationTools** | `src/agentic/tools.py` | 9 native tools for ZhipuAI tool-calling (action + observation + signal) |
+| **KnowledgeBase** | `src/agentic/knowledge_base.py` | LanceDB RAG: page matching, error patterns, tool suggestions, auto-learning |
+| **NavigationState** | `src/agentic/state.py` | TypedDict state schema for LangGraph |
+| **LLMFactory** | `src/agentic/llm_factory.py` | ZhipuAI/Gemini/OpenAI provider factory |
+
+### Execution Layer (Deterministic Drivers)
+
+| Component | File | Purpose |
+|---|---|---|
+| **DataViewerWorkflow** | `src/workflows/data_viewer.py` | Legacy orchestration (used by `/api/diagnose/*`) |
 | **NavigationController** | `src/navigation/controller.py` | State detection + page transitions (`GDS2Page`) |
 | **AgentNavigator** | `src/streaming/agent_navigator.py` | Command/response IPC with Java Agent |
 | **AgentDataCollector** | `src/streaming/agent_data_collector.py` | 100ms polling, parameter/DTC extraction, change detection |
 | **DiagnosticBuffer** | `src/streaming/diagnostic_buffer.py` | 30s sliding window buffer, dual-rate sampling, delta compression |
 | **DeviceExplorerController** | `src/native/device_explorer.py` | Win32 Device Explorer automation |
 | **VehicleMapping** | `src/discovery/vehicle_mapping.py` | Cache module/category indexes per vehicle |
+
+## Agentic Navigation Flow
+
+The LangGraph hybrid navigator uses three node types:
+
+```
+START --> deterministic_node --> should_continue() --> deterministic | agent | human | END
+                                                         agent_node --> should_continue() --> ...
+                                                         human_node --> should_continue() --> ...
+```
+
+| Node | Pages Handled | LLM Call? |
+|---|---|---|
+| **deterministic** | main_menu, diagnostics_menu, module_submenu | No |
+| **human** (HITL) | module_list, data_list, sub_data_list | No |
+| **agent** (AI) | Unknown pages, error recovery, unexpected states | Yes (ZhipuAI) |
+
+The agent node queries LanceDB for similar pages and tool suggestions before calling ZhipuAI with bound tools.
 
 ## GDS2 Page Flow
 

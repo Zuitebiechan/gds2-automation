@@ -11,16 +11,16 @@ This project has three product layers:
 | Layer | Location | Purpose |
 |---|---|---|
 | **VCI Proxy Tunnel** | `vci_proxy/` | Connect cloud GDS2 to local VCI via reverse TCP + virtual J2534 DLL |
-| **RPA Automation** | `src/` | State-aware GDS2 automation (NavigationController + DataViewerWorkflow + Java Agent) |
+| **RPA Automation** | `src/` | GDS2 UI automation: deterministic navigation + AI agent fallback + Java Agent IPC |
 | **Client UX** | `vci_proxy/client_gui.py`, `vci_proxy/diagnostics_window.py` | Local system-tray exe for mechanics (connectivity + diagnostics UI) |
 
 `app.py` and `templates/` remain a **debug/service layer**, not the final mechanic-facing product.
 
-## CURRENT STATUS (2026-02-26)
+## CURRENT STATUS (2026-03-10)
 
 - Phase 1 client packaging is done (tray app + config persistence + reconnect status)
 - Phase 3 diagnostics API is implemented under `/api/diagnose/*`
-- Phase 3.5 AI-Powered Diagnosis is **complete** ✅:
+- Phase 3.5 AI-Powered Diagnosis is **complete**:
   - ZhipuAI glm-4.7 integration (thinking disabled, all tokens go to content output)
   - 30s sliding window buffer for live sensor data with dual-rate sampling (10Hz/1Hz)
   - Delta-compressed timeline payload for LLM
@@ -28,6 +28,14 @@ This project has three product layers:
   - Structured JSON verdict parsing with multiple fallback strategies
   - Streaming timeout protection (60s per-chunk, 180s total)
   - Deferred event queue cleanup (30s Timer) to prevent SSE race conditions
+- Agentic UI Navigation refactor is **partially implemented**:
+  - LangGraph hybrid navigator: deterministic (3 steps) + HITL (user choices) + AI agent (fallback)
+  - LanceDB knowledge base with 12 page records, 4 error patterns, 186 icons, 7 page screenshots
+  - ZhipuAI native tool-calling (9 tools: action + observation + signal)
+  - RAG-guided agent: similar pages, error patterns, tool suggestions, auto-learning
+  - Retry (2 attempts), wall-clock timeout (300s), step limit (50), recovery wiring
+  - Navigation trace recording to LanceDB
+  - Session API (`/api/session/*`) + session orchestrator (backend ready, not yet production-default)
 - Local diagnostics window is integrated into exe:
   - Start Diagnostics
   - Select Module
@@ -62,7 +70,7 @@ python app.py --port 8080
 Expected listening ports:
 - `9000`: reverse_server VCI listener
 - `9001`: reverse_server local proxy listener (for virtual DLL)
-- `8080`: Flask API (`/api/diagnose/*`)
+- `8080`: Flask API (`/api/diagnose/*`, `/api/session/*`)
 
 ### Local client runtime
 
@@ -125,12 +133,16 @@ This sequence ensures GDS2 is on Data Display page where DTC and live data are v
 - ZhipuAI API key stored in `%APPDATA%/VCI_Proxy/config.json` (never in source code)
 - AI Diagnose requires 30s data collection window before LLM call
 - LLM model: ZhipuAI glm-4.7 with `thinking={"type": "disabled"}` (not glm-4.7-flash)
+- Knowledge base model: all-MiniLM-L6-v2 (cached locally, use `HF_HUB_OFFLINE=1` when huggingface.co unreachable)
+- Agentic navigation uses LangGraph + native tool-calling (not ReAct string parsing)
 
 ## REFERENCE DOCS
 
 | Document | Purpose |
 |---|---|
 | `agent_docs/architecture.md` | End-to-end architecture and data flow |
-| `agent_docs/vci_proxy.md` | VCI Proxy protocol/cache/auth details |
 | `agent_docs/rpa_automation.md` | GDS2 navigation/workflow/API details |
 | `agent_docs/roadmap.md` | Delivery status and upcoming phases |
+| `agent_docs/agentic_refactor_master_plan.md` | Reusable agentic architecture design |
+| `agent_docs/gds2_agentic_refactor_execution_plan.md` | GDS2-specific migration plan and status |
+| `agent_docs/gds2_agentic_navigation_implementation.md` | LangGraph + LanceDB implementation guide |

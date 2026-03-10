@@ -1,6 +1,6 @@
 # Roadmap
 
-**Last Updated**: 2026-03-09  
+**Last Updated**: 2026-03-10  
 **Status**: Phase 1 complete, Phase 3 complete, Phase 3.5 complete, agentic refactor partially implemented
 
 ## Completed Foundations
@@ -121,23 +121,27 @@ Goal: replace brittle hardcoded navigation assumptions with a safer hybrid archi
 
 ### Already completed on this branch
 
-- [x] LangGraph-based local hybrid navigator (`src/agentic/graph.py`, `nodes.py`, `tools.py`)
+- [x] LangGraph hybrid navigation graph (`src/agentic/graph.py`, `nodes.py`)
+- [x] Native tool-calling with ZhipuAI (9 tools in `src/agentic/tools.py`)
+- [x] LanceDB knowledge base with RAG (12 pages, 4 error patterns, 186 icons, 7 screenshots)
+- [x] Retry logic (2 attempts), wall-clock timeout (300s), step limit (50)
+- [x] Recovery wiring (AnomalyDetector + RecoveryManager integration)
+- [x] Navigation trace recording to LanceDB
+- [x] Page screenshots added to knowledge base seed data
 - [x] ZhipuAI/Gemini/OpenAI factory for navigation agent (`src/agentic/llm_factory.py`)
 - [x] LanceDB knowledge base interface + initializer (`src/agentic/knowledge_base.py`, `scripts/init_knowledge_base.py`)
-- [x] Action DSL contracts (`src/agentic/contracts/*`)
-- [x] Capability registry + policy guard + deterministic executor
+- [x] Action DSL contracts (`src/agentic/contracts/*`) (Stack B, session API path, retained for future use)
+- [x] Capability registry + policy guard + deterministic executor (Stack B, session API path, retained for future use)
 - [x] GDS2 action adapter bridging executor to real workflow/controller
-- [x] Session orchestrator + `/api/session/*` backend blueprint + unit tests
+- [x] Session orchestrator + `/api/session/*` backend blueprint + unit tests (Stack B, session API path, retained for future use)
 - [x] Client session-mode call sites / decision handling hooks in `vci_proxy/diagnostics_window.py`
-- [x] Local real-GDS2 navigation verification for the LangGraph path
 
 ### Still remaining
 
-- [ ] Complete product-default convergence between local LangGraph prototype and session-mode product flow
-- [ ] Broaden coverage for device explorer / error dialogs / unknown intermediate pages
-- [ ] Strengthen replay, observability, and step-level artifact logging
+- [ ] Replace console HITL with SSE/DecisionGate for production client
+- [ ] Connect LangGraph to `/api/session/*` endpoints (session lifecycle integration)
+- [ ] Broader coverage for device explorer / error dialogs / unknown intermediate pages
 - [ ] Full manual acceptance of session-mode GUI + cloud flow
-- [ ] Decide final production orchestration path once both stacks are unified
 
 ## Phase 4: Session Manager / Session Productization (Planned)
 

@@ -1,42 +1,44 @@
 # GDS2 Agentic Refactor Execution Plan
 
-**Last Updated**: 2026-03-09  
+**Last Updated**: 2026-03-10  
 **Scope**: GDS2 only (first migration target)  
-**Status**: Partial implementation delivered; full rollout still in progress
+**Status**: LangGraph-based navigation is the primary implementation; Stack B (session API) retained for future integration
 
-## Current Branch Status (2026-03-09)
+## Current Branch Status (2026-03-10)
 
-This execution plan is no longer purely aspirational. The current branch already contains a meaningful subset of the target architecture:
+The agentic refactor took a different path than the original G1-G5 phased plan. Instead of building up from Action DSL + deterministic executor + constrained planner, the team built a LangGraph-based hybrid navigator with native tool-calling and LanceDB RAG. The G1-G5 "Stack B" code (contracts, executor, planner, policy_guard, session_orchestrator) still exists and is used by `session_api.py`, but it's not the primary navigation system.
 
-### Already implemented in code
+### Primary implementation (LangGraph stack)
 
-- **G1 contracts/scaffolding**
-  - `src/agentic/contracts/action_schema.py`
-  - `src/agentic/contracts/state_schema.py`
-  - `src/agentic/capability_registry.py`
-  - `src/agentic/policy_guard.py`
-- **G2 deterministic execution core**
-  - `src/agentic/executor.py`
-  - `src/agentic/adapters/gds2_adapter.py`
-- **G3 session/HITL backend foundation**
-  - `src/agentic/session_orchestrator.py`
-  - `session_api.py`
-  - `app.py` blueprint registration for `/api/session/*`
-- **Narrow branch planner**
-  - `src/agentic/planner.py`
-- **Separate local hybrid navigator prototype**
-  - `src/agentic/graph.py`, `nodes.py`, `tools.py`, `knowledge_base.py`
-  - `scripts/test_local_navigation.py`
+- `src/agentic/graph.py` + `nodes.py` ... LangGraph hybrid navigation graph (deterministic + HITL + AI agent)
+- `src/agentic/tools.py` ... 9 native tool-calling functions (action + observation + signal) for ZhipuAI
+- `src/agentic/knowledge_base.py` ... LanceDB knowledge base with RAG (12 pages, 4 error patterns, 186 icons, 7 screenshots)
+- `src/agentic/llm_factory.py` ... ZhipuAI/Gemini/OpenAI factory for navigation agent
+- `scripts/init_knowledge_base.py` ... Knowledge base seed data initializer
+- Retry logic (2 attempts), wall-clock timeout (300s), step limit (50)
+- Recovery wiring (AnomalyDetector + RecoveryManager integration)
+- Navigation trace recording to LanceDB for auto-learning
+- Page screenshots added to knowledge base seed data
 
-### Verified today vs not yet fully proven
+### Stack B (session API path, retained for future use)
+
+- `src/agentic/contracts/action_schema.py`, `state_schema.py` ... G1 contracts
+- `src/agentic/capability_registry.py`, `policy_guard.py` ... G1 scaffolding
+- `src/agentic/executor.py` ... G2 deterministic executor
+- `src/agentic/adapters/gds2_adapter.py` ... G2 adapter
+- `src/agentic/planner.py` ... G4 narrow branch planner
+- `src/agentic/session_orchestrator.py` ... G3 session orchestrator
+- `session_api.py` + `app.py` blueprint registration for `/api/session/*`
+
+### Verified vs. still open
 
 - **Verified in code/tests**: action schema, policy guard, executor, planner, adapter, session orchestrator, session API, graph compilation/imports
-- **Verified locally with real GDS2**: LangGraph-based local navigation flow to `data_display`
-- **Not yet fully closed out**: complete product-path integration, replay/observability depth, and full manual acceptance of session-mode GUI + cloud workflow
+- **Verified locally with real GDS2**: LangGraph-based navigation flow to `data_display`
+- **Not yet closed out**: SSE/DecisionGate replacing console HITL, LangGraph-to-session-API integration, broader page coverage, full manual acceptance of session-mode GUI + cloud workflow
 
 ### Practical interpretation
 
-Treat G1 as **mostly complete**, G2 as **core complete but still light on observability/postcondition rigor**, G3 as **backend largely present with remaining end-to-end/manual validation**, and G4/G5 as **partially started but not fully finished**.
+Treat G1 as **complete** (contracts exist, used by Stack B). G2 as **complete** (executor works, used by Stack B). G3 as **backend complete, end-to-end integration pending** (session API exists but LangGraph doesn't route through it yet). G4 is **deferred** ... the LangGraph + RAG approach replaces the narrow constrained planner originally envisioned. G5 is **partially started** via navigation trace recording to LanceDB, but the full replay harness and KPI dashboard are not built.
 
 ## WHY
 
@@ -267,6 +269,10 @@ For GDS2, we will deliver:
 
 ## Notes on RAG / MCP / ReAct for This Plan
 
+_Original plan notes (written before LangGraph implementation):_
+
 - **ReAct**: optional implementation style for planner internals; not required for first release.
 - **RAG**: not required for UI step planning; postpone to diagnosis-knowledge improvements.
 - **MCP**: optional for external integrations; not required for core GDS2 migration.
+
+_Actual outcome_: RAG is now central to navigation via LanceDB knowledge base. The LangGraph agent queries similar pages, error patterns, and tool suggestions during every AI fallback step. ReAct-style string parsing was skipped entirely in favor of native tool-calling.
