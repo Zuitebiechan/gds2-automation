@@ -52,7 +52,7 @@ SEED_PAGES: List[Dict[str, Any]] = [
         "detection_rule": "Has 'Diagnostics' AND 'Update' buttons",
         "deterministic_action": "click Diagnostics",
         "is_user_decision": False,
-        "screenshot_paths": [],
+        "screenshot_paths": ["data/screenshots/main_menu.png"],
     },
     {
         "id": "page_device_explorer",
@@ -96,7 +96,7 @@ SEED_PAGES: List[Dict[str, Any]] = [
         "detection_rule": "Has 'Enter' button AND no list items",
         "deterministic_action": "click Enter (auto-detect vehicle)",
         "is_user_decision": False,
-        "screenshot_paths": [],
+        "screenshot_paths": ["data/screenshots/vehicle_selection.png"],
     },
     {
         "id": "page_diagnostics_menu",
@@ -118,7 +118,7 @@ SEED_PAGES: List[Dict[str, Any]] = [
         "detection_rule": "List items contain 'Module Diagnostics'",
         "deterministic_action": "click 'Module Diagnostics'",
         "is_user_decision": False,
-        "screenshot_paths": [],
+        "screenshot_paths": ["data/screenshots/diagnostics_menu.png"],
     },
     {
         "id": "page_module_list",
@@ -140,7 +140,7 @@ SEED_PAGES: List[Dict[str, Any]] = [
         "detection_rule": "List items contain '[' and ']' bracket patterns",
         "deterministic_action": None,
         "is_user_decision": True,
-        "screenshot_paths": [],
+        "screenshot_paths": ["data/screenshots/module_list.png"],
     },
     {
         "id": "page_module_submenu",
@@ -166,7 +166,7 @@ SEED_PAGES: List[Dict[str, Any]] = [
         ),
         "deterministic_action": "click 'Data Display'",
         "is_user_decision": False,
-        "screenshot_paths": [],
+        "screenshot_paths": ["data/screenshots/module_submenu.png"],
     },
     {
         "id": "page_data_list",
@@ -189,7 +189,7 @@ SEED_PAGES: List[Dict[str, Any]] = [
         "detection_rule": "Has list items AND Back button, but not MODULE_SUBMENU markers",
         "deterministic_action": None,
         "is_user_decision": True,
-        "screenshot_paths": [],
+        "screenshot_paths": ["data/screenshots/data_list.png"],
     },
     {
         "id": "page_sub_data_list",
@@ -235,7 +235,7 @@ SEED_PAGES: List[Dict[str, Any]] = [
         "detection_rule": "Has 'Create Report' button",
         "deterministic_action": None,
         "is_user_decision": False,
-        "screenshot_paths": [],
+        "screenshot_paths": ["data/screenshots/data_display.png"],
     },
     # --- Error / dynamic pages (unknown layout, AI agent must handle) ---
     {

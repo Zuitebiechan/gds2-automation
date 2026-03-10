@@ -64,6 +64,9 @@ nul
 
 # Screenshots directory
 screenshots/
+# But track knowledge base seed screenshots
+!data/screenshots/
+!data/screenshots/*.png
 
 # Exploration results
 exploration_results/
