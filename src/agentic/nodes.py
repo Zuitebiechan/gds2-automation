@@ -598,40 +598,64 @@ def agent_node(state: NavigationState) -> dict:
     except Exception as e:
         logger.warning(f"Agent: KB query failed (non-fatal): {e}")
 
-    # 3. Call LLM with bound tools
-    try:
-        llm = create_llm()
-        llm_with_tools = llm.bind_tools(ALL_TOOLS)
+    # 3. Call LLM with bound tools (with retry for rate limits)
+    llm_max_retries = 3
+    llm_retry_delay = 5.0  # initial backoff in seconds
+    response = None
 
-        messages = [
-            SystemMessage(content=AGENT_SYSTEM_PROMPT),
-            HumanMessage(content=_build_user_message(
-                snapshot, state, similar_pages,
-                error_patterns=error_patterns,
-                tool_suggestion=tool_suggestion,
-            )),
-        ]
+    for llm_attempt in range(1, llm_max_retries + 1):
+        try:
+            llm = create_llm()
+            llm_with_tools = llm.bind_tools(ALL_TOOLS)
 
-        response = llm_with_tools.invoke(messages)
-        logger.info(
-            f"Agent: LLM response received "
-            f"(tool_calls={len(response.tool_calls) if response.tool_calls else 0})"
-        )
+            messages = [
+                SystemMessage(content=AGENT_SYSTEM_PROMPT),
+                HumanMessage(content=_build_user_message(
+                    snapshot, state, similar_pages,
+                    error_patterns=error_patterns,
+                    tool_suggestion=tool_suggestion,
+                )),
+            ]
 
-    except Exception as e:
-        logger.exception(f"Agent: LLM call failed: {e}")
-        return {
-            **state_updates,
-            "error": f"LLM error: {e}",
-            "next_action": "ask_user",
-            "agent_confidence": 0.0,
-            "agent_reasoning": f"LLM call failed, falling back to user: {e}",
-            "navigation_history": [{
-                "action": "agent_analysis_failed",
-                "error": str(e),
-                "success": False,
-            }],
-        }
+            response = llm_with_tools.invoke(messages)
+            logger.info(
+                f"Agent: LLM response received "
+                f"(tool_calls={len(response.tool_calls) if response.tool_calls else 0})"
+            )
+            break  # success
+
+        except Exception as e:
+            error_str = str(e)
+            is_rate_limit = (
+                "429" in error_str
+                or "rate" in error_str.lower()
+                or "too many" in error_str.lower()
+                or "quota" in error_str.lower()
+            )
+
+            if is_rate_limit and llm_attempt < llm_max_retries:
+                wait = llm_retry_delay * (2 ** (llm_attempt - 1))
+                logger.warning(
+                    f"Agent: LLM rate limited (attempt {llm_attempt}/{llm_max_retries}), "
+                    f"retrying in {wait:.0f}s..."
+                )
+                time.sleep(wait)
+                continue
+
+            # Non-retriable error or exhausted retries
+            logger.exception(f"Agent: LLM call failed: {e}")
+            return {
+                **state_updates,
+                "error": f"LLM error: {e}",
+                "next_action": "ask_user",
+                "agent_confidence": 0.0,
+                "agent_reasoning": f"LLM call failed, falling back to user: {e}",
+                "navigation_history": [{
+                    "action": "agent_analysis_failed",
+                    "error": error_str,
+                    "success": False,
+                }],
+            }
 
     # 4. Process tool calls
     if response.tool_calls:

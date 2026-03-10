@@ -236,8 +236,13 @@ class NavigationController:
                     return self._current_page
 
                 # 7. VEHICLE_SELECTION: Has "Enter" button but NO list items
-                #    (Important: must come AFTER list-based checks)
-                if "Enter" in button_texts and not items:
+                #    Must also exclude pages with "Back" button — those are deep
+                #    pages (like diagnostics_menu) where list hasn't loaded yet.
+                if (
+                    "Enter" in button_texts
+                    and not items
+                    and "Back" not in button_texts
+                ):
                     self._current_page = GDS2Page.VEHICLE_SELECTION
                     return self._current_page
 

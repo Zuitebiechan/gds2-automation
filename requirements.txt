@@ -1,33 +1,22 @@
-# Core RPA
+# Core RPA (cloud-side, runs on 64-bit Python)
 pywinauto>=0.6.8
-pyautogui>=0.9.0
 
-# Image processing (for screenshot comparison and fallback locators)
+# Web framework + HTTP
+flask>=2.3.0
+requests>=2.28.0
+
+# Image processing (tray icon generation)
 Pillow>=9.0.0
-opencv-python>=4.5.0
 
-# OCR (for text verification)
-easyocr>=1.6.0
+# System tray client
+pystray>=0.19.0
 
-# VLM providers (for AI-based element finding)
+# LLM providers
+zhipuai>=2.1.5
 anthropic>=0.40.0
 openai>=1.0.0
 
-# API (future)
-fastapi>=0.100.0
-uvicorn>=0.22.0
-
-# Utilities
-pydantic>=2.0.0
-
-# Development
-pytest>=7.0.0
-pytest-cov>=4.0.0
-
-# AI diagnosis (Phase 3.5)
-zhipuai>=2.1.5
-
-# Agentic Navigation (Phase 1)
+# Agentic Navigation (LangGraph)
 langgraph>=0.2.0
 langchain>=0.3.0
 langchain-community>=0.3.0
@@ -37,4 +26,7 @@ langchain-google-genai>=0.0.5
 # Vector DB and Embeddings
 lancedb>=0.5.0
 sentence-transformers>=2.2.0
-open-clip-torch>=2.20.0
+
+# Development
+pytest>=7.0.0
+pytest-cov>=4.0.0
