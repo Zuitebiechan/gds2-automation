@@ -160,32 +160,6 @@ class AgentNavigator:
             return result.get('data', {}).get('windows', [])
         return []
 
-    def get_page_id(self) -> Dict[str, Any]:
-        """
-        Identify the current GDS2 page using Java-side scene graph analysis.
-
-        This is more reliable than Python-side button heuristics because
-        the Java Agent has direct access to the full JavaFX scene graph,
-        including window titles, disabled buttons, and list contents,
-        all in a single atomic snapshot.
-
-        Returns:
-            Dict with:
-              - page_id: str (e.g., 'main_menu', 'module_list')
-              - confidence: str ('high', 'medium', 'low', 'none')
-              - evidence: str (why this page was identified)
-              - window_title: str
-              - buttons: List[str] (enabled button texts)
-              - list_item_count: int
-              - has_modal: bool
-            Returns empty dict if command fails.
-        """
-        result = self._send_command("get_page_id", {})
-        if result.get('success'):
-            return result.get('data', {})
-        logger.warning(f"get_page_id failed: {result.get('message')}")
-        return {}
-
     def wait(self, ms: int) -> Dict[str, Any]:
         """
         Wait for specified milliseconds (executed by Java Agent).
