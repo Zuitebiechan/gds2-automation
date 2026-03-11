@@ -729,4 +729,4 @@ if __name__ == '__main__':
     print(f"  Agent:       /api/agent/*")
     print(f"{'='*60}\n")
 
-    app.run(debug=True, host=host, port=port, use_reloader=False)
+    app.run(debug=True, host=host, port=port, use_reloader=False, threaded=True)

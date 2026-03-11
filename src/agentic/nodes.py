@@ -181,6 +181,106 @@ def _handle_vehicle_selection(state: NavigationState) -> dict:
             "step_count": state.get("step_count", 0) + 1,
         }
 # ---------------------------------------------------------------------------
+# Handler: Device Explorer (Win32 dialog)
+# ---------------------------------------------------------------------------
+
+# Target device for auto-selection in Device Explorer.
+DEVICE_EXPLORER_TARGET = "VCI Proxy (Remote)"
+
+
+def _handle_device_explorer(state: NavigationState) -> dict:
+    """Handle Device Explorer Win32 dialog: auto-select VCI Proxy (Remote) and click Continue.
+
+    Device Explorer is a Win32 native dialog (not JavaFX) that appears when
+    GDS2 needs a VCI device connection.  We use DeviceExplorerController
+    (Win32 API automation) to select the device and proceed.
+    """
+    from ..native.device_explorer import DeviceExplorerController
+    from .tools import get_controller, _snapshot_from_controller
+
+    logger.info("Handling Device Explorer dialog: selecting '%s'", DEVICE_EXPLORER_TARGET)
+
+    explorer = DeviceExplorerController()
+    if not explorer.find_dialog(timeout_sec=5.0):
+        logger.warning("Device Explorer dialog not found")
+        return {
+            "error": "Device Explorer dialog not found",
+            "next_action": "handle_error",
+            "navigation_history": [{
+                "action": "find Device Explorer dialog",
+                "from_page": "device_explorer",
+                "deterministic": True,
+                "success": False,
+                "error": "Dialog window not found within 5s",
+            }],
+            "step_count": state.get("step_count", 0) + 1,
+        }
+
+    # Select the target device
+    if not explorer.select_device_by_name(DEVICE_EXPLORER_TARGET):
+        devices = explorer.get_device_names()
+        error_msg = (
+            f"Device '{DEVICE_EXPLORER_TARGET}' not found. "
+            f"Available: {devices}"
+        )
+        logger.warning(error_msg)
+        return {
+            "error": error_msg,
+            "next_action": "handle_error",
+            "navigation_history": [{
+                "action": f"select '{DEVICE_EXPLORER_TARGET}' in Device Explorer",
+                "from_page": "device_explorer",
+                "deterministic": True,
+                "success": False,
+                "error": error_msg,
+            }],
+            "step_count": state.get("step_count", 0) + 1,
+        }
+
+    time.sleep(0.3)
+
+    # Click Continue
+    if not explorer.click_continue():
+        logger.warning("Failed to click Continue in Device Explorer")
+        return {
+            "error": "Failed to click Continue in Device Explorer",
+            "next_action": "handle_error",
+            "navigation_history": [{
+                "action": "click Continue in Device Explorer",
+                "from_page": "device_explorer",
+                "deterministic": True,
+                "success": False,
+                "error": "Continue button click failed",
+            }],
+            "step_count": state.get("step_count", 0) + 1,
+        }
+
+    # Wait for the dialog to close and GDS2 to advance
+    time.sleep(1.0)
+
+    # Detect resulting page (typically vehicle_selection)
+    controller = get_controller()
+    snapshot = _snapshot_from_controller(controller)
+    new_page = snapshot["page"]
+    logger.info("Device Explorer handled, now on '%s'", new_page)
+
+    return {
+        "current_page": new_page,
+        "page_snapshot": snapshot,
+        "navigation_history": [{
+            "action": f"selected '{DEVICE_EXPLORER_TARGET}' and clicked Continue",
+            "from_page": "device_explorer",
+            "to_page": new_page,
+            "deterministic": True,
+            "success": True,
+        }],
+        "next_action": "continue",
+        "error": None,
+        "step_count": state.get("step_count", 0) + 1,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Node: Deterministic
 # ---------------------------------------------------------------------------
 
@@ -194,6 +294,11 @@ def deterministic_node(state: NavigationState) -> dict:
     current_page = state["current_page"]
 
     logger.info(f"Deterministic node: current_page={current_page}")
+
+    # Special case: Device Explorer is a Win32 dialog handled outside
+    # the normal JavaFX route table.
+    if current_page == "device_explorer":
+        return _handle_device_explorer(state)
 
     route = DETERMINISTIC_ROUTES.get(current_page)
 

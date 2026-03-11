@@ -11,6 +11,7 @@ from flask import Blueprint, Response, jsonify, request
 from src.recovery.types import WorkflowRecoveryError
 from src.streaming import AgentDataCollector
 from src.diagnosis.ai_engine import AIEngine, get_cached_payload
+from src.navigation import GDS2Page
 
 logger = logging.getLogger(__name__)
 
@@ -337,10 +338,16 @@ def diagnose_ai_start():
                 "error": "AI diagnosis already in progress",
             }), 409
 
-        # Navigate GDS2 to Data Display page for the selected category
+        # Skip redundant navigation if GDS2 is already on Data Display
+        # (e.g. agentic navigation already landed here)
         app_shared = _app_bindings()
         viewer = app_shared["get_data_viewer"]()
-        viewer.select_data_category(data_category)
+        current_page = viewer.controller.detect_current_page()
+        if current_page == GDS2Page.DATA_DISPLAY:
+            logger.info("Already on DATA_DISPLAY, skipping select_data_category")
+        else:
+            logger.info("Not on DATA_DISPLAY (current: %s), navigating via select_data_category", current_page)
+            viewer.select_data_category(data_category)
 
         session_id = engine.start_session(vehicle_context)
         return jsonify({

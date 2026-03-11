@@ -149,15 +149,29 @@ def make_initial_state(goal: str = "Navigate to Data Display") -> dict:
     """
     Create a valid initial state for the navigation graph.
 
+    Detects the real current GDS2 page via the Java Agent so the
+    graph starts from the actual state rather than assuming main_menu.
+
     Args:
         goal: Navigation goal description.
 
     Returns:
         Dictionary matching NavigationState schema.
     """
+    from .tools import get_controller
+
+    try:
+        controller = get_controller()
+        detected = controller.detect_current_page()
+        current_page = detected.value
+        logger.info("make_initial_state: detected current page = %s", current_page)
+    except Exception as exc:
+        logger.warning("make_initial_state: page detection failed (%s), defaulting to main_menu", exc)
+        current_page = "main_menu"
+
     return {
         "goal": goal,
-        "current_page": "main_menu",
+        "current_page": current_page,
         "page_snapshot": {},
         "screenshot": None,
         "navigation_history": [],
