@@ -51,7 +51,7 @@ Delegates to `PageIdentifier.identifyPage()`.
 build.bat
 ```
 
-Requires JDK 11+ and the original JAR at `C:\tools\gds2-agent\gds2-agent.jar`.
+Requires JDK 8+ and the original JAR at `C:\tools\gds2-agent\gds2-agent.jar`. Output must target Java 8 (class version 52) since GDS2 ships with JRE 6/8.
 
 ## Page IDs
 

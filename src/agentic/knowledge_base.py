@@ -623,6 +623,28 @@ def get_knowledge_base() -> GDS2KnowledgeBase:
     return _kb_instance
 
 
+def preload_knowledge_base():
+    """Pre-initialize knowledge base in a background thread.
+
+    Call this early (e.g., at graph creation time) so that the
+    SentenceTransformer model download and LanceDB init happen
+    before the agent node needs them.  Safe to call multiple times.
+    """
+    import threading
+
+    def _init():
+        try:
+            kb = get_knowledge_base()
+            kb._ensure_initialized()
+            logger.info("Knowledge base pre-initialized successfully")
+        except Exception as e:
+            logger.warning(f"Knowledge base pre-init failed (non-fatal): {e}")
+
+    t = threading.Thread(target=_init, daemon=True, name="kb-preload")
+    t.start()
+    return t
+
+
 # ---------------------------------------------------------------------------
 # Convenience functions
 # ---------------------------------------------------------------------------

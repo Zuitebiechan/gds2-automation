@@ -43,6 +43,10 @@ def _invoke_tool(tool: Any, args: dict) -> dict:
 DETERMINISTIC_SEQUENCE = [
     # (from_page, action_type, target, expected_next_page)
     ("main_menu",        "click_button", "Diagnostics",        "diagnostics_menu"),
+    # vehicle_selection: Enter clicks through to diagnostics_menu.
+    # Device Explorer (Win32 dialog) is handled by start_diagnostics() before
+    # the LangGraph flow begins, so by the time we're here the device is selected.
+    ("vehicle_selection", "click_button", "Enter",              "diagnostics_menu"),
     ("diagnostics_menu", "select_list_item", "Module Diagnostics", "module_list"),
     # module_list -> HITL (user picks module)
     # module_submenu -> deterministic: click "Data Display"
@@ -66,6 +70,61 @@ USER_DECISION_PAGES = [
     "sub_data_list",   # User selects sub-data (if present)
 ]
 
+
+def _handle_vehicle_selection(state: NavigationState) -> dict:
+    """Handle vehicle_selection deterministically via controller.click_enter().
+
+    Uses the full click_enter() method which includes:
+    - Retry if still at vehicle_selection after first Enter click
+    - Warning dialog dismissal
+    - Handling GDS2 auto-skip to module_list (clicks Back to diagnostics_menu)
+    """
+    from .tools import get_controller, _snapshot_from_controller
+
+    controller = get_controller()
+    try:
+        result = controller.click_enter()
+        snapshot = _snapshot_from_controller(controller)
+        new_page = result.page.value
+
+        if result.success:
+            logger.info(f"Vehicle selection: Enter succeeded, now on '{new_page}'")
+            return {
+                "current_page": new_page,
+                "page_snapshot": snapshot,
+                "navigation_history": [{
+                    "action": "clicked 'Enter' (vehicle selection)",
+                    "from_page": "vehicle_selection",
+                    "to_page": new_page,
+                    "deterministic": True,
+                    "success": True,
+                }],
+                "next_action": "continue",
+                "error": None,
+                "step_count": state.get("step_count", 0) + 1,
+            }
+        else:
+            error_msg = result.error or "Failed to click Enter at vehicle selection"
+            logger.warning(f"Vehicle selection: Enter failed: {error_msg}")
+            return {
+                "error": error_msg,
+                "next_action": "handle_error",
+                "navigation_history": [{
+                    "action": "tried clicking 'Enter' (vehicle selection)",
+                    "from_page": "vehicle_selection",
+                    "deterministic": True,
+                    "success": False,
+                    "error": error_msg,
+                }],
+                "step_count": state.get("step_count", 0) + 1,
+            }
+    except Exception as e:
+        logger.exception(f"Vehicle selection handler error: {e}")
+        return {
+            "error": str(e),
+            "next_action": "handle_error",
+            "step_count": state.get("step_count", 0) + 1,
+        }
 
 # ---------------------------------------------------------------------------
 # Node: Deterministic
@@ -93,6 +152,11 @@ def deterministic_node(state: NavigationState) -> dict:
         }
 
     logger.info(f"Found deterministic route: {route}")
+
+    # Special case: vehicle_selection needs controller.click_enter() which has
+    # retry logic, warning dialog dismissal, and auto-skip handling.
+    if current_page == "vehicle_selection":
+        return _handle_vehicle_selection(state)
 
     # Execute the deterministic action
     if route["action"] == "click_button":

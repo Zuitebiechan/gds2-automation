@@ -76,6 +76,13 @@ def create_navigation_graph():
     """
     logger.info("Creating navigation graph")
 
+    # Pre-initialize knowledge base in background so agent node doesn't block
+    try:
+        from .knowledge_base import preload_knowledge_base
+        preload_knowledge_base()
+    except Exception:
+        pass  # Non-fatal: agent will lazy-init if preload fails
+
     # Initialize graph with state schema
     workflow = StateGraph(NavigationState)
 

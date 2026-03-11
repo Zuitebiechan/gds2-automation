@@ -56,8 +56,7 @@ REM Compile only the new/modified files
 echo Compiling...
 javac -cp "%CP%" ^
       -d "%CLASSES_DIR%" ^
-      -source 11 -target 11 ^
-      --add-exports javafx.graphics/com.sun.javafx.stage=ALL-UNNAMED ^
+      -source 8 -target 8 ^
       "%SRC_DIR%\com\gds2\agent\PageIdentifier.java" ^
       "%SRC_DIR%\com\gds2\agent\CommandMonitor.java"
 
