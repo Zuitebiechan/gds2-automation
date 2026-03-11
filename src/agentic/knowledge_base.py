@@ -21,6 +21,8 @@ from typing import List, Dict, Any, Optional
 
 import os
 
+import threading as _threading
+
 logger = logging.getLogger(__name__)
 
 # Similarity threshold: distances above this are "low confidence"
@@ -58,40 +60,44 @@ class GDS2KnowledgeBase:
         self._traces_table = None
         self._icons_table = None
 
+        self._init_lock = _threading.Lock()
+
     def _ensure_initialized(self):
-        """Lazy initialization of database and models."""
+        """Lazy initialization of database and models (thread-safe)."""
         if self._db is not None:
             return
+        with self._init_lock:
+            # Double-check after acquiring lock
+            if self._db is not None:
+                return
+            try:
+                import lancedb
+                from sentence_transformers import SentenceTransformer
 
-        try:
-            import lancedb
-            from sentence_transformers import SentenceTransformer
+                logger.info(f"Initializing knowledge base at {self.db_path}")
 
-            logger.info(f"Initializing knowledge base at {self.db_path}")
+                self._db = lancedb.connect(self.db_path)
+                self._text_model = SentenceTransformer('all-MiniLM-L6-v2')
 
-            self._db = lancedb.connect(self.db_path)
-            self._text_model = SentenceTransformer('all-MiniLM-L6-v2')
+                # Try to open tables
+                for table_name, attr_name in [
+                    ("gds2_pages", "_pages_table"),
+                    ("gds2_error_patterns", "_errors_table"),
+                    ("gds2_navigation_traces", "_traces_table"),
+                    ("gds2_icons", "_icons_table"),
+                ]:
+                    try:
+                        table = self._db.open_table(table_name)
+                        setattr(self, attr_name, table)
+                        logger.info(f"{table_name}: {table.count_rows()} entries")
+                    except Exception as e:
+                        logger.debug(f"{table_name} not found: {e}")
+                        setattr(self, attr_name, None)
 
-            # Try to open tables
-            for table_name, attr_name in [
-                ("gds2_pages", "_pages_table"),
-                ("gds2_error_patterns", "_errors_table"),
-                ("gds2_navigation_traces", "_traces_table"),
-                ("gds2_icons", "_icons_table"),
-            ]:
-                try:
-                    table = self._db.open_table(table_name)
-                    setattr(self, attr_name, table)
-                    logger.info(f"{table_name}: {table.count_rows()} entries")
-                except Exception as e:
-                    logger.debug(f"{table_name} not found: {e}")
-                    setattr(self, attr_name, None)
-
-        except ImportError as e:
-            logger.error(f"Failed to import dependencies: {e}")
-            logger.error("Install: pip install lancedb sentence-transformers")
-            raise
-
+            except ImportError as e:
+                logger.error(f"Failed to import dependencies: {e}")
+                logger.error("Install: pip install lancedb sentence-transformers")
+                raise
     # -----------------------------------------------------------------------
     # #1: Rich snapshot formatting (matches seed data text_features format)
     # -----------------------------------------------------------------------

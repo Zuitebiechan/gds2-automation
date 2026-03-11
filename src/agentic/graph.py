@@ -398,9 +398,10 @@ def run_with_event_queue(
             state = graph.get_state(config)
 
             if not state.next:
-                # Graph finished
+                # Graph finished — emit done event FIRST so the
+                # client can proceed immediately, then record trace
+                # in background (trace recording may download models).
                 final = state.values
-                _record_trace(final)
                 event_queue.put({
                     "type": "done",
                     "final_page": final.get("current_page", "unknown"),
@@ -408,6 +409,14 @@ def run_with_event_queue(
                     "selections": final.get("user_selections", {}),
                     "error": final.get("error"),
                 })
+                # Record trace in background (non-blocking)
+                import threading as _threading
+                _threading.Thread(
+                    target=_record_trace,
+                    args=(final,),
+                    daemon=True,
+                    name="nav-trace-record",
+                ).start()
                 return final
 
             # Graph paused for HITL
