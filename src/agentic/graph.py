@@ -454,10 +454,14 @@ def run_with_event_queue(
                     })
                     return state.values
 
-                # Resume graph with user's selection
+                # Resume graph with user's selection.
+                # MERGE with existing selections so previous choices
+                # (e.g. module) are preserved across HITL rounds.
+                existing_selections = state.values.get("user_selections", {})
+                merged = {**existing_selections, "selected_item": selected_item}
                 graph.update_state(
                     config,
-                    {"user_selections": {"selected_item": selected_item}},
+                    {"user_selections": merged},
                 )
 
                 # Continue streaming (None = resume from checkpoint)
