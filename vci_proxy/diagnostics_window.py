@@ -2085,7 +2085,7 @@ class DiagnosticsWindow:
             self._set_session_hint("导航完成，自动开始 AI 诊断...")
             self._append_agent_message("agent", "导航完成，自动开始 AI 诊断...")
             self._navigate_session_id = None
-            self.after(500, self._on_ai_diagnose_clicked)
+            self._root.after(500, self._on_ai_diagnose_clicked)
             return
         else:
             self._set_session_hint("导航完成。请选择 Module 和 Data Category。")
