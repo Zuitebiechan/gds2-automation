@@ -1137,8 +1137,10 @@ def should_continue(state: NavigationState) -> Literal["deterministic", "agent",
         logger.info(f"Routing: user decision page ({current_page})")
         return "human"
 
-    # 7. Deterministic route available
-    if current_page in DETERMINISTIC_ROUTES:
+    # 7. Deterministic route available (includes special-case pages
+    #    like device_explorer that are handled inside deterministic_node
+    #    but not listed in DETERMINISTIC_ROUTES).
+    if current_page in DETERMINISTIC_ROUTES or current_page == "device_explorer":
         logger.info("Routing: deterministic route available")
         return "deterministic"
 
