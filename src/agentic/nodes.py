@@ -71,8 +71,44 @@ USER_DECISION_PAGES = [
 ]
 
 
+def _wait_for_enter_enabled(controller, timeout: float = 30.0, poll_interval: float = 1.0) -> bool:
+    """Poll Java Agent until the Enter button is enabled or timeout.
+
+    GDS2 disables the Enter button on vehicle_selection while it
+    initialises the vehicle connection.  This mirrors the old
+    DataViewerWorkflow._wait_for_button_enabled() behaviour.
+
+    Returns:
+        True if Enter became enabled within timeout, False otherwise.
+    """
+    import time as _time
+    start = _time.time()
+    while _time.time() - start < timeout:
+        try:
+            buttons = controller.nav.get_buttons()
+            for btn in buttons:
+                if btn.get('text') == 'Enter':
+                    if btn.get('enabled', True):  # default True for older Agents
+                        logger.info(
+                            f"Enter button enabled after "
+                            f"{_time.time() - start:.1f}s"
+                        )
+                        return True
+                    else:
+                        logger.debug("Enter button found but disabled, waiting...")
+                        break  # found button, but disabled — keep polling
+        except Exception as e:
+            logger.debug(f"Button poll error (non-fatal): {e}")
+        _time.sleep(poll_interval)
+    logger.warning(f"Enter button did not become enabled within {timeout}s")
+    return False
+
+
 def _handle_vehicle_selection(state: NavigationState) -> dict:
     """Handle vehicle_selection deterministically via controller.click_enter().
+
+    Waits for the Enter button to become enabled (up to 30s) before
+    clicking, since GDS2 disables it during vehicle connection init.
 
     Uses the full click_enter() method which includes:
     - Retry if still at vehicle_selection after first Enter click
@@ -83,6 +119,25 @@ def _handle_vehicle_selection(state: NavigationState) -> dict:
 
     controller = get_controller()
     try:
+        # Wait for Enter button to become enabled before clicking.
+        # GDS2 disables it while initialising the vehicle connection.
+        if not _wait_for_enter_enabled(controller, timeout=30.0):
+            logger.warning("Vehicle selection: Enter button never became enabled")
+            snapshot = _snapshot_from_controller(controller)
+            return {
+                "error": "Enter button is disabled (vehicle connection not ready)",
+                "next_action": "handle_error",
+                "page_snapshot": snapshot,
+                "navigation_history": [{
+                    "action": "waited for Enter button to become enabled",
+                    "from_page": "vehicle_selection",
+                    "deterministic": True,
+                    "success": False,
+                    "error": "Enter button remained disabled after 30s",
+                }],
+                "step_count": state.get("step_count", 0) + 1,
+            }
+
         result = controller.click_enter()
         snapshot = _snapshot_from_controller(controller)
         new_page = result.page.value
@@ -125,7 +180,6 @@ def _handle_vehicle_selection(state: NavigationState) -> dict:
             "next_action": "handle_error",
             "step_count": state.get("step_count", 0) + 1,
         }
-
 # ---------------------------------------------------------------------------
 # Node: Deterministic
 # ---------------------------------------------------------------------------
