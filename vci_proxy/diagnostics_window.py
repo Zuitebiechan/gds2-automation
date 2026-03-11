@@ -2081,9 +2081,12 @@ class DiagnosticsWindow:
 
         self._refresh_action_buttons()
 
-        if self._session_category_confirmed:
-            self._set_session_hint("导航完成。现在可以执行 Read DTCs。")
-            self._prompt_action_choices()
+        if self._session_category_confirmed and final_page == "data_display":
+            self._set_session_hint("导航完成，自动开始 AI 诊断...")
+            self._append_agent_message("agent", "导航完成，自动开始 AI 诊断...")
+            self._navigate_session_id = None
+            self.after(500, self._on_ai_diagnose_clicked)
+            return
         else:
             self._set_session_hint("导航完成。请选择 Module 和 Data Category。")
 

@@ -27,6 +27,13 @@ logger = logging.getLogger(__name__)
 # LanceDB uses L2 distance by default; lower = more similar
 SIMILARITY_THRESHOLD = 1.5  # Tuned for all-MiniLM-L6-v2 embedding space
 
+# ---------------------------------------------------------------------------
+# HuggingFace environment — MUST be set before any HF/sentence-transformers
+# import so the download URL is correct from the start.
+# ---------------------------------------------------------------------------
+if not os.environ.get("HF_ENDPOINT"):
+    os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+
 
 class GDS2KnowledgeBase:
     """
@@ -61,11 +68,6 @@ class GDS2KnowledgeBase:
             from sentence_transformers import SentenceTransformer
 
             logger.info(f"Initializing knowledge base at {self.db_path}")
-
-            # Use HF mirror for China mainland if not set
-            if not os.environ.get("HF_ENDPOINT"):
-                os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
-                logger.info("Set HF_ENDPOINT=https://hf-mirror.com (China mirror)")
 
             self._db = lancedb.connect(self.db_path)
             self._text_model = SentenceTransformer('all-MiniLM-L6-v2')
@@ -424,8 +426,8 @@ class GDS2KnowledgeBase:
         """
         self._ensure_initialized()
 
-        if self._db is None:
-            logger.warning("Database not initialized, cannot record trace")
+        if self._db is None or self._text_model is None:
+            logger.warning("Database or text model not initialized, cannot record trace")
             return
 
         try:

@@ -49,8 +49,8 @@ DETERMINISTIC_SEQUENCE = [
     ("vehicle_selection", "click_button", "Enter",              "diagnostics_menu"),
     ("diagnostics_menu", "select_list_item", "Module Diagnostics", "module_list"),
     # module_list -> HITL (user picks module)
-    # module_submenu -> deterministic: click "Data Display"
-    ("module_submenu",   "click_button", "Data Display",       "data_list"),
+    # module_submenu -> deterministic: select "Data Display" from list
+    ("module_submenu",   "select_list_item", "Data Display",       "data_list"),
     # data_list -> HITL (user picks data category)
     # sub_data_list -> HITL (user picks sub-data)
     # After user picks data -> we land on data_display (goal)
