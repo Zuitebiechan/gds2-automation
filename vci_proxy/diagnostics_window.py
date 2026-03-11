@@ -730,18 +730,6 @@ class DiagnosticsWindow:
         )
         self._append_agent_message("agent", f"模块已进入数据页，发现 {len(categories)} 个数据分类。")
 
-    def _prompt_action_choices(self) -> None:
-        """Prompt next-step actions in dialogue-only mode."""
-        options = [
-            {"value": "read_dtcs", "display": "Read DTCs"},
-        ]
-        self._set_agent_prompt(
-            "action",
-            "请选择下一步操作（下拉后点 Submit）",
-            options,
-        )
-        self._append_agent_message("agent", "请选择下一步操作：Read DTCs。")
-
     def _prompt_decision(self, decision: dict[str, Any]) -> bool:
         """Show decision options in chat prompt dropdown. Returns True when shown."""
         decision_id = str(decision.get("decision_id") or "").strip()
@@ -818,13 +806,6 @@ class DiagnosticsWindow:
             decision_id = self._agent_prompt_decision_id
             self._set_agent_prompt(None, "", [])
             self._navigate_submit_decision(decision_id, value)
-            return
-
-        if kind == "action":
-            self._append_agent_message("user", f"执行操作：{selected_display}")
-            self._set_agent_prompt(None, "", [])
-            if value == "read_dtcs":
-                self._on_read_dtcs_clicked()
             return
 
         self._set_agent_prompt(None, "", [])
@@ -1353,7 +1334,6 @@ class DiagnosticsWindow:
         self._ai_diagnose_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
         self._set_session_hint("已确认 Category：现在可执行 Read DTCs。")
         self._append_agent_message("agent", "数据分类已确认。现在可以执行 Read DTCs。")
-        self._prompt_action_choices()
         self._refresh_action_buttons()
 
     def _handle_live_start_result(self, payload: dict[str, Any]) -> None:
@@ -1932,7 +1912,6 @@ class DiagnosticsWindow:
                     self._ai_diagnose_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
                     self._set_status_text("Decision applied. Data category resolved.")
                     self._set_session_hint("Category 已确定。现在可执行诊断动作。")
-                    self._prompt_action_choices()
                 elif resume_action == "select_sub_category":
                     self._session_category_confirmed = True
                     has_category = bool(self._selected_data_category.get().strip())
@@ -1941,7 +1920,6 @@ class DiagnosticsWindow:
                     self._ai_diagnose_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
                     self._set_status_text("Decision applied. Sub-data category resolved.")
                     self._set_session_hint("Sub-data 已确定。现在可执行诊断动作。")
-                    self._prompt_action_choices()
 
                 self._session_status_var.set("Decision applied. Continuing...")
                 self._refresh_action_buttons()
