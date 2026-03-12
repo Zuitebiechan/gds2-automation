@@ -68,6 +68,9 @@ class AgentSnapshot:
     dtcs: List[DTCInfo]
     table_count: int
     raw_tables: List[Dict[str, Any]] = field(default_factory=list)
+    agent_timestamp_s: Optional[float] = None
+    collected_at_s: Optional[float] = None
+    collector_lag_ms: Optional[float] = None
 
     @property
     def has_parameters(self) -> bool:
@@ -86,7 +89,27 @@ class AgentSnapshot:
             'parameters': self.parameters,
             'dtcs': [d.to_dict() for d in self.dtcs],
             'table_count': self.table_count,
+            'agent_timestamp_s': self.agent_timestamp_s,
+            'collected_at_s': self.collected_at_s,
+            'collector_lag_ms': self.collector_lag_ms,
         }
+
+
+def _normalize_timestamp_seconds(timestamp: Any) -> Optional[float]:
+    """Normalize agent timestamp to unix seconds when possible."""
+    try:
+        value = float(timestamp)
+    except (TypeError, ValueError):
+        return None
+
+    if value <= 0:
+        return None
+
+    # Java-side timestamps are typically currentTimeMillis().
+    if value >= 1e11:
+        return value / 1000.0
+
+    return value
 
 
 def _parse_agent_json(data: dict) -> AgentSnapshot:
@@ -181,6 +204,7 @@ def _parse_agent_json(data: dict) -> AgentSnapshot:
         dtcs=dtcs,
         table_count=len(tables) if tables else 0,
         raw_tables=raw_tables,
+        agent_timestamp_s=_normalize_timestamp_seconds(timestamp),
     )
 
 
@@ -245,7 +269,7 @@ class AgentDataCollector:
 
     def __init__(
         self,
-        on_snapshot: Optional[Callable[[AgentSnapshot], None]] = None,
+        on_snapshot: Optional[Callable[[AgentSnapshot, List[dict]], None]] = None,
         on_param_change: Optional[Callable[[List[dict]], None]] = None,
         on_dtc_change: Optional[Callable[[List[DTCInfo], List[DTCInfo]], None]] = None,
         on_error: Optional[Callable[[str], None]] = None,
@@ -426,7 +450,17 @@ class AgentDataCollector:
 
             self._last_extraction_count = extraction_count
 
-            return _parse_agent_json(data)
+            snapshot = _parse_agent_json(data)
+            collected_at_s = time.time()
+            snapshot.collected_at_s = collected_at_s
+
+            if snapshot.agent_timestamp_s is not None:
+                snapshot.collector_lag_ms = round(
+                    max(0.0, collected_at_s - snapshot.agent_timestamp_s) * 1000.0,
+                    1,
+                )
+
+            return snapshot
 
         except json.JSONDecodeError:
             # File might be in the middle of being written
@@ -482,7 +516,7 @@ class AgentDataCollector:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
-    def on_snapshot(snap):
+    def on_snapshot(snap, _changes=None):
         print(f"\n[SNAPSHOT] #{snap.extraction_count} "
               f"({snap.extraction_duration_ms}ms) "
               f"params={len(snap.parameters)} dtcs={len(snap.dtcs)}")

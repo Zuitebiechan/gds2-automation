@@ -21,6 +21,44 @@ from .agent_data_collector import AgentSnapshot
 
 logger = logging.getLogger(__name__)
 
+TARGET_SAMPLE_INTERVAL_MS = 100.0
+EXPECTED_SAMPLE_RATE_HZ = 10.0
+LARGE_GAP_THRESHOLD_MS = 2000.0
+
+
+def _percentile(values: list[float], percentile: float) -> float:
+    """Return a simple percentile for a non-empty list."""
+    if not values:
+        return 0.0
+
+    if len(values) == 1:
+        return values[0]
+
+    ordered = sorted(values)
+    rank = (len(ordered) - 1) * percentile
+    lower = int(rank)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = rank - lower
+    return ordered[lower] * (1 - weight) + ordered[upper] * weight
+
+
+def format_sampling_quality_summary(quality: dict[str, Any]) -> str:
+    """Format a one-line sampling quality summary for logs/UI."""
+    grade = quality.get('grade', '?')
+    status = quality.get('status', 'unknown')
+    observed = quality.get('snapshot_count', 0)
+    expected = quality.get('expected_snapshot_count', 0)
+    gap = quality.get('gap_ms', {})
+    lag = quality.get('lag_ms', {})
+    stale_ratio = quality.get('stale_ratio', 0.0) * 100.0
+    return (
+        f"[AI-Sampling] grade={grade} status={status} | "
+        f"samples={observed}/{expected} | "
+        f"gap_ms(avg/p95/max)={gap.get('avg', 0):.0f}/{gap.get('p95', 0):.0f}/{gap.get('max', 0):.0f} | "
+        f"lag_ms(avg/p95/max)={lag.get('avg', 0):.0f}/{lag.get('p95', 0):.0f}/{lag.get('max', 0):.0f} | "
+        f"stale={stale_ratio:.1f}%"
+    )
+
 # Parameters that change rapidly and need 10Hz sampling
 FAST_PARAMETERS: set[str] = {
     'Engine Speed', 'RPM',
@@ -76,6 +114,11 @@ class DiagnosticBuffer:
         self._latest_dtcs: list[dict[str, Any]] = []
 
         self._snapshot_count = 0
+        self._sample_times: list[float] = []
+        self._sample_gaps_ms: list[float] = []
+        self._collector_lags_ms: list[float] = []
+        self._stale_snapshot_count = 0
+        self._gap_segments: list[dict[str, float]] = []
 
     @property
     def snapshot_count(self) -> int:
@@ -99,13 +142,29 @@ class DiagnosticBuffer:
 
         Applies dual-rate sampling and tracks per-parameter value changes.
         """
-        now = time.time()
+        now = self._resolve_snapshot_time(snapshot)
 
         with self._lock:
             if self._start_time is None:
                 self._start_time = now
 
             relative_time = round(now - self._start_time, 3)
+
+            if self._sample_times:
+                gap_ms = max(0.0, (now - self._sample_times[-1]) * 1000.0)
+                self._sample_gaps_ms.append(gap_ms)
+                if gap_ms > LARGE_GAP_THRESHOLD_MS:
+                    self._gap_segments.append({
+                        'start_t': round(relative_time - (gap_ms / 1000.0), 3),
+                        'end_t': relative_time,
+                        'duration_ms': round(gap_ms, 1),
+                        'reason': 'no_new_snapshot',
+                    })
+
+            self._sample_times.append(now)
+
+            if snapshot.collector_lag_ms is not None:
+                self._collector_lags_ms.append(snapshot.collector_lag_ms)
 
             # Store DTCs (always latest)
             self._latest_dtcs = [d.to_dict() for d in snapshot.dtcs]
@@ -139,6 +198,9 @@ class DiagnosticBuffer:
                     history.append((relative_time, value))
 
             # Store snapshot
+            if not sampled_params:
+                self._stale_snapshot_count += 1
+
             self._snapshots.append({
                 'ts': now,
                 'relative_time': relative_time,
@@ -231,6 +293,7 @@ class DiagnosticBuffer:
 
             # Detect significant changes (large jumps)
             significant = self._detect_significant_changes()
+            quality = self._build_sampling_quality(duration)
 
             return {
                 'window_seconds': self._window_seconds,
@@ -240,6 +303,9 @@ class DiagnosticBuffer:
                 'timeline': timeline,
                 'dtcs': list(self._latest_dtcs),
                 'significant_changes': significant,
+                'sampling_quality': quality,
+                'quality_summary': format_sampling_quality_summary(quality),
+                'gaps': list(self._gap_segments),
             }
 
     def get_raw_payload(self) -> dict[str, Any]:
@@ -263,6 +329,90 @@ class DiagnosticBuffer:
             self._latest_dtcs.clear()
             self._start_time = None
             self._snapshot_count = 0
+            self._sample_times.clear()
+            self._sample_gaps_ms.clear()
+            self._collector_lags_ms.clear()
+            self._stale_snapshot_count = 0
+            self._gap_segments.clear()
+
+    def _resolve_snapshot_time(self, snapshot: AgentSnapshot) -> float:
+        """Prefer the Java Agent timestamp over Python ingest time."""
+        if snapshot.agent_timestamp_s is not None:
+            return snapshot.agent_timestamp_s
+        if snapshot.collected_at_s is not None:
+            return snapshot.collected_at_s
+        return time.time()
+
+    def _build_sampling_quality(self, duration: float) -> dict[str, Any]:
+        """Summarize sampling quality over the current buffer window."""
+        expected_snapshot_count = max(
+            1,
+            int(round(self._window_seconds * EXPECTED_SAMPLE_RATE_HZ)),
+        )
+        gap_avg = round(sum(self._sample_gaps_ms) / len(self._sample_gaps_ms), 1) if self._sample_gaps_ms else 0.0
+        gap_p95 = round(_percentile(self._sample_gaps_ms, 0.95), 1) if self._sample_gaps_ms else 0.0
+        gap_max = round(max(self._sample_gaps_ms), 1) if self._sample_gaps_ms else 0.0
+        lag_avg = round(sum(self._collector_lags_ms) / len(self._collector_lags_ms), 1) if self._collector_lags_ms else 0.0
+        lag_p95 = round(_percentile(self._collector_lags_ms, 0.95), 1) if self._collector_lags_ms else 0.0
+        lag_max = round(max(self._collector_lags_ms), 1) if self._collector_lags_ms else 0.0
+        completeness_ratio = round(min(self._snapshot_count / expected_snapshot_count, 1.0), 3)
+        stale_ratio = round(self._stale_snapshot_count / self._snapshot_count, 3) if self._snapshot_count else 0.0
+        observed_rate_hz = round((self._snapshot_count / duration), 2) if duration > 0 else 0.0
+
+        degradation_reasons: list[str] = []
+        if self._snapshot_count < 180:
+            degradation_reasons.append('low_snapshot_count')
+        if gap_max > 2000.0:
+            degradation_reasons.append('large_gap')
+        if gap_p95 > 500.0:
+            degradation_reasons.append('high_p95_gap')
+        if lag_p95 > 300.0:
+            degradation_reasons.append('high_collector_lag')
+
+        if (
+            self._snapshot_count >= 240
+            and gap_p95 <= 250.0
+            and gap_max <= 800.0
+            and lag_p95 <= 300.0
+        ):
+            grade = 'A'
+            status = 'ready'
+        elif (
+            self._snapshot_count >= 180
+            and gap_p95 <= 500.0
+            and gap_max <= 2000.0
+        ):
+            grade = 'B'
+            status = 'degraded'
+        else:
+            grade = 'C'
+            status = 'insufficient'
+
+        return {
+            'grade': grade,
+            'status': status,
+            'degraded': grade != 'A',
+            'degradation_reasons': degradation_reasons,
+            'timing_source': 'java_agent_timestamp' if self._sample_times else 'unknown',
+            'expected_snapshot_count': expected_snapshot_count,
+            'snapshot_count': self._snapshot_count,
+            'completeness_ratio': completeness_ratio,
+            'observed_rate_hz': observed_rate_hz,
+            'target_rate_hz': EXPECTED_SAMPLE_RATE_HZ,
+            'target_interval_ms': TARGET_SAMPLE_INTERVAL_MS,
+            'stale_ratio': stale_ratio,
+            'gap_count': len(self._gap_segments),
+            'gap_ms': {
+                'avg': gap_avg,
+                'p95': gap_p95,
+                'max': gap_max,
+            },
+            'lag_ms': {
+                'avg': lag_avg,
+                'p95': lag_p95,
+                'max': lag_max,
+            },
+        }
 
     def _detect_significant_changes(self) -> list[dict[str, Any]]:
         """
