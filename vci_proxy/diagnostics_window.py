@@ -1487,8 +1487,8 @@ class DiagnosticsWindow:
 
     def _handle_ai_llm_chunk(self, payload: dict[str, Any]) -> None:
         chunk = payload.get("text", "")
-        if chunk:
-            self._append_ai_result_text(chunk)
+        if chunk and self._ai_status_text.get().startswith("Sending to AI"):
+            self._ai_status_text.set("Receiving AI analysis...")
 
     def _handle_ai_result(self, payload: dict[str, Any]) -> None:
         self._cached_payload_id = payload.get("cached_payload_id", "")
@@ -1499,17 +1499,12 @@ class DiagnosticsWindow:
         sampling_quality = data_summary.get("sampling_quality") or {}
         quality_summary = payload.get("quality_summary") or ""
 
-        # If LLM chunks were already streamed, the text widget has content.
-        # If not (e.g. non-stream fallback), show raw_response as base text.
-        current_text = self._ai_result_text.get("1.0", tk.END).strip()
-        if not current_text and raw_response:
-            self._set_ai_result_text(raw_response)
+        display_parts: list[str] = []
 
         if quality_summary or sampling_quality:
-            self._append_ai_result_text(
-                "\n\n--- DATA QUALITY ---\n"
+            display_parts.append(
+                "--- DATA QUALITY ---\n"
                 + self._format_ai_quality_summary(quality_summary, sampling_quality)
-                + "\n"
             )
             self._append_agent_message(
                 "agent",
@@ -1520,13 +1515,16 @@ class DiagnosticsWindow:
         if isinstance(verdict_data, dict) and verdict_data:
             verdict = verdict_data.get("verdict", "Unknown")
             confidence = verdict_data.get("confidence", "Unknown")
+            confidence_note = verdict_data.get("confidence_note", "")
             findings = verdict_data.get("findings", [])
             recommended_action = verdict_data.get("recommended_action", "None")
             ai_summary = verdict_data.get("summary", "")
 
-            summary = "\n\n--- FINAL VERDICT ---\n"
+            summary = "--- FINAL VERDICT ---\n"
             summary += f"Verdict: {verdict}\n"
             summary += f"Confidence: {confidence}\n"
+            if confidence_note:
+                summary += f"Confidence Note: {confidence_note}\n"
             if ai_summary:
                 summary += f"Summary: {ai_summary}\n"
             summary += "Findings:\n"
@@ -1539,16 +1537,18 @@ class DiagnosticsWindow:
                 else:
                     summary += f"  - {finding}\n"
             summary += f"Recommended Action: {recommended_action}\n"
-            self._append_ai_result_text(summary)
+            display_parts.append(summary)
             self._append_agent_message(
                 "agent",
                 f"AI 诊断完成：{verdict}（confidence={confidence}）。建议：{recommended_action}",
             )
         else:
-            # parse_verdict failed — raw_response is already displayed
-            self._append_ai_result_text("\n\n[Note: Could not parse structured verdict from AI response.]\n")
+            if raw_response:
+                display_parts.append(raw_response)
+            display_parts.append("[Note: Could not parse structured verdict from AI response.]")
             self._append_agent_message("agent", "AI 诊断完成，但结构化 verdict 解析失败；请查看 AI Diagnosis Result。")
 
+        self._set_ai_result_text("\n\n".join(part for part in display_parts if part))
         self._ai_status_text.set("AI Diagnosis Complete.")
 
     def _format_ai_quality_summary(
