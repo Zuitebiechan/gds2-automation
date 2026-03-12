@@ -344,6 +344,7 @@ class AIEngine:
         # Parse the full response
         response_text = "".join(full_response)
         verdict = LLMClient.parse_verdict(response_text)
+        verdict = self._apply_sampling_quality_confidence(verdict, delta_payload)
 
         self._emit(session_id, 'result', {
             'raw_response': response_text,
@@ -368,6 +369,41 @@ class AIEngine:
         )
         if quality_summary:
             logger.info(quality_summary)
+
+    def _apply_sampling_quality_confidence(
+        self,
+        verdict: Optional[dict[str, Any]],
+        delta_payload: dict[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        """Clamp verdict confidence when data quality is degraded."""
+        if not isinstance(verdict, dict):
+            return verdict
+
+        sampling_quality = delta_payload.get('sampling_quality', {})
+        if not isinstance(sampling_quality, dict):
+            return verdict
+
+        grade = str(sampling_quality.get('grade', '')).upper()
+        if grade == 'B':
+            max_confidence = 70
+        elif grade == 'C':
+            max_confidence = 40
+        else:
+            return verdict
+
+        original_confidence = verdict.get('confidence')
+        if not isinstance(original_confidence, (int, float)):
+            return verdict
+
+        if original_confidence <= max_confidence:
+            return verdict
+
+        updated = dict(verdict)
+        updated['confidence'] = max_confidence
+        updated['confidence_note'] = (
+            f"Capped from {original_confidence} due to grade {grade} sampling quality."
+        )
+        return updated
 
     def _cleanup_session(self, session_id: str) -> None:
         """Mark session as complete, emit done event, and schedule queue cleanup."""

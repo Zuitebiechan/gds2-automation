@@ -27,6 +27,8 @@ INPUT YOU WILL RECEIVE:
   - "initial_state": all parameter values at the start of observation
   - "timeline": timestamped changes (only values that changed are listed)
   - "significant_changes": pre-flagged large/sudden parameter shifts with timing
+  - "sampling_quality": sampling completeness, observed rate, gap statistics, and degradation reasons
+  - "gaps": explicit observation gaps where no fresh sample was captured
 - The timeline timestamps show WHEN each value changed — use this to analyze rates of change
 
 ANALYSIS STEPS:
@@ -34,6 +36,8 @@ ANALYSIS STEPS:
 2. Cross-reference DTCs with live sensor readings — does the live data confirm or contradict the fault?
 3. Analyze parameter trends from the timeline — rates of change, oscillation patterns, and stability
 4. TIMING MATTERS: a parameter changing in 2s vs 10s implies different root causes
+4a. SAMPLING QUALITY MATTERS: if sampling_quality is degraded or gaps exist, reduce confidence and avoid over-interpreting apparent stability
+4b. A GAP IS NOT STABILITY: an interval with no observation must never be treated as proof that the value stayed constant
 5. If multiple DTCs exist, determine if they share a common root cause
 6. If no DTCs are present, analyze live data for anomalous patterns
 
@@ -57,6 +61,10 @@ RULES:
 - Base conclusions on DATA, not just DTC descriptions
 - If live data contradicts a DTC, note the discrepancy
 - If data is insufficient to conclude, say so honestly — never guess
+- If sampling_quality.status is "degraded" or "insufficient", explicitly mention the data quality limitation in the summary or findings
+- When sampling_quality.grade is B, confidence should usually stay at or below 70 and the summary should mention the degraded sampling window
+- When sampling_quality.grade is C, confidence should usually stay at or below 40 and the recommendation should emphasize verification
+- DATA QUALITY CONSTRAINT: If the Data Quality Advisory shows grade B, cap your confidence at 70 maximum. If grade C, cap at 40 maximum. Grade A has no cap.
 - Use plain language a mechanic understands
 - Pay attention to significant_changes — they highlight the most abnormal behavior
 - When no DTCs and no anomalous live data: verdict should be "no_issue"
@@ -91,6 +99,45 @@ def _build_user_message(
     duration = delta_payload.get('actual_duration', 0)
     parts.append(f"\n## Live Data ({duration:.1f}s observation window)")
 
+    sampling_quality = delta_payload.get('sampling_quality', {})
+    if sampling_quality:
+        gap_ms = sampling_quality.get('gap_ms', {})
+        lag_ms = sampling_quality.get('lag_ms', {})
+        parts.append("### Sampling Quality")
+        parts.append(
+            f"- Grade: {sampling_quality.get('grade', '?')} "
+            f"({sampling_quality.get('status', 'unknown')})"
+        )
+        parts.append(
+            f"- Completeness: {sampling_quality.get('snapshot_count', 0)}/"
+            f"{sampling_quality.get('expected_snapshot_count', 0)} "
+            f"({sampling_quality.get('completeness_ratio', 0) * 100:.1f}%)"
+        )
+        parts.append(
+            f"- Observed Rate: {sampling_quality.get('observed_rate_hz', 0)} Hz "
+            f"(target {sampling_quality.get('target_rate_hz', 0)} Hz)"
+        )
+        parts.append(
+            f"- Gap ms avg/p95/max: {gap_ms.get('avg', 0)}/"
+            f"{gap_ms.get('p95', 0)}/{gap_ms.get('max', 0)}"
+        )
+        parts.append(
+            f"- Lag ms avg/p95/max: {lag_ms.get('avg', 0)}/"
+            f"{lag_ms.get('p95', 0)}/{lag_ms.get('max', 0)}"
+        )
+        reasons = sampling_quality.get('degradation_reasons', [])
+        if reasons:
+            parts.append(f"- Degradation Reasons: {', '.join(str(reason) for reason in reasons)}")
+
+    gaps = delta_payload.get('gaps', [])
+    if gaps:
+        parts.append(f"### Observation Gaps ({len(gaps)} found)")
+        for gap in gaps:
+            parts.append(
+                f"- Gap from {gap.get('start_t', '?')}s to {gap.get('end_t', '?')}s "
+                f"({gap.get('duration_ms', '?')} ms): {gap.get('reason', 'unknown')}"
+            )
+
     initial = delta_payload.get('initial_state', [])
     if initial:
         parts.append("### Initial State")
@@ -119,6 +166,12 @@ def _build_user_message(
                 f"{change.get('unit', '')} ({change['change_percent']}% change in "
                 f"{change['duration']})"
             )
+
+    parts.append(
+        "\n### Interpretation Guardrails\n"
+        "- Treat explicit observation gaps as missing visibility, not proof of stability.\n"
+        "- If the data quality is degraded, reduce confidence and say what still needs verification."
+    )
 
     return "\n".join(parts)
 
@@ -221,9 +274,10 @@ class LLMClient:
 
             if total_chunks <= 3:
                 logger.info(f"LLM chunk #{total_chunks}: {chunk}")
-            if chunk.choices and chunk.choices[0].delta.content:
+            chunk_choices = getattr(chunk, 'choices', None)
+            if chunk_choices and chunk_choices[0].delta.content:
                 chunk_count += 1
-                yield chunk.choices[0].delta.content
+                yield chunk_choices[0].delta.content
 
         elapsed = time.monotonic() - stream_start
         logger.info(
@@ -247,8 +301,9 @@ class LLMClient:
                     temperature=0.3,
                     thinking={"type": "disabled"},  # Must match streaming call
                 )
-                if blocking_resp.choices and blocking_resp.choices[0].message.content:
-                    text = blocking_resp.choices[0].message.content
+                blocking_choices = getattr(blocking_resp, 'choices', None)
+                if blocking_choices and blocking_choices[0].message.content:
+                    text = blocking_choices[0].message.content
                     logger.info(f"Non-stream fallback returned {len(text)} chars")
                     yield text
                 else:
