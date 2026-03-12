@@ -242,6 +242,17 @@ class AIEngine:
             })
 
             delta_payload = buffer.get_delta_payload()
+            sampling_quality = delta_payload.get('sampling_quality', {})
+            quality_summary = delta_payload.get('quality_summary', '')
+
+            if quality_summary:
+                logger.info(quality_summary)
+
+            self._emit(session_id, 'progress', {
+                'phase': 'assembling',
+                'message': quality_summary or 'Sampling quality calculated.',
+                'sampling_quality': sampling_quality,
+            })
 
             # Cache payload for retry
             cache_data = {
@@ -338,19 +349,25 @@ class AIEngine:
             'raw_response': response_text,
             'verdict': verdict,
             'cached_payload_id': payload_id,
+            'quality_summary': delta_payload.get('quality_summary', ''),
             'data_summary': {
                 'collection_duration': delta_payload.get('actual_duration', 0),
                 'snapshot_count': delta_payload.get('snapshot_count', 0),
                 'dtc_count': len(delta_payload.get('dtcs', [])),
                 'timeline_events': len(delta_payload.get('timeline', [])),
                 'significant_changes': len(delta_payload.get('significant_changes', [])),
+                'sampling_quality': delta_payload.get('sampling_quality', {}),
+                'gaps': delta_payload.get('gaps', []),
             },
         })
 
+        quality_summary = delta_payload.get('quality_summary', '')
         logger.info(
             f"AI diagnosis complete. Verdict: "
             f"{verdict.get('verdict', 'unknown') if verdict else 'parse_failed'}"
         )
+        if quality_summary:
+            logger.info(quality_summary)
 
     def _cleanup_session(self, session_id: str) -> None:
         """Mark session as complete, emit done event, and schedule queue cleanup."""

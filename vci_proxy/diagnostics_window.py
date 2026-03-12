@@ -1480,12 +1480,22 @@ class DiagnosticsWindow:
 
         verdict_data = payload.get("verdict")
         raw_response = payload.get("raw_response", "")
+        data_summary = payload.get("data_summary") or {}
+        sampling_quality = data_summary.get("sampling_quality") or {}
+        quality_summary = payload.get("quality_summary") or ""
 
         # If LLM chunks were already streamed, the text widget has content.
         # If not (e.g. non-stream fallback), show raw_response as base text.
         current_text = self._ai_result_text.get("1.0", tk.END).strip()
         if not current_text and raw_response:
             self._set_ai_result_text(raw_response)
+
+        if quality_summary or sampling_quality:
+            self._append_ai_result_text(
+                "\n\n--- DATA QUALITY ---\n"
+                + self._format_ai_quality_summary(quality_summary, sampling_quality)
+                + "\n"
+            )
 
         # Build structured verdict summary
         if isinstance(verdict_data, dict) and verdict_data:
@@ -1516,6 +1526,49 @@ class DiagnosticsWindow:
             self._append_ai_result_text("\n\n[Note: Could not parse structured verdict from AI response.]\n")
 
         self._ai_status_text.set("AI Diagnosis Complete.")
+
+    def _format_ai_quality_summary(
+        self,
+        quality_summary: str,
+        sampling_quality: dict[str, Any],
+    ) -> str:
+        """Build a readable AI data-quality block from SSE payload."""
+        lines: list[str] = []
+        if quality_summary:
+            lines.append(quality_summary)
+
+        if not isinstance(sampling_quality, dict) or not sampling_quality:
+            return "\n".join(lines) if lines else "No sampling quality data received."
+
+        lines.append(
+            f"Observed Rate: {sampling_quality.get('observed_rate_hz', 0)} Hz "
+            f"(target {sampling_quality.get('target_rate_hz', 0)} Hz)"
+        )
+        lines.append(
+            f"Completeness: {sampling_quality.get('completeness_ratio', 0) * 100:.1f}% "
+            f"({sampling_quality.get('snapshot_count', 0)}/"
+            f"{sampling_quality.get('expected_snapshot_count', 0)})"
+        )
+
+        gap_ms = sampling_quality.get('gap_ms') or {}
+        lag_ms = sampling_quality.get('lag_ms') or {}
+        lines.append(
+            f"Gap ms avg/p95/max: {gap_ms.get('avg', 0)}/{gap_ms.get('p95', 0)}/{gap_ms.get('max', 0)}"
+        )
+        lines.append(
+            f"Lag ms avg/p95/max: {lag_ms.get('avg', 0)}/{lag_ms.get('p95', 0)}/{lag_ms.get('max', 0)}"
+        )
+        lines.append(
+            f"Grade: {sampling_quality.get('grade', '?')} | "
+            f"Status: {sampling_quality.get('status', 'unknown')} | "
+            f"Stale: {sampling_quality.get('stale_ratio', 0) * 100:.1f}%"
+        )
+
+        reasons = sampling_quality.get('degradation_reasons') or []
+        if reasons:
+            lines.append(f"Warnings: {', '.join(str(reason) for reason in reasons)}")
+
+        return "\n".join(lines)
 
     def _handle_ai_error(self, payload: dict[str, Any]) -> None:
         error_msg = payload.get("error", "Unknown error")
