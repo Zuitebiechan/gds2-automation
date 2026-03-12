@@ -431,6 +431,7 @@ def diagnose_ai_retry():
     vehicle_context = {
         'vin': data.get('vin', ''),
         'module': data.get('module', ''),
+        'data_category': data.get('data_category', ''),
     }
 
     if not cached_payload_id:

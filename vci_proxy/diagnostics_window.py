@@ -204,7 +204,7 @@ class DiagnosticsWindow:
     def _build_start_section(self, parent: ttk.Frame) -> None:
         frame = ttk.Frame(parent, style="Card.TFrame", padding=(0, 0, 0, 12))
         frame.grid(row=1, column=0, sticky="ew")
-        frame.columnconfigure(1, weight=1)
+        frame.columnconfigure(2, weight=1)
 
         self._start_button = ttk.Button(
             frame,
@@ -215,8 +215,17 @@ class DiagnosticsWindow:
         )
         self._start_button.grid(row=0, column=0, sticky="w", padx=(0, 16))
 
+        self._ai_diagnose_button = ttk.Button(
+            frame,
+            text="✨ AI Diagnostics",
+            style="Big.TButton",
+            command=self._on_ai_diagnose_clicked,
+            state=tk.DISABLED,
+        )
+        self._ai_diagnose_button.grid(row=0, column=1, sticky="w", padx=(0, 16))
+
         self._status_label = ttk.Label(frame, textvariable=self._status_message, style="Status.TLabel")
-        self._status_label.grid(row=0, column=1, sticky="w")
+        self._status_label.grid(row=0, column=2, sticky="w")
 
     def _build_session_section(self, parent: ttk.Frame) -> None:
         frame = ttk.LabelFrame(parent, text="Session Diagnostics (New)", padding=(12, 6))
@@ -395,16 +404,6 @@ class DiagnosticsWindow:
         primary_controls = ttk.Frame(live_frame, style="Card.TFrame")
         primary_controls.grid(row=2, column=0, columnspan=3, sticky="w", pady=(4, 5))
 
-        self._ai_diagnose_button = ttk.Button(
-            primary_controls,
-            text="✨ AI Diagnose",
-            style="Big.TButton",
-            command=self._on_ai_diagnose_clicked,
-            state=tk.DISABLED,
-        )
-        self._ai_diagnose_button.grid(row=0, column=0, sticky="w")
-        self._ai_diagnose_button.grid_remove()
-
         # Row 4: Secondary controls
         secondary_controls = ttk.Frame(live_frame, style="Card.TFrame")
         secondary_controls.grid(row=3, column=0, columnspan=3, sticky="w", pady=(0, 10))
@@ -485,8 +484,7 @@ class DiagnosticsWindow:
         ai_scroll.grid(row=1, column=1, sticky="ns")
         self._ai_result_text.configure(yscrollcommand=ai_scroll.set)
 
-        # Legacy AI diagnosis panel hidden in agentic-only simplified UI.
-        ai_frame.grid_remove()
+        self._ai_result_frame = ai_frame
     # ------------------------------------------------------------------
     # Generic threaded API helpers
     # ------------------------------------------------------------------
@@ -646,9 +644,9 @@ class DiagnosticsWindow:
         )
 
         can_run_actions = (
-            session_mode
+            has_module
             and has_category
-            and self._session_category_confirmed
+            and (not session_mode or self._session_category_confirmed)
             and not self._stream_active
         )
 
@@ -657,7 +655,9 @@ class DiagnosticsWindow:
         )
         # Legacy controls hidden in agentic-only mode.
         self._start_stream_button.configure(state=tk.DISABLED)
-        self._ai_diagnose_button.configure(state=tk.DISABLED)
+        self._ai_diagnose_button.configure(
+            state=tk.NORMAL if can_run_actions else tk.DISABLED
+        )
 
     def _error_message(self, payload: dict[str, Any], fallback: str) -> str:
         value = payload.get("error") if isinstance(payload, dict) else None
@@ -877,6 +877,7 @@ class DiagnosticsWindow:
         
         self._ai_status_text.set("Starting AI Diagnosis...")
         self._set_ai_result_text("")
+        self._append_agent_message("user", f"启动 AI Diagnostics（{module} / {category}）")
 
         self._api_call(
             "POST",
@@ -888,7 +889,10 @@ class DiagnosticsWindow:
     def _on_ai_retry_clicked(self) -> None:
         if not self._cached_payload_id:
             return
-            
+
+        module = self._selected_module.get().strip()
+        category = self._selected_data_category.get().strip()
+
         self._ai_diagnose_button.configure(state=tk.DISABLED)
         self._start_stream_button.configure(state=tk.DISABLED)
         self._read_dtc_button.configure(state=tk.DISABLED)
@@ -896,11 +900,17 @@ class DiagnosticsWindow:
         
         self._ai_status_text.set("Retrying AI Diagnosis...")
         self._set_ai_result_text("")
+        self._append_agent_message("user", "重试 AI Diagnostics")
 
         self._api_call(
             "POST",
             "/api/diagnose/ai_diagnose/retry",
-            json_data={"cached_payload_id": self._cached_payload_id},
+            json_data={
+                "cached_payload_id": self._cached_payload_id,
+                "vin": self._vin,
+                "module": module,
+                "data_category": category,
+            },
             callback_event="ai_start_result",
         )
     def _on_read_dtcs_clicked(self) -> None:
@@ -1454,6 +1464,7 @@ class DiagnosticsWindow:
             session_id = payload.get("session_id")
             if session_id:
                 self._ai_status_text.set("AI Diagnosis started. Waiting for events...")
+                self._append_agent_message("agent", "AI Diagnostics 已启动，正在采集 30 秒数据并准备分析。")
                 self._start_ai_sse_thread(session_id)
             else:
                 self._ai_status_text.set("Error: No session_id returned.")
@@ -1462,6 +1473,10 @@ class DiagnosticsWindow:
                 self._read_dtc_button.configure(state=tk.NORMAL)
         else:
             self._ai_status_text.set(f"Failed to start AI Diagnosis: {self._error_message(payload, 'Request failed.')}")
+            self._append_agent_message(
+                "agent",
+                f"AI Diagnostics 启动失败：{self._error_message(payload, 'Request failed.')}",
+            )
             self._ai_diagnose_button.configure(state=tk.NORMAL)
             self._start_stream_button.configure(state=tk.NORMAL)
             self._read_dtc_button.configure(state=tk.NORMAL)
@@ -1496,6 +1511,10 @@ class DiagnosticsWindow:
                 + self._format_ai_quality_summary(quality_summary, sampling_quality)
                 + "\n"
             )
+            self._append_agent_message(
+                "agent",
+                self._format_ai_dialog_quality_summary(quality_summary, sampling_quality),
+            )
 
         # Build structured verdict summary
         if isinstance(verdict_data, dict) and verdict_data:
@@ -1521,9 +1540,14 @@ class DiagnosticsWindow:
                     summary += f"  - {finding}\n"
             summary += f"Recommended Action: {recommended_action}\n"
             self._append_ai_result_text(summary)
+            self._append_agent_message(
+                "agent",
+                f"AI 诊断完成：{verdict}（confidence={confidence}）。建议：{recommended_action}",
+            )
         else:
             # parse_verdict failed — raw_response is already displayed
             self._append_ai_result_text("\n\n[Note: Could not parse structured verdict from AI response.]\n")
+            self._append_agent_message("agent", "AI 诊断完成，但结构化 verdict 解析失败；请查看 AI Diagnosis Result。")
 
         self._ai_status_text.set("AI Diagnosis Complete.")
 
@@ -1570,10 +1594,31 @@ class DiagnosticsWindow:
 
         return "\n".join(lines)
 
+    def _format_ai_dialog_quality_summary(
+        self,
+        quality_summary: str,
+        sampling_quality: dict[str, Any],
+    ) -> str:
+        """Build a concise single-line sampling summary for the chat panel."""
+        if quality_summary:
+            return f"AI 数据质量：{quality_summary}"
+
+        if not isinstance(sampling_quality, dict) or not sampling_quality:
+            return "AI 数据质量：未收到采样质量信息。"
+
+        return (
+            "AI 数据质量："
+            f"grade={sampling_quality.get('grade', '?')} "
+            f"status={sampling_quality.get('status', 'unknown')} "
+            f"samples={sampling_quality.get('snapshot_count', 0)}/"
+            f"{sampling_quality.get('expected_snapshot_count', 0)}"
+        )
+
     def _handle_ai_error(self, payload: dict[str, Any]) -> None:
         error_msg = payload.get("error", "Unknown error")
         self._ai_status_text.set(f"Error: {error_msg}")
         self._append_ai_result_text(f"\n\n[Error: {error_msg}]")
+        self._append_agent_message("agent", f"AI Diagnostics 失败：{error_msg}")
         
         self._cached_payload_id = payload.get("cached_payload_id", "")
         is_retryable = payload.get("retryable", False)
