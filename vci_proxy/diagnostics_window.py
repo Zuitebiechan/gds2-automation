@@ -50,6 +50,7 @@ class DiagnosticsWindow:
         self._ai_sse_response: Optional[requests.Response] = None
         self._vin = ""
         self._cached_payload_id = ""
+        self._auto_ai_start_scheduled = False
 
         # Session flow state
         self._session_id: Optional[str] = None
@@ -659,6 +660,33 @@ class DiagnosticsWindow:
             state=tk.NORMAL if can_run_actions else tk.DISABLED
         )
 
+    def _can_auto_start_ai(self) -> bool:
+        """Return whether the main workflow can auto-start AI safely."""
+        return (
+            bool(self._selected_module.get().strip())
+            and bool(self._selected_data_category.get().strip())
+            and (not self._session_id or self._session_category_confirmed)
+            and not self._stream_active
+            and not self._ai_sse_running
+            and not self._auto_ai_start_scheduled
+        )
+
+    def _schedule_auto_ai_start(self, reason: str) -> None:
+        """Schedule main-path AI auto-start once after reaching Data Display."""
+        if not self._can_auto_start_ai():
+            return
+
+        self._auto_ai_start_scheduled = True
+        self._set_session_hint(reason)
+        self._append_agent_message("agent", reason)
+
+        def _run() -> None:
+            self._auto_ai_start_scheduled = False
+            if self._can_auto_start_ai():
+                self._on_ai_diagnose_clicked()
+
+        self._root.after(500, _run)
+
     def _error_message(self, payload: dict[str, Any], fallback: str) -> str:
         value = payload.get("error") if isinstance(payload, dict) else None
         return str(value).strip() if value else fallback
@@ -874,6 +902,7 @@ class DiagnosticsWindow:
         self._start_stream_button.configure(state=tk.DISABLED)
         self._read_dtc_button.configure(state=tk.DISABLED)
         self._ai_retry_button.grid_remove()
+        self._auto_ai_start_scheduled = False
         
         self._ai_status_text.set("Starting AI Diagnosis...")
         self._set_ai_result_text("")
@@ -1336,15 +1365,14 @@ class DiagnosticsWindow:
             return
 
         self._set_server_connected(True)
-        self._set_status_text("Session data category selected. Ready for Read DTCs.")
+        self._set_status_text("Session data category selected. Data Display ready.")
         self._session_category_confirmed = True
         has_category = bool(self._selected_data_category.get().strip())
         self._read_dtc_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
         self._start_stream_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
         self._ai_diagnose_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
-        self._set_session_hint("已确认 Category：现在可执行 Read DTCs。")
-        self._append_agent_message("agent", "数据分类已确认。现在可以执行 Read DTCs。")
         self._refresh_action_buttons()
+        self._schedule_auto_ai_start("数据分类已确认，自动开始 AI 诊断...")
 
     def _handle_live_start_result(self, payload: dict[str, Any]) -> None:
         if payload.get("success"):
@@ -2009,7 +2037,7 @@ class DiagnosticsWindow:
                     self._start_stream_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
                     self._ai_diagnose_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
                     self._set_status_text("Decision applied. Data category resolved.")
-                    self._set_session_hint("Category 已确定。现在可执行诊断动作。")
+                    self._schedule_auto_ai_start("Category 已确定，自动开始 AI 诊断...")
                 elif resume_action == "select_sub_category":
                     self._session_category_confirmed = True
                     has_category = bool(self._selected_data_category.get().strip())
@@ -2017,7 +2045,7 @@ class DiagnosticsWindow:
                     self._start_stream_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
                     self._ai_diagnose_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
                     self._set_status_text("Decision applied. Sub-data category resolved.")
-                    self._set_session_hint("Sub-data 已确定。现在可执行诊断动作。")
+                    self._schedule_auto_ai_start("Sub-data 已确定，自动开始 AI 诊断...")
 
                 self._session_status_var.set("Decision applied. Continuing...")
                 self._refresh_action_buttons()
@@ -2158,10 +2186,8 @@ class DiagnosticsWindow:
         self._refresh_action_buttons()
 
         if self._session_category_confirmed and final_page == "data_display":
-            self._set_session_hint("导航完成，自动开始 AI 诊断...")
-            self._append_agent_message("agent", "导航完成，自动开始 AI 诊断...")
             self._navigate_session_id = None
-            self._root.after(500, self._on_ai_diagnose_clicked)
+            self._schedule_auto_ai_start("导航完成，自动开始 AI 诊断...")
             return
         else:
             self._set_session_hint("导航完成。请选择 Module 和 Data Category。")
