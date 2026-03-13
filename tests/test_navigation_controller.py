@@ -135,6 +135,15 @@ class TestPageDetection:
 
         assert page == GDS2Page.J2534_DISCONNECT
 
+    def test_detect_loading_page_with_ambiguous_enter_and_back(self, controller, mock_nav):
+        """Transient loading state should not be misclassified as disconnect."""
+        mock_nav.set_buttons(["Back", "Vehicle Menu", "Enter"])
+        mock_nav.set_list_items([])
+
+        page = controller.detect_current_page()
+
+        assert page == GDS2Page.LOADING
+
     def test_detect_module_submenu(self, controller, mock_nav):
         """Test detection of Module Submenu (list contains Data Display)."""
         mock_nav.set_buttons(["Back", "Home"])
@@ -223,14 +232,14 @@ class TestPageDetection:
 
         assert page == GDS2Page.DATA_LIST
 
-    def test_detect_unknown(self, controller, mock_nav):
-        """Test detection returns UNKNOWN when no patterns match."""
+    def test_detect_loading_with_blank_intermediate_state(self, controller, mock_nav):
+        """Blank intermediate states should be treated as transient loading."""
         mock_nav.set_buttons([])
         mock_nav.set_list_items([])
 
         page = controller.detect_current_page()
 
-        assert page == GDS2Page.UNKNOWN
+        assert page == GDS2Page.LOADING
 
 
 class TestNavigationActions:

@@ -350,6 +350,49 @@ def _handle_j2534_disconnect(state: NavigationState) -> dict:
     }
 
 
+def _handle_loading(state: NavigationState) -> dict:
+    """Wait deterministically for transient loading pages to resolve."""
+    from .tools import get_controller, _snapshot_from_controller
+
+    controller = get_controller()
+    try:
+        from ..navigation.controller import GDS2Page
+
+        new_page = controller.wait_for_page_transition(GDS2Page.LOADING, timeout=10.0)
+    except TimeoutError:
+        snapshot = _snapshot_from_controller(controller)
+        return {
+            "current_page": snapshot.get("page", "unknown"),
+            "page_snapshot": snapshot,
+            "error": "Loading page did not resolve within 10s.",
+            "next_action": "handle_error",
+            "navigation_history": [{
+                "action": "waited for loading page to resolve",
+                "from_page": "loading",
+                "deterministic": True,
+                "success": False,
+                "error": "Timed out waiting for loading page",
+            }],
+            "step_count": state.get("step_count", 0) + 1,
+        }
+
+    snapshot = _snapshot_from_controller(controller)
+    return {
+        "current_page": new_page.value,
+        "page_snapshot": snapshot,
+        "next_action": "continue",
+        "error": None,
+        "navigation_history": [{
+            "action": "waited for loading page to resolve",
+            "from_page": "loading",
+            "to_page": new_page.value,
+            "deterministic": True,
+            "success": True,
+        }],
+        "step_count": state.get("step_count", 0) + 1,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Node: Deterministic
 # ---------------------------------------------------------------------------
@@ -369,6 +412,9 @@ def deterministic_node(state: NavigationState) -> dict:
     # the normal JavaFX route table.
     if current_page == "device_explorer":
         return _handle_device_explorer(state)
+
+    if current_page == "loading":
+        return _handle_loading(state)
 
     if current_page == "j2534_disconnect":
         return _handle_j2534_disconnect(state)
@@ -1226,7 +1272,7 @@ def should_continue(state: NavigationState) -> Literal["deterministic", "agent",
     # 7. Deterministic route available (includes special-case pages
     #    like device_explorer that are handled inside deterministic_node
     #    but not listed in DETERMINISTIC_ROUTES).
-    if current_page in DETERMINISTIC_ROUTES or current_page in {"device_explorer", "j2534_disconnect"}:
+    if current_page in DETERMINISTIC_ROUTES or current_page in {"device_explorer", "j2534_disconnect", "loading"}:
         logger.info("Routing: deterministic route available")
         return "deterministic"
 

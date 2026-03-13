@@ -28,6 +28,7 @@ class GDS2Page(Enum):
     DATA_LIST = "data_list"
     SUB_DATA_LIST = "sub_data_list"         # Sub-categories for some data
     DATA_DISPLAY = "data_display"
+    LOADING = "loading"
     J2534_DISCONNECT = "j2534_disconnect"
 
 
@@ -256,6 +257,7 @@ class NavigationController:
                 'data_list': GDS2Page.DATA_LIST,
                 'sub_data_list': GDS2Page.SUB_DATA_LIST,
                 'data_display': GDS2Page.DATA_DISPLAY,
+                'loading': GDS2Page.LOADING,
                 'j2534_disconnect': GDS2Page.J2534_DISCONNECT,
             }
 
@@ -293,13 +295,22 @@ class NavigationController:
             if "Create Report" in button_texts:
                 return GDS2Page.DATA_DISPLAY
 
-            # 1a. Lost communication page variants: always has Back, may or may not have OK.
+            # 1a. Transitional loading page: no list content and either no actionable
+            # buttons or stale deep-page buttons while GDS2 is repainting.
+            if not items:
+                if not button_texts:
+                    return GDS2Page.LOADING
+                if "Enter" in button_texts and ("Back" in button_texts or "Vehicle Menu" in button_texts):
+                    return GDS2Page.LOADING
+
+            # 1b. Lost communication page variants: always has Back, may or may not have OK.
             if (
                 "Back" in button_texts
                 and not items
                 and "Create Report" not in button_texts
                 and "Diagnostics" not in button_texts
                 and "Update" not in button_texts
+                and "Enter" not in button_texts
             ):
                 return GDS2Page.J2534_DISCONNECT
 
@@ -847,6 +858,18 @@ class NavigationController:
         if current == GDS2Page.DATA_DISPLAY:
             return NavigationResult(True, GDS2Page.DATA_DISPLAY, context=self._context.copy())
 
+        if current == GDS2Page.LOADING:
+            try:
+                current = self.wait_for_page_transition(GDS2Page.LOADING, timeout=10.0)
+            except TimeoutError:
+                current = self.detect_current_page(retries=0)
+            if current == GDS2Page.DATA_DISPLAY:
+                return NavigationResult(
+                    success=True,
+                    page=GDS2Page.DATA_DISPLAY,
+                    context={**self._context.copy(), "recovery_method": "loading_wait"},
+                )
+
         if current != GDS2Page.J2534_DISCONNECT:
             return NavigationResult(
                 success=False,
@@ -879,7 +902,7 @@ class NavigationController:
                     return NavigationResult(
                         success=True,
                         page=GDS2Page.DATA_DISPLAY,
-                        context=self._context.copy(),
+                        context={**self._context.copy(), "recovery_method": "soft_ok"},
                     )
 
                 # Re-sample visible buttons after each failed OK attempt.
@@ -937,6 +960,7 @@ class NavigationController:
                 reenter = self.select_sub_category(target_sub_category)
 
             if reenter.success and reenter.page == GDS2Page.DATA_DISPLAY:
+                reenter.context["recovery_method"] = "backtrack"
                 return reenter
 
             if reenter.page != GDS2Page.J2534_DISCONNECT:
