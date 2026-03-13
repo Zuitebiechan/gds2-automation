@@ -126,6 +126,15 @@ class TestPageDetection:
 
         assert page == GDS2Page.J2534_DISCONNECT
 
+    def test_detect_j2534_disconnect_page_without_ok(self, controller, mock_nav):
+        """Back-only disconnect variant should still be recognized."""
+        mock_nav.set_buttons(["Back", "Home"])
+        mock_nav.set_list_items([])
+
+        page = controller.detect_current_page()
+
+        assert page == GDS2Page.J2534_DISCONNECT
+
     def test_detect_module_submenu(self, controller, mock_nav):
         """Test detection of Module Submenu (list contains Data Display)."""
         mock_nav.set_buttons(["Back", "Home"])
@@ -301,6 +310,36 @@ class TestNavigationActions:
 
         assert result.success
         assert result.page == GDS2Page.DATA_DISPLAY
+        mock_back.assert_called_once()
+        mock_select.assert_called_once_with("Engine Data")
+
+    def test_recover_data_display_connection_without_ok_skips_soft_retry(self, controller, mock_nav):
+        """Back-only disconnect page should go straight to backtrack recovery."""
+        mock_nav.set_buttons(["Back", "Home"])
+        mock_nav.set_list_items([])
+        controller.detect_current_page()
+        controller.set_context(data_category="Engine Data")
+
+        mock_nav.click_button = MagicMock(return_value={"success": True, "message": ""})
+
+        with patch.object(
+            controller,
+            "go_back",
+            return_value=NavigationResult(success=True, page=GDS2Page.DATA_LIST),
+        ) as mock_back:
+            with patch.object(
+                controller,
+                "select_data_category",
+                return_value=NavigationResult(success=True, page=GDS2Page.DATA_DISPLAY),
+            ) as mock_select:
+                result = controller.recover_data_display_connection(
+                    data_category="Engine Data",
+                    retry_delays=[0.0],
+                )
+
+        assert result.success
+        assert result.page == GDS2Page.DATA_DISPLAY
+        mock_nav.click_button.assert_not_called()
         mock_back.assert_called_once()
         mock_select.assert_called_once_with("Engine Data")
 

@@ -293,12 +293,13 @@ class NavigationController:
             if "Create Report" in button_texts:
                 return GDS2Page.DATA_DISPLAY
 
-            # 1a. Lost communication page: visible OK + Back, no list, no report.
+            # 1a. Lost communication page variants: always has Back, may or may not have OK.
             if (
-                "OK" in button_texts
-                and "Back" in button_texts
+                "Back" in button_texts
                 and not items
                 and "Create Report" not in button_texts
+                and "Diagnostics" not in button_texts
+                and "Update" not in button_texts
             ):
                 return GDS2Page.J2534_DISCONNECT
 
@@ -853,28 +854,34 @@ class NavigationController:
                 context=self._context.copy(),
             )
 
-        delays = retry_delays or [0.0, 1.5, 3.0]
-        for attempt in range(min(soft_retry_attempts, len(delays))):
-            delay = delays[attempt]
-            if delay > 0:
-                time.sleep(delay)
+        button_states = self.get_available_buttons()
+        has_ok = button_states.get("OK", False)
 
-            result = self.nav.click_button("OK")
-            if not result.get('success'):
-                logger.warning("Failed to click OK on J2534 disconnect page: %s", result.get('message'))
+        if has_ok:
+            delays = retry_delays or [0.0, 1.5, 3.0]
+            for attempt in range(min(soft_retry_attempts, len(delays))):
+                delay = delays[attempt]
+                if delay > 0:
+                    time.sleep(delay)
 
-            try:
-                new_page = self.wait_for_page_transition(GDS2Page.J2534_DISCONNECT, timeout=ok_timeout)
-            except TimeoutError:
-                new_page = self.detect_current_page(retries=0)
+                result = self.nav.click_button("OK")
+                if not result.get('success'):
+                    logger.warning("Failed to click OK on J2534 disconnect page: %s", result.get('message'))
 
-            if new_page == GDS2Page.DATA_DISPLAY:
-                self._current_page = GDS2Page.DATA_DISPLAY
-                return NavigationResult(
-                    success=True,
-                    page=GDS2Page.DATA_DISPLAY,
-                    context=self._context.copy(),
-                )
+                try:
+                    new_page = self.wait_for_page_transition(GDS2Page.J2534_DISCONNECT, timeout=ok_timeout)
+                except TimeoutError:
+                    new_page = self.detect_current_page(retries=0)
+
+                if new_page == GDS2Page.DATA_DISPLAY:
+                    self._current_page = GDS2Page.DATA_DISPLAY
+                    return NavigationResult(
+                        success=True,
+                        page=GDS2Page.DATA_DISPLAY,
+                        context=self._context.copy(),
+                    )
+        else:
+            logger.info("J2534 disconnect page has no OK button; skipping soft retries and backtracking immediately")
 
         if not allow_backtrack:
             return NavigationResult(
