@@ -301,6 +301,7 @@ class AgentDataCollector:
         self._collection_count = 0
         self._last_snapshot: Optional[AgentSnapshot] = None
         self._fatal_error: Optional[str] = None
+        self._last_guard_event_signature: Optional[str] = None
 
     def start(self):
         """Start polling the Agent JSON file."""
@@ -393,7 +394,10 @@ class AgentDataCollector:
             try:
                 guard_result = self._run_page_guard()
                 if guard_result is not None and self.on_guard_event:
-                    self.on_guard_event(guard_result)
+                    signature = json.dumps(guard_result, sort_keys=True, ensure_ascii=False)
+                    if signature != self._last_guard_event_signature:
+                        self._last_guard_event_signature = signature
+                        self.on_guard_event(guard_result)
 
                 snapshot = self._read_and_parse()
 
@@ -445,6 +449,8 @@ class AgentDataCollector:
             self._running = False
             if self.on_error:
                 self.on_error(self._fatal_error)
+        elif not result.get('message'):
+            self._last_guard_event_signature = None
 
         return result
 

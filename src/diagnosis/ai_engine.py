@@ -203,13 +203,13 @@ class AIEngine:
             })
 
             collector_guard_error: dict[str, Optional[str]] = {'error': None}
-            collector_guard_event: dict[str, Optional[str]] = {'message': None}
+            collector_guard_event: dict[str, Optional[dict[str, Any]]] = {'event': None}
 
             def _on_collector_error(message: str) -> None:
                 collector_guard_error['error'] = message
 
             def _on_guard_event(event: dict[str, Any]) -> None:
-                collector_guard_event['message'] = event.get('message')
+                collector_guard_event['event'] = event
 
             buffer = DiagnosticBuffer(window_seconds=self._collection_seconds)
             collector = AgentDataCollector(
@@ -242,15 +242,16 @@ class AIEngine:
                         })
                         return
 
-                    guard_message = collector_guard_event.get('message')
-                    if guard_message:
-                        self._emit(session_id, 'progress', {
-                            'phase': 'collecting',
-                            'elapsed': elapsed,
-                            'total': self._collection_seconds,
-                            'message': guard_message,
-                        })
-                        collector_guard_event['message'] = None
+                    guard_event = collector_guard_event.get('event')
+                    if guard_event:
+                        start_time = self._handle_collection_guard_event(
+                            session_id,
+                            guard_event,
+                            buffer,
+                            start_time,
+                            elapsed,
+                        )
+                        collector_guard_event['event'] = None
 
                     self._emit(session_id, 'progress', {
                         'phase': 'collecting',
@@ -436,6 +437,38 @@ class AIEngine:
             f"Capped from {original_confidence} due to grade {grade} sampling quality."
         )
         return updated
+
+    def _handle_collection_guard_event(
+        self,
+        session_id: str,
+        guard_event: dict[str, Any],
+        buffer: DiagnosticBuffer,
+        start_time: float,
+        elapsed: int,
+    ) -> float:
+        """Emit guard status and restart the AI collection window if requested."""
+        guard_message = str(guard_event.get('message') or '')
+        if guard_message:
+            self._emit(session_id, 'progress', {
+                'phase': 'collecting',
+                'elapsed': elapsed,
+                'total': self._collection_seconds,
+                'message': guard_message,
+            })
+
+        if guard_event.get('restart_collection'):
+            logger.info('AI collection guard requested restart after reconnect recovery')
+            buffer.clear()
+            restart_time = time.time()
+            self._emit(session_id, 'progress', {
+                'phase': 'collecting',
+                'elapsed': 0,
+                'total': self._collection_seconds,
+                'message': 'Recovered connection. Restarting a fresh 30s AI collection window...',
+            })
+            return restart_time
+
+        return start_time
 
 
     def _cleanup_session(self, session_id: str) -> None:

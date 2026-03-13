@@ -92,21 +92,33 @@ def _make_data_display_guard(viewer, data_category: str, *, mode: str):
         if page == GDS2Page.DATA_DISPLAY:
             return None
 
+        if page == GDS2Page.LOADING:
+            return {
+                'ok': True,
+                'mode': mode,
+                'message': 'Waiting for GDS2 loading page to finish...',
+            }
+
         if page == GDS2Page.J2534_DISCONNECT:
             recovery = viewer.controller.recover_data_display_connection(
                 data_category=data_category,
-                allow_backtrack=(mode == 'stream'),
+                allow_backtrack=True,
             )
             if recovery.success and recovery.page == GDS2Page.DATA_DISPLAY:
+                recovery_method = (recovery.context or {}).get('recovery_method', 'unknown')
+                if mode == 'ai_collect' and recovery_method == 'backtrack':
+                    message = 'Recovered Data Display after reconnect; restarting AI collection window.'
+                elif mode == 'ai_collect':
+                    message = 'Recovered temporary J2534 disconnect and returned to Data Display.'
+                else:
+                    message = 'Recovered Data Display after J2534 disconnect.'
                 return {
                     'ok': True,
                     'mode': mode,
                     'recovered': True,
-                    'message': (
-                        'Recovered temporary J2534 disconnect and returned to Data Display.'
-                        if mode == 'ai_collect'
-                        else 'Recovered Data Display after J2534 disconnect.'
-                    ),
+                    'recovery_method': recovery_method,
+                    'restart_collection': mode == 'ai_collect' and recovery_method == 'backtrack',
+                    'message': message,
                 }
 
             if mode == 'ai_collect':

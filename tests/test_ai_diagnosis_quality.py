@@ -1,5 +1,9 @@
+from typing import cast
+from unittest.mock import patch
+
 from src.diagnosis.ai_engine import AIEngine
 from src.diagnosis.llm_client import _build_user_message
+from src.streaming.diagnostic_buffer import DiagnosticBuffer
 
 
 def test_build_user_message_includes_sampling_quality_and_gaps() -> None:
@@ -62,3 +66,28 @@ def test_apply_sampling_quality_confidence_caps_grade_c() -> None:
     assert adjusted is not None
     assert adjusted['confidence'] == 40
     assert 'grade C' in adjusted['confidence_note']
+
+
+def test_handle_collection_guard_event_restart_resets_collection_window() -> None:
+    engine = AIEngine(api_key='test-key')
+
+    class _FakeBuffer:
+        def __init__(self):
+            self.cleared = False
+
+        def clear(self) -> None:
+            self.cleared = True
+
+    buffer = _FakeBuffer()
+
+    with patch('src.diagnosis.ai_engine.time.time', return_value=1234.5):
+        new_start = engine._handle_collection_guard_event(
+            session_id='session-1',
+            guard_event={'message': 'Recovered', 'restart_collection': True},
+            buffer=cast(DiagnosticBuffer, buffer),
+            start_time=1000.0,
+            elapsed=12,
+        )
+
+    assert buffer.cleared is True
+    assert new_start == 1234.5
