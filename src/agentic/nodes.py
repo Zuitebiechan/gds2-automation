@@ -280,6 +280,76 @@ def _handle_device_explorer(state: NavigationState) -> dict:
     }
 
 
+def _handle_j2534_disconnect(state: NavigationState) -> dict:
+    """Recover deterministically from the J2534 disconnect page.
+
+    Navigation-stage semantics differ from AI collection semantics:
+    here we are still trying to reach Data Display, so backtracking to
+    Data List and re-entering the selected data category is allowed.
+    """
+    from .tools import get_controller, _snapshot_from_controller
+
+    controller = get_controller()
+    user_selections = state.get("user_selections", {}) or {}
+    target_category = user_selections.get("data_category") or controller.current_data_category
+
+    if not target_category:
+        return {
+            "error": "No remembered data category for J2534 disconnect recovery.",
+            "next_action": "handle_error",
+            "navigation_history": [{
+                "action": "recover from j2534_disconnect",
+                "from_page": "j2534_disconnect",
+                "deterministic": True,
+                "success": False,
+                "error": "Missing data_category context",
+            }],
+            "step_count": state.get("step_count", 0) + 1,
+        }
+
+    recovery = controller.recover_data_display_connection(
+        data_category=target_category,
+        allow_backtrack=True,
+    )
+    snapshot = _snapshot_from_controller(controller)
+    new_page = snapshot["page"] if snapshot else recovery.page.value
+
+    if recovery.success:
+        logger.info("J2534 disconnect recovery succeeded, now on '%s'", new_page)
+        return {
+            "current_page": new_page,
+            "page_snapshot": snapshot,
+            "next_action": "continue",
+            "error": None,
+            "navigation_history": [{
+                "action": "recovered from j2534_disconnect",
+                "from_page": "j2534_disconnect",
+                "to_page": new_page,
+                "deterministic": True,
+                "success": True,
+            }],
+            "step_count": state.get("step_count", 0) + 1,
+        }
+
+    error_msg = recovery.error or "Failed to recover from J2534 disconnect"
+    logger.warning("J2534 disconnect recovery failed: %s", error_msg)
+    return {
+        "current_page": new_page,
+        "page_snapshot": snapshot,
+        "error": error_msg,
+        "next_action": "handle_error",
+        "navigation_history": [{
+            "action": "recover from j2534_disconnect",
+            "from_page": "j2534_disconnect",
+            "to_page": new_page,
+            "deterministic": True,
+            "success": False,
+            "error": error_msg,
+        }],
+        "step_count": state.get("step_count", 0) + 1,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Node: Deterministic
 # ---------------------------------------------------------------------------
@@ -299,6 +369,9 @@ def deterministic_node(state: NavigationState) -> dict:
     # the normal JavaFX route table.
     if current_page == "device_explorer":
         return _handle_device_explorer(state)
+
+    if current_page == "j2534_disconnect":
+        return _handle_j2534_disconnect(state)
 
     route = DETERMINISTIC_ROUTES.get(current_page)
 
@@ -881,9 +954,22 @@ def agent_node(state: NavigationState) -> dict:
             }
 
     # 4. Process tool calls
-    if response.tool_calls:
+    if response is None:
+        return {
+            **state_updates,
+            "next_action": "ask_user",
+            "agent_confidence": 0.0,
+            "agent_reasoning": "LLM returned no response",
+            "navigation_history": [{
+                "action": "agent_no_response",
+                "success": False,
+            }],
+        }
+
+    response_tool_calls = cast(list[Any], getattr(response, "tool_calls", []) or [])
+    if response_tool_calls:
         # Take only the first tool call (one action per turn)
-        tool_call = response.tool_calls[0]
+        tool_call = cast(dict[str, Any], response_tool_calls[0])
         logger.info(f"Agent: tool_call = {tool_call['name']}({tool_call.get('args', {})})")
 
         try:
@@ -928,7 +1014,7 @@ def agent_node(state: NavigationState) -> dict:
                 f"Tool execution failed after {MAX_AGENT_RETRIES} retries, escalating to error handler"
             )
 
-            recovery_state = {**state, **state_updates}
+            recovery_state: NavigationState = cast(NavigationState, {**state, **state_updates})
             recovery_result = _try_recovery(recovery_state, str(e))
             if recovery_result:
                 logger.info("Structured recovery succeeded, continuing")
@@ -949,7 +1035,7 @@ def agent_node(state: NavigationState) -> dict:
             }
 
     # No tool calls -- LLM responded with plain text
-    content = response.content or ""
+    content = str(getattr(response, "content", "") or "")
     logger.warning(f"Agent: LLM returned no tool calls. Content: {content[:200]}")
 
     return {
@@ -1140,7 +1226,7 @@ def should_continue(state: NavigationState) -> Literal["deterministic", "agent",
     # 7. Deterministic route available (includes special-case pages
     #    like device_explorer that are handled inside deterministic_node
     #    but not listed in DETERMINISTIC_ROUTES).
-    if current_page in DETERMINISTIC_ROUTES or current_page == "device_explorer":
+    if current_page in DETERMINISTIC_ROUTES or current_page in {"device_explorer", "j2534_disconnect"}:
         logger.info("Routing: deterministic route available")
         return "deterministic"
 
