@@ -605,6 +605,38 @@ class DataViewerWorkflow:
         self._data_category = None
 
     @with_recovery
+    def recover_data_display_connection(
+        self,
+        *,
+        allow_backtrack: bool = True,
+        on_status: StatusCallback = None,
+    ) -> dict:
+        """Recover from the J2534 disconnect page back to Data Display."""
+        def status(msg):
+            logger.info(msg)
+            if on_status:
+                on_status(msg)
+
+        data_category = self._data_category or self.controller.current_data_category
+        if not data_category:
+            raise RuntimeError("No active data category stored for recovery.")
+
+        status("Attempting Data Display recovery...")
+        result = self.controller.recover_data_display_connection(
+            data_category=data_category,
+            allow_backtrack=allow_backtrack,
+        )
+        if not result.success:
+            raise RuntimeError(result.error or "Data Display recovery failed")
+
+        status("Data Display recovered")
+        return {
+            "monitoring": True,
+            "data_category": data_category,
+            "page": result.page.value,
+        }
+
+    @with_recovery
     def get_available_devices(self, on_status: StatusCallback = None) -> dict:
         """
         Navigate to Device Explorer and get all available devices.

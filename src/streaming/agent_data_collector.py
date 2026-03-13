@@ -273,6 +273,8 @@ class AgentDataCollector:
         on_param_change: Optional[Callable[[List[dict]], None]] = None,
         on_dtc_change: Optional[Callable[[List[DTCInfo], List[DTCInfo]], None]] = None,
         on_error: Optional[Callable[[str], None]] = None,
+        page_guard: Optional[Callable[[], Optional[dict[str, Any]]]] = None,
+        on_guard_event: Optional[Callable[[dict[str, Any]], None]] = None,
         interval_ms: int = 100,
         json_path: Optional[Path] = None,
     ):
@@ -280,6 +282,8 @@ class AgentDataCollector:
         self.on_param_change = on_param_change
         self.on_dtc_change = on_dtc_change
         self.on_error = on_error
+        self.page_guard = page_guard
+        self.on_guard_event = on_guard_event
         self.interval_ms = max(50, interval_ms)
 
         if json_path is None:
@@ -296,6 +300,7 @@ class AgentDataCollector:
         self._last_dtcs: List[DTCInfo] = []
         self._collection_count = 0
         self._last_snapshot: Optional[AgentSnapshot] = None
+        self._fatal_error: Optional[str] = None
 
     def start(self):
         """Start polling the Agent JSON file."""
@@ -340,6 +345,10 @@ class AgentDataCollector:
         return list(self._last_dtcs)
 
     @property
+    def fatal_error(self) -> Optional[str]:
+        return self._fatal_error
+
+    @property
     def json_path(self) -> Path:
         return self._json_path
 
@@ -382,6 +391,10 @@ class AgentDataCollector:
 
         while self._running:
             try:
+                guard_result = self._run_page_guard()
+                if guard_result is not None and self.on_guard_event:
+                    self.on_guard_event(guard_result)
+
                 snapshot = self._read_and_parse()
 
                 if snapshot is not None:
@@ -415,6 +428,25 @@ class AgentDataCollector:
             time.sleep(interval_sec)
 
         logger.info("Agent poll loop stopped")
+
+    def _run_page_guard(self) -> Optional[dict[str, Any]]:
+        """Run optional page consistency guard before reading Agent output."""
+        if self.page_guard is None:
+            return None
+
+        result = self.page_guard()
+        if result is None:
+            return None
+        if not isinstance(result, dict):
+            raise RuntimeError("page_guard must return a dict or None")
+
+        if not result.get('ok', False):
+            self._fatal_error = str(result.get('error') or 'Data Display guard failed.')
+            self._running = False
+            if self.on_error:
+                self.on_error(self._fatal_error)
+
+        return result
 
     def _read_and_parse(self) -> Optional[AgentSnapshot]:
         """Read and parse the Agent JSON file if it has been updated."""

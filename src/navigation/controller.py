@@ -28,6 +28,7 @@ class GDS2Page(Enum):
     DATA_LIST = "data_list"
     SUB_DATA_LIST = "sub_data_list"         # Sub-categories for some data
     DATA_DISPLAY = "data_display"
+    J2534_DISCONNECT = "j2534_disconnect"
 
 
 @dataclass
@@ -255,6 +256,7 @@ class NavigationController:
                 'data_list': GDS2Page.DATA_LIST,
                 'sub_data_list': GDS2Page.SUB_DATA_LIST,
                 'data_display': GDS2Page.DATA_DISPLAY,
+                'j2534_disconnect': GDS2Page.J2534_DISCONNECT,
             }
 
             return page_map.get(page_id, GDS2Page.UNKNOWN)
@@ -290,6 +292,15 @@ class NavigationController:
             # 1. DATA_DISPLAY: Has "Create Report" button (most specific)
             if "Create Report" in button_texts:
                 return GDS2Page.DATA_DISPLAY
+
+            # 1a. Lost communication page: visible OK + Back, no list, no report.
+            if (
+                "OK" in button_texts
+                and "Back" in button_texts
+                and not items
+                and "Create Report" not in button_texts
+            ):
+                return GDS2Page.J2534_DISCONNECT
 
             # 2. MAIN_MENU: Has "Diagnostics" and "Update" buttons
             if "Diagnostics" in button_texts and "Update" in button_texts:
@@ -814,6 +825,108 @@ class NavigationController:
             context=self._context.copy(),
         )
 
+    def recover_data_display_connection(
+        self,
+        data_category: Optional[str] = None,
+        *,
+        soft_retry_attempts: int = 3,
+        ok_timeout: float = 2.0,
+        allow_backtrack: bool = True,
+        retry_delays: Optional[list[float]] = None,
+    ) -> NavigationResult:
+        """Recover from the J2534 disconnect page back to Data Display.
+
+        Strategy:
+        1. Try OK several times to preserve the current Data Display context.
+        2. If allowed, Back to Data List and re-enter the remembered data category.
+        3. Return failure if recovery cannot safely restore Data Display.
+        """
+        current = self.detect_current_page(retries=0)
+        if current == GDS2Page.DATA_DISPLAY:
+            return NavigationResult(True, GDS2Page.DATA_DISPLAY, context=self._context.copy())
+
+        if current != GDS2Page.J2534_DISCONNECT:
+            return NavigationResult(
+                success=False,
+                page=current,
+                error=f"Expected J2534 disconnect page, got {current.value}",
+                context=self._context.copy(),
+            )
+
+        delays = retry_delays or [0.0, 1.5, 3.0]
+        for attempt in range(min(soft_retry_attempts, len(delays))):
+            delay = delays[attempt]
+            if delay > 0:
+                time.sleep(delay)
+
+            result = self.nav.click_button("OK")
+            if not result.get('success'):
+                logger.warning("Failed to click OK on J2534 disconnect page: %s", result.get('message'))
+
+            try:
+                new_page = self.wait_for_page_transition(GDS2Page.J2534_DISCONNECT, timeout=ok_timeout)
+            except TimeoutError:
+                new_page = self.detect_current_page(retries=0)
+
+            if new_page == GDS2Page.DATA_DISPLAY:
+                self._current_page = GDS2Page.DATA_DISPLAY
+                return NavigationResult(
+                    success=True,
+                    page=GDS2Page.DATA_DISPLAY,
+                    context=self._context.copy(),
+                )
+
+        if not allow_backtrack:
+            return NavigationResult(
+                success=False,
+                page=GDS2Page.J2534_DISCONNECT,
+                error="Transient reconnect failed without leaving the disconnect page.",
+                context=self._context.copy(),
+            )
+
+        target_category = data_category or self._context.get("data_category")
+        if not target_category:
+            return NavigationResult(
+                success=False,
+                page=GDS2Page.J2534_DISCONNECT,
+                error="No data category available for reconnect backtrack.",
+                context=self._context.copy(),
+            )
+
+        back_result = self.go_back()
+        if not back_result.success or back_result.page != GDS2Page.DATA_LIST:
+            return NavigationResult(
+                success=False,
+                page=back_result.page,
+                error=back_result.error or "Failed to return to Data List after disconnect.",
+                context=self._context.copy(),
+            )
+
+        reenter = self.select_data_category(target_category)
+        if not reenter.success:
+            return reenter
+
+        if reenter.page == GDS2Page.SUB_DATA_LIST:
+            target_sub_category = self._context.get("sub_category")
+            if not target_sub_category:
+                return NavigationResult(
+                    success=False,
+                    page=GDS2Page.SUB_DATA_LIST,
+                    error="Reconnect reached sub-category list but no prior sub-category was stored.",
+                    context=self._context.copy(),
+                )
+            reenter = self.select_sub_category(target_sub_category)
+
+        if reenter.success and reenter.page == GDS2Page.DATA_DISPLAY:
+            return reenter
+
+        return NavigationResult(
+            success=False,
+            page=reenter.page,
+            error=reenter.error or "Failed to restore Data Display after reconnect backtrack.",
+            context=self._context.copy(),
+        )
+
     def dismiss_warning_dialog(self) -> bool:
         """Dismiss warning dialog if present (OK button)."""
         for _ in range(3):
@@ -1289,6 +1402,8 @@ class NavigationController:
         if new_page == GDS2Page.DATA_DISPLAY:
             self._history.append(self._current_page)
             self._current_page = GDS2Page.DATA_DISPLAY
+            self._context["data_category"] = matched_item
+            self._context["sub_category"] = None
             return NavigationResult(
                 success=True,
                 page=GDS2Page.DATA_DISPLAY,
@@ -1301,6 +1416,8 @@ class NavigationController:
         if sub_items:
             self._history.append(self._current_page)
             self._current_page = GDS2Page.SUB_DATA_LIST
+            self._context["data_category"] = matched_item
+            self._context["sub_category"] = None
             return NavigationResult(
                 success=True,
                 page=GDS2Page.SUB_DATA_LIST,
@@ -1311,6 +1428,8 @@ class NavigationController:
 
         # Fallback
         self._history.append(self._current_page)
+        self._context["data_category"] = matched_item
+        self._context["sub_category"] = None
         return NavigationResult(
             success=True,
             page=new_page,
@@ -1373,6 +1492,7 @@ class NavigationController:
             new_page = self.detect_current_page()
         self._history.append(self._current_page)
         self._current_page = new_page
+        self._context["sub_category"] = matched_item
 
         return NavigationResult(
             success=True,
