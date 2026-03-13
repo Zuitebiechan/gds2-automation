@@ -18,6 +18,7 @@ import queue
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from typing import Any, Optional
 
 from ..streaming.agent_data_collector import AgentDataCollector, AgentSnapshot
@@ -102,6 +103,7 @@ class AIEngine:
     def start_session(
         self,
         vehicle_context: dict[str, Any],
+        collection_guard: Optional[Callable[[], Optional[dict[str, Any]]]] = None,
     ) -> str:
         """
         Start a new AI diagnosis session.
@@ -128,7 +130,7 @@ class AIEngine:
         # Launch worker thread
         self._worker_thread = threading.Thread(
             target=self._diagnosis_worker,
-            args=(session_id, vehicle_context),
+            args=(session_id, vehicle_context, collection_guard),
             daemon=True,
         )
         self._worker_thread.start()
@@ -188,6 +190,7 @@ class AIEngine:
         self,
         session_id: str,
         vehicle_context: dict[str, Any],
+        collection_guard: Optional[Callable[[], Optional[dict[str, Any]]]] = None,
     ) -> None:
         """Main worker: collect data → assemble payload → call LLM → stream result."""
         try:
@@ -199,9 +202,21 @@ class AIEngine:
                 'message': 'Starting data collection...',
             })
 
+            collector_guard_error: dict[str, Optional[str]] = {'error': None}
+            collector_guard_event: dict[str, Optional[str]] = {'message': None}
+
+            def _on_collector_error(message: str) -> None:
+                collector_guard_error['error'] = message
+
+            def _on_guard_event(event: dict[str, Any]) -> None:
+                collector_guard_event['message'] = event.get('message')
+
             buffer = DiagnosticBuffer(window_seconds=self._collection_seconds)
             collector = AgentDataCollector(
                 on_snapshot=lambda snap, _changes=None: buffer.append_snapshot(snap),
+                on_error=_on_collector_error,
+                page_guard=collection_guard,
+                on_guard_event=_on_guard_event,
                 interval_ms=100,
             )
 
@@ -220,6 +235,23 @@ class AIEngine:
             try:
                 while time.time() - start_time < self._collection_seconds:
                     elapsed = int(time.time() - start_time)
+                    if collector_guard_error['error']:
+                        self._emit(session_id, 'error', {
+                            'error': collector_guard_error['error'],
+                            'retryable': False,
+                        })
+                        return
+
+                    guard_message = collector_guard_event.get('message')
+                    if guard_message:
+                        self._emit(session_id, 'progress', {
+                            'phase': 'collecting',
+                            'elapsed': elapsed,
+                            'total': self._collection_seconds,
+                            'message': guard_message,
+                        })
+                        collector_guard_event['message'] = None
+
                     self._emit(session_id, 'progress', {
                         'phase': 'collecting',
                         'elapsed': elapsed,
@@ -404,6 +436,7 @@ class AIEngine:
             f"Capped from {original_confidence} due to grade {grade} sampling quality."
         )
         return updated
+
 
     def _cleanup_session(self, session_id: str) -> None:
         """Mark session as complete, emit done event, and schedule queue cleanup."""

@@ -77,6 +77,69 @@ def _app_bindings():
     }
 
 
+def _make_data_display_guard(viewer, data_category: str, *, mode: str):
+    """Build a shared Data Display guard for live and AI collectors.
+
+    mode:
+      - 'stream': allow backtrack recovery through Data List
+      - 'ai_collect': allow only in-place soft recovery; otherwise invalidate sample
+    """
+    if mode not in {'stream', 'ai_collect'}:
+        raise ValueError(f"Unsupported guard mode: {mode}")
+
+    def guard() -> dict | None:
+        page = viewer.controller.detect_current_page(retries=0)
+        if page == GDS2Page.DATA_DISPLAY:
+            return None
+
+        if page == GDS2Page.J2534_DISCONNECT:
+            recovery = viewer.controller.recover_data_display_connection(
+                data_category=data_category,
+                allow_backtrack=(mode == 'stream'),
+            )
+            if recovery.success and recovery.page == GDS2Page.DATA_DISPLAY:
+                return {
+                    'ok': True,
+                    'mode': mode,
+                    'recovered': True,
+                    'message': (
+                        'Recovered temporary J2534 disconnect and returned to Data Display.'
+                        if mode == 'ai_collect'
+                        else 'Recovered Data Display after J2534 disconnect.'
+                    ),
+                }
+
+            if mode == 'ai_collect':
+                return {
+                    'ok': False,
+                    'mode': mode,
+                    'error': (
+                        'Lost communication with J2534 during AI collection and could not '
+                        'restore Data Display in-place. Please reconnect and restart AI Diagnostics.'
+                    ),
+                }
+
+            return {
+                'ok': False,
+                'mode': mode,
+                'error': (
+                    'Lost communication with J2534 and could not restore Data Display. '
+                    'Please reconnect and restart live monitoring.'
+                ),
+            }
+
+        return {
+            'ok': False,
+            'mode': mode,
+            'error': (
+                f'Data Display guard detected page drift to {page.value}. '
+                'Please return to Data Display and retry.'
+            ),
+        }
+
+    return guard
+
+
 @diagnostics_bp.route('/start', methods=['POST'])
 def diagnose_start():
     """One-button start: start + auto-connect + modules."""
@@ -213,12 +276,20 @@ def diagnose_live_data_start():
         app_shared = _app_bindings()
         viewer = app_shared["get_data_viewer"]()
         viewer.select_data_category(data_category)
+        page_guard = _make_data_display_guard(viewer, data_category, mode='stream')
+
+        def on_guard_event(event: dict[str, object]) -> None:
+            message = event.get('message')
+            if message:
+                app_shared["broadcast_to_agent_clients"]('guard', {'message': message})
 
         _diag_collector = AgentDataCollector(
             on_snapshot=app_shared["on_agent_snapshot"],
             on_param_change=app_shared["on_agent_param_change"],
             on_dtc_change=app_shared["on_agent_dtc_change"],
             on_error=app_shared["on_agent_error"],
+            page_guard=page_guard,
+            on_guard_event=on_guard_event,
             interval_ms=interval_ms,
         )
         _diag_collector.start()
@@ -349,7 +420,8 @@ def diagnose_ai_start():
             logger.info("Not on DATA_DISPLAY (current: %s), navigating via select_data_category", current_page)
             viewer.select_data_category(data_category)
 
-        session_id = engine.start_session(vehicle_context)
+        page_guard = _make_data_display_guard(viewer, data_category, mode='ai_collect')
+        session_id = engine.start_session(vehicle_context, collection_guard=page_guard)
         return jsonify({
             "success": True,
             "session_id": session_id,

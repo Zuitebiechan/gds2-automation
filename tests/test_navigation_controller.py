@@ -117,6 +117,15 @@ class TestPageDetection:
 
         assert page == GDS2Page.DATA_DISPLAY
 
+    def test_detect_j2534_disconnect_page(self, controller, mock_nav):
+        """Disconnect page should be recognized by OK + Back without list items."""
+        mock_nav.set_buttons(["Back", "Home", "OK"])
+        mock_nav.set_list_items([])
+
+        page = controller.detect_current_page()
+
+        assert page == GDS2Page.J2534_DISCONNECT
+
     def test_detect_module_submenu(self, controller, mock_nav):
         """Test detection of Module Submenu (list contains Data Display)."""
         mock_nav.set_buttons(["Back", "Home"])
@@ -245,6 +254,55 @@ class TestNavigationActions:
 
         assert not result.success
         assert "Failed to click Back" in result.error
+
+    def test_recover_data_display_connection_with_ok_retry(self, controller, mock_nav):
+        """Soft OK retry should preserve Data Display when reconnect succeeds."""
+        mock_nav.set_buttons(["Back", "Home", "OK"])
+        mock_nav.set_list_items([])
+        controller.detect_current_page()
+
+        mock_nav.click_button = MagicMock(return_value={"success": True, "message": ""})
+
+        with patch.object(controller, "wait_for_page_transition", return_value=GDS2Page.DATA_DISPLAY):
+            result = controller.recover_data_display_connection(
+                data_category="Engine Data",
+                allow_backtrack=False,
+                retry_delays=[0.0],
+            )
+
+        assert result.success
+        assert result.page == GDS2Page.DATA_DISPLAY
+        mock_nav.click_button.assert_called_with("OK")
+
+    def test_recover_data_display_connection_backtracks_to_data_list(self, controller, mock_nav):
+        """Backtrack recovery should return to Data Display through the saved data category."""
+        mock_nav.set_buttons(["Back", "Home", "OK"])
+        mock_nav.set_list_items([])
+        controller.detect_current_page()
+        controller.set_context(data_category="Engine Data")
+
+        mock_nav.click_button = MagicMock(return_value={"success": True, "message": ""})
+
+        with patch.object(controller, "wait_for_page_transition", side_effect=TimeoutError("still disconnected")):
+            with patch.object(
+                controller,
+                "go_back",
+                return_value=NavigationResult(success=True, page=GDS2Page.DATA_LIST),
+            ) as mock_back:
+                with patch.object(
+                    controller,
+                    "select_data_category",
+                    return_value=NavigationResult(success=True, page=GDS2Page.DATA_DISPLAY),
+                ) as mock_select:
+                    result = controller.recover_data_display_connection(
+                        data_category="Engine Data",
+                        retry_delays=[0.0],
+                    )
+
+        assert result.success
+        assert result.page == GDS2Page.DATA_DISPLAY
+        mock_back.assert_called_once()
+        mock_select.assert_called_once_with("Engine Data")
 
     def test_go_home(self, controller, mock_nav):
         """Test go_home returns to Main Menu."""
