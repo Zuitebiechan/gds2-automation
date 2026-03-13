@@ -833,6 +833,7 @@ class NavigationController:
         soft_retry_attempts: int = 3,
         ok_timeout: float = 2.0,
         allow_backtrack: bool = True,
+        backtrack_attempts: int = 2,
         retry_delays: Optional[list[float]] = None,
     ) -> NavigationResult:
         """Recover from the J2534 disconnect page back to Data Display.
@@ -880,6 +881,15 @@ class NavigationController:
                         page=GDS2Page.DATA_DISPLAY,
                         context=self._context.copy(),
                     )
+
+                # Re-sample visible buttons after each failed OK attempt.
+                # Some disconnect pages visually lose the OK action once GDS2
+                # determines the connection cannot be resumed in place.
+                button_states = self.get_available_buttons()
+                has_ok = button_states.get("OK", False)
+                if not has_ok:
+                    logger.info("J2534 disconnect page no longer exposes OK; switching to backtrack recovery")
+                    break
         else:
             logger.info("J2534 disconnect page has no OK button; skipping soft retries and backtracking immediately")
 
@@ -900,37 +910,52 @@ class NavigationController:
                 context=self._context.copy(),
             )
 
-        back_result = self.go_back()
-        if not back_result.success or back_result.page != GDS2Page.DATA_LIST:
-            return NavigationResult(
-                success=False,
-                page=back_result.page,
-                error=back_result.error or "Failed to return to Data List after disconnect.",
-                context=self._context.copy(),
-            )
-
-        reenter = self.select_data_category(target_category)
-        if not reenter.success:
-            return reenter
-
-        if reenter.page == GDS2Page.SUB_DATA_LIST:
-            target_sub_category = self._context.get("sub_category")
-            if not target_sub_category:
+        last_failure: Optional[NavigationResult] = None
+        for _ in range(max(1, backtrack_attempts)):
+            back_result = self.go_back()
+            if not back_result.success or back_result.page != GDS2Page.DATA_LIST:
                 return NavigationResult(
                     success=False,
-                    page=GDS2Page.SUB_DATA_LIST,
-                    error="Reconnect reached sub-category list but no prior sub-category was stored.",
+                    page=back_result.page,
+                    error=back_result.error or "Failed to return to Data List after disconnect.",
                     context=self._context.copy(),
                 )
-            reenter = self.select_sub_category(target_sub_category)
 
-        if reenter.success and reenter.page == GDS2Page.DATA_DISPLAY:
-            return reenter
+            reenter = self.select_data_category(target_category)
+            if not reenter.success:
+                return reenter
+
+            if reenter.page == GDS2Page.SUB_DATA_LIST:
+                target_sub_category = self._context.get("sub_category")
+                if not target_sub_category:
+                    return NavigationResult(
+                        success=False,
+                        page=GDS2Page.SUB_DATA_LIST,
+                        error="Reconnect reached sub-category list but no prior sub-category was stored.",
+                        context=self._context.copy(),
+                    )
+                reenter = self.select_sub_category(target_sub_category)
+
+            if reenter.success and reenter.page == GDS2Page.DATA_DISPLAY:
+                return reenter
+
+            if reenter.page != GDS2Page.J2534_DISCONNECT:
+                return NavigationResult(
+                    success=False,
+                    page=reenter.page,
+                    error=reenter.error or "Failed to restore Data Display after reconnect backtrack.",
+                    context=self._context.copy(),
+                )
+
+            last_failure = reenter
 
         return NavigationResult(
             success=False,
-            page=reenter.page,
-            error=reenter.error or "Failed to restore Data Display after reconnect backtrack.",
+            page=last_failure.page if last_failure else GDS2Page.J2534_DISCONNECT,
+            error=(
+                last_failure.error if last_failure and last_failure.error
+                else "Failed to restore Data Display after reconnect backtrack."
+            ),
             context=self._context.copy(),
         )
 

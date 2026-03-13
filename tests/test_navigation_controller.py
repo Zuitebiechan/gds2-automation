@@ -313,6 +313,75 @@ class TestNavigationActions:
         mock_back.assert_called_once()
         mock_select.assert_called_once_with("Engine Data")
 
+    def test_recover_data_display_connection_rechecks_ok_and_switches_to_backtrack(self, controller, mock_nav):
+        """If OK disappears after a failed retry, switch immediately to backtrack recovery."""
+        mock_nav.set_buttons(["Back", "Home", "OK"])
+        mock_nav.set_list_items([])
+        controller.detect_current_page()
+        controller.set_context(data_category="Engine Data")
+
+        mock_nav.click_button = MagicMock(return_value={"success": True, "message": ""})
+
+        with patch.object(controller, "wait_for_page_transition", side_effect=TimeoutError("still disconnected")):
+            with patch.object(
+                controller,
+                "get_available_buttons",
+                side_effect=[{"OK": True, "Back": True}, {"Back": True}],
+            ):
+                with patch.object(
+                    controller,
+                    "go_back",
+                    return_value=NavigationResult(success=True, page=GDS2Page.DATA_LIST),
+                ) as mock_back:
+                    with patch.object(
+                        controller,
+                        "select_data_category",
+                        return_value=NavigationResult(success=True, page=GDS2Page.DATA_DISPLAY),
+                    ) as mock_select:
+                        result = controller.recover_data_display_connection(
+                            data_category="Engine Data",
+                            retry_delays=[0.0, 1.5, 3.0],
+                        )
+
+        assert result.success
+        assert result.page == GDS2Page.DATA_DISPLAY
+        assert mock_nav.click_button.call_count == 1
+        mock_back.assert_called_once()
+        mock_select.assert_called_once_with("Engine Data")
+
+    def test_recover_data_display_connection_allows_multiple_backtrack_rounds(self, controller, mock_nav):
+        """Backtrack recovery should retry deterministically before giving up."""
+        mock_nav.set_buttons(["Back", "Home"])
+        mock_nav.set_list_items([])
+        controller.detect_current_page()
+        controller.set_context(data_category="Engine Data")
+
+        with patch.object(
+            controller,
+            "go_back",
+            side_effect=[
+                NavigationResult(success=True, page=GDS2Page.DATA_LIST),
+                NavigationResult(success=True, page=GDS2Page.DATA_LIST),
+            ],
+        ) as mock_back:
+            with patch.object(
+                controller,
+                "select_data_category",
+                side_effect=[
+                    NavigationResult(success=True, page=GDS2Page.J2534_DISCONNECT),
+                    NavigationResult(success=True, page=GDS2Page.DATA_DISPLAY),
+                ],
+            ) as mock_select:
+                result = controller.recover_data_display_connection(
+                    data_category="Engine Data",
+                    backtrack_attempts=2,
+                )
+
+        assert result.success
+        assert result.page == GDS2Page.DATA_DISPLAY
+        assert mock_back.call_count == 2
+        assert mock_select.call_count == 2
+
     def test_recover_data_display_connection_without_ok_skips_soft_retry(self, controller, mock_nav):
         """Back-only disconnect page should go straight to backtrack recovery."""
         mock_nav.set_buttons(["Back", "Home"])
