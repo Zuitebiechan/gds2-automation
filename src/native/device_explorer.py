@@ -431,36 +431,58 @@ class DeviceExplorerController:
         return result[0]
 
     def _find_child_controls(self):
-        """Find child controls in the dialog."""
+        """Find child controls in the dialog.
+
+        Retries enumeration up to 2s to handle the case where the dialog
+        window exists but child controls (SysListView32, buttons) have
+        not been created yet.
+        """
         if not self._dialog_hwnd:
             return
 
-        self._listview_hwnd = None
-        self._continue_btn_hwnd = None
-        self._cancel_btn_hwnd = None
+        max_wait = 2.0
+        poll = 0.2
+        start = time.time()
 
-        def callback(hwnd, lparam):
-            class_name = ctypes.create_unicode_buffer(256)
-            user32.GetClassNameW(hwnd, class_name, 256)
+        while time.time() - start < max_wait:
+            self._listview_hwnd = None
+            self._continue_btn_hwnd = None
+            self._cancel_btn_hwnd = None
 
-            text_length = user32.GetWindowTextLengthW(hwnd) + 1
-            text = ctypes.create_unicode_buffer(text_length)
-            user32.GetWindowTextW(hwnd, text, text_length)
+            def callback(hwnd, lparam):
+                class_name = ctypes.create_unicode_buffer(256)
+                user32.GetClassNameW(hwnd, class_name, 256)
 
-            if class_name.value == "SysListView32":
-                self._listview_hwnd = hwnd
-            elif class_name.value == "Button":
-                if text.value == "Continue":
-                    self._continue_btn_hwnd = hwnd
-                elif text.value == "Cancel":
-                    self._cancel_btn_hwnd = hwnd
+                text_length = user32.GetWindowTextLengthW(hwnd) + 1
+                text = ctypes.create_unicode_buffer(text_length)
+                user32.GetWindowTextW(hwnd, text, text_length)
 
-            return True
+                if class_name.value == "SysListView32":
+                    self._listview_hwnd = hwnd
+                elif class_name.value == "Button":
+                    if text.value == "Continue":
+                        self._continue_btn_hwnd = hwnd
+                    elif text.value == "Cancel":
+                        self._cancel_btn_hwnd = hwnd
 
-        user32.EnumChildWindows(self._dialog_hwnd, EnumChildProc(callback), 0)
+                return True
 
-        logger.debug(f"Found controls: ListView={self._listview_hwnd}, "
-                    f"Continue={self._continue_btn_hwnd}, Cancel={self._cancel_btn_hwnd}")
+            user32.EnumChildWindows(self._dialog_hwnd, EnumChildProc(callback), 0)
+
+            if self._listview_hwnd is not None:
+                logger.debug(
+                    f"Found controls: ListView={self._listview_hwnd}, "
+                    f"Continue={self._continue_btn_hwnd}, Cancel={self._cancel_btn_hwnd}"
+                )
+                return
+
+            logger.debug("ListView not yet created, retrying...")
+            time.sleep(poll)
+
+        logger.warning(
+            "ListView not found after %.1fs. Controls: Continue=%s, Cancel=%s",
+            max_wait, self._continue_btn_hwnd, self._cancel_btn_hwnd,
+        )
 
     def _click_button(self, hwnd):
         """Click a button by sending messages."""
