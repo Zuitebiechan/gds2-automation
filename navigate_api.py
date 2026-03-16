@@ -10,6 +10,14 @@ Endpoints:
     POST /api/navigate/decision     - Submit user decision
     GET  /api/navigate/status       - Query session status
     POST /api/navigate/abort        - Abort running session
+
+NOTE on session management layers:
+    This module uses its own NavSession / _sessions store to manage the
+    LangGraph *execution* lifecycle (graph.stream + HITL pause/resume).
+    It is intentionally separate from SessionOrchestrator (session_api.py)
+    which manages the higher-level *business* lifecycle (brand routing,
+    workflow selection, decision gates with timeout/fallback).
+    The two do not share state — they serve different API surfaces.
 """
 
 import json

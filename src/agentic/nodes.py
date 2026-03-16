@@ -94,6 +94,75 @@ USER_DECISION_PAGES = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# Rule-based page hints for agent_node (replaces RAG vector search for the
+# 12 known GDS2 pages — deterministic is faster, cheaper, and more reliable).
+#
+# Each entry maps page_id -> {description, action, tool_name, tool_args}.
+# If `action` is None, the page has no deterministic shortcut and the
+# agent must reason freely.
+# ---------------------------------------------------------------------------
+
+PAGE_HINTS: dict[str, dict] = {
+    "main_menu": {
+        "description": "GDS2 Main Menu — click Diagnostics to proceed",
+        "tool_name": "click_button",
+        "tool_args": {"button_text": "Diagnostics"},
+    },
+    "vehicle_selection": {
+        "description": "Vehicle Selection — click Enter after VCI connects",
+        "tool_name": "click_button",
+        "tool_args": {"button_text": "Enter"},
+    },
+    "diagnostics_menu": {
+        "description": "Diagnostics Menu — select Module Diagnostics",
+        "tool_name": "select_list_item",
+        "tool_args": {"item_text": "Module Diagnostics"},
+    },
+    "module_list": {
+        "description": "Module List — user must select a module",
+        "tool_name": "ask_user",
+        "tool_args": {"prompt": "Please select a module"},
+    },
+    "module_submenu": {
+        "description": "Module Submenu — select Data Display to proceed",
+        "tool_name": "select_list_item",
+        "tool_args": {"item_text": "Data Display"},
+    },
+    "data_list": {
+        "description": "Data Category List — user must select a category",
+        "tool_name": "ask_user",
+        "tool_args": {"prompt": "Please select a data category"},
+    },
+    "sub_data_list": {
+        "description": "Sub-Data List — user must select a sub-category",
+        "tool_name": "ask_user",
+        "tool_args": {"prompt": "Please select a sub-category"},
+    },
+    "data_display": {
+        "description": "Data Display — goal reached",
+        "tool_name": "mark_done",
+        "tool_args": {"reasoning": "Arrived at Data Display page"},
+    },
+    "loading": {
+        "description": "Loading/transition page — wait for page to finish loading",
+        "tool_name": "get_current_snapshot",
+        "tool_args": {},
+    },
+    "j2534_disconnect": {
+        "description": "J2534 Disconnect — communication lost, try clicking OK",
+        "tool_name": "click_button",
+        "tool_args": {"button_text": "OK"},
+    },
+    "device_explorer": {
+        "description": "Device Explorer dialog (Win32) — select VCI device",
+        "tool_name": None,
+        "tool_args": {},
+    },
+    # unknown pages have no hint — agent must reason freely
+}
+
+
 def _wait_for_enter_enabled(controller, timeout: float = 30.0, poll_interval: float = 1.0) -> bool:
     """Poll Java Agent until the Enter button is enabled or timeout.
 
@@ -834,28 +903,38 @@ def agent_node(state: NavigationState) -> dict:
 
     try:
         from .knowledge_base import (
-            query_similar_pages,
             query_error_patterns,
-            get_tool_suggestion,
             get_knowledge_base,
         )
 
-        # Always query similar pages
-        similar_pages = query_similar_pages(snapshot, top_k=3)
+        # Rule-based page hint (replaces RAG vector search for known pages)
+        page_hint = PAGE_HINTS.get(current_page)
+        if page_hint:
+            similar_pages = [{
+                "page_type": current_page,
+                "description": page_hint["description"],
+                "deterministic_action": (
+                    f"{page_hint['tool_name']}({page_hint['tool_args']})"
+                    if page_hint.get("tool_name") else ""
+                ),
+                "is_confident": True,
+            }]
+            if page_hint.get("tool_name"):
+                tool_suggestion = {
+                    "tool_name": page_hint["tool_name"],
+                    "args": page_hint["tool_args"],
+                    "source": "page_hints_rule",
+                }
+                logger.info(
+                    f"Agent: rule-based hint suggests {tool_suggestion['tool_name']}"
+                    f"({tool_suggestion.get('args', {})})"
+                )
 
-        # Query error patterns if we're in error recovery
+        # Query error patterns if we're in error recovery (keep RAG for this)
         if state.get("error") or state.get("next_action") == "handle_error":
             error_text = state.get("error") or "unknown error"
             error_patterns = query_error_patterns(error_text, top_k=2)
             logger.info(f"Agent: found {len(error_patterns)} error patterns for recovery")
-
-        # Get tool suggestion from RAG
-        tool_suggestion = get_tool_suggestion(snapshot)
-        if tool_suggestion:
-            logger.info(
-                f"Agent: RAG suggests {tool_suggestion['tool_name']}"
-                f"({tool_suggestion.get('args', {})}) from {tool_suggestion.get('source')}"
-            )
 
     except Exception as e:
         logger.warning(f"Agent: KB query failed (non-fatal): {e}")

@@ -3,6 +3,17 @@
 Manages session lifecycle: routing by brand, decision gates for
 uncertain/missing workflows, and SSE-formatted event strings for
 real-time client communication.
+
+NOTE on session management layers:
+    This module provides the *business-level* session manager used by
+    session_api.py (/api/session/*).  It handles brand-to-workflow
+    routing, DecisionGate with timeout/fallback, and ad-hoc progress
+    events from workflow executors.
+
+    A separate, simpler session mechanism exists in navigate_api.py
+    (NavSession / _sessions) which manages the *execution-level*
+    LangGraph lifecycle (graph.stream + HITL pause/resume) for the
+    /api/navigate/* endpoints.  The two are intentionally independent.
 """
 
 import json
