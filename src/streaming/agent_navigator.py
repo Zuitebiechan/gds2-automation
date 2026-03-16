@@ -21,6 +21,7 @@ Usage:
 """
 
 import json
+import os
 import time
 import uuid
 import logging
@@ -292,11 +293,12 @@ class AgentNavigator:
         # Ensure data dir exists
         self._data_dir.mkdir(parents=True, exist_ok=True)
 
-        # Write command file (don't delete result.json - cmd_id matching
-        # ensures correctness, and deletion causes WinError 32 on Windows
-        # when the Java Agent is concurrently writing to it)
-        with open(self._command_file, 'w', encoding='utf-8') as f:
+        # Write command file atomically (write to temp, then rename)
+        # to prevent the Java Agent from reading a partially-written file.
+        tmp_file = self._command_file.with_suffix('.tmp')
+        with open(tmp_file, 'w', encoding='utf-8') as f:
             json.dump(command, f)
+        os.replace(str(tmp_file), str(self._command_file))
 
         # Wait for result
         start_time = time.time()

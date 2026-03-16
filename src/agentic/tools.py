@@ -8,19 +8,27 @@ Each tool returns a standardized dict for the state machine to consume.
 from langchain_core.tools import tool
 from typing import Dict, Any, List
 import logging
+import threading
 
 logger = logging.getLogger(__name__)
 
 # Lazy-loaded controller (shared across tools)
 _controller = None
+_controller_lock = threading.Lock()
 
 
 def get_controller():
-    """Lazy-load NavigationController to avoid circular imports."""
+    """Lazy-load NavigationController to avoid circular imports.
+
+    Thread-safe: uses double-checked locking so concurrent callers
+    never create duplicate instances.
+    """
     global _controller
     if _controller is None:
-        from ..navigation.controller import NavigationController
-        _controller = NavigationController()
+        with _controller_lock:
+            if _controller is None:
+                from ..navigation.controller import NavigationController
+                _controller = NavigationController()
     return _controller
 
 
@@ -28,19 +36,14 @@ def _snapshot_from_controller(controller) -> Dict[str, Any]:
     """
     Build a page snapshot dict from the current NavigationController state.
 
+    Delegates to controller.get_snapshot() which uses cached IPC results
+    from the most recent detect_current_page() call, avoiding redundant
+    round-trips to the Java Agent.
+
     Returns:
         {"page": str, "buttons": [...], "lists": [...], "context": {...}}
     """
-    page = controller.detect_current_page()
-    buttons = controller.get_visible_buttons()
-    items = controller.get_list_items(0)
-
-    return {
-        "page": page.value,
-        "buttons": buttons,
-        "lists": items,
-        "context": controller.get_context(),
-    }
+    return controller.get_snapshot()
 
 
 @tool

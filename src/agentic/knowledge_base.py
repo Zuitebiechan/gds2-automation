@@ -396,6 +396,35 @@ class GDS2KnowledgeBase:
                 "updated_at": datetime.now().isoformat(),
             }
 
+            # Dedup: check if a very similar record already exists.
+            # If so, update its usage_count and accuracy_rate instead of
+            # adding a near-duplicate that would pollute search results.
+            DEDUP_THRESHOLD = 0.3
+            try:
+                existing = self._pages_table.search(text_embedding).limit(1).to_list()
+                if existing and existing[0].get("_distance", 999) < DEDUP_THRESHOLD:
+                    old = existing[0]
+                    old_count = old.get("usage_count", 0)
+                    old_rate = old.get("accuracy_rate", 1.0)
+                    new_count = old_count + 1
+                    # Running average of accuracy
+                    new_rate = (old_rate * old_count + (1.0 if action_succeeded else 0.0)) / new_count
+                    self._pages_table.update(
+                        where=f"id = '{old['id']}'",
+                        values={
+                            "usage_count": new_count,
+                            "accuracy_rate": new_rate,
+                            "updated_at": datetime.now().isoformat(),
+                        },
+                    )
+                    logger.debug(
+                        f"Dedup: updated existing record '{old['id']}' "
+                        f"(usage_count={new_count}, accuracy={new_rate:.2f})"
+                    )
+                    return
+            except Exception as dedup_err:
+                logger.debug(f"Dedup check failed (non-fatal): {dedup_err}")
+
             self._pages_table.add([record])
             logger.info(
                 f"Added learned example: {final_classification} "

@@ -8,6 +8,7 @@ Each node represents a step in the navigation workflow:
 """
 
 import logging
+import threading
 import time
 from typing import Any, Literal, Optional, cast
 
@@ -22,6 +23,28 @@ from .llm_factory import create_llm
 logger = logging.getLogger(__name__)
 
 MAX_AGENT_RETRIES = 2
+
+# ---------------------------------------------------------------------------
+# Cached LLM with tools bound (avoid re-creating per agent_node call)
+# ---------------------------------------------------------------------------
+_llm_with_tools = None
+_llm_lock = threading.Lock()
+
+
+def _get_llm_with_tools():
+    """Get or create the cached LLM instance with tools bound.
+
+    Thread-safe. The LLM client and tool bindings are reused across
+    agent_node invocations to avoid connection setup overhead.
+    """
+    global _llm_with_tools
+    if _llm_with_tools is None:
+        with _llm_lock:
+            if _llm_with_tools is None:
+                llm = create_llm()
+                _llm_with_tools = llm.bind_tools(ALL_TOOLS)
+                logger.info("Created and cached LLM instance with tools bound")
+    return _llm_with_tools
 
 
 def _invoke_tool(tool: Any, args: dict) -> dict:
@@ -422,10 +445,10 @@ def deterministic_node(state: NavigationState) -> dict:
     route = DETERMINISTIC_ROUTES.get(current_page)
 
     if route is None:
-        # No deterministic route → hand off to agent
-        logger.info("No deterministic route found, handing off to agent")
+        # No deterministic route — let should_continue() decide the next node
+        logger.info("No deterministic route for this page, routing via should_continue")
         return {
-            "next_action": "agent",
+            "next_action": "continue",
             "step_count": state.get("step_count", 0) + 1,
         }
 
@@ -515,7 +538,7 @@ def deterministic_node(state: NavigationState) -> dict:
 
     logger.warning(f"Unknown deterministic action type: {route['action']}")
     return {
-        "next_action": "agent",
+        "next_action": "continue",
         "step_count": state.get("step_count", 0) + 1,
     }
 
@@ -633,19 +656,59 @@ def _build_user_message(
     return "\n".join(parts)
 
 
+def _build_action_result(
+    tool_call: dict, result: dict, current_page: str
+) -> dict:
+    """Build state updates for an action tool (click_button, select_list_item, go_back, go_home)."""
+    tool_name = tool_call["name"]
+    tool_args = tool_call.get("args", {})
+    action_label = tool_args.get("button_text") or tool_args.get("item_text") or tool_name
+
+    if result.get("success", False):
+        new_snapshot = result.get("snapshot")
+        new_page = new_snapshot["page"] if new_snapshot else "unknown"
+        return {
+            "current_page": new_page,
+            "page_snapshot": new_snapshot,
+            "next_action": "continue",
+            "error": None,
+            "navigation_history": [{
+                "action": f"agent {tool_name} '{action_label}'",
+                "from_page": current_page,
+                "to_page": new_page,
+                "deterministic": False,
+                "success": True,
+            }],
+        }
+    else:
+        error_msg = result.get("error", f"{tool_name} failed")
+        return {
+            "error": error_msg,
+            "next_action": "handle_error",
+            "navigation_history": [{
+                "action": f"agent tried {tool_name} '{action_label}'",
+                "from_page": current_page,
+                "deterministic": False,
+                "success": False,
+                "error": error_msg,
+            }],
+        }
+
+
 def _execute_tool_call(tool_call: dict, current_page: str) -> dict:
     """
     Execute a single tool call and return state updates.
 
-    Maps tool name + args to the actual tool invocation, then converts
-    the tool result into NavigationState updates.
+    Uses a registry to dispatch tool calls instead of a long if-elif chain.
+    Signal tools return control-flow signals, observation tools refresh state,
+    and action tools navigate GDS2 and report success/failure.
     """
     tool_name = tool_call["name"]
     tool_args = tool_call.get("args", {})
 
     logger.info(f"Agent: executing tool '{tool_name}' with args {tool_args}")
 
-    # --- Signal tools (non-action) ---
+    # --- Signal tools (non-action, return immediately) ---
     if tool_name == "ask_user":
         return {
             "next_action": "ask_user",
@@ -683,191 +746,48 @@ def _execute_tool_call(tool_call: dict, current_page: str) -> dict:
             }],
         }
 
-    # --- Observation tools ---
+    # --- Observation tools (refresh state, hand back to agent) ---
     if tool_name == "get_current_snapshot":
         result = _invoke_tool(get_current_snapshot, {})
-        new_page = result.get("page", "unknown")
         return {
-            "current_page": new_page,
+            "current_page": result.get("page", "unknown"),
             "page_snapshot": result,
-            "next_action": "agent",  # Agent should decide again with fresh data
-            "navigation_history": [{
-                "action": "agent refreshed page snapshot",
-                "success": True,
-            }],
+            "next_action": "agent",
+            "navigation_history": [{"action": "agent refreshed page snapshot", "success": True}],
         }
 
     if tool_name == "get_list_items":
         from .tools import get_list_items
         result = _invoke_tool(get_list_items, {})
         return {
-            "next_action": "agent",  # Agent should decide again with list data
-            "navigation_history": [{
-                "action": "agent read list items",
-                "items_count": result.get("count", 0),
-                "success": True,
-            }],
+            "next_action": "agent",
+            "navigation_history": [{"action": "agent read list items", "items_count": result.get("count", 0), "success": True}],
         }
 
-    # --- Action tools ---
-    if tool_name == "click_button":
-        result = _invoke_tool(click_button, {"button_text": tool_args.get("button_text", "")})
-        if result["success"]:
-            new_snapshot = result["snapshot"]
-            new_page = new_snapshot["page"] if new_snapshot else "unknown"
-            return {
-                "current_page": new_page,
-                "page_snapshot": new_snapshot,
-                "next_action": "continue",
-                "error": None,
-                "navigation_history": [{
-                    "action": f"agent clicked '{tool_args.get('button_text', '')}'",
-                    "from_page": current_page,
-                    "to_page": new_page,
-                    "deterministic": False,
-                    "success": True,
-                }],
-            }
-        else:
-            error_msg = result.get("error", "Click failed")
-            return {
-                "error": error_msg,
-                "next_action": "handle_error",
-                "navigation_history": [{
-                    "action": f"agent tried clicking '{tool_args.get('button_text', '')}'",
-                    "from_page": current_page,
-                    "deterministic": False,
-                    "success": False,
-                    "error": error_msg,
-                }],
-            }
+    # --- Action tools (navigate GDS2, unified via _build_action_result) ---
+    ACTION_TOOLS_MAP = {
+        "click_button": (click_button, lambda a: {"button_text": a.get("button_text", "")}),
+        "select_list_item": (select_list_item, lambda a: {"item_text": a.get("item_text", "")}),
+    }
+    if tool_name in ACTION_TOOLS_MAP:
+        tool_fn, args_builder = ACTION_TOOLS_MAP[tool_name]
+        result = _invoke_tool(tool_fn, args_builder(tool_args))
+        return _build_action_result(tool_call, result, current_page)
 
-    if tool_name == "select_list_item":
-        result = _invoke_tool(select_list_item, {"item_text": tool_args.get("item_text", "")})
-        if result["success"]:
-            new_snapshot = result["snapshot"]
-            new_page = new_snapshot["page"] if new_snapshot else "unknown"
-            return {
-                "current_page": new_page,
-                "page_snapshot": new_snapshot,
-                "next_action": "continue",
-                "error": None,
-                "navigation_history": [{
-                    "action": f"agent selected '{tool_args.get('item_text', '')}'",
-                    "from_page": current_page,
-                    "to_page": new_page,
-                    "deterministic": False,
-                    "success": True,
-                }],
-            }
-        else:
-            error_msg = result.get("error", "Selection failed")
-            return {
-                "current_page": current_page,
-                "error": error_msg,
-                "next_action": "handle_error",
-                "navigation_history": [{
-                    "action": f"agent tried selecting '{tool_args.get('item_text', '')}'",
-                    "from_page": current_page,
-                    "deterministic": False,
-                    "success": False,
-                    "error": error_msg,
-                }],
-            }
-
-    if tool_name == "go_back":
-        from .tools import go_back
-        result = _invoke_tool(go_back, {})
-        new_snapshot = result.get("snapshot")
-        new_page = new_snapshot["page"] if new_snapshot else "unknown"
-        return {
-            "current_page": new_page,
-            "page_snapshot": new_snapshot,
-            "next_action": "continue",
-            "error": None,
-            "navigation_history": [{
-                "action": "agent went back",
-                "from_page": current_page,
-                "to_page": new_page,
-                "success": result.get("success", False),
-            }],
-        }
-
-    if tool_name == "go_home":
-        from .tools import go_home
-        result = _invoke_tool(go_home, {})
-        new_snapshot = result.get("snapshot")
-        new_page = new_snapshot["page"] if new_snapshot else "unknown"
-        return {
-            "current_page": new_page,
-            "page_snapshot": new_snapshot,
-            "next_action": "continue",
-            "error": None,
-            "navigation_history": [{
-                "action": "agent went home",
-                "from_page": current_page,
-                "to_page": new_page,
-                "success": result.get("success", False),
-            }],
-        }
+    # go_back / go_home: no args, import lazily
+    if tool_name in ("go_back", "go_home"):
+        from .tools import go_back, go_home
+        tool_fn = go_back if tool_name == "go_back" else go_home
+        result = _invoke_tool(tool_fn, {})
+        return _build_action_result(tool_call, result, current_page)
 
     # Unknown tool (shouldn't happen with bind_tools)
     logger.warning(f"Agent called unknown tool: {tool_name}")
     return {
         "next_action": "ask_user",
-        "navigation_history": [{
-            "action": f"agent_unknown_tool_{tool_name}",
-            "success": False,
-        }],
+        "navigation_history": [{"action": f"agent_unknown_tool_{tool_name}", "success": False}],
     }
 
-
-def _try_recovery(state: NavigationState, error: str) -> Optional[dict]:
-    """Attempt structured recovery using the anomaly detection pipeline."""
-    try:
-        from src.recovery.anomaly_detector import AnomalyDetector
-        from src.recovery.recovery_manager import RecoveryManager
-        from src.recovery.types import OperationContext
-
-        detector = AnomalyDetector()
-        anomaly = detector.check_unexpected_dialog()
-
-        if anomaly is None:
-            anomaly = detector.check_state_mismatch(
-                expected_page="data_display",
-                actual_page=state.get("current_page", "unknown"),
-            )
-
-        if anomaly is None:
-            return None
-
-        context = OperationContext(
-            operation_name="agent_navigation",
-            current_page=state.get("current_page", "unknown"),
-        )
-
-        try:
-            recovery_manager = RecoveryManager()
-        except Exception as e:
-            logger.warning(f"RecoveryManager unavailable, skipping structured recovery: {e}")
-            return None
-
-        result = recovery_manager.handle_anomaly(anomaly, context)
-        if result.success:
-            return {
-                "error": None,
-                "next_action": "continue",
-                "navigation_history": [{
-                    "action": f"recovery: {result.action.name}",
-                    "success": True,
-                    "new_state": result.new_state,
-                }],
-            }
-
-        return None
-    except Exception as e:
-        logger.warning(f"Structured recovery attempt failed: {e}")
-        return None
 
 
 def agent_node(state: NavigationState) -> dict:
@@ -947,8 +867,7 @@ def agent_node(state: NavigationState) -> dict:
 
     for llm_attempt in range(1, llm_max_retries + 1):
         try:
-            llm = create_llm()
-            llm_with_tools = llm.bind_tools(ALL_TOOLS)
+            llm_with_tools = _get_llm_with_tools()
 
             messages = [
                 SystemMessage(content=AGENT_SYSTEM_PROMPT),
@@ -1059,12 +978,6 @@ def agent_node(state: NavigationState) -> dict:
             logger.error(
                 f"Tool execution failed after {MAX_AGENT_RETRIES} retries, escalating to error handler"
             )
-
-            recovery_state: NavigationState = cast(NavigationState, {**state, **state_updates})
-            recovery_result = _try_recovery(recovery_state, str(e))
-            if recovery_result:
-                logger.info("Structured recovery succeeded, continuing")
-                return {**state_updates, **recovery_result, "retry_count": 0}
 
             return {
                 **state_updates,
