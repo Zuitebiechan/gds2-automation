@@ -63,7 +63,13 @@ class GDS2KnowledgeBase:
         self._init_lock = _threading.Lock()
 
     def _ensure_initialized(self):
-        """Lazy initialization of database and models (thread-safe)."""
+        """Lazy initialization of database tables (thread-safe).
+
+        Only connects to LanceDB and opens tables — does NOT load the
+        SentenceTransformer model.  Model loading is deferred to
+        _ensure_model_loaded() which is called on-demand by methods
+        that actually need embeddings (add_example, query_*, etc.).
+        """
         if self._db is not None:
             return
         with self._init_lock:
@@ -72,12 +78,10 @@ class GDS2KnowledgeBase:
                 return
             try:
                 import lancedb
-                from sentence_transformers import SentenceTransformer
 
                 logger.info(f"Initializing knowledge base at {self.db_path}")
 
                 self._db = lancedb.connect(self.db_path)
-                self._text_model = SentenceTransformer('all-MiniLM-L6-v2')
 
                 # Try to open tables
                 for table_name, attr_name in [
@@ -95,8 +99,30 @@ class GDS2KnowledgeBase:
                         setattr(self, attr_name, None)
 
             except ImportError as e:
-                logger.error(f"Failed to import dependencies: {e}")
-                logger.error("Install: pip install lancedb sentence-transformers")
+                logger.error(f"Failed to import lancedb: {e}")
+                logger.error("Install: pip install lancedb")
+                raise
+
+    def _ensure_model_loaded(self):
+        """Load SentenceTransformer model on demand (thread-safe).
+
+        Called only when an embedding is actually needed (insert or
+        similarity search).  Separated from _ensure_initialized so
+        that DB table access doesn't trigger a 50+ second model download.
+        """
+        if self._text_model is not None:
+            return
+        with self._init_lock:
+            if self._text_model is not None:
+                return
+            try:
+                from sentence_transformers import SentenceTransformer
+                logger.info("Loading SentenceTransformer model (on-demand)...")
+                self._text_model = SentenceTransformer('all-MiniLM-L6-v2')
+                logger.info("SentenceTransformer model loaded")
+            except ImportError as e:
+                logger.error(f"Failed to import sentence-transformers: {e}")
+                logger.error("Install: pip install sentence-transformers")
                 raise
     # -----------------------------------------------------------------------
     # #1: Rich snapshot formatting (matches seed data text_features format)
@@ -200,6 +226,7 @@ class GDS2KnowledgeBase:
 
         try:
             text_query = self._format_snapshot(snapshot)
+            self._ensure_model_loaded()
             query_embedding = self._text_model.encode(text_query)
 
             results = (
@@ -246,6 +273,7 @@ class GDS2KnowledgeBase:
             return []
 
         try:
+            self._ensure_model_loaded()
             query_embedding = self._text_model.encode(error_text)
 
             results = (
@@ -371,6 +399,7 @@ class GDS2KnowledgeBase:
 
         try:
             text_features = self._format_snapshot(snapshot)
+            self._ensure_model_loaded()
             text_embedding = self._text_model.encode(text_features).tolist()
 
             final_classification = user_correction or classification
@@ -461,8 +490,8 @@ class GDS2KnowledgeBase:
         """
         self._ensure_initialized()
 
-        if self._db is None or self._text_model is None:
-            logger.warning("Database or text model not initialized, cannot record trace")
+        if self._db is None:
+            logger.warning("Database not initialized, cannot record trace")
             return
 
         try:
@@ -492,6 +521,7 @@ class GDS2KnowledgeBase:
                 f"Steps: {total_steps}. "
                 f"{'Success' if success else 'Failed'}."
             )
+            self._ensure_model_loaded()
             trace_embedding = self._text_model.encode(trace_text).tolist()
 
             record = {
@@ -564,6 +594,7 @@ class GDS2KnowledgeBase:
 
         try:
             query_text = f"Goal: {goal}. Current page: {current_page}."
+            self._ensure_model_loaded()
             query_embedding = self._text_model.encode(query_text)
 
             results = (

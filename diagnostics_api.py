@@ -77,20 +77,44 @@ def _app_bindings():
     }
 
 
-def _make_data_display_guard(viewer, data_category: str, *, mode: str):
+def _make_data_display_guard(viewer, data_category: str, *, mode: str,
+                              check_interval: float = 5.0):
     """Build a shared Data Display guard for live and AI collectors.
 
     mode:
       - 'stream': allow backtrack recovery through Data List
       - 'ai_collect': allow only in-place soft recovery; otherwise invalidate sample
+
+    check_interval:
+      Minimum seconds between actual page detection calls.  The guard is
+      invoked every ~100 ms by the collector poll loop, but the underlying
+      detect_current_page IPC round-trip takes ~800 ms and blocks the
+      loop.  Throttling to every *check_interval* seconds keeps the poll
+      loop fast (just reading latest.json) and only does an IPC check
+      periodically to confirm we're still on Data Display.
     """
     if mode not in {'stream', 'ai_collect'}:
         raise ValueError(f"Unsupported guard mode: {mode}")
 
+    import time as _time
+    _last_check_ts: list[float] = [0.0]       # mutable container for nonlocal
+    _last_result: list[dict | None] = [None]
+
     def guard() -> dict | None:
+        now = _time.time()
+        if now - _last_check_ts[0] < check_interval:
+            return _last_result[0]  # reuse cached result
+
+        _last_check_ts[0] = now
+
         page = viewer.controller.detect_current_page(retries=0)
         if page == GDS2Page.DATA_DISPLAY:
+            _last_result[0] = None
             return None
+
+        # Page is NOT Data Display — reset timer so the next poll
+        # immediately re-checks instead of waiting another 5 seconds.
+        _last_check_ts[0] = 0.0
 
         if page == GDS2Page.LOADING:
             return {
