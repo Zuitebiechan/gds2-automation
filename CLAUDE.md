@@ -206,3 +206,16 @@ This keeps GDS2 on the Data Display page where DTC and live-data operations are 
 | `agent_docs/roadmap.md` | Delivery status and migration progress |
 | `agent_docs/gds2_agentic_navigation_implementation.md` | LangGraph + LanceDB implementation details |
 | `agent_docs/vci_proxy.md` | Tunnel, protocol, and hardware bridge details |
+
+## CODE HYGIENE RULES
+
+### Dead code removal
+
+When adding new code, refactoring, or building new frameworks, always check whether existing code or frameworks can be deleted or simplified. Do not leave obsolete modules, unused imports, stale config files, or abandoned features sitting in the repo. Every change is an opportunity to clean up.
+
+### Test lifecycle
+
+Tests fall into two categories:
+
+- **Regression tests** — generic, long-lived. Any future change must still pass these. Keep them in `tests/` permanently.
+- **One-off tests** — written to validate a specific change or debug a specific issue. Delete them after the test passes and the change is merged. Do not accumulate throwaway test scripts in `scripts/` or `tests/`.
