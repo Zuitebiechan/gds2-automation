@@ -179,6 +179,7 @@ def diagnose_start():
         backend.start()
         state = backend.get_state()
         modules = backend.get_modules()
+        logger.info("DIAG start ready modules=%s device=%s", len(modules), state.extra.get("device") or "-")
         return jsonify({
             "success": True,
             "modules": modules,
@@ -224,6 +225,8 @@ def diagnose_dtcs():
             backend.select_data_category(data_category)
 
         dtcs = backend.read_dtcs()
+        page_context = backend.detect_current_page()
+        logger.info("DIAG DTC read count=%s page=%s", len(dtcs), page_context)
         return jsonify({
             "success": True,
             "dtcs": [
@@ -238,7 +241,7 @@ def diagnose_dtcs():
                 for dtc in dtcs
             ],
             "dtc_count": len(dtcs),
-            "page_context": backend.detect_current_page(),
+            "page_context": page_context,
         })
 
     except WorkflowRecoveryError as e:
@@ -274,6 +277,7 @@ def diagnose_select_module():
         backend = _get_backend()
         backend.select_module(module)
         data_categories = backend.get_data_categories()
+        logger.info("DIAG module=%s categories=%s", module, len(data_categories))
         return jsonify({
             "success": True,
             "data_categories": data_categories,
@@ -337,7 +341,7 @@ def diagnose_live_data_start():
         )
         _diag_collector.start()
 
-        logger.info(f"Started diagnostics live data streaming ({interval_ms}ms interval)")
+        logger.info("DIAG live start category=%s interval=%sms", data_category, interval_ms)
         return jsonify({
             "success": True,
             "message": "Live data streaming started",
@@ -368,7 +372,7 @@ def diagnose_live_data_events():
         with agent_lock:
             agent_clients.append(client_queue)
 
-        logger.info(f"Diagnostics SSE client connected. Total: {len(agent_clients)}")
+        logger.debug("Diagnostics SSE client connected. total=%s", len(agent_clients))
 
         try:
             yield f"event: connected\ndata: {json.dumps({'message': 'Connected to stream'})}\n\n"
@@ -386,7 +390,7 @@ def diagnose_live_data_events():
             with agent_lock:
                 if client_queue in agent_clients:
                     agent_clients.remove(client_queue)
-            logger.info(f"Diagnostics SSE client disconnected. Total: {len(agent_clients)}")
+            logger.debug("Diagnostics SSE client disconnected. total=%s", len(agent_clients))
 
     return Response(
         generate(),
@@ -414,6 +418,7 @@ def diagnose_live_data_stop():
         if current_page == GDS2Page.DATA_DISPLAY.value:
             backend.go_back()
 
+        logger.info("DIAG live stopped")
         return jsonify({"success": True, "message": "Live data stopped"})
 
     except Exception as e:
@@ -453,13 +458,14 @@ def diagnose_ai_start():
         backend = _get_backend()
         current_page = backend.detect_current_page()
         if current_page == GDS2Page.DATA_DISPLAY.value:
-            logger.info("Already on DATA_DISPLAY, skipping select_data_category")
+            logger.debug("AI-DIAG request already on data_display")
         else:
-            logger.info("Not on DATA_DISPLAY (current: %s), navigating via select_data_category", current_page)
+            logger.debug("AI-DIAG navigating to data_display from %s", current_page)
             backend.select_data_category(data_category)
 
         page_guard = _make_data_display_guard(backend, data_category, mode='ai_collect')
         session_id = engine.start_session(vehicle_context, collection_guard=page_guard)
+        logger.info("AI-DIAG %s requested module=%s category=%s", session_id, vehicle_context.get('module') or '-', data_category)
         return jsonify({
             "success": True,
             "session_id": session_id,
@@ -559,6 +565,7 @@ def diagnose_ai_retry():
             }), 409
 
         session_id = engine.retry_with_cached(cached_payload_id, vehicle_context)
+        logger.info("AI-DIAG %s retry requested payload=%s", session_id, cached_payload_id)
         return jsonify({
             "success": True,
             "session_id": session_id,

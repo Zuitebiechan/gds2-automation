@@ -74,7 +74,7 @@ def get_executor() -> DeterministicExecutor:
         _adapter = GDS2ActionAdapter(workflow)
         _executor = DeterministicExecutor()
         _adapter.register_all(_executor)
-        logger.info("Session API: executor wired with GDS2ActionAdapter")
+        logger.debug("Session API executor wired with GDS2 adapter")
     return _executor
 
 
@@ -177,6 +177,13 @@ def session_start():
         )
         orch = get_orchestrator()
         session = orch.start_session(ctx)
+        logger.info(
+            "SESSION %s started brand=%s workflow=%s status=%s",
+            session.session_id,
+            brand,
+            session.workflow,
+            session.status.value,
+        )
 
         payload = {
             "success": True,
@@ -258,6 +265,12 @@ def session_start_diagnostics():
             session_id,
             "GDS2 diagnostics started",
             result,
+        )
+        logger.info(
+            "SESSION %s diagnostics started modules=%s device=%s",
+            session_id,
+            len(result["modules"]),
+            result.get("device") or '-',
         )
         return jsonify({
             "success": True,
@@ -357,6 +370,7 @@ def session_execute():
                     pass
 
         orch.emit_progress(session_id, f"Executing {action_name}...")
+        logger.info("SESSION %s action=%s start", session_id, action_name)
 
         # Handle BranchDecisionRequiredError for select_module/select_data_category
         try:
@@ -374,6 +388,14 @@ def session_execute():
                 resume_action=resume_action,
             )
             session = orch.raise_decision(session_id, gate)
+            logger.info(
+                "SESSION %s action=%s awaiting decision=%s domain=%s options=%s",
+                session_id,
+                action_name,
+                gate.decision_id,
+                exc.decision.domain.value,
+                len(exc.choices),
+            )
             return jsonify({
                 "success": True,
                 "session_id": session.session_id,
@@ -384,6 +406,12 @@ def session_execute():
 
         if not exec_result.success:
             orch.emit_progress(session_id, f"{action_name} failed: {exec_result.error}")
+            logger.warning(
+                "SESSION %s action=%s failed error=%s",
+                session_id,
+                action_name,
+                exec_result.error,
+            )
             return jsonify({
                 "success": False,
                 "session_id": session_id,
@@ -394,6 +422,13 @@ def session_execute():
             }), 500
 
         orch.emit_progress(session_id, f"{action_name} completed")
+        logger.info(
+            "SESSION %s action=%s completed attempts=%s elapsed=%.1fs",
+            session_id,
+            action_name,
+            exec_result.attempts,
+            exec_result.elapsed_time,
+        )
         return jsonify({
             "success": True,
             "session_id": session_id,
@@ -512,6 +547,7 @@ def session_decision():
         before = orch.get_session(session_id)
         pending_gate = before.pending_decision
         session = orch.submit_decision(session_id, decision_id, option_id)
+        logger.info("SESSION %s decision=%s option=%s", session_id, decision_id, option_id)
 
         if pending_gate is not None and pending_gate.kind == "branch":
             option_map = pending_gate.context.get("option_map", {})
@@ -567,6 +603,12 @@ def session_decision():
                     "resume_action": resume_action,
                     "selected_choice": selected_choice,
                 },
+            )
+            logger.info(
+                "SESSION %s resumed action=%s choice=%s",
+                session_id,
+                resume_action,
+                selected_choice,
             )
 
             return jsonify({
@@ -649,6 +691,12 @@ def session_select_module():
                 resume_action=resume_action,
             )
             session = orch.raise_decision(session_id, gate)
+            logger.info(
+                "SESSION %s select_module awaiting decision=%s options=%s",
+                session_id,
+                gate.decision_id,
+                len(exc.choices),
+            )
             return jsonify({
                 "success": True,
                 "session_id": session.session_id,
@@ -660,6 +708,7 @@ def session_select_module():
 
         if not exec_result.success:
             orch.emit_progress(session_id, f"select_module failed: {exec_result.error}")
+            logger.warning("SESSION %s select_module failed error=%s", session_id, exec_result.error)
             return jsonify({
                 "success": False,
                 "session_id": session_id,
@@ -667,6 +716,7 @@ def session_select_module():
             }), 500
 
         orch.emit_progress(session_id, f"Module selected: {module}")
+        logger.info("SESSION %s module=%s selected", session_id, module)
         return jsonify({
             "success": True,
             "session_id": session_id,
@@ -732,6 +782,12 @@ def session_select_data_category():
                 resume_action=resume_action,
             )
             session = orch.raise_decision(session_id, gate)
+            logger.info(
+                "SESSION %s select_data_category awaiting decision=%s options=%s",
+                session_id,
+                gate.decision_id,
+                len(exc.choices),
+            )
             return jsonify({
                 "success": True,
                 "session_id": session.session_id,
@@ -743,6 +799,7 @@ def session_select_data_category():
 
         if not exec_result.success:
             orch.emit_progress(session_id, f"select_data_category failed: {exec_result.error}")
+            logger.warning("SESSION %s select_data_category failed error=%s", session_id, exec_result.error)
             return jsonify({
                 "success": False,
                 "session_id": session_id,
@@ -750,6 +807,7 @@ def session_select_data_category():
             }), 500
 
         orch.emit_progress(session_id, f"Data category selected: {data_category}")
+        logger.info("SESSION %s data_category=%s selected", session_id, data_category)
         return jsonify({
             "success": True,
             "session_id": session_id,
@@ -790,6 +848,7 @@ def session_abort():
         orch = get_orchestrator()
         reason = (data.get("reason") or "").strip()
         session = orch.abort_session(session_id, reason)
+        logger.info("SESSION %s aborted reason=%s", session_id, reason or "user")
         return jsonify({
             "success": True,
             "session_id": session.session_id,

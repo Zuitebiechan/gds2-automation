@@ -125,7 +125,12 @@ class AIEngine:
             self._active_session = session_id
             self._event_queues[session_id] = queue.Queue(maxsize=500)
 
-        logger.info(f"Starting AI diagnosis session {session_id}")
+        logger.info(
+            "AI-DIAG %s started module=%s category=%s",
+            session_id,
+            vehicle_context.get('module') or '-',
+            vehicle_context.get('data_category') or '-',
+        )
 
         # Launch worker thread
         self._worker_thread = threading.Thread(
@@ -165,7 +170,7 @@ class AIEngine:
             self._active_session = session_id
             self._event_queues[session_id] = queue.Queue(maxsize=500)
 
-        logger.info(f"Retrying AI diagnosis session {session_id} with cached payload")
+        logger.info("AI-DIAG %s retry payload=%s", session_id, payload_id)
 
         self._worker_thread = threading.Thread(
             target=self._retry_worker,
@@ -223,6 +228,7 @@ class AIEngine:
             # Check agent availability
             avail = collector.check_agent_available()
             if not avail.get('available'):
+                logger.warning("AI-DIAG %s aborted: Java Agent unavailable", session_id)
                 self._emit(session_id, 'error', {
                     'error': 'Java Agent not available. Start GDS2 with the agent.',
                     'retryable': False,
@@ -230,8 +236,10 @@ class AIEngine:
                 return
 
             collector.start()
+            logger.info("AI-DIAG %s collecting 0/%ss", session_id, self._collection_seconds)
 
             start_time = time.time()
+            last_collection_log = -1
             try:
                 while time.time() - start_time < self._collection_seconds:
                     elapsed = int(time.time() - start_time)
@@ -244,14 +252,27 @@ class AIEngine:
 
                     guard_event = collector_guard_event.get('event')
                     if guard_event:
-                        start_time = self._handle_collection_guard_event(
+                        new_start_time = self._handle_collection_guard_event(
                             session_id,
                             guard_event,
                             buffer,
                             start_time,
                             elapsed,
                         )
+                        if new_start_time != start_time:
+                            last_collection_log = -1
+                        start_time = new_start_time
                         collector_guard_event['event'] = None
+
+                    if elapsed > 0 and elapsed % 5 == 0 and elapsed != last_collection_log:
+                        last_collection_log = elapsed
+                        logger.info(
+                            "AI-DIAG %s collecting %s/%ss (%s snapshots)",
+                            session_id,
+                            elapsed,
+                            self._collection_seconds,
+                            buffer.snapshot_count,
+                        )
 
                     self._emit(session_id, 'progress', {
                         'phase': 'collecting',
@@ -264,8 +285,10 @@ class AIEngine:
                 collector.stop()
 
             logger.info(
-                f"Collection complete: {buffer.snapshot_count} snapshots, "
-                f"{buffer.duration_seconds:.1f}s duration"
+                "AI-DIAG %s collection complete snapshots=%s duration=%.1fs",
+                session_id,
+                buffer.snapshot_count,
+                buffer.duration_seconds,
             )
 
             # Phase 2: Assemble payload
@@ -277,9 +300,6 @@ class AIEngine:
             delta_payload = buffer.get_delta_payload()
             sampling_quality = delta_payload.get('sampling_quality', {})
             quality_summary = delta_payload.get('quality_summary', '')
-
-            if quality_summary:
-                logger.info(quality_summary)
 
             self._emit(session_id, 'progress', {
                 'phase': 'assembling',
@@ -295,9 +315,13 @@ class AIEngine:
             payload_id = _cache_payload(cache_data)
 
             logger.info(
-                f"Payload assembled: {len(delta_payload.get('timeline', []))} timeline events, "
-                f"{len(delta_payload.get('dtcs', []))} DTCs, "
-                f"{len(delta_payload.get('significant_changes', []))} significant changes"
+                "AI-DIAG %s payload ready snapshots=%s dtcs=%s timeline=%s changes=%s quality=%s",
+                session_id,
+                delta_payload.get('snapshot_count', 0),
+                len(delta_payload.get('dtcs', [])),
+                len(delta_payload.get('timeline', [])),
+                len(delta_payload.get('significant_changes', [])),
+                sampling_quality.get('grade', '?'),
             )
 
             # Phase 3: Call LLM (streaming)
@@ -355,12 +379,16 @@ class AIEngine:
         })
 
         full_response = []
+        chunk_count = 0
+        stream_started = time.monotonic()
+        logger.info("AI-DIAG %s LLM streaming started", session_id)
 
         try:
             for chunk in self._llm_client.diagnose_stream(
                 vehicle_context, delta_payload
             ):
                 full_response.append(chunk)
+                chunk_count += 1
                 self._emit(session_id, 'llm_chunk', {
                     'text': chunk,
                 })
@@ -376,6 +404,12 @@ class AIEngine:
 
         # Parse the full response
         response_text = "".join(full_response)
+        logger.info(
+            "LLM streaming complete session=%s chunks=%s duration=%.1fs",
+            session_id,
+            chunk_count,
+            time.monotonic() - stream_started,
+        )
         verdict = LLMClient.parse_verdict(response_text)
         verdict = self._apply_sampling_quality_confidence(verdict, delta_payload)
 
@@ -395,13 +429,12 @@ class AIEngine:
             },
         })
 
-        quality_summary = delta_payload.get('quality_summary', '')
         logger.info(
-            f"AI diagnosis complete. Verdict: "
-            f"{verdict.get('verdict', 'unknown') if verdict else 'parse_failed'}"
+            "AI-DIAG %s verdict=%s confidence=%s",
+            session_id,
+            verdict.get('verdict', 'parse_failed') if verdict else 'parse_failed',
+            verdict.get('confidence', '?') if verdict else '?',
         )
-        if quality_summary:
-            logger.info(quality_summary)
 
     def _apply_sampling_quality_confidence(
         self,
@@ -457,7 +490,7 @@ class AIEngine:
             })
 
         if guard_event.get('restart_collection'):
-            logger.info('AI collection guard requested restart after reconnect recovery')
+            logger.info("AI-DIAG %s collection restarted after reconnect recovery", session_id)
             buffer.clear()
             restart_time = time.time()
             self._emit(session_id, 'progress', {
@@ -484,7 +517,7 @@ class AIEngine:
         def _deferred_cleanup():
             with self._session_lock:
                 self._event_queues.pop(session_id, None)
-            logger.debug(f"Cleaned up event queue for session {session_id}")
+            logger.debug("AI-DIAG %s queue cleaned up", session_id)
 
         cleanup_timer = threading.Timer(30.0, _deferred_cleanup)
         cleanup_timer.daemon = True

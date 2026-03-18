@@ -216,7 +216,7 @@ class NavigationController:
 
                     # Still UNKNOWN - retry if attempts remain
                     if attempt < retries:
-                        logger.info(f"Page detection returned UNKNOWN, retrying in {retry_delay}s...")
+                        logger.debug("Page detection returned UNKNOWN, retrying in %.1fs", retry_delay)
                         time.sleep(retry_delay)
                         continue
 
@@ -249,9 +249,8 @@ class NavigationController:
 
             page_id = page_info.get('page_id', 'unknown')
             confidence = page_info.get('confidence', 'none')
-            evidence = page_info.get('evidence', '')
 
-            logger.info(f"Agent page detection: {page_id} (confidence={confidence}, evidence={evidence})")
+            logger.debug("Agent page detection: %s (confidence=%s)", page_id, confidence)
 
             # Pre-cache buttons and items for get_snapshot() reuse
             try:
@@ -280,7 +279,7 @@ class NavigationController:
             return page_map.get(page_id, GDS2Page.UNKNOWN)
 
         except TimeoutError:
-            logger.warning("get_page_id timed out, falling back to heuristic")
+            logger.debug("get_page_id timed out, falling back to heuristic")
             return GDS2Page.UNKNOWN
         except Exception as e:
             logger.debug(f"get_page_id failed: {e}, falling back to heuristic")
@@ -363,9 +362,8 @@ class NavigationController:
                 if "Back" not in button_texts and "Vehicle Menu" not in button_texts:
                     return GDS2Page.VEHICLE_SELECTION
                 else:
-                    logger.info(
-                        f"Rule 7 blocked: Enter+empty list but deep-page buttons present "
-                        f"(Back={'Back' in button_texts}, VehicleMenu={'Vehicle Menu' in button_texts})"
+                    logger.debug(
+                        "Rule 7 blocked: Enter+empty list with deep-page buttons present"
                     )
 
             # 8. Also check for "Disconnect" or "Select Device" buttons for VEHICLE_SELECTION
@@ -675,8 +673,10 @@ class NavigationController:
                         continue
 
                     logger.info(
-                        f"Page transitioned from {from_page.value} to {current.value} "
-                        f"in {time.time() - start:.1f}s"
+                        "NAV %s → %s (%.1fs)",
+                        from_page.value,
+                        current.value,
+                        time.time() - start,
                     )
                     self._current_page = current
                     return current
@@ -725,9 +725,10 @@ class NavigationController:
                     last_page = current
                     stable_since = time.time()
                 elif time.time() - stable_since >= stable_duration:
-                    logger.info(
-                        f"Page stable at {current.value} for {stable_duration}s "
-                        f"(total wait: {time.time() - start:.1f}s)"
+                    logger.debug(
+                        "Page stable at %s after %.1fs",
+                        current.value,
+                        time.time() - start,
                     )
                     self._current_page = current
                     return current
@@ -965,10 +966,10 @@ class NavigationController:
                     button_states = self.get_available_buttons()
                     has_ok = button_states.get("OK", False)
                     if not has_ok:
-                        logger.info("J2534 disconnect page no longer exposes OK; switching to backtrack recovery")
+                        logger.info("NAV recovery j2534_disconnect switching to backtrack")
                         break
             else:
-                logger.info("J2534 disconnect page has no OK button; skipping soft retries and backtracking immediately")
+                logger.info("NAV recovery j2534_disconnect using backtrack (OK unavailable)")
 
             if not allow_backtrack:
                 return NavigationResult(
@@ -1044,7 +1045,7 @@ class NavigationController:
                 buttons = self.nav.get_buttons()
                 button_texts = [b.get('text', '') for b in buttons]
                 if "OK" in button_texts:
-                    logger.info("Warning dialog detected, clicking OK...")
+                    logger.info("NAV warning dialog dismissed")
                     result = self.nav.click_button("OK")
                     if result.get('success'):
                         time.sleep(1)
@@ -1107,8 +1108,6 @@ class NavigationController:
                 except TimeoutError:
                     logger.warning("Page did not transition after Diagnostics click")
                     new_page = self.detect_current_page(retries=3, retry_delay=1.5)
-                logger.info(f"After Diagnostics click, detected page: {new_page.value}")
-
                 self._history.append(GDS2Page.MAIN_MENU)
 
                 # Get choices for the current page
@@ -1187,8 +1186,6 @@ class NavigationController:
                 except TimeoutError:
                     logger.warning("Page did not transition after device Continue click")
                     new_page = self.detect_current_page(retries=3, retry_delay=1.5)
-                logger.info(f"After device selection, detected page: {new_page.value}")
-
                 self._history.append(GDS2Page.DEVICE_EXPLORER)
 
                 # Get choices for the new page
@@ -1251,7 +1248,7 @@ class NavigationController:
                 # Clear device from context
                 self._context["device"] = None
 
-                logger.info("Device disconnected successfully")
+                logger.info("Device disconnected")
 
                 return NavigationResult(
                     success=True,
@@ -1374,7 +1371,7 @@ class NavigationController:
                     new_page = self.detect_current_page(retries=2, retry_delay=1.5)
                 # If still at Vehicle Selection after first attempt, retry
                 if new_page == GDS2Page.VEHICLE_SELECTION:
-                    logger.info("Still at Vehicle Selection, retrying Enter...")
+                    logger.info("NAV vehicle_selection retrying Enter")
                     self.nav.click_button("Enter")
                     try:
                         new_page = self.wait_for_page_transition(
@@ -1390,7 +1387,7 @@ class NavigationController:
                 # If GDS2 auto-navigated to Module List (skipping Diagnostics Menu),
                 # click Back to return to Diagnostics Menu so user can choose
                 if new_page == GDS2Page.MODULE_LIST:
-                    logger.info("GDS2 auto-navigated to Module List, clicking Back to return to Diagnostics Menu...")
+                    logger.info("NAV module_list auto-skip detected; returning to diagnostics_menu")
                     back_result = self.nav.click_button("Back")
                     if back_result.get('success'):
                         try:
@@ -1399,7 +1396,6 @@ class NavigationController:
                             )
                         except TimeoutError:
                             new_page = self.detect_current_page(retries=2, retry_delay=1.0)
-                        logger.info(f"After Back, detected page: {new_page.value}")
 
                 # Get choices for the new page
                 choices = None

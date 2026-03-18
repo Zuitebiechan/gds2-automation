@@ -11,7 +11,9 @@ runner for testing with real GDS2 (no Flask needed).
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 import logging
+import queue
 import time
+from typing import Any, cast
 
 from .state import NavigationState
 from .nodes import deterministic_node, agent_node, human_node, should_continue
@@ -74,7 +76,7 @@ def create_navigation_graph():
         >>> for event in graph.stream(initial_state, config):
         ...     print(event)
     """
-    logger.info("Creating navigation graph")
+    logger.debug("Creating navigation graph")
 
     # Pre-initialize knowledge base in background so agent node doesn't block
     try:
@@ -91,7 +93,7 @@ def create_navigation_graph():
     workflow.add_node("agent", agent_node)
     workflow.add_node("human", human_node)
 
-    logger.info("Added nodes: deterministic, agent, human")
+    logger.debug("Added graph nodes")
 
     # Set entry point
     workflow.add_edge(START, "deterministic")
@@ -131,7 +133,7 @@ def create_navigation_graph():
         },
     )
 
-    logger.info("Added conditional edges")
+    logger.debug("Added graph edges")
 
     # Compile with checkpointing and HITL support
     memory = MemorySaver()
@@ -140,7 +142,7 @@ def create_navigation_graph():
         interrupt_before=["human"],  # Pause before human node
     )
 
-    logger.info("Graph compiled successfully")
+    logger.debug("Navigation graph compiled")
 
     return app
 
@@ -164,7 +166,7 @@ def make_initial_state(goal: str = "Navigate to Data Display") -> dict:
         controller = get_controller()
         detected = controller.detect_current_page()
         current_page = detected.value
-        logger.info("make_initial_state: detected current page = %s", current_page)
+        logger.debug("Initial navigation page detected: %s", current_page)
     except Exception as exc:
         logger.warning("make_initial_state: page detection failed (%s), defaulting to main_menu", exc)
         current_page = "main_menu"
@@ -350,10 +352,10 @@ def visualize_graph(graph=None):
 
 def run_with_event_queue(
     goal: str,
-    event_queue: "queue.Queue",
-    decision_queue: "queue.Queue",
+    event_queue: queue.Queue,
+    decision_queue: queue.Queue,
     thread_id: str | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """
     Run the navigation graph driven by queues instead of console input.
 
@@ -383,16 +385,16 @@ def run_with_event_queue(
         thread_id = f"api_{_uuid.uuid4().hex[:8]}"
 
     graph = create_navigation_graph()
-    config = {"configurable": {"thread_id": thread_id}}
+    config = cast(Any, {"configurable": {"thread_id": thread_id}})
     initial_state = make_initial_state(goal)
 
-    current_input: dict | None = initial_state
+    current_input: Any = cast(Any, initial_state)
     decision_counter = 0
 
     try:
         while True:
             # Stream graph events
-            for event in graph.stream(current_input, config):
+            for event in graph.stream(cast(Any, current_input), cast(Any, config)):
                 if not isinstance(event, dict):
                     continue
                 for node_name, node_output in event.items():
@@ -409,7 +411,7 @@ def run_with_event_queue(
                     })
 
             # Check graph state after streaming completes
-            state = graph.get_state(config)
+            state = graph.get_state(cast(Any, config))
 
             if not state.next:
                 # Graph finished — emit done event FIRST so the
@@ -474,7 +476,7 @@ def run_with_event_queue(
                 existing_selections = state.values.get("user_selections", {})
                 merged = {**existing_selections, "selected_item": selected_item}
                 graph.update_state(
-                    config,
+                    cast(Any, config),
                     {"user_selections": merged},
                 )
 
@@ -492,6 +494,6 @@ def run_with_event_queue(
         logger.exception(f"run_with_event_queue failed: {exc}")
         event_queue.put({"type": "error", "error": str(exc)})
         try:
-            return graph.get_state(config).values
+            return graph.get_state(cast(Any, config)).values
         except Exception:
             return {}

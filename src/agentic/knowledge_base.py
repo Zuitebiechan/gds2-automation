@@ -36,6 +36,13 @@ SIMILARITY_THRESHOLD = 1.5  # Tuned for all-MiniLM-L6-v2 embedding space
 if not os.environ.get("HF_ENDPOINT"):
     os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 
+# Use offline mode: skip HTTP version checks, use locally cached model only.
+# The model must have been downloaded at least once before this takes effect.
+if not os.environ.get("HF_HUB_OFFLINE"):
+    os.environ["HF_HUB_OFFLINE"] = "1"
+if not os.environ.get("TRANSFORMERS_OFFLINE"):
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
 
 class GDS2KnowledgeBase:
     """

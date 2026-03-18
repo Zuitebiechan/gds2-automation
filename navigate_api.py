@@ -89,8 +89,15 @@ def _run_graph_thread(session: NavSession) -> None:
             if final.get("error") and final_page != "data_display":
                 session.status = NavSessionStatus.FAILED
                 session.error = final.get("error")
+                logger.warning("NAV session=%s failed page=%s error=%s", session.session_id, final_page, session.error)
             else:
                 session.status = NavSessionStatus.COMPLETED
+                logger.info(
+                    "NAV session=%s completed page=%s steps=%s",
+                    session.session_id,
+                    final_page,
+                    len(final.get("navigation_history", [])) if final else 0,
+                )
     except Exception as exc:
         logger.exception(f"Navigation graph thread failed: {exc}")
         session.status = NavSessionStatus.FAILED
@@ -142,6 +149,7 @@ def navigate_start():
         _sessions[session_id] = session
 
     thread.start()
+    logger.info("NAV session=%s started goal=%s", session_id, goal)
 
     return jsonify({
         "success": True,
@@ -278,6 +286,7 @@ def navigate_decision():
     session.pending_decision_id = None
     session.pending_items = []
     session.decision_queue.put({"selected_item": selected_item})
+    logger.info("NAV session=%s decision=%s selected=%s", session_id, decision_id or "-", selected_item)
 
     return jsonify({
         "success": True,
@@ -360,6 +369,8 @@ def navigate_abort():
         session.event_queue.put_nowait({"type": "error", "error": "Aborted by user"})
     except queue.Full:
         pass
+
+    logger.info("NAV session=%s aborted", session_id)
 
     return jsonify({
         "success": True,

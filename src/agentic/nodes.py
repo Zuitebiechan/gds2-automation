@@ -43,7 +43,7 @@ def _get_llm_with_tools():
             if _llm_with_tools is None:
                 llm = create_llm()
                 _llm_with_tools = llm.bind_tools(ALL_TOOLS)
-                logger.info("Created and cached LLM instance with tools bound")
+                logger.debug("Created cached LLM instance with tools")
     return _llm_with_tools
 
 
@@ -182,8 +182,8 @@ def _wait_for_enter_enabled(controller, timeout: float = 30.0, poll_interval: fl
                 if btn.get('text') == 'Enter':
                     if btn.get('enabled', True):  # default True for older Agents
                         logger.info(
-                            f"Enter button enabled after "
-                            f"{_time.time() - start:.1f}s"
+                            "Enter button enabled after %.1fs",
+                            _time.time() - start,
                         )
                         return True
                     else:
@@ -235,7 +235,6 @@ def _handle_vehicle_selection(state: NavigationState) -> dict:
         new_page = result.page.value
 
         if result.success:
-            logger.info(f"Vehicle selection: Enter succeeded, now on '{new_page}'")
             return {
                 "current_page": new_page,
                 "page_snapshot": snapshot,
@@ -289,8 +288,6 @@ def _handle_device_explorer(state: NavigationState) -> dict:
     """
     from ..native.device_explorer import DeviceExplorerController
     from .tools import get_controller, _snapshot_from_controller
-
-    logger.info("Handling Device Explorer dialog: selecting '%s'", DEVICE_EXPLORER_TARGET)
 
     explorer = DeviceExplorerController()
     if not explorer.find_dialog(timeout_sec=5.0):
@@ -354,7 +351,7 @@ def _handle_device_explorer(state: NavigationState) -> dict:
     controller = get_controller()
     snapshot = _snapshot_from_controller(controller)
     new_page = snapshot["page"]
-    logger.info("Device Explorer handled, now on '%s'", new_page)
+    logger.info("NAV device_explorer → %s", new_page)
 
     return {
         "current_page": new_page,
@@ -407,7 +404,7 @@ def _handle_j2534_disconnect(state: NavigationState) -> dict:
     new_page = snapshot["page"] if snapshot else recovery.page.value
 
     if recovery.success:
-        logger.info("J2534 disconnect recovery succeeded, now on '%s'", new_page)
+        logger.info("NAV j2534_disconnect → %s (recovered)", new_page)
         return {
             "current_page": new_page,
             "page_snapshot": snapshot,
@@ -498,7 +495,7 @@ def deterministic_node(state: NavigationState) -> dict:
     """
     current_page = state["current_page"]
 
-    logger.info(f"Deterministic node: current_page={current_page}")
+    logger.debug("Deterministic node current_page=%s", current_page)
 
     # Special case: Device Explorer is a Win32 dialog handled outside
     # the normal JavaFX route table.
@@ -515,13 +512,13 @@ def deterministic_node(state: NavigationState) -> dict:
 
     if route is None:
         # No deterministic route — let should_continue() decide the next node
-        logger.info("No deterministic route for this page, routing via should_continue")
+        logger.debug("No deterministic route for page=%s", current_page)
         return {
             "next_action": "continue",
             "step_count": state.get("step_count", 0) + 1,
         }
 
-    logger.info(f"Found deterministic route: {route}")
+    logger.debug("Deterministic route for %s: %s", current_page, route)
 
     # Special case: vehicle_selection needs controller.click_enter() which has
     # retry logic, warning dialog dismissal, and auto-skip handling.
@@ -535,8 +532,6 @@ def deterministic_node(state: NavigationState) -> dict:
         if result["success"]:
             snapshot = result["snapshot"]
             new_page = snapshot["page"] if snapshot else "unknown"
-            logger.info(f"Deterministic click succeeded, now on '{new_page}'")
-
             return {
                 "current_page": new_page,
                 "page_snapshot": snapshot,
@@ -573,8 +568,6 @@ def deterministic_node(state: NavigationState) -> dict:
         if result["success"]:
             snapshot = result["snapshot"]
             new_page = snapshot["page"] if snapshot else "unknown"
-            logger.info(f"Deterministic select succeeded, now on '{new_page}'")
-
             return {
                 "current_page": new_page,
                 "page_snapshot": snapshot,
@@ -775,7 +768,7 @@ def _execute_tool_call(tool_call: dict, current_page: str) -> dict:
     tool_name = tool_call["name"]
     tool_args = tool_call.get("args", {})
 
-    logger.info(f"Agent: executing tool '{tool_name}' with args {tool_args}")
+    logger.debug("Agent executing tool=%s args=%s", tool_name, tool_args)
 
     # --- Signal tools (non-action, return immediately) ---
     if tool_name == "ask_user":
@@ -873,7 +866,7 @@ def agent_node(state: NavigationState) -> dict:
     4. Execute the tool call and return state updates
     5. If successful, record example for auto-learning
     """
-    logger.info("Agent node: analyzing page")
+    logger.debug("Agent node analyzing page")
 
     # 1. Get fresh snapshot
     try:
@@ -887,7 +880,7 @@ def agent_node(state: NavigationState) -> dict:
         }
 
     current_page = snapshot.get("page", "unknown")
-    logger.info(f"Agent: current page from snapshot = '{current_page}'")
+    logger.debug("Agent snapshot page=%s", current_page)
 
     # Base state updates (always set fresh snapshot)
     state_updates: dict = {
@@ -925,16 +918,17 @@ def agent_node(state: NavigationState) -> dict:
                     "args": page_hint["tool_args"],
                     "source": "page_hints_rule",
                 }
-                logger.info(
-                    f"Agent: rule-based hint suggests {tool_suggestion['tool_name']}"
-                    f"({tool_suggestion.get('args', {})})"
+                logger.debug(
+                    "Agent rule hint tool=%s args=%s",
+                    tool_suggestion['tool_name'],
+                    tool_suggestion.get('args', {}),
                 )
 
         # Query error patterns if we're in error recovery (keep RAG for this)
         if state.get("error") or state.get("next_action") == "handle_error":
             error_text = state.get("error") or "unknown error"
             error_patterns = query_error_patterns(error_text, top_k=2)
-            logger.info(f"Agent: found {len(error_patterns)} error patterns for recovery")
+            logger.debug("Agent found %s error patterns for recovery", len(error_patterns))
 
     except Exception as e:
         logger.warning(f"Agent: KB query failed (non-fatal): {e}")
@@ -958,9 +952,9 @@ def agent_node(state: NavigationState) -> dict:
             ]
 
             response = llm_with_tools.invoke(messages)
-            logger.info(
-                f"Agent: LLM response received "
-                f"(tool_calls={len(response.tool_calls) if response.tool_calls else 0})"
+            logger.debug(
+                "Agent LLM response tool_calls=%s",
+                len(response.tool_calls) if response.tool_calls else 0,
             )
             break  # success
 
@@ -1014,7 +1008,7 @@ def agent_node(state: NavigationState) -> dict:
     if response_tool_calls:
         # Take only the first tool call (one action per turn)
         tool_call = cast(dict[str, Any], response_tool_calls[0])
-        logger.info(f"Agent: tool_call = {tool_call['name']}({tool_call.get('args', {})})")
+        logger.debug("Agent tool_call=%s args=%s", tool_call['name'], tool_call.get('args', {}))
 
         try:
             tool_result = _execute_tool_call(tool_call, current_page)
@@ -1074,7 +1068,8 @@ def agent_node(state: NavigationState) -> dict:
 
     # No tool calls -- LLM responded with plain text
     content = str(getattr(response, "content", "") or "")
-    logger.warning(f"Agent: LLM returned no tool calls. Content: {content[:200]}")
+    logger.warning("Agent LLM returned no tool calls")
+    logger.debug("Agent LLM content without tool call: %s", content[:200])
 
     return {
         **state_updates,
@@ -1128,13 +1123,13 @@ def human_node(state: NavigationState) -> dict:
     - If user_selections has a pending "selected_item", select it from the list.
     - Otherwise, just return state unchanged for the graph to re-evaluate.
     """
-    logger.info("Human node: processing user input")
+    logger.debug("Human node processing user input")
 
     user_selections = state.get("user_selections", {})
     selected_item = user_selections.get("selected_item")
 
     if selected_item:
-        logger.info(f"Human node: user selected '{selected_item}'")
+        logger.info("NAV user selected '%s' on %s", selected_item, state.get("current_page", "unknown"))
 
         # Execute the user's selection
         result = _invoke_tool(select_list_item, {"item_text": selected_item})
@@ -1186,7 +1181,7 @@ def human_node(state: NavigationState) -> dict:
 
     # No selection provided -- just return state unchanged
     # (graph will re-evaluate via should_continue)
-    logger.info("Human node: no selection provided, returning state unchanged")
+    logger.debug("Human node resumed without selection")
     return {"step_count": state.get("step_count", 0) + 1}
 
 
@@ -1233,41 +1228,41 @@ def should_continue(state: NavigationState) -> Literal["deterministic", "agent",
 
     # 1. Goal reached
     if current_page == "data_display":
-        logger.info("Routing: goal reached (data_display)")
+        logger.debug("Routing: goal reached")
         return "end"
 
     # 2. Explicit "done"
     if next_action == "done":
-        logger.info("Routing: task complete (done)")
+        logger.debug("Routing: task complete")
         return "end"
 
     # 3. Error with too many retries -> end
     if error and retry_count >= 3:
-        logger.info(f"Routing: too many retries ({retry_count}), ending")
+        logger.debug("Routing: too many retries (%s)", retry_count)
         return "end"
 
     # 4. Error -> agent (try to recover)
     if next_action == "handle_error":
-        logger.info("Routing: error detected, sending to agent for recovery")
+        logger.debug("Routing: handle_error → agent")
         return "agent"
 
     # 5. Explicit ask_user
     if next_action == "ask_user":
-        logger.info("Routing: agent requested user input")
+        logger.debug("Routing: ask_user → human")
         return "human"
 
     # 6. Current page is a user decision point
     if current_page in USER_DECISION_PAGES:
-        logger.info(f"Routing: user decision page ({current_page})")
+        logger.debug("Routing: user decision page=%s", current_page)
         return "human"
 
     # 7. Deterministic route available (includes special-case pages
     #    like device_explorer that are handled inside deterministic_node
     #    but not listed in DETERMINISTIC_ROUTES).
     if current_page in DETERMINISTIC_ROUTES or current_page in {"device_explorer", "j2534_disconnect", "loading"}:
-        logger.info("Routing: deterministic route available")
+        logger.debug("Routing: deterministic route available")
         return "deterministic"
 
     # 8. Fallback -> agent
-    logger.info(f"Routing: no deterministic route for '{current_page}', using agent")
+    logger.debug("Routing: agent fallback page=%s", current_page)
     return "agent"

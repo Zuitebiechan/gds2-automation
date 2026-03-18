@@ -10,6 +10,12 @@ API Endpoints:
 - Session API: /api/session/* - Agentic diagnostic session management
 """
 
+from flask import Flask
+from flask_cors import CORS
+import logging
+
+_bootstrap_logs: list[tuple[str, str]] = []
+
 # Load environment variables from .env file
 try:
     from dotenv import load_dotenv
@@ -17,26 +23,26 @@ try:
     env_path = Path(__file__).parent / ".env"
     if env_path.exists():
         load_dotenv(env_path)
-        print(f"[OK] Loaded environment variables from {env_path}")
+        _bootstrap_logs.append(("debug", f"Loaded environment variables from {env_path}"))
     else:
-        print(f"[WARN] .env file not found at {env_path}")
+        _bootstrap_logs.append(("debug", f".env file not found at {env_path}"))
 except ImportError:
-    print("[WARN] python-dotenv not installed. Run: pip install python-dotenv")
-
-from flask import Flask
-from flask_cors import CORS
-import logging
+    _bootstrap_logs.append(("debug", "python-dotenv not installed"))
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
+    format="%(asctime)s %(levelname)s %(message)s",
     handlers=[
         logging.FileHandler('gds2_web.log'),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
+logging.getLogger("werkzeug").setLevel(logging.WARNING)
+
+for level, message in _bootstrap_logs:
+    getattr(logger, level)(message)
 
 app = Flask(__name__)
 CORS(app)
@@ -75,17 +81,11 @@ if __name__ == '__main__':
     except Exception:
         pass
 
-    print(f"\n{'='*60}")
-    print(f"  GDS2 Automation Flask Backend")
-    print(f"{'='*60}")
+    logger.info("API starting host=%s port=%s", host, port)
     if host == '0.0.0.0':
-        print(f"\n  Local:  http://localhost:{port}")
-        print(f"  Remote: http://{local_ip}:{port}")
+        logger.info("API endpoints local=http://localhost:%s remote=http://%s:%s", port, local_ip, port)
     else:
-        print(f"\n  http://localhost:{port}")
-    print(f"\n  Diagnostics: /api/diagnose/*")
-    print(f"  Navigate:    /api/navigate/*")
-    print(f"  Session:     /api/session/*")
-    print(f"{'='*60}\n")
+        logger.info("API endpoint http://localhost:%s", port)
+    logger.info("API routes /api/diagnose/* /api/navigate/* /api/session/*")
 
     app.run(debug=True, host=host, port=port, use_reloader=False, threaded=True)

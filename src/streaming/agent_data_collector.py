@@ -28,7 +28,7 @@ import threading
 import logging
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Callable, Optional, Any
+from typing import Dict, List, Callable, Optional, Any, Tuple
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
@@ -293,6 +293,10 @@ class AgentDataCollector:
 
         self._running = False
         self._thread: Optional[threading.Thread] = None
+        self._guard_thread: Optional[threading.Thread] = None
+        self._guard_interval_sec: float = 5.0
+        self._last_guard_result: Optional[dict] = None
+        self._guard_result_lock = threading.Lock()
         self._last_mtime: float = 0
         self._last_extraction_count: int = 0
         self._last_params: Dict[str, dict] = {}
@@ -313,9 +317,15 @@ class AgentDataCollector:
             logger.warning(f"Agent data directory does not exist: {self._json_path.parent}")
 
         self._running = True
+        with self._guard_result_lock:
+            self._last_guard_result = None
+        if self.page_guard is not None:
+            self._guard_thread = threading.Thread(target=self._guard_loop, daemon=True)
+            self._guard_thread.start()
         self._thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._thread.start()
-        logger.info(f"AgentDataCollector started (interval={self.interval_ms}ms, path={self._json_path})")
+        logger.info("Agent collector started interval=%sms", self.interval_ms)
+        logger.debug("Agent collector JSON path: %s", self._json_path)
 
     def stop(self):
         """Stop polling."""
@@ -323,7 +333,10 @@ class AgentDataCollector:
         if self._thread:
             self._thread.join(timeout=5)
             self._thread = None
-        logger.info("AgentDataCollector stopped")
+        if self._guard_thread is not None:
+            self._guard_thread.join(timeout=5)
+            self._guard_thread = None
+        logger.info("Agent collector stopped")
 
     @property
     def is_running(self) -> bool:
@@ -385,14 +398,28 @@ class AgentDataCollector:
 
         return result
 
+    def _guard_loop(self):
+        """Run page guard checks in the background."""
+        while self._running:
+            try:
+                result = self._run_page_guard()
+                with self._guard_result_lock:
+                    self._last_guard_result = result
+            except Exception as e:
+                logger.debug(f"Guard loop error: {e}")
+            time.sleep(self._guard_interval_sec)
+
     def _poll_loop(self):
         """Main polling loop."""
-        logger.info("Agent poll loop started")
+        logger.debug("Agent poll loop started")
         interval_sec = self.interval_ms / 1000.0
 
         while self._running:
+            loop_start = time.monotonic()
             try:
-                guard_result = self._run_page_guard()
+                with self._guard_result_lock:
+                    guard_result = self._last_guard_result
+                    self._last_guard_result = None
                 if guard_result is not None and self.on_guard_event:
                     signature = json.dumps(guard_result, sort_keys=True, ensure_ascii=False)
                     if signature != self._last_guard_event_signature:
@@ -429,9 +456,11 @@ class AgentDataCollector:
                 if self.on_error:
                     self.on_error(str(e))
 
-            time.sleep(interval_sec)
+            elapsed = time.monotonic() - loop_start
+            remaining = max(0.01, interval_sec - elapsed)
+            time.sleep(remaining)
 
-        logger.info("Agent poll loop stopped")
+        logger.debug("Agent poll loop stopped")
 
     def _run_page_guard(self) -> Optional[dict[str, Any]]:
         """Run optional page consistency guard before reading Agent output."""
@@ -446,6 +475,7 @@ class AgentDataCollector:
 
         if not result.get('ok', False):
             self._fatal_error = str(result.get('error') or 'Data Display guard failed.')
+            logger.warning("Agent collector guard failed: %s", self._fatal_error)
             self._running = False
             if self.on_error:
                 self.on_error(self._fatal_error)
@@ -526,7 +556,7 @@ class AgentDataCollector:
 
         return changes
 
-    def _detect_dtc_changes(self, new_dtcs: List[DTCInfo]):
+    def _detect_dtc_changes(self, new_dtcs: List[DTCInfo]) -> Tuple[List[DTCInfo], List[DTCInfo]]:
         """Detect DTC additions and removals."""
         new_codes = {d.code for d in new_dtcs}
         old_codes = self._last_dtc_codes
@@ -567,6 +597,7 @@ if __name__ == "__main__":
         print(f"\n[CHANGES] {len(changes)} parameter(s) changed:")
         for c in changes:
             print(f"  * {c['parameter']}: {c['old_value']} -> {c['new_value']} {c['unit']}")
+        print()
 
     def on_dtc_change(added, removed):
         if added:
