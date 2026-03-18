@@ -610,5 +610,5 @@ KNOWLEDGE_BASE_PATH=data/gds2_knowledge.lance
 
 ---
 
-**Document status**: still useful as the original implementation guide, but no longer the source of truth for current status by itself.  
-For branch status, also read `gds2_agentic_refactor_execution_plan.md`, `roadmap.md`, and `phase1_completion_summary.md`.
+**Document status**: still useful as the original implementation guide, but no longer the source of truth for current platform status by itself.  
+For current status, read `CLAUDE.md`, `README.md`, `agent_docs/architecture.md`, and `agent_docs/roadmap.md`.

@@ -1,38 +1,54 @@
-# GDS2 RPA — Cloud Remote Vehicle Diagnostics
+# Diagnostic Platform RPA — Cloud Remote Vehicle Diagnostics
 
-Remote vehicle diagnostics for GM GDS2 using:
+Remote vehicle diagnostics platform with:
 
-- **Cloud GDS2 + Java Agent** for data extraction
-- **VCI Proxy tunnel** for cloud↔local hardware bridge
-- **Local tray client exe** for mechanic-facing operations
+- **Cloud OEM diagnostic software + Java Agent / automation**
+- **VCI Proxy tunnel** for cloud↔local hardware bridging
+- **Shared backend contract layer** for multi-software expansion
+- **Local tray client UX** for mechanics
+
+GDS2 is the first fully implemented backend. The repository is now structured for additional OEM software backends through `diagnostic_platform/` + `backends/`.
 
 ---
 
 ## Architecture at a Glance
 
-1. Cloud runs GDS2 + RPA automation + Flask APIs
-2. Local machine runs VCI proxy client and tray diagnostics UI
+1. Cloud runs OEM diagnostic software, backend APIs, and RPA automation
+2. Local machine runs the VCI proxy client and diagnostics tray UI
 3. Tunnel bridges cloud J2534 calls to local VCI hardware
+4. Shared contracts standardize backend behavior across OEM tools
 
 Key cloud ports:
 
 - `9000` — reverse VCI listener
 - `9001` — local proxy listener (virtual DLL side)
-- `8080` — Flask API (`/api/diagnose/*`)
+- `8080` — Flask API (`/api/diagnose/*`, `/api/navigate/*`, `/api/session/*`)
 
 ---
 
-## Current Product Flow (Phase 3 + 3.5)
+## Platform Layers
 
-In local exe Diagnostics window:
+| Layer | Location | Purpose |
+|---|---|---|
+| **VCI Proxy Tunnel** | `vci_proxy/` | Bridge cloud diagnostic software to local VCI hardware |
+| **Platform Core** | `diagnostic_platform/` | `DiagnosticBackend`, `BackendRegistry`, standard schemas, SSE helpers |
+| **Backend Facades** | `backends/`, `backends/gds2/` | Per-software adapters behind the shared backend contract |
+| **RPA Automation** | `src/` | GDS2-specific navigation, streaming, recovery, AI diagnosis |
+| **API + Client UX** | `app.py`, `diagnostics_api.py`, `navigate_api.py`, `session_api.py`, `vci_proxy/*.py` | Thin Flask entry point and mechanic-facing local UX |
+
+---
+
+## Current Product Flow
+
+In the local Diagnostics window:
 
 1. **Start Diagnostics**
 2. Select **Module** and click **Select**
 3. Select **Data Category**
-4. Click **AI Diagnose** (primary) — collects 30s data, sends to AI, streams structured verdict
-5. Optionally: **Read DTCs** or **Start Stream** (advanced/fallback)
+4. Click **AI Diagnose** — collects 30s data, runs AI analysis, streams the verdict
+5. Optionally use **Read DTCs** or **Start Stream**
 
-This sequence ensures GDS2 is on Data Display page where DTC/live data are valid.
+This keeps GDS2 on the Data Display page where DTC and live-data operations are valid.
 
 ---
 
@@ -60,11 +76,11 @@ Start each service in a separate terminal:
 # Terminal A: VCI Proxy server
 python -m vci_proxy.reverse_server
 
-# Terminal B: Flask API
+# Terminal B: Flask API entry point
 python app.py --port 8080
 
 # Terminal C: Start GDS2 with Java Agent (manual/project-specific)
-# Keep Agent writing to ~/gds2-data/latest.json
+# Keep agent writing to ~/gds2-data/latest.json
 ```
 
 Quick checks:
@@ -102,13 +118,13 @@ dist\VCI_Proxy_Client\VCI_Proxy_Client.exe
 
 ---
 
-## Config Persistence (Expected)
+## Config Persistence
 
 Client config file:
 
 `%APPDATA%\VCI_Proxy\config.json`
 
-If host/port are already saved, next launch auto-connects and will not show first-run input again.
+If host/port are already saved, next launch auto-connects.
 
 Reset first-run behavior:
 
@@ -118,49 +134,47 @@ Remove-Item "$env:APPDATA\VCI_Proxy\config.json" -Force
 
 ---
 
-## API Endpoints
+## Supported API Surfaces
+
+Only these APIs are supported:
 
 ### Diagnostics API
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/diagnose/start` | POST | Auto-start and connect to `VCI Proxy (Remote)`, returns modules + VIN/device context |
+| `/api/diagnose/start` | POST | Auto-start and connect to `VCI Proxy (Remote)`, returns modules + context |
 | `/api/diagnose/select_module` | POST | Select module and return data categories |
 | `/api/diagnose/dtcs` | GET | Read DTCs from current Data Display context |
 | `/api/diagnose/live_data/start` | POST | Start live stream collector |
 | `/api/diagnose/live_data/events` | GET | SSE stream |
 | `/api/diagnose/live_data/stop` | POST | Stop stream and navigate back |
-| `/api/diagnose/ai_diagnose` | POST | Start 30s data collection + AI analysis, return session_id |
-| `/api/diagnose/ai_diagnose/events` | GET | SSE progress + streamed LLM verdict |
-| `/api/diagnose/ai_diagnose/retry` | POST | Retry LLM call with cached payload |
+| `/api/diagnose/ai_diagnose` | POST | Start 30s collection + AI analysis |
+| `/api/diagnose/ai_diagnose/events` | GET | SSE progress + streamed verdict |
+| `/api/diagnose/ai_diagnose/retry` | POST | Retry AI call with cached payload |
 
-### Existing debug/service APIs
-
-- `/api/viewer/*`
-- `/api/stream/*`
-- `/api/agent/*`
-
-### Navigate API (LangGraph navigation)
+### Navigate API
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/navigate/start` | POST | Start LangGraph navigation session, returns session_id |
+| `/api/navigate/start` | POST | Start LangGraph navigation session |
 | `/api/navigate/events` | GET | SSE stream: progress / decision_required / done / error |
-| `/api/navigate/decision` | POST | Submit user selection for paused HITL decision |
+| `/api/navigate/decision` | POST | Submit paused HITL choice |
 | `/api/navigate/status` | GET | Query navigation session status |
 | `/api/navigate/abort` | POST | Abort running navigation session |
 
-### Session API (legacy, retained)
+### Session API
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/session/start` | POST | Start agentic session and route app by brand/model/VIN |
-| `/api/session/events` | GET | SSE stream: progress / decision_required / decision_resolved / done |
-| `/api/session/decision` | POST | Submit user choice for pending decision |
-| `/api/session/abort` | POST | Abort current session safely |
-| `/api/session/status` | GET | Query current session status |
-
----
+| `/api/session/start` | POST | Start session and select workflow/backend context |
+| `/api/session/start_diagnostics` | POST | Start GDS2 diagnostics for a running session |
+| `/api/session/execute` | POST | Execute one guarded backend action |
+| `/api/session/events` | GET | SSE stream for session lifecycle and decisions |
+| `/api/session/decision` | POST | Resolve a pending decision gate |
+| `/api/session/select_module` | POST | Session-aware module selection |
+| `/api/session/select_data_category` | POST | Session-aware category selection |
+| `/api/session/abort` | POST | Abort the current session safely |
+| `/api/session/status` | GET | Query current session state |
 
 ## Troubleshooting
 
@@ -179,21 +193,19 @@ python -m PyInstaller --clean --noconfirm --distpath dist_fix --workpath build_f
 
 ### 3) Pillow `_imaging` import errors
 
-Use clean rebuild in the active venv and ensure ABI-matching Pillow wheel is installed.
+Use a clean rebuild in the active venv and ensure the installed Pillow wheel matches the Python ABI.
 
 ### 4) Diagnostics tray click no response
 
-Use latest client build; errors are now surfaced with explicit dialogs instead of silent failure.
+Use the latest client build; errors are surfaced with explicit dialogs instead of silent failure.
 
 ---
 
 ## Documentation Index
 
 - `CLAUDE.md` — concise operational guide
-- `agent_docs/architecture.md` — end-to-end architecture
+- `agent_docs/architecture.md` — end-to-end architecture and platform layering
 - `agent_docs/vci_proxy.md` — tunnel/protocol/cache details
-- `agent_docs/rpa_automation.md` — workflow/page/API details
-- `agent_docs/roadmap.md` — delivery status and next phases
-- `agent_docs/agentic_refactor_master_plan.md` — reusable agentic architecture and phased migration
-- `agent_docs/gds2_agentic_refactor_execution_plan.md` — GDS2-specific implementation and rollout plan
-- `agent_docs/session_hitl_manual_test_plan.md` — manual acceptance checklist for Session + HITL loop
+- `agent_docs/rpa_automation.md` — GDS2 automation/runtime/API details
+- `agent_docs/roadmap.md` — delivery status and migration progress
+- `agent_docs/gds2_agentic_navigation_implementation.md` — LangGraph + LanceDB implementation details

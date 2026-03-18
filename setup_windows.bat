@@ -20,15 +20,15 @@ echo.
 
 :: Create virtual environment
 echo Creating virtual environment...
-if not exist "venv" (
-    python -m venv venv
+if not exist "venv32" (
+    python -m venv venv32
 )
 echo [OK] Virtual environment ready
 echo.
 
 :: Activate and install dependencies
 echo Installing dependencies...
-call venv\Scripts\activate.bat
+call venv32\Scripts\activate.bat
 python -m pip install --upgrade pip
 python -m pip install -r requirements-minimal.txt
 
@@ -39,7 +39,7 @@ echo ================================================
 echo.
 echo To run the demo:
 echo   1. Open Command Prompt in this folder
-echo   2. Run: venv\Scripts\activate
+echo   2. Run: venv32\Scripts\activate
 echo   3. Run: python main.py inspect
 echo.
 pause

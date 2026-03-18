@@ -2,12 +2,21 @@
 
 import json
 import logging
-import queue
 import os
-import time
+import queue
 
 from flask import Blueprint, Response, jsonify, request
 
+from backends.gds2 import GDS2DiagnosticBackend
+from diagnostic_platform.sse import (
+    agent_clients,
+    agent_lock,
+    broadcast_to_agent_clients,
+    on_agent_dtc_change,
+    on_agent_error,
+    on_agent_param_change,
+    on_agent_snapshot,
+)
 from src.recovery.types import WorkflowRecoveryError
 from src.streaming import AgentDataCollector
 from src.diagnosis.ai_engine import AIEngine, get_cached_payload
@@ -21,6 +30,7 @@ _diag_collector = None
 
 # Phase 3.5: AI diagnosis engine (lazy-initialized)
 _ai_engine: AIEngine | None = None
+_backend: GDS2DiagnosticBackend | None = None
 
 
 def _get_ai_engine() -> AIEngine:
@@ -52,32 +62,14 @@ def _load_zhipu_api_key() -> str | None:
         return None
 
 
-def _app_bindings():
-    """Get shared app-level viewer + SSE bindings."""
-    from app import (
-        get_data_viewer,
-        agent_clients,
-        agent_lock,
-        broadcast_to_agent_clients,
-        on_agent_snapshot,
-        on_agent_param_change,
-        on_agent_dtc_change,
-        on_agent_error,
-    )
-
-    return {
-        "get_data_viewer": get_data_viewer,
-        "agent_clients": agent_clients,
-        "agent_lock": agent_lock,
-        "broadcast_to_agent_clients": broadcast_to_agent_clients,
-        "on_agent_snapshot": on_agent_snapshot,
-        "on_agent_param_change": on_agent_param_change,
-        "on_agent_dtc_change": on_agent_dtc_change,
-        "on_agent_error": on_agent_error,
-    }
+def _get_backend() -> GDS2DiagnosticBackend:
+    global _backend
+    if _backend is None:
+        _backend = GDS2DiagnosticBackend()
+    return _backend
 
 
-def _make_data_display_guard(viewer, data_category: str, *, mode: str,
+def _make_data_display_guard(backend: GDS2DiagnosticBackend, data_category: str, *, mode: str,
                               check_interval: float = 5.0):
     """Build a shared Data Display guard for live and AI collectors.
 
@@ -107,8 +99,8 @@ def _make_data_display_guard(viewer, data_category: str, *, mode: str,
 
         _last_check_ts[0] = now
 
-        page = viewer.controller.detect_current_page(retries=0)
-        if page == GDS2Page.DATA_DISPLAY:
+        page = backend.detect_current_page()
+        if page == GDS2Page.DATA_DISPLAY.value:
             _last_result[0] = None
             return None
 
@@ -116,15 +108,18 @@ def _make_data_display_guard(viewer, data_category: str, *, mode: str,
         # immediately re-checks instead of waiting another 5 seconds.
         _last_check_ts[0] = 0.0
 
-        if page == GDS2Page.LOADING:
+        if page == GDS2Page.LOADING.value:
             return {
                 'ok': True,
                 'mode': mode,
                 'message': 'Waiting for GDS2 loading page to finish...',
             }
 
-        if page == GDS2Page.J2534_DISCONNECT:
-            recovery = viewer.controller.recover_data_display_connection(
+        if page == GDS2Page.J2534_DISCONNECT.value:
+            # Transitional escape hatch: recovery helper still lives on the
+            # underlying workflow/controller until this path is moved into the
+            # DiagnosticBackend contract.
+            recovery = backend._get_workflow().controller.recover_data_display_connection(
                 data_category=data_category,
                 allow_backtrack=True,
             )
@@ -168,7 +163,7 @@ def _make_data_display_guard(viewer, data_category: str, *, mode: str,
             'ok': False,
             'mode': mode,
             'error': (
-                f'Data Display guard detected page drift to {page.value}. '
+                f'Data Display guard detected page drift to {page}. '
                 'Please return to Data Display and retry.'
             ),
         }
@@ -180,13 +175,15 @@ def _make_data_display_guard(viewer, data_category: str, *, mode: str,
 def diagnose_start():
     """One-button start: start + auto-connect + modules."""
     try:
-        viewer = _app_bindings()["get_data_viewer"]()
-        result = viewer.auto_start()
+        backend = _get_backend()
+        backend.start()
+        state = backend.get_state()
+        modules = backend.get_modules()
         return jsonify({
             "success": True,
-            "modules": result["modules"],
-            "vin": result.get("vin"),
-            "device": result.get("device"),
+            "modules": modules,
+            "vin": state.extra.get("vin"),
+            "device": state.extra.get("device"),
         })
 
     except WorkflowRecoveryError as e:
@@ -211,27 +208,37 @@ def diagnose_dtcs():
         module_name = request.args.get('module', '').strip()
         data_category = request.args.get('data_category', '').strip()
 
-        viewer = _app_bindings()["get_data_viewer"]()
+        backend = _get_backend()
 
         # Keep navigation minimal for UI flow:
         # User already clicked "Select module", so we should avoid jumping
         # back to module list unless module context is missing.
-        current_page = viewer.controller.detect_current_page()
-        state = viewer.get_state()
+        current_page = backend.detect_current_page()
+        state = backend.get_state()
 
-        if module_name and not state.get("module"):
-            viewer.select_module(module_name)
-            current_page = viewer.controller.detect_current_page()
+        if module_name and not state.current_module:
+            backend.select_module(module_name)
+            current_page = backend.detect_current_page()
 
-        if data_category and current_page.value != "data_display":
-            viewer.select_data_category(data_category)
+        if data_category and current_page != GDS2Page.DATA_DISPLAY.value:
+            backend.select_data_category(data_category)
 
-        result = viewer.read_all_dtcs()
+        dtcs = backend.read_dtcs()
         return jsonify({
             "success": True,
-            "dtcs": result["dtcs"],
-            "dtc_count": result["dtc_count"],
-            "page_context": result.get("page_context"),
+            "dtcs": [
+                {
+                    "code": dtc.code,
+                    "control_module": dtc.module,
+                    "module": dtc.module,
+                    "status": dtc.status,
+                    "description": dtc.description,
+                    "source_backend": dtc.source_backend,
+                }
+                for dtc in dtcs
+            ],
+            "dtc_count": len(dtcs),
+            "page_context": backend.detect_current_page(),
         })
 
     except WorkflowRecoveryError as e:
@@ -264,11 +271,12 @@ def diagnose_select_module():
         return jsonify({"success": False, "error": "Module name required"}), 400
 
     try:
-        viewer = _app_bindings()["get_data_viewer"]()
-        result = viewer.select_module(module)
+        backend = _get_backend()
+        backend.select_module(module)
+        data_categories = backend.get_data_categories()
         return jsonify({
             "success": True,
-            "data_categories": result["data_categories"],
+            "data_categories": data_categories,
         })
 
     except WorkflowRecoveryError as e:
@@ -309,21 +317,20 @@ def diagnose_live_data_start():
                 pass
             _diag_collector = None
 
-        app_shared = _app_bindings()
-        viewer = app_shared["get_data_viewer"]()
-        viewer.select_data_category(data_category)
-        page_guard = _make_data_display_guard(viewer, data_category, mode='stream')
+        backend = _get_backend()
+        backend.select_data_category(data_category)
+        page_guard = _make_data_display_guard(backend, data_category, mode='stream')
 
         def on_guard_event(event: dict[str, object]) -> None:
             message = event.get('message')
             if message:
-                app_shared["broadcast_to_agent_clients"]('guard', {'message': message})
+                broadcast_to_agent_clients('guard', {'message': message})
 
         _diag_collector = AgentDataCollector(
-            on_snapshot=app_shared["on_agent_snapshot"],
-            on_param_change=app_shared["on_agent_param_change"],
-            on_dtc_change=app_shared["on_agent_dtc_change"],
-            on_error=app_shared["on_agent_error"],
+            on_snapshot=on_agent_snapshot,
+            on_param_change=on_agent_param_change,
+            on_dtc_change=on_agent_dtc_change,
+            on_error=on_agent_error,
             page_guard=page_guard,
             on_guard_event=on_guard_event,
             interval_ms=interval_ms,
@@ -355,10 +362,6 @@ def diagnose_live_data_start():
 @diagnostics_bp.route('/live_data/events')
 def diagnose_live_data_events():
     """SSE endpoint for diagnostics live data events."""
-    app_shared = _app_bindings()
-    agent_clients = app_shared["agent_clients"]
-    agent_lock = app_shared["agent_lock"]
-
     def generate():
         client_queue = queue.Queue(maxsize=200)
 
@@ -406,10 +409,10 @@ def diagnose_live_data_stop():
             _diag_collector.stop()
             _diag_collector = None
 
-        viewer = _app_bindings()["get_data_viewer"]()
-        current_page = viewer.controller.detect_current_page()
-        if current_page.value == "data_display":
-            viewer.controller.go_back()
+        backend = _get_backend()
+        current_page = backend.detect_current_page()
+        if current_page == GDS2Page.DATA_DISPLAY.value:
+            backend.go_back()
 
         return jsonify({"success": True, "message": "Live data stopped"})
 
@@ -447,16 +450,15 @@ def diagnose_ai_start():
 
         # Skip redundant navigation if GDS2 is already on Data Display
         # (e.g. agentic navigation already landed here)
-        app_shared = _app_bindings()
-        viewer = app_shared["get_data_viewer"]()
-        current_page = viewer.controller.detect_current_page()
-        if current_page == GDS2Page.DATA_DISPLAY:
+        backend = _get_backend()
+        current_page = backend.detect_current_page()
+        if current_page == GDS2Page.DATA_DISPLAY.value:
             logger.info("Already on DATA_DISPLAY, skipping select_data_category")
         else:
             logger.info("Not on DATA_DISPLAY (current: %s), navigating via select_data_category", current_page)
-            viewer.select_data_category(data_category)
+            backend.select_data_category(data_category)
 
-        page_guard = _make_data_display_guard(viewer, data_category, mode='ai_collect')
+        page_guard = _make_data_display_guard(backend, data_category, mode='ai_collect')
         session_id = engine.start_session(vehicle_context, collection_guard=page_guard)
         return jsonify({
             "success": True,

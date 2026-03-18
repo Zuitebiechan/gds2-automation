@@ -14,6 +14,8 @@ import uuid
 
 from flask import Blueprint, Response, jsonify, request
 
+from backends.gds2 import GDS2DiagnosticBackend
+
 from src.agentic.contracts.action_schema import ActionStep, GDS2Action
 from src.agentic.executor import DeterministicExecutor
 from src.agentic.adapters.gds2_adapter import GDS2ActionAdapter
@@ -32,7 +34,7 @@ session_bp = Blueprint("session", __name__, url_prefix="/api/session")
 
 # Module-level orchestrator instance (in-memory, single-process).
 _orchestrator = SessionOrchestrator()
-_data_viewer_getter = None
+_backend: GDS2DiagnosticBackend | None = None
 _executor: DeterministicExecutor | None = None
 _adapter: GDS2ActionAdapter | None = None
 
@@ -50,33 +52,26 @@ def set_orchestrator(orch: SessionOrchestrator) -> None:
     _orchestrator = orch
 
 
-def _default_data_viewer_getter():
-    from app import get_data_viewer
-
-    return get_data_viewer()
-
-
-def get_data_viewer():
-    getter = _data_viewer_getter or _default_data_viewer_getter
-    return getter()
-
-
-def set_data_viewer_getter(getter) -> None:
-    """Inject data-viewer getter for testing session step endpoints."""
-    global _data_viewer_getter
-    _data_viewer_getter = getter
+def _get_backend() -> GDS2DiagnosticBackend:
+    global _backend
+    if _backend is None:
+        _backend = GDS2DiagnosticBackend()
+    return _backend
 
 
 def get_executor() -> DeterministicExecutor:
     """Return the module-level executor, lazily wired with the GDS2 adapter.
 
     Creates a DeterministicExecutor + GDS2ActionAdapter on first call,
-    using the current DataViewerWorkflow from get_data_viewer().
+    using the DataViewerWorkflow wrapped by GDS2DiagnosticBackend.
     """
     global _executor, _adapter
     if _executor is None:
-        viewer = get_data_viewer()
-        _adapter = GDS2ActionAdapter(viewer)
+        # Transitional pattern: session_api still depends on the executor chain,
+        # so we reach through the backend to reuse its underlying workflow until
+        # this module is migrated to backend.execute_action().
+        workflow = _get_backend()._get_workflow()
+        _adapter = GDS2ActionAdapter(workflow)
         _executor = DeterministicExecutor()
         _adapter.register_all(_executor)
         logger.info("Session API: executor wired with GDS2ActionAdapter")
@@ -249,39 +244,25 @@ def session_start_diagnostics():
                 "error": f"Session workflow is '{session.workflow}', not 'gds2'",
             }), 409
 
-        executor = get_executor()
-        adapter = get_adapter()
-        assert adapter is not None, "Adapter not initialized"
-
-        # Build the action step
-        step = ActionStep(
-            action=GDS2Action.START_DIAGNOSTICS,
-            timeout_sec=60.0,
-        )
-
-        # Get current UI state from GDS2
-        ui_state = adapter.get_current_ui_state()
-
         orch.emit_progress(session_id, "Starting GDS2 diagnostics...")
-        exec_result = executor.execute_step(step, ui_state)
-
-        if not exec_result.success:
-            orch.emit_progress(session_id, f"Start diagnostics failed: {exec_result.error}")
-            return jsonify({
-                "success": False,
-                "session_id": session_id,
-                "error": exec_result.error,
-            }), 500
+        backend = _get_backend()
+        backend.start()
+        state = backend.get_state()
+        result = {
+            "modules": backend.get_modules(),
+            "vin": state.extra.get("vin"),
+            "device": state.extra.get("device"),
+        }
 
         orch.emit_progress(
             session_id,
             "GDS2 diagnostics started",
-            exec_result.metadata,
+            result,
         )
         return jsonify({
             "success": True,
             "session_id": session_id,
-            "result": exec_result.metadata,
+            "result": result,
         })
 
     except KeyError as exc:
@@ -541,17 +522,19 @@ def session_decision():
             resume_action = str(pending_gate.context.get("resume_action") or "").strip()
             if not resume_action:
                 raise ValueError("Missing resume_action in branch decision context")
-            viewer = get_data_viewer()
+            backend = _get_backend()
+            workflow = backend._get_workflow()
+            controller = workflow.controller
 
             try:
                 if resume_action == "select_module":
-                    resume_result = viewer.select_module(selected_choice)
+                    resume_result = workflow.select_module(selected_choice)
                 elif resume_action == "select_sub_module":
-                    resume_result = viewer.select_sub_module(selected_choice)
+                    resume_result = controller.select_list_item(selected_choice).to_dict()
                 elif resume_action == "select_data_category":
-                    resume_result = viewer.select_data_category(selected_choice)
+                    resume_result = workflow.select_data_category(selected_choice)
                 elif resume_action == "select_sub_category":
-                    resume_result = viewer.select_sub_category(selected_choice)
+                    resume_result = controller.select_sub_category(selected_choice).to_dict()
                 else:
                     raise ValueError(f"Unsupported resume action: {resume_action}")
             except BranchDecisionRequiredError as exc:
@@ -640,9 +623,19 @@ def session_select_module():
                 "error": f"Session not running (status={session.status.value})",
             }), 409
 
-        viewer = get_data_viewer()
+        executor = get_executor()
+        adapter = get_adapter()
+        assert adapter is not None, "Adapter not initialized"
+
+        step = ActionStep(
+            action=GDS2Action.SELECT_MODULE,
+            args={"module_name": module},
+            timeout_sec=30.0,
+        )
+
+        ui_state = adapter.get_current_ui_state()
         try:
-            result = viewer.select_module(module)
+            exec_result = executor.execute_step(step, ui_state)
         except BranchDecisionRequiredError as exc:
             resume_action = _resume_action_for_domain(
                 exc.decision.domain.value,
@@ -665,8 +658,20 @@ def session_select_module():
                 "decision": gate.to_dict(),
             })
 
+        if not exec_result.success:
+            orch.emit_progress(session_id, f"select_module failed: {exec_result.error}")
+            return jsonify({
+                "success": False,
+                "session_id": session_id,
+                "error": exec_result.error,
+            }), 500
+
         orch.emit_progress(session_id, f"Module selected: {module}")
-        return jsonify({"success": True, "session_id": session_id, "result": result})
+        return jsonify({
+            "success": True,
+            "session_id": session_id,
+            "result": exec_result.metadata,
+        })
 
     except KeyError as exc:
         return jsonify({"success": False, "error": str(exc)}), 404
@@ -701,9 +706,19 @@ def session_select_data_category():
                 "error": f"Session not running (status={session.status.value})",
             }), 409
 
-        viewer = get_data_viewer()
+        executor = get_executor()
+        adapter = get_adapter()
+        assert adapter is not None, "Adapter not initialized"
+
+        step = ActionStep(
+            action=GDS2Action.SELECT_DATA_CATEGORY,
+            args={"category_name": data_category},
+            timeout_sec=30.0,
+        )
+
+        ui_state = adapter.get_current_ui_state()
         try:
-            result = viewer.select_data_category(data_category)
+            exec_result = executor.execute_step(step, ui_state)
         except BranchDecisionRequiredError as exc:
             resume_action = _resume_action_for_domain(
                 exc.decision.domain.value,
@@ -726,8 +741,20 @@ def session_select_data_category():
                 "decision": gate.to_dict(),
             })
 
+        if not exec_result.success:
+            orch.emit_progress(session_id, f"select_data_category failed: {exec_result.error}")
+            return jsonify({
+                "success": False,
+                "session_id": session_id,
+                "error": exec_result.error,
+            }), 500
+
         orch.emit_progress(session_id, f"Data category selected: {data_category}")
-        return jsonify({"success": True, "session_id": session_id, "result": result})
+        return jsonify({
+            "success": True,
+            "session_id": session_id,
+            "result": exec_result.metadata,
+        })
 
     except KeyError as exc:
         return jsonify({"success": False, "error": str(exc)}), 404

@@ -1,29 +1,43 @@
 # RPA Automation (GDS2)
 
-Per-OEM-tool UI automation. Currently: **GDS2 (General Motors)**. Future OEM tools get dedicated adapters under `src/`.
+This document describes the **GDS2-specific** automation/runtime layer. In the new architecture, GDS2 automation lives under `src/` and is wrapped by `backends/gds2/backend.py`, which exposes the shared `DiagnosticBackend` contract used by the API layer.
+
+## GDS2 in the Multi-Backend Platform
+
+| Layer | Location | Role |
+|---|---|---|
+| **Platform Core** | `diagnostic_platform/` | Shared contracts, schemas, backend registry, SSE helpers |
+| **GDS2 Backend Facade** | `backends/gds2/backend.py` | Adapts GDS2 runtime to `DiagnosticBackend` |
+| **GDS2 RPA Runtime** | `src/` | Actual GDS2 navigation, streaming, recovery, AI diagnosis |
 
 ## GDS2 Automation Stack
 
-### Navigation Layer (Agentic)
+### Backend facade
+
+| Component | File | Purpose |
+|---|---|---|
+| **GDS2DiagnosticBackend** | `backends/gds2/backend.py` | Standard backend facade over the existing GDS2 workflow/controller |
+
+### Navigation layer (agentic)
 
 | Component | File | Purpose |
 |---|---|---|
 | **NavigationGraph** | `src/agentic/graph.py` | LangGraph StateGraph: deterministic + agent + human nodes |
-| **NavigationNodes** | `src/agentic/nodes.py` | 3 node implementations + routing logic (`should_continue`) |
-| **NavigationTools** | `src/agentic/tools.py` | 9 native tools for ZhipuAI tool-calling (action + observation + signal) |
-| **KnowledgeBase** | `src/agentic/knowledge_base.py` | LanceDB RAG: page matching, error patterns, tool suggestions, auto-learning |
-| **NavigationState** | `src/agentic/state.py` | TypedDict state schema for LangGraph |
+| **NavigationNodes** | `src/agentic/nodes.py` | Node implementations + routing logic |
+| **NavigationTools** | `src/agentic/tools.py` | Native tool-calling functions for ZhipuAI |
+| **KnowledgeBase** | `src/agentic/knowledge_base.py` | LanceDB RAG for page matching and navigation support |
+| **NavigationState** | `src/agentic/state.py` | Typed state schema for LangGraph |
 | **LLMFactory** | `src/agentic/llm_factory.py` | ZhipuAI/Gemini/OpenAI provider factory |
 
-### Execution Layer (Deterministic Drivers)
+### Execution/runtime layer
 
 | Component | File | Purpose |
 |---|---|---|
-| **DataViewerWorkflow** | `src/workflows/data_viewer.py` | Legacy orchestration (used by `/api/diagnose/*`) |
-| **NavigationController** | `src/navigation/controller.py` | State detection + page transitions (`GDS2Page`) |
+| **DataViewerWorkflow** | `src/workflows/data_viewer.py` | Retained GDS2 workflow orchestration |
+| **NavigationController** | `src/navigation/controller.py` | Page detection + state transitions (`GDS2Page`) |
 | **AgentNavigator** | `src/streaming/agent_navigator.py` | Command/response IPC with Java Agent |
 | **AgentDataCollector** | `src/streaming/agent_data_collector.py` | 100ms polling, parameter/DTC extraction, change detection |
-| **DiagnosticBuffer** | `src/streaming/diagnostic_buffer.py` | 30s sliding window buffer, dual-rate sampling, delta compression |
+| **DiagnosticBuffer** | `src/streaming/diagnostic_buffer.py` | 30s sliding window, dual-rate sampling, delta compression |
 | **DeviceExplorerController** | `src/native/device_explorer.py` | Win32 Device Explorer automation |
 | **VehicleMapping** | `src/discovery/vehicle_mapping.py` | Cache module/category indexes per vehicle |
 
@@ -31,25 +45,25 @@ Per-OEM-tool UI automation. Currently: **GDS2 (General Motors)**. Future OEM too
 
 The LangGraph hybrid navigator uses three node types:
 
-```
-START --> deterministic_node --> should_continue() --> deterministic | agent | human | END
-                                                         agent_node --> should_continue() --> ...
-                                                         human_node --> should_continue() --> ...
+```text
+START -> deterministic_node -> router -> deterministic | agent | human | END
+                                   agent_node -> router -> ...
+                                   human_node -> router -> ...
 ```
 
 | Node | Pages Handled | LLM Call? |
 |---|---|---|
-| **deterministic** | main_menu, diagnostics_menu, module_submenu | No |
-| **human** (HITL) | module_list, data_list, sub_data_list | No |
-| **agent** (AI) | Unknown pages, error recovery, unexpected states | Yes (ZhipuAI) |
+| **deterministic** | known-safe pages | No |
+| **human** (HITL) | module/data/sub-data selection pages | No |
+| **agent** (AI) | unknown pages, recovery, unexpected states | Yes |
 
-The agent node queries LanceDB for similar pages and tool suggestions before calling ZhipuAI with bound tools.
+The agent node queries LanceDB before calling ZhipuAI with bound tools.
 
 ## GDS2 Page Flow
 
-```
-MAIN_MENU → DEVICE_EXPLORER → VEHICLE_SELECTION → DIAGNOSTICS_MENU
-  → MODULE_LIST → MODULE_SUBMENU → DATA_LIST → [SUB_DATA_LIST] → DATA_DISPLAY
+```text
+MAIN_MENU -> DEVICE_EXPLORER -> VEHICLE_SELECTION -> DIAGNOSTICS_MENU
+  -> MODULE_LIST -> MODULE_SUBMENU -> DATA_LIST -> [SUB_DATA_LIST] -> DATA_DISPLAY
 ```
 
 ## Java Agent Communication
@@ -60,74 +74,72 @@ MAIN_MENU → DEVICE_EXPLORER → VEHICLE_SELECTION → DIAGNOSTICS_MENU
 | `~/gds2-data/result.json` | Java Agent | Command execution results |
 | `~/gds2-data/latest.json` | Java Agent | Continuously updated snapshot |
 
-Agent extraction is JVM-level (no screenshot OCR), enabling high-frequency monitoring.
+Agent extraction is JVM-level, not screenshot-driven OCR.
 
-## Phase 3 Diagnostics APIs
+## API Integration
 
-All endpoints are under `/api/diagnose`:
+`app.py` is now a **thin Flask entry point**. It registers only:
+
+- `/api/diagnose/*`
+- `/api/navigate/*`
+- `/api/session/*`
+
+These are the supported API surfaces for the current product path.
+
+### Diagnostics API
+
+`diagnostics_api.py`:
+
+- uses `GDS2DiagnosticBackend`
+- uses shared SSE callbacks/helpers from `diagnostic_platform/sse.py`
+- keeps the mechanic flow centered on Data Display operations
+
+Supported diagnostics endpoints:
 
 | Endpoint | Method | Purpose |
 |---|---|---|
-| `/start` | POST | Start diagnostics, auto-connect `VCI Proxy (Remote)`, return modules + VIN/device |
-| `/select_module` | POST | Select module and return data categories |
-| `/dtcs` | GET | Read DTCs from current Data Display context |
-| `/live_data/start` | POST | Start live collection for selected data category |
-| `/live_data/events` | GET | SSE real-time stream |
-| `/live_data/stop` | POST | Stop stream and navigate back |
-| `/ai_diagnose` | POST | Start 30s data collection + AI analysis, return session_id |
-| `/ai_diagnose/events` | GET | SSE progress events + streamed LLM verdict |
-| `/ai_diagnose/retry` | POST | Retry LLM call with cached payload |
+| `/api/diagnose/start` | POST | Start diagnostics, auto-connect `VCI Proxy (Remote)`, return modules + context |
+| `/api/diagnose/select_module` | POST | Select module and return data categories |
+| `/api/diagnose/dtcs` | GET | Read DTCs from current Data Display context |
+| `/api/diagnose/live_data/start` | POST | Start live collection for selected data category |
+| `/api/diagnose/live_data/events` | GET | SSE real-time stream |
+| `/api/diagnose/live_data/stop` | POST | Stop stream and navigate back |
+| `/api/diagnose/ai_diagnose` | POST | Start 30s collection + AI analysis |
+| `/api/diagnose/ai_diagnose/events` | GET | SSE progress + streamed verdict |
+| `/api/diagnose/ai_diagnose/retry` | POST | Retry LLM call with cached payload |
 
-### Required UX Flow (Mechanic)
+### Session API
+
+`session_api.py` uses the backend abstraction for GDS2 session lifecycle/orchestration and keeps its own session event queues.
+
+Supported session endpoints:
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/api/session/start` | POST | Start session and select workflow/backend context |
+| `/api/session/start_diagnostics` | POST | Start GDS2 diagnostics for a running session |
+| `/api/session/execute` | POST | Execute one guarded backend action |
+| `/api/session/events` | GET | SSE events for session lifecycle and decisions |
+| `/api/session/decision` | POST | Submit user decision option |
+| `/api/session/select_module` | POST | Session-aware module selection |
+| `/api/session/select_data_category` | POST | Session-aware data category selection |
+| `/api/session/abort` | POST | Abort session |
+| `/api/session/status` | GET | Query session state |
+
+## Required Mechanic UX Flow
 
 1. Start Diagnostics
 2. Select Module and click **Select**
 3. Select Data Category
-4. Click **AI Diagnose** (primary) — collects 30s data, sends to AI, streams result
-5. Optionally: **Read DTCs** or **Start Stream** (advanced/fallback)
+4. Click **AI Diagnose** — collects 30s data and streams AI output
+5. Optionally use **Read DTCs** or **Start Stream**
 
-This ensures GDS2 is on Data Display page before DTC/live operations.
-
-### AI Diagnosis Data Flow
-
-```
-User clicks "AI Diagnose"
-  → POST /ai_diagnose → backend starts AgentDataCollector + DiagnosticBuffer
-  → 30s collection (SSE progress: "Collecting... 15/30s")
-  → Read DTCs from final snapshot
-  → Assemble delta-compressed payload (initial state + timestamped changes)
-  → Call ZhipuAI glm-4.7 (streaming, thinking disabled)
-  → SSE-stream LLM tokens to client in real-time
-  → Final structured verdict displayed
-```
-## Debug/Service APIs (Flask)
-
-Current Flask layer in `app.py` exposes:
-
-- Viewer APIs: `/api/viewer/*`
-- Stream APIs: `/api/stream/*`
-- Agent APIs: `/api/agent/*`
-- Diagnostics APIs: `/api/diagnose/*`
-
-The mechanic-facing product path is local exe UI + diagnostics APIs. Web UI remains debug/service support.
+This ensures GDS2 stays on Data Display before DTC/live-data operations.
 
 ## Operational Gotchas
 
 - Device Explorer is **Win32**, not JavaFX
 - GDS2 frequently uses **GBK** encoding
-- One GDS2 instance per machine (single-instance lock)
-- DTC/Live data are valid only when page context is correct (Data Display)
-
-## Session APIs (G3, Agentic Orchestration)
-
-| Endpoint | Method | Purpose |
-|---|---|---|
-| `/api/session/start` | POST | Start session and route workflow by brand/model/VIN |
-| `/api/session/events` | GET | SSE events (progress, decision_required, decision_timeout, decision_resolved, error, done) |
-| `/api/session/decision` | POST | Submit user decision option |
-| `/api/session/abort` | POST | Abort session |
-| `/api/session/status` | GET | Query session state snapshot |
-| `/api/session/select_module` | POST | Execute module selection; if ambiguous emits `decision_required` |
-| `/api/session/select_data_category` | POST | Execute data category selection; if ambiguous emits `decision_required` |
-
-These APIs are additive and do not replace existing `/api/diagnose/*` endpoints.
+- One GDS2 instance per machine
+- DTC/live data are valid only on the correct page context
+- AI diagnosis requires a full 30s collection window before the LLM call
