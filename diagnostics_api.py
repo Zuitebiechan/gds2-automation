@@ -17,10 +17,16 @@ from diagnostic_platform.sse import (
     on_agent_param_change,
     on_agent_snapshot,
 )
-from src.recovery.types import WorkflowRecoveryError
 from src.streaming import AgentDataCollector
 from src.diagnosis.ai_engine import AIEngine, get_cached_payload
 from src.navigation import GDS2Page
+
+
+# Lightweight exception kept from removed AI recovery system
+class WorkflowRecoveryError(Exception):
+    """Raised when workflow needs to be restarted from a different page."""
+    pass
+
 
 logger = logging.getLogger(__name__)
 
