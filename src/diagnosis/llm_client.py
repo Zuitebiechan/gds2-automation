@@ -17,6 +17,9 @@ from typing import Any, Generator, Optional
 
 logger = logging.getLogger(__name__)
 
+# Suppress noisy httpx "HTTP Request: POST ..." logs
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 # System prompt for vehicle diagnosis
 DIAGNOSTIC_SYSTEM_PROMPT = """You are an expert GM vehicle diagnostics technician with 15+ years of experience analyzing data from GDS2 OEM diagnostic tools.
 
