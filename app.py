@@ -61,6 +61,23 @@ if __name__ == '__main__':
     import sys
     import socket
 
+    # Disable Windows console Quick Edit Mode to prevent stdout freeze
+    # when user accidentally clicks the terminal window.
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        # STD_INPUT_HANDLE = -10
+        handle = kernel32.GetStdHandle(-10)
+        # Get current console mode
+        mode = ctypes.c_ulong()
+        kernel32.GetConsoleMode(handle, ctypes.byref(mode))
+        # ENABLE_QUICK_EDIT_MODE = 0x0040, ENABLE_EXTENDED_FLAGS = 0x0080
+        # Disable quick edit, enable extended flags
+        new_mode = (mode.value | 0x0080) & ~0x0040
+        kernel32.SetConsoleMode(handle, new_mode)
+    except Exception:
+        pass  # Not on Windows or no console attached
+
     port = 8080
     host = '0.0.0.0'
 
