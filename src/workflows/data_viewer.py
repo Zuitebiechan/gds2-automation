@@ -3,8 +3,6 @@ Data Viewer Workflow for GDS2.
 
 Simplified three-step workflow: Device -> Module -> Data Category.
 Handles all GDS2 navigation automatically in the background.
-
-Supports AI-powered exception recovery (Day 6 integration).
 """
 
 import logging
@@ -20,7 +18,6 @@ from ..agentic.planner import (
     DecisionDomain,
 )
 from ..navigation import NavigationController, NavigationResult, GDS2Page
-from ..recovery.decorators import with_recovery
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +27,7 @@ StatusCallback = Optional[Callable[[str], None]]
 class DataViewerWorkflow:
     """Simplified three-step workflow: Device -> Module -> Data."""
 
-    def __init__(self, nav=None, enable_ai_recovery=False):
+    def __init__(self, nav=None):
         self.controller = NavigationController(nav)
         self._branch_planner = ConstrainedPlanner()
         self._mapping = None
@@ -40,25 +37,6 @@ class DataViewerWorkflow:
         self._module = None
         self._data_category = None
 
-        # AI Recovery Integration (Day 6)
-        self.recovery = None
-        if enable_ai_recovery:
-            from ..recovery import RecoveryManager
-            try:
-                self.recovery = RecoveryManager(
-                    agent_navigator=self.controller.nav if hasattr(self.controller, 'nav') else None,
-                    navigation_controller=self.controller,
-                )
-                if self.recovery.enabled:
-                    self.recovery.reset_session()
-                    logger.info("AI recovery enabled and initialized")
-                else:
-                    logger.info("AI recovery disabled (check config/API key)")
-                    self.recovery = None
-            except Exception as e:
-                logger.warning(f"Failed to initialize AI recovery: {e}")
-                self.recovery = None
-
     @property
     def mapping(self):
         if self._mapping is None:
@@ -66,7 +44,6 @@ class DataViewerWorkflow:
             self._mapping = VehicleMapping()
         return self._mapping
 
-    @with_recovery
     def start(self, on_status: StatusCallback = None) -> dict:
         """
         Initialize the Data Viewer.
@@ -213,7 +190,6 @@ class DataViewerWorkflow:
             "device_connected": True,
         }
 
-    @with_recovery
     def connect_device(self, device_name: str, on_status: StatusCallback = None) -> dict:
         """
         Select device and navigate to Module List.
@@ -281,14 +257,14 @@ class DataViewerWorkflow:
                     if "Module Diagnostics" in item:
                         self.controller.nav.select_list_item(0, i, double_click=True)
                         try:
-                            new_page = self.controller.wait_for_page_transition(
+                            self.controller.wait_for_page_transition(
                                 GDS2Page.DIAGNOSTICS_MENU, timeout=30
                             )
-                            current = new_page
                         except TimeoutError:
                             logger.warning("Page did not transition after Module Diagnostics selection")
-                            current = self.controller.detect_current_page()
-                        break
+                        self.controller._current_page = self.controller.detect_current_page()
+                        self.controller._current_page = GDS2Page.MODULE_LIST
+                        return
 
         # If at Data Display/Data List, navigate back to Module List
         if current in (GDS2Page.DATA_DISPLAY, GDS2Page.DATA_LIST, GDS2Page.SUB_DATA_LIST):
@@ -332,7 +308,6 @@ class DataViewerWorkflow:
             "device": self._device,
         }
 
-    @with_recovery
     def select_module(self, module_name: str, on_status: StatusCallback = None) -> dict:
         """
         Navigate to Data List for the given module.
@@ -435,7 +410,6 @@ class DataViewerWorkflow:
             "data_categories": data_categories,
         }
 
-    @with_recovery
     def select_data_category(self, data_category: str, on_status: StatusCallback = None) -> dict:
         """
         Navigate to Data Display and start monitoring.
@@ -498,7 +472,6 @@ class DataViewerWorkflow:
             "sub_categories": sub_categories,
         }
 
-    @with_recovery
     def select_sub_module(self, sub_module_name: str, on_status: StatusCallback = None) -> dict:
         """Select sub-module entry (Module Submenu -> Data List).
 
@@ -562,7 +535,6 @@ class DataViewerWorkflow:
             "sub_module": resolved_sub_module,
         }
 
-    @with_recovery
     def select_sub_category(self, sub_category: str, on_status: StatusCallback = None) -> dict:
         """Select sub-data category from Sub Data List to Data Display.
 
@@ -604,7 +576,6 @@ class DataViewerWorkflow:
         """Clear monitoring state."""
         self._data_category = None
 
-    @with_recovery
     def recover_data_display_connection(
         self,
         *,
@@ -636,7 +607,6 @@ class DataViewerWorkflow:
             "page": result.page.value,
         }
 
-    @with_recovery
     def get_available_devices(self, on_status: StatusCallback = None) -> dict:
         """
         Navigate to Device Explorer and get all available devices.
@@ -717,7 +687,6 @@ class DataViewerWorkflow:
             "at_device_explorer": True,
         }
 
-    @with_recovery
     def auto_start(self, on_status: StatusCallback = None) -> dict:
         """
         One-button start flow.
@@ -924,10 +893,6 @@ class DataViewerWorkflow:
 
         Returns:
             True if button became enabled, False if timeout
-
-        With AI recovery enabled, handles:
-        - Unexpected dialogs during wait
-        - Timeout with AI decision (wait longer vs give up)
         """
         # Prevent infinite recursion
         MAX_RECURSION = 2
@@ -936,37 +901,8 @@ class DataViewerWorkflow:
             return False
 
         start_time = time.time()
-        original_timeout = timeout_sec  # Save original for context
 
         while time.time() - start_time < timeout_sec:
-            # Check for unexpected dialogs (AI Recovery - Day 6)
-            if self.recovery:
-                if anomaly := self.recovery.check_for_dialogs():
-                    logger.warning(f"Unexpected dialog detected: {anomaly.context.get('modal_title')}")
-
-                    # Create operation context
-                    from ..recovery import OperationContext
-                    context = OperationContext(
-                        operation_name=f"wait_for_button:{button_text}",
-                        current_page=self.controller.current_page.value,
-                        visible_buttons=[button_text],
-                        recent_actions=["wait_for_button_enabled"],
-                        elapsed_time=time.time() - start_time,
-                        expected_time=original_timeout,
-                    )
-
-                    # Let AI handle it
-                    try:
-                        result = self.recovery.handle_anomaly(anomaly, context)
-                        if result.success:
-                            logger.info(f"Dialog recovered: {result.action.name}")
-                            # Continue waiting after recovery
-                        else:
-                            logger.error(f"Dialog recovery failed: {result.error}")
-                            # Continue waiting anyway, maybe button appeared
-                    except Exception as e:
-                        logger.error(f"Recovery exception: {e}", exc_info=True)
-
             # Check button status
             buttons = self.controller.nav.get_buttons()
             for btn in buttons:
@@ -979,43 +915,9 @@ class DataViewerWorkflow:
                         break
             time.sleep(1)
 
-        # Timeout - check if AI can help
+        # Timeout
         elapsed = time.time() - start_time
         logger.warning(f"Timeout waiting for button '{button_text}' after {elapsed:.1f}s")
-
-        if self.recovery:
-            from ..recovery import OperationContext
-            # Detect timeout anomaly
-            anomaly = self.recovery.detector.check_timeout(
-                operation=f"wait_for_button:{button_text}",
-                elapsed_time=elapsed,
-                expected_time=original_timeout,
-            )
-
-            if anomaly:
-                context = OperationContext(
-                    operation_name=f"wait_for_button:{button_text}",
-                    current_page=self.controller.current_page.value,
-                    visible_buttons=[button_text],
-                    recent_actions=["wait_for_button_enabled"],
-                    elapsed_time=elapsed,
-                    expected_time=original_timeout,
-                )
-
-                try:
-                    result = self.recovery.handle_anomaly(anomaly, context)
-                    if result.success and result.action.name == "WAIT_LONGER":
-                        # AI recommends waiting longer
-                        extended_timeout = 60  # Default to 60s
-                        logger.info(f"AI recommends waiting {extended_timeout} more seconds")
-                        # Recursively call with extended timeout (and increment depth)
-                        return self._wait_for_button_enabled(
-                            button_text, extended_timeout, _recursion_depth + 1
-                        )
-                    elif not result.success:
-                        logger.error(f"Timeout recovery failed: {result.error}")
-                except Exception as e:
-                    logger.error(f"Recovery exception: {e}", exc_info=True)
 
         return False
 
