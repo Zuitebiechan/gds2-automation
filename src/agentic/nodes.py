@@ -1176,11 +1176,26 @@ def human_node(state: NavigationState) -> dict:
             # Clear the pending selection
             updated_selections.pop("selected_item", None)
 
+            # If the new page is still a user-decision page (e.g.
+            # data_list -> sub_data_list, or a transient misclassification
+            # that left us on the same page), explicitly signal "ask_user"
+            # so the router takes the HITL path cleanly and
+            # interrupt_before=["human"] fires correctly.
+            if new_page in USER_DECISION_PAGES:
+                next_action = "ask_user"
+                logger.info(
+                    "Human node: new page %s is still a decision page, "
+                    "signalling ask_user for another HITL round",
+                    new_page,
+                )
+            else:
+                next_action = "continue"
+
             return {
                 "current_page": new_page,
                 "page_snapshot": snapshot,
                 "user_selections": updated_selections,
-                "next_action": "continue",
+                "next_action": next_action,
                 "error": None,
                 "navigation_history": [{
                     "action": f"user selected '{selected_item}'",

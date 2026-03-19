@@ -102,12 +102,18 @@ def create_navigation_graph():
     )
 
     # Add conditional edges from human node
+    # NOTE: "human" must be included here because after a user selection
+    # the page may still be a USER_DECISION_PAGE (e.g. data_list ->
+    # sub_data_list, or a transient misclassification), causing
+    # should_continue() to return "human" again.  Without this key
+    # LangGraph raises KeyError('human') in _branch.py.
     workflow.add_conditional_edges(
         "human",
         should_continue,
         {
             "deterministic": "deterministic",
             "agent": "agent",
+            "human": "human",
             "end": END,
         },
     )
