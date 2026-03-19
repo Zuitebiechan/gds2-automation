@@ -126,14 +126,24 @@ class TestPageDetection:
 
         assert page == GDS2Page.J2534_DISCONNECT
 
-    def test_detect_j2534_disconnect_page_without_ok(self, controller, mock_nav):
-        """Back-only disconnect variant should still be recognized."""
+    def test_detect_j2534_disconnect_page_without_ok_from_data_display_context(self, controller, mock_nav):
+        """Back-only variant is treated as disconnect when prior context is deep-page."""
+        controller._current_page = GDS2Page.DATA_DISPLAY
         mock_nav.set_buttons(["Back", "Home"])
         mock_nav.set_list_items([])
 
         page = controller.detect_current_page()
 
         assert page == GDS2Page.J2534_DISCONNECT
+
+    def test_detect_back_only_empty_list_as_loading_without_disconnect_context(self, controller, mock_nav):
+        """Ambiguous Back-only empty-list pages should default to loading."""
+        mock_nav.set_buttons(["Back", "Home"])
+        mock_nav.set_list_items([])
+
+        page = controller.detect_current_page()
+
+        assert page == GDS2Page.LOADING
 
     def test_detect_loading_page_with_ambiguous_enter_and_back(self, controller, mock_nav):
         """Transient loading state should not be misclassified as disconnect."""
@@ -362,6 +372,7 @@ class TestNavigationActions:
         """Backtrack recovery should retry deterministically before giving up."""
         mock_nav.set_buttons(["Back", "Home"])
         mock_nav.set_list_items([])
+        controller._current_page = GDS2Page.DATA_DISPLAY
         controller.detect_current_page()
         controller.set_context(data_category="Engine Data")
 
@@ -395,6 +406,7 @@ class TestNavigationActions:
         """Back-only disconnect page should go straight to backtrack recovery."""
         mock_nav.set_buttons(["Back", "Home"])
         mock_nav.set_list_items([])
+        controller._current_page = GDS2Page.DATA_DISPLAY
         controller.detect_current_page()
         controller.set_context(data_category="Engine Data")
 

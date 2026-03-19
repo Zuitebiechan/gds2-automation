@@ -22,26 +22,12 @@ logger = logging.getLogger(__name__)
 
 
 def _record_trace(state: dict):
-    """Record the final navigation trace for future reference."""
-    try:
-        from .knowledge_base import record_navigation_trace
-
-        navigation_history = state.get("navigation_history", [])
-        goal = state.get("goal", "")
-        current_page = state.get("current_page")
-        user_selections = state.get("user_selections", {})
-        step_count = state.get("step_count", 0)
-        success = current_page == "data_display" or state.get("next_action") == "done"
-
-        record_navigation_trace(
-            steps=navigation_history,
-            goal=goal,
-            success=success,
-            total_steps=step_count,
-            user_selections=user_selections,
-        )
-    except Exception as e:
-        logger.warning(f"Failed to record navigation trace: {e}")
+    """Navigation trace learning has been disabled by product decision."""
+    logger.debug(
+        "Navigation trace recording disabled (goal=%s, steps=%s)",
+        state.get("goal", ""),
+        state.get("step_count", 0),
+    )
 
 
 def create_navigation_graph():
@@ -77,13 +63,6 @@ def create_navigation_graph():
         ...     print(event)
     """
     logger.debug("Creating navigation graph")
-
-    # Pre-initialize knowledge base in background so agent node doesn't block
-    try:
-        from .knowledge_base import preload_knowledge_base
-        preload_knowledge_base()
-    except Exception:
-        pass  # Non-fatal: agent will lazy-init if preload fails
 
     # Initialize graph with state schema
     workflow = StateGraph(NavigationState)
@@ -415,8 +394,7 @@ def run_with_event_queue(
 
             if not state.next:
                 # Graph finished — emit done event FIRST so the
-                # client can proceed immediately, then record trace
-                # in background (trace recording may download models).
+                # client can proceed immediately.
                 final = state.values
                 event_queue.put({
                     "type": "done",
@@ -425,14 +403,6 @@ def run_with_event_queue(
                     "selections": final.get("user_selections", {}),
                     "error": final.get("error"),
                 })
-                # Record trace in background (non-blocking)
-                import threading as _threading
-                _threading.Thread(
-                    target=_record_trace,
-                    args=(final,),
-                    daemon=True,
-                    name="nav-trace-record",
-                ).start()
                 return final
 
             # Graph paused for HITL

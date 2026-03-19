@@ -11,8 +11,6 @@ Prerequisites:
     3. ZhipuAI API key must be available:
        - Environment variable ZHIPUAI_API_KEY, OR
        - %APPDATA%/VCI_Proxy/config.json → {"zhipuai_api_key": "..."}
-    4. For knowledge base queries, run `python scripts/init_knowledge_base.py` first.
-       (Set HF_ENDPOINT=https://hf-mirror.com if huggingface.co is unreachable.)
 
 Usage:
     python scripts/test_local_navigation.py
@@ -44,7 +42,6 @@ def setup_logging(verbose: bool = False):
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
-    logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
 
 
 def verify_imports():
@@ -57,7 +54,6 @@ def verify_imports():
         ("llm_factory", "from src.agentic.llm_factory import create_llm, LLMFactory"),
         ("nodes", "from src.agentic.nodes import deterministic_node, agent_node, human_node, should_continue"),
         ("graph", "from src.agentic.graph import create_navigation_graph, make_initial_state, run_local_interactive"),
-        ("knowledge_base", "from src.agentic.knowledge_base import get_knowledge_base, query_similar_pages"),
     ]
 
     all_ok = True
@@ -130,36 +126,6 @@ def verify_llm_key():
     return False
 
 
-def verify_knowledge_base():
-    """Check if knowledge base is initialized."""
-    print("\nVerifying knowledge base...")
-
-    db_path = os.path.join(PROJECT_ROOT, "data", "gds2_knowledge.lance")
-    if os.path.exists(db_path):
-        print(f"  [OK] LanceDB found at {db_path}")
-        try:
-            # Need HF_ENDPOINT for sentence-transformers
-            if not os.getenv("HF_ENDPOINT"):
-                os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
-
-            from src.agentic.knowledge_base import get_knowledge_base
-            kb = get_knowledge_base()
-            stats = kb.get_stats()
-            print(f"  [OK] Pages: {stats.get('page_count', 0)}")
-            print(f"  [OK] Error patterns: {stats.get('error_pattern_count', 0)}")
-            print(f"  [OK] Icons: {stats.get('icon_count', 0)}")
-            return True
-        except Exception as e:
-            print(f"  [WARN] KB exists but failed to load: {e}")
-            print("    (Non-fatal — agent will work without KB)")
-            return True  # Non-fatal
-    else:
-        print(f"  [WARN] LanceDB not found at {db_path}")
-        print("    Run: python scripts/init_knowledge_base.py")
-        print("    (Non-fatal — agent will work without KB)")
-        return True  # Non-fatal
-
-
 def check_gds2_running():
     """Check if GDS2 Java Agent is accessible."""
     print("\nChecking GDS2 Java Agent...")
@@ -190,8 +156,6 @@ def main():
                         help="Only verify imports and config, don't run navigation")
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="Enable debug logging")
-    parser.add_argument("--skip-kb", action="store_true",
-                        help="Skip knowledge base verification (faster startup)")
 
     args = parser.parse_args()
     setup_logging(args.verbose)
@@ -212,10 +176,6 @@ def main():
 
     # 3. Verify LLM key
     has_key = verify_llm_key()
-
-    # 4. Verify KB (optional)
-    if not args.skip_kb:
-        verify_knowledge_base()
 
     if args.dry_run:
         print("\n" + "=" * 60)

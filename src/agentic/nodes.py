@@ -383,18 +383,67 @@ def _handle_j2534_disconnect(state: NavigationState) -> dict:
     target_category = user_selections.get("data_category") or controller.current_data_category
 
     if not target_category:
-        return {
-            "error": "No remembered data category for J2534 disconnect recovery.",
-            "next_action": "handle_error",
-            "navigation_history": [{
-                "action": "recover from j2534_disconnect",
-                "from_page": "j2534_disconnect",
-                "deterministic": True,
-                "success": False,
-                "error": "Missing data_category context",
-            }],
-            "step_count": state.get("step_count", 0) + 1,
-        }
+        # No data-category context usually means this is an early-flow
+        # false positive during page transition (e.g. vehicle_selection ->
+        # diagnostics_menu), not a true data-display disconnect.
+        from ..navigation.controller import GDS2Page
+
+        try:
+            transitioned = controller.wait_for_page_transition(
+                GDS2Page.J2534_DISCONNECT,
+                timeout=8.0,
+            )
+            snapshot = _snapshot_from_controller(controller)
+            new_page = snapshot.get("page", transitioned.value)
+            logger.info(
+                "NAV transient j2534_disconnect resolved to %s (no data_category context)",
+                new_page,
+            )
+            return {
+                "current_page": new_page,
+                "page_snapshot": snapshot,
+                "next_action": "continue",
+                "error": None,
+                "navigation_history": [{
+                    "action": "waited out transient j2534_disconnect classification",
+                    "from_page": "j2534_disconnect",
+                    "to_page": new_page,
+                    "deterministic": True,
+                    "success": True,
+                }],
+                "step_count": state.get("step_count", 0) + 1,
+            }
+        except TimeoutError:
+            snapshot = _snapshot_from_controller(controller)
+            observed_page = snapshot.get("page", "unknown")
+            if observed_page != "j2534_disconnect":
+                return {
+                    "current_page": observed_page,
+                    "page_snapshot": snapshot,
+                    "next_action": "continue",
+                    "error": None,
+                    "navigation_history": [{
+                        "action": "rechecked transient j2534_disconnect classification",
+                        "from_page": "j2534_disconnect",
+                        "to_page": observed_page,
+                        "deterministic": True,
+                        "success": True,
+                    }],
+                    "step_count": state.get("step_count", 0) + 1,
+                }
+
+            return {
+                "error": "No remembered data category for J2534 disconnect recovery.",
+                "next_action": "handle_error",
+                "navigation_history": [{
+                    "action": "recover from j2534_disconnect",
+                    "from_page": "j2534_disconnect",
+                    "deterministic": True,
+                    "success": False,
+                    "error": "Missing data_category context",
+                }],
+                "step_count": state.get("step_count", 0) + 1,
+            }
 
     recovery = controller.recover_data_display_connection(
         data_category=target_category,
@@ -889,49 +938,34 @@ def agent_node(state: NavigationState) -> dict:
         "step_count": state.get("step_count", 0) + 1,
     }
 
-    # 2. Query knowledge base (RAG)
+    # 2. Build deterministic page hints (RAG/embedding removed)
     similar_pages: list = []
     error_patterns: Optional[list] = None
     tool_suggestion: Optional[dict] = None
 
-    try:
-        from .knowledge_base import (
-            query_error_patterns,
-            get_knowledge_base,
-        )
-
-        # Rule-based page hint (replaces RAG vector search for known pages)
-        page_hint = PAGE_HINTS.get(current_page)
-        if page_hint:
-            similar_pages = [{
-                "page_type": current_page,
-                "description": page_hint["description"],
-                "deterministic_action": (
-                    f"{page_hint['tool_name']}({page_hint['tool_args']})"
-                    if page_hint.get("tool_name") else ""
-                ),
-                "is_confident": True,
-            }]
-            if page_hint.get("tool_name"):
-                tool_suggestion = {
-                    "tool_name": page_hint["tool_name"],
-                    "args": page_hint["tool_args"],
-                    "source": "page_hints_rule",
-                }
-                logger.debug(
-                    "Agent rule hint tool=%s args=%s",
-                    tool_suggestion['tool_name'],
-                    tool_suggestion.get('args', {}),
-                )
-
-        # Query error patterns if we're in error recovery (keep RAG for this)
-        if state.get("error") or state.get("next_action") == "handle_error":
-            error_text = state.get("error") or "unknown error"
-            error_patterns = query_error_patterns(error_text, top_k=2)
-            logger.debug("Agent found %s error patterns for recovery", len(error_patterns))
-
-    except Exception as e:
-        logger.warning(f"Agent: KB query failed (non-fatal): {e}")
+    # Rule-based page hint (deterministic metadata only)
+    page_hint = PAGE_HINTS.get(current_page)
+    if page_hint:
+        similar_pages = [{
+            "page_type": current_page,
+            "description": page_hint["description"],
+            "deterministic_action": (
+                f"{page_hint['tool_name']}({page_hint['tool_args']})"
+                if page_hint.get("tool_name") else ""
+            ),
+            "is_confident": True,
+        }]
+        if page_hint.get("tool_name"):
+            tool_suggestion = {
+                "tool_name": page_hint["tool_name"],
+                "args": page_hint["tool_args"],
+                "source": "page_hints_rule",
+            }
+            logger.debug(
+                "Agent rule hint tool=%s args=%s",
+                tool_suggestion['tool_name'],
+                tool_suggestion.get('args', {}),
+            )
 
     # 3. Call LLM with bound tools (with retry for rate limits)
     llm_max_retries = 3
@@ -1091,21 +1125,14 @@ def _record_learned_example(
     tool_args: dict,
     success: bool,
 ):
-    """Record a successful agent action to the knowledge base for auto-learning."""
-    try:
-        from .knowledge_base import get_knowledge_base
-        kb = get_knowledge_base()
-        action_desc = f"{tool_name}({tool_args})"
-        kb.add_example(
-            snapshot=snapshot,
-            classification=page_type,
-            confidence=1.0 if success else 0.5,
-            action_taken=action_desc,
-            action_succeeded=success,
-        )
-    except Exception as e:
-        # Auto-learning is best-effort, never block navigation
-        logger.debug(f"Auto-learning failed (non-fatal): {e}")
+    """Knowledge-base learning has been disabled by product decision."""
+    logger.debug(
+        "Auto-learning disabled: skip recording %s(%s) on page=%s success=%s",
+        tool_name,
+        tool_args,
+        page_type,
+        success,
+    )
 
 
 # ---------------------------------------------------------------------------

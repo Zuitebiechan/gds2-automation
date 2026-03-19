@@ -25,7 +25,6 @@ This document describes the **GDS2-specific** automation/runtime layer. In the n
 | **NavigationGraph** | `src/agentic/graph.py` | LangGraph StateGraph: deterministic + agent + human nodes |
 | **NavigationNodes** | `src/agentic/nodes.py` | Node implementations + routing logic |
 | **NavigationTools** | `src/agentic/tools.py` | Native tool-calling functions for ZhipuAI |
-| **KnowledgeBase** | `src/agentic/knowledge_base.py` | LanceDB RAG for page matching and navigation support |
 | **NavigationState** | `src/agentic/state.py` | Typed state schema for LangGraph |
 | **LLMFactory** | `src/agentic/llm_factory.py` | ZhipuAI/Gemini/OpenAI provider factory |
 
@@ -57,7 +56,7 @@ START -> deterministic_node -> router -> deterministic | agent | human | END
 | **human** (HITL) | module/data/sub-data selection pages | No |
 | **agent** (AI) | unknown pages, recovery, unexpected states | Yes |
 
-The agent node queries LanceDB before calling ZhipuAI with bound tools.
+The agent node uses deterministic page hints before calling ZhipuAI with bound tools.
 
 ## GDS2 Page Flow
 

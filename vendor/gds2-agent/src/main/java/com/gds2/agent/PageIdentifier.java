@@ -48,6 +48,8 @@ public class PageIdentifier {
     public static final String PAGE_DATA_LIST = "data_list";
     public static final String PAGE_SUB_DATA_LIST = "sub_data_list";
     public static final String PAGE_DATA_DISPLAY = "data_display";
+    public static final String PAGE_LOADING = "loading";
+    public static final String PAGE_J2534_DISCONNECT = "j2534_disconnect";
 
     /**
      * Identify the current GDS2 page.
@@ -190,31 +192,77 @@ public class PageIdentifier {
             confidence = "high";
             evidence = "buttons 'Diagnostics' + 'Update' present";
         }
-        // Rule 5: List contains "Data Display" item -> MODULE_SUBMENU
+        // Rule 5: Transitional loading states (no list content yet)
+        else if (listItems.isEmpty() && buttonTexts.isEmpty()) {
+            pageId = PAGE_LOADING;
+            confidence = "high";
+            evidence = "no buttons and no list items (transition/loading)";
+        }
+        // Rule 6: Transitional loading (stale deep-page toolbar + Enter)
+        else if (listItems.isEmpty()
+                && buttonTexts.contains("Enter")
+                && (buttonTexts.contains("Back") || buttonTexts.contains("Vehicle Menu"))) {
+            pageId = PAGE_LOADING;
+            confidence = "high";
+            evidence = "Enter + deep-page toolbar buttons with empty list (transition/loading)";
+        }
+        // Rule 7: Ambiguous toolbar-only deep page should default to LOADING,
+        // not disconnect, to avoid false positives during screen repaint.
+        else if (listItems.isEmpty()
+                && buttonTexts.contains("Back")
+                && buttonTexts.contains("Home")
+                && !buttonTexts.contains("OK")
+                && !buttonTexts.contains("Enter")
+                && !buttonTexts.contains("Diagnostics")
+                && !buttonTexts.contains("Update")
+                && !buttonTexts.contains("Disconnect")
+                && !buttonTexts.contains("Select Device")
+                && !buttonTexts.contains("Create Report")) {
+            pageId = PAGE_LOADING;
+            confidence = "medium";
+            evidence = "toolbar-only deep page with empty list (likely transient loading)";
+        }
+        // Rule 8: Lost communication page (J2534 disconnect)
+        else if (listItems.isEmpty()
+                && buttonTexts.contains("Back")
+                && !buttonTexts.contains("Enter")
+                && !buttonTexts.contains("Diagnostics")
+                && !buttonTexts.contains("Update")
+                && !buttonTexts.contains("Create Report")
+                && (buttonTexts.contains("OK")
+                    || containsAny(labelTexts, Arrays.asList(
+                            "j2534", "disconnect", "communication", "lost", "connection")))) {
+            pageId = PAGE_J2534_DISCONNECT;
+            confidence = buttonTexts.contains("OK") ? "high" : "medium";
+            evidence = buttonTexts.contains("OK")
+                    ? "Back + OK with empty list and no navigation markers"
+                    : "disconnect keywords detected in labels with Back + empty list";
+        }
+        // Rule 9: List contains "Data Display" item -> MODULE_SUBMENU
         else if (containsItem(listItems, "Data Display")) {
             pageId = PAGE_MODULE_SUBMENU;
             confidence = "high";
             evidence = "list contains 'Data Display' item";
         }
-        // Rule 6: List contains "Module Diagnostics" -> DIAGNOSTICS_MENU
+        // Rule 10: List contains "Module Diagnostics" -> DIAGNOSTICS_MENU
         else if (containsItem(listItems, "Module Diagnostics")) {
             pageId = PAGE_DIAGNOSTICS_MENU;
             confidence = "high";
             evidence = "list contains 'Module Diagnostics' item";
         }
-        // Rule 7: List items contain brackets like [K20] -> MODULE_LIST
+        // Rule 11: List items contain brackets like [K20] -> MODULE_LIST
         else if (hasModulePattern(listItems)) {
             pageId = PAGE_MODULE_LIST;
             confidence = "high";
             evidence = "list items contain module code patterns [...]";
         }
-        // Rule 8: Has list items + Back button (but no markers above) -> DATA_LIST
+        // Rule 12: Has list items + Back button (but no markers above) -> DATA_LIST
         else if (!listItems.isEmpty() && buttonTexts.contains("Back")) {
             pageId = PAGE_DATA_LIST;
             confidence = "medium";
             evidence = "has list items + Back button, no specific markers";
         }
-        // Rule 9: "Enter" button, no list items, and specific button pattern -> VEHICLE_SELECTION
+        // Rule 13: "Enter" button, no list items, and specific button pattern -> VEHICLE_SELECTION
         //   Vehicle Selection has: Enter visible, possibly Back/Disconnect/Select Device
         //   Diagnostics Menu also has Enter, but it has list items (checked above)
         else if (buttonTexts.contains("Enter") && listItems.isEmpty()) {
@@ -237,7 +285,7 @@ public class PageIdentifier {
                 evidence = "Enter button present but ambiguous context";
             }
         }
-        // Rule 10: "Disconnect" or "Select Device" without Enter -> still VEHICLE_SELECTION
+        // Rule 14: "Disconnect" or "Select Device" without Enter -> still VEHICLE_SELECTION
         else if (buttonTexts.contains("Disconnect") || buttonTexts.contains("Select Device")) {
             pageId = PAGE_VEHICLE_SELECTION;
             confidence = "high";
@@ -335,6 +383,21 @@ public class PageIdentifier {
     private boolean hasModulePattern(List<String> items) {
         for (String item : items) {
             if (item.contains("[") && item.contains("]")) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Check whether any label contains one of the marker substrings (case-insensitive).
+     */
+    private boolean containsAny(List<String> labels, List<String> markers) {
+        for (String label : labels) {
+            String normalized = label.toLowerCase(Locale.ROOT);
+            for (String marker : markers) {
+                if (normalized.contains(marker.toLowerCase(Locale.ROOT))) {
+                    return true;
+                }
+            }
         }
         return false;
     }

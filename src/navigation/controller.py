@@ -323,7 +323,11 @@ class NavigationController:
                 if "Enter" in button_texts and ("Back" in button_texts or "Vehicle Menu" in button_texts):
                     return GDS2Page.LOADING
 
-            # 1b. Lost communication page variants: always has Back, may or may not have OK.
+            # 1b. Lost communication page variants: always has Back.
+            #     IMPORTANT: during vehicle_selection -> diagnostics_menu transition,
+            #     GDS2 can briefly expose toolbar-only buttons with empty lists.
+            #     Treat ambiguous Back-only states as LOADING unless we have
+            #     strong disconnect evidence (OK button or prior deep-page context).
             if (
                 "Back" in button_texts
                 and not items
@@ -332,7 +336,24 @@ class NavigationController:
                 and "Update" not in button_texts
                 and "Enter" not in button_texts
             ):
-                return GDS2Page.J2534_DISCONNECT
+                if "OK" in button_texts:
+                    return GDS2Page.J2534_DISCONNECT
+
+                prior_disconnect_context = {
+                    GDS2Page.DATA_DISPLAY,
+                    GDS2Page.DATA_LIST,
+                    GDS2Page.SUB_DATA_LIST,
+                    GDS2Page.MODULE_SUBMENU,
+                    GDS2Page.J2534_DISCONNECT,
+                }
+                if self._current_page in prior_disconnect_context:
+                    return GDS2Page.J2534_DISCONNECT
+
+                logger.debug(
+                    "Ambiguous Back-only empty-list state from %s -> treating as LOADING",
+                    self._current_page.value,
+                )
+                return GDS2Page.LOADING
 
             # 2. MAIN_MENU: Has "Diagnostics" and "Update" buttons
             if "Diagnostics" in button_texts and "Update" in button_texts:

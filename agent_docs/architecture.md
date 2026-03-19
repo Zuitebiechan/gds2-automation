@@ -133,7 +133,7 @@ The shared platform layer does **not** replace the existing GDS2 runtime. `src/`
 - `src/navigation/` — page detection and transitions
 - `src/streaming/` — agent navigator, live collection, diagnostic buffering
 - `src/diagnosis/` — AI diagnosis orchestration and LLM client
-- `src/agentic/` — LangGraph navigator, tools, nodes, knowledge base
+- `src/agentic/` — LangGraph navigator, tools, nodes
 - `src/native/` — Win32 Device Explorer path
 - `src/workflows/` — retained GDS2 workflow orchestration
 

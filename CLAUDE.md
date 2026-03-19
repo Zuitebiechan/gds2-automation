@@ -37,7 +37,7 @@ The codebase now has five product layers:
   - timeout protection and deferred SSE cleanup
 - Agentic navigation is implemented:
   - deterministic + HITL + AI fallback graph
-  - LanceDB knowledge base
+  - rule-based page hints (knowledge-base learning removed)
   - `/api/navigate/*` SSE flow integrated with the client GUI
 - Local tray diagnostics UX remains the primary mechanic-facing product path
 

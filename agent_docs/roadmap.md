@@ -89,10 +89,10 @@ Deferred until multi-user/session-manager work becomes a priority.
 
 - [x] LangGraph hybrid navigation graph (`src/agentic/graph.py`, `nodes.py`)
 - [x] Native tool-calling with ZhipuAI (`src/agentic/tools.py`)
-- [x] LanceDB knowledge base and RAG-backed navigation
+- [x] Rule-based page hints + AI fallback navigation
 - [x] Navigate API blueprint (`/api/navigate/*`) with SSE + HITL flow
 - [x] Client GUI integration for navigation progress and decisions
-- [x] Retry logic, timeout limits, and navigation trace recording
+- [x] Retry logic and timeout limits
 
 ### Still remaining
 
