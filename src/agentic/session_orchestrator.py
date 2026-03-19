@@ -31,11 +31,9 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-# Brands routed to the gds2 workflow adapter
-GM_BRANDS = frozenset({
-    "chevrolet", "buick", "gmc", "cadillac",
-    "holden", "opel", "vauxhall", "baojun", "wuling",
-})
+# Module-level singleton registry for brand → backend routing.
+# Lazily initialised on first call to avoid circular imports.
+_registry = None
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -209,11 +207,31 @@ def sse_event(event_type: str, data: Dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _get_registry():
+    """Return the shared backend registry for brand routing."""
+    global _registry
+
+    if _registry is None:
+        from backends.gds2 import GDS2DiagnosticBackend
+        from diagnostic_platform.contracts import BackendRegistry
+
+        _registry = BackendRegistry()
+        _registry.register(GDS2DiagnosticBackend())
+
+    return _registry
+
+
 def route_workflow(brand: str) -> Optional[str]:
-    """Return the workflow adapter name for *brand*, or ``None``."""
-    if brand.lower().strip() in GM_BRANDS:
-        return "gds2"
-    return None
+    """Return the backend name for a brand, or ``None`` if unsupported."""
+    normalized_brand = brand.lower().strip()
+    if not normalized_brand:
+        return None
+
+    try:
+        backend = _get_registry().get_by_brand(normalized_brand)
+        return backend.name
+    except KeyError:
+        return None
 
 
 # ---------------------------------------------------------------------------

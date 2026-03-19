@@ -381,11 +381,21 @@ class AIEngine:
         full_response = []
         chunk_count = 0
         stream_started = time.monotonic()
-        logger.info("AI-DIAG %s LLM streaming started", session_id)
+        brand = str(vehicle_context.get('brand') or 'GM')
+        software = str(vehicle_context.get('software') or 'GDS2')
+        logger.info(
+            "AI-DIAG %s LLM streaming started brand=%s software=%s",
+            session_id,
+            brand,
+            software,
+        )
 
         try:
             for chunk in self._llm_client.diagnose_stream(
-                vehicle_context, delta_payload
+                vehicle_context,
+                delta_payload,
+                brand=brand,
+                software=software,
             ):
                 full_response.append(chunk)
                 chunk_count += 1

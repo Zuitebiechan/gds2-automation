@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # System prompt for vehicle diagnosis
-DIAGNOSTIC_SYSTEM_PROMPT = """You are an expert GM vehicle diagnostics technician with 15+ years of experience analyzing data from GDS2 OEM diagnostic tools.
+_SYSTEM_PROMPT_TEMPLATE = """You are an expert {brand} vehicle diagnostics technician with 15+ years of experience analyzing data from {software} OEM diagnostic tools.
 
 INPUT YOU WILL RECEIVE:
 - Vehicle VIN and selected control module
@@ -45,20 +45,20 @@ ANALYSIS STEPS:
 6. If no DTCs are present, analyze live data for anomalous patterns
 
 OUTPUT FORMAT (strict JSON):
-{
+{{
     "verdict": "no_issue" | "monitor" | "action_needed",
     "confidence": 0-100,
     "summary": "1-2 sentence mechanic-friendly explanation",
     "findings": [
-        {
+        {{
             "dtc": "P0101 (or null if live-data-only finding)",
             "severity": "critical | warning | informational",
             "analysis": "What the data shows and why it matters",
             "supporting_evidence": ["parameter names and values that support this conclusion"]
-        }
+        }}
     ],
     "recommended_action": "Specific repair/diagnostic recommendation (if action_needed)"
-}
+}}
 
 RULES:
 - Base conclusions on DATA, not just DTC descriptions
@@ -72,6 +72,15 @@ RULES:
 - Pay attention to significant_changes — they highlight the most abnormal behavior
 - When no DTCs and no anomalous live data: verdict should be "no_issue"
 """
+
+
+def _build_system_prompt(brand: str = "GM", software: str = "GDS2") -> str:
+    """Build diagnostic system prompt with brand/software context."""
+    return _SYSTEM_PROMPT_TEMPLATE.format(brand=brand, software=software)
+
+
+# Backward-compatible default for external callers
+DIAGNOSTIC_SYSTEM_PROMPT = _build_system_prompt()
 
 
 def _build_user_message(
@@ -222,6 +231,8 @@ class LLMClient:
         self,
         vehicle_context: dict[str, Any],
         delta_payload: dict[str, Any],
+        brand: str = "GM",
+        software: str = "GDS2",
     ) -> Generator[str, None, None]:
         """
         Call ZhipuAI with diagnostic data and stream the response.
@@ -231,12 +242,15 @@ class LLMClient:
         Args:
             vehicle_context: {"vin": "...", "module": "..."}
             delta_payload: Output from DiagnosticBuffer.get_delta_payload()
+            brand: Vehicle brand for prompt context (e.g. "GM", "Honda")
+            software: Diagnostic software name (e.g. "GDS2", "Honda HDS")
 
         Yields:
             str: Text chunks from the LLM response
         """
         client = self._get_client()
         user_message = _build_user_message(vehicle_context, delta_payload)
+        system_prompt = _build_system_prompt(brand, software)
 
         logger.info(
             f"Calling ZhipuAI {self._model} with "
@@ -247,7 +261,7 @@ class LLMClient:
         response = client.chat.completions.create(
             model=self._model,
             messages=[
-                {"role": "system", "content": DIAGNOSTIC_SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
             ],
             stream=True,
@@ -296,7 +310,7 @@ class LLMClient:
                 blocking_resp = client.chat.completions.create(
                     model=self._model,
                     messages=[
-                        {"role": "system", "content": DIAGNOSTIC_SYSTEM_PROMPT},
+                        {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_message},
                     ],
                     stream=False,
