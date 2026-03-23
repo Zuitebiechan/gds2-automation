@@ -21,6 +21,11 @@ from .cache_read_msgs import ReadMsgsCache
 from .cache_filter_dedup import FilterDeduplicationCache
 from .cache_vbatt import VbattCache
 from .auth import verify_signature
+from .benchmark import (
+    JsonlBenchmarkWriter,
+    decode_benchmark_response,
+    make_proxy_benchmark_event,
+)
 from .protocol import MAGIC, HEADER_SIZE, MsgType, MSG_NAMES, ProtocolDecoder, ProtocolEncoder
 
 logging.basicConfig(
@@ -35,10 +40,14 @@ class ReverseProxyServer:
     """反向代理服务器 - 接受 VCI Proxy 的连接"""
 
     def __init__(self, listen_port: int = 9000, proxy_port: int = 9001,
-                 config: Optional[ProxyConfig] = None):
+                 config: Optional[ProxyConfig] = None,
+                 benchmark_writer: Optional[JsonlBenchmarkWriter] = None,
+                 benchmark_label: str = "proxy_run"):
         self.listen_port = listen_port  # VCI Proxy 连接的端口
         self.proxy_port = proxy_port    # 本地程序连接的端口
         self.config = config or ProxyConfig()
+        self.benchmark_writer = benchmark_writer
+        self.benchmark_label = benchmark_label
         self.vci_reader: Optional[asyncio.StreamReader] = None
         self.vci_writer: Optional[asyncio.StreamWriter] = None
         self.vci_connected = asyncio.Event()
@@ -80,6 +89,8 @@ class ReverseProxyServer:
             logger.info(
                 f"VBATT cache enabled (TTL={self.config.vbatt_cache.ttl_s}s)"
             )
+        if self.benchmark_writer is not None:
+            logger.info("Proxy benchmark logging enabled: %s", self.benchmark_writer.path)
 
         print(f"\n等待本地 VCI Proxy 连接到端口 {self.listen_port}...")
         print(f"连接后，可以通过 localhost:{self.proxy_port} 访问 J2534 设备\n")
@@ -357,6 +368,35 @@ class ReverseProxyServer:
             ret, output_data = ProtocolDecoder.decode_ioctl_rsp(resp_body)
             self._vbatt_cache.record_result(ioctl_id, ret, output_data)
 
+    def _record_benchmark_event(
+        self,
+        *,
+        started_at_s: float,
+        duration_ms: float,
+        msg_type: int,
+        req_body: bytes,
+        resp_type: int | None,
+        resp_body: bytes,
+        cache_hit: bool,
+        status: str,
+    ) -> None:
+        if self.benchmark_writer is None:
+            return
+
+        event = make_proxy_benchmark_event(
+            run_label=self.benchmark_label,
+            source="proxy_server",
+            started_at_s=started_at_s,
+            duration_ms=duration_ms,
+            msg_type=msg_type,
+            req_body=req_body,
+            resp_type=resp_type,
+            resp_body=resp_body,
+            cache_hit=cache_hit,
+            status=status,
+        )
+        self.benchmark_writer.write_event(event)
+
     async def _handle_proxy_connection(self, reader: asyncio.StreamReader,
                                        writer: asyncio.StreamWriter):
         """处理本地代理连接"""
@@ -386,10 +426,22 @@ class ReverseProxyServer:
                 body = await reader.readexactly(body_len) if body_len > 0 else b''
 
                 msg_name = MSG_NAMES.get(msg_type, f"0x{msg_type:04x}")
+                started_at_s = time.time()
 
                 # Try serving from cache
                 cached, ioctl_id = self._try_serve_cached(msg_type, body, sequence)
                 if cached is not None:
+                    resp_type, resp_body = decode_benchmark_response(cached)
+                    self._record_benchmark_event(
+                        started_at_s=started_at_s,
+                        duration_ms=0.0,
+                        msg_type=msg_type,
+                        req_body=body,
+                        resp_type=resp_type,
+                        resp_body=resp_body,
+                        cache_hit=True,
+                        status="success",
+                    )
                     writer.write(cached)
                     await writer.drain()
                     continue
@@ -423,6 +475,16 @@ class ReverseProxyServer:
                     fwd_ms = (time.monotonic() - fwd_start) * 1000
 
                     self._record_in_caches(msg_type, body, resp_type, resp_body, ioctl_id)
+                    self._record_benchmark_event(
+                        started_at_s=started_at_s,
+                        duration_ms=fwd_ms,
+                        msg_type=msg_type,
+                        req_body=body,
+                        resp_type=resp_type,
+                        resp_body=resp_body,
+                        cache_hit=False,
+                        status="success",
+                    )
 
                     # 发送响应给客户端（使用原始 sequence）
                     resp_header = struct.pack('>IIHI', MAGIC,
@@ -438,6 +500,16 @@ class ReverseProxyServer:
                     self.response_futures.pop(new_seq, None)
                     fwd_ms = (time.monotonic() - fwd_start) * 1000
                     reason = "VCI_DISCONNECTED" if isinstance(e, ConnectionError) else "TIMEOUT"
+                    self._record_benchmark_event(
+                        started_at_s=started_at_s,
+                        duration_ms=fwd_ms,
+                        msg_type=msg_type,
+                        req_body=body,
+                        resp_type=None,
+                        resp_body=b"",
+                        cache_hit=False,
+                        status=reason.lower(),
+                    )
                     logger.error(f"[PROXY] {msg_name} seq={sequence} {reason} after {fwd_ms:.0f}ms")
                     break
 
@@ -467,6 +539,10 @@ def main():
                        help='Disable READ_VBATT response cache')
     parser.add_argument('--vbatt-ttl', type=int, default=5,
                        help='VBATT cache TTL in seconds (默认: 5)')
+    parser.add_argument('--benchmark-log', type=str, default=None,
+                       help='Write structured JSONL benchmark events to this file')
+    parser.add_argument('--benchmark-label', type=str, default='proxy_run',
+                       help='Run label stored in benchmark events')
     args = parser.parse_args()
 
     config = ProxyConfig.from_args(
@@ -491,7 +567,14 @@ def main():
           f" (TTL={config.vbatt_cache.ttl_s}s)")
     print("=" * 50)
 
-    server = ReverseProxyServer(args.listen_port, args.proxy_port, config)
+    benchmark_writer = JsonlBenchmarkWriter(args.benchmark_log) if args.benchmark_log else None
+    server = ReverseProxyServer(
+        args.listen_port,
+        args.proxy_port,
+        config,
+        benchmark_writer=benchmark_writer,
+        benchmark_label=args.benchmark_label,
+    )
 
     try:
         asyncio.run(server.start())

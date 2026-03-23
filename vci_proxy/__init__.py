@@ -23,6 +23,13 @@ from .cache_read_msgs import ReadMsgsCache
 from .cache_filter_dedup import FilterDeduplicationCache
 from .cache_vbatt import VbattCache
 from .auth import compute_signature, verify_signature
+from .benchmark import (
+    JsonlBenchmarkWriter,
+    compare_benchmark_summaries,
+    load_benchmark_events,
+    make_proxy_benchmark_event,
+    summarize_benchmark_events,
+)
 from .j2534_driver import J2534Driver
 from .reverse_client import ReverseProxyClient
 from .reverse_server import ReverseProxyServer
@@ -45,6 +52,11 @@ __all__ = [
     "VbattCache",
     "compute_signature",
     "verify_signature",
+    "JsonlBenchmarkWriter",
+    "make_proxy_benchmark_event",
+    "summarize_benchmark_events",
+    "compare_benchmark_summaries",
+    "load_benchmark_events",
     "J2534Driver",
     "ReverseProxyClient",
     "ReverseProxyServer",
