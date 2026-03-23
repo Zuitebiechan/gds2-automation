@@ -11,6 +11,7 @@ import json
 import logging
 import queue
 import uuid
+from typing import Any, Callable
 
 from flask import Blueprint, Response, jsonify, request
 
@@ -37,6 +38,8 @@ _orchestrator = SessionOrchestrator()
 _backend: GDS2DiagnosticBackend | None = None
 _executor: DeterministicExecutor | None = None
 _adapter: GDS2ActionAdapter | None = None
+_data_viewer_getter: Callable[[], Any] | None = None
+_data_viewer: Any | None = None
 
 def get_orchestrator() -> SessionOrchestrator:
     """Return the module-level orchestrator.
@@ -50,6 +53,29 @@ def set_orchestrator(orch: SessionOrchestrator) -> None:
     """Replace the module-level orchestrator (for testing)."""
     global _orchestrator
     _orchestrator = orch
+
+
+def set_data_viewer_getter(getter: Callable[[], Any] | None) -> None:
+    """Inject a lightweight viewer object for tests that bypass GDS2 startup."""
+    global _backend, _data_viewer_getter, _data_viewer
+    _data_viewer_getter = getter
+    _data_viewer = None
+    _backend = None
+    reset_executor()
+
+
+def _get_data_viewer() -> Any:
+    """Return the injected viewer when present, otherwise the real workflow."""
+    global _data_viewer
+    if _data_viewer_getter is None:
+        return _get_backend()._get_workflow()
+
+    if _data_viewer is None:
+        _data_viewer = _data_viewer_getter()
+        if _data_viewer is None:
+            raise RuntimeError("Injected data viewer getter returned None")
+
+    return _data_viewer
 
 
 def _get_backend() -> GDS2DiagnosticBackend:
@@ -558,21 +584,35 @@ def session_decision():
             resume_action = str(pending_gate.context.get("resume_action") or "").strip()
             if not resume_action:
                 raise ValueError("Missing resume_action in branch decision context")
-            backend = _get_backend()
-            workflow = backend._get_workflow()
-            controller = workflow.controller
 
             try:
-                if resume_action == "select_module":
-                    resume_result = workflow.select_module(selected_choice)
-                elif resume_action == "select_sub_module":
-                    resume_result = controller.select_list_item(selected_choice).to_dict()
-                elif resume_action == "select_data_category":
-                    resume_result = workflow.select_data_category(selected_choice)
-                elif resume_action == "select_sub_category":
-                    resume_result = controller.select_sub_category(selected_choice).to_dict()
+                if _data_viewer_getter is not None:
+                    viewer = _get_data_viewer()
+                    if resume_action == "select_module":
+                        resume_result = viewer.select_module(selected_choice)
+                    elif resume_action == "select_sub_module":
+                        resume_result = viewer.select_sub_module(selected_choice)
+                    elif resume_action == "select_data_category":
+                        resume_result = viewer.select_data_category(selected_choice)
+                    elif resume_action == "select_sub_category":
+                        resume_result = viewer.select_sub_category(selected_choice)
+                    else:
+                        raise ValueError(f"Unsupported resume action: {resume_action}")
                 else:
-                    raise ValueError(f"Unsupported resume action: {resume_action}")
+                    backend = _get_backend()
+                    workflow = backend._get_workflow()
+                    controller = workflow.controller
+
+                    if resume_action == "select_module":
+                        resume_result = workflow.select_module(selected_choice)
+                    elif resume_action == "select_sub_module":
+                        resume_result = controller.select_list_item(selected_choice).to_dict()
+                    elif resume_action == "select_data_category":
+                        resume_result = workflow.select_data_category(selected_choice)
+                    elif resume_action == "select_sub_category":
+                        resume_result = controller.select_sub_category(selected_choice).to_dict()
+                    else:
+                        raise ValueError(f"Unsupported resume action: {resume_action}")
             except BranchDecisionRequiredError as exc:
                 nested_resume_action = _resume_action_for_domain(
                     exc.decision.domain.value,
@@ -665,19 +705,23 @@ def session_select_module():
                 "error": f"Session not running (status={session.status.value})",
             }), 409
 
-        executor = get_executor()
-        adapter = get_adapter()
-        assert adapter is not None, "Adapter not initialized"
-
-        step = ActionStep(
-            action=GDS2Action.SELECT_MODULE,
-            args={"module_name": module},
-            timeout_sec=30.0,
-        )
-
-        ui_state = adapter.get_current_ui_state()
         try:
-            exec_result = executor.execute_step(step, ui_state)
+            if _data_viewer_getter is not None:
+                result = _get_data_viewer().select_module(module)
+                exec_result = None
+            else:
+                executor = get_executor()
+                adapter = get_adapter()
+                assert adapter is not None, "Adapter not initialized"
+
+                step = ActionStep(
+                    action=GDS2Action.SELECT_MODULE,
+                    args={"module_name": module},
+                    timeout_sec=30.0,
+                )
+
+                ui_state = adapter.get_current_ui_state()
+                exec_result = executor.execute_step(step, ui_state)
         except BranchDecisionRequiredError as exc:
             resume_action = _resume_action_for_domain(
                 exc.decision.domain.value,
@@ -706,7 +750,7 @@ def session_select_module():
                 "decision": gate.to_dict(),
             })
 
-        if not exec_result.success:
+        if exec_result is not None and not exec_result.success:
             orch.emit_progress(session_id, f"select_module failed: {exec_result.error}")
             logger.warning("SESSION %s select_module failed error=%s", session_id, exec_result.error)
             return jsonify({
@@ -720,7 +764,7 @@ def session_select_module():
         return jsonify({
             "success": True,
             "session_id": session_id,
-            "result": exec_result.metadata,
+            "result": result if exec_result is None else exec_result.metadata,
         })
 
     except KeyError as exc:
@@ -756,19 +800,23 @@ def session_select_data_category():
                 "error": f"Session not running (status={session.status.value})",
             }), 409
 
-        executor = get_executor()
-        adapter = get_adapter()
-        assert adapter is not None, "Adapter not initialized"
-
-        step = ActionStep(
-            action=GDS2Action.SELECT_DATA_CATEGORY,
-            args={"category_name": data_category},
-            timeout_sec=30.0,
-        )
-
-        ui_state = adapter.get_current_ui_state()
         try:
-            exec_result = executor.execute_step(step, ui_state)
+            if _data_viewer_getter is not None:
+                result = _get_data_viewer().select_data_category(data_category)
+                exec_result = None
+            else:
+                executor = get_executor()
+                adapter = get_adapter()
+                assert adapter is not None, "Adapter not initialized"
+
+                step = ActionStep(
+                    action=GDS2Action.SELECT_DATA_CATEGORY,
+                    args={"category_name": data_category},
+                    timeout_sec=30.0,
+                )
+
+                ui_state = adapter.get_current_ui_state()
+                exec_result = executor.execute_step(step, ui_state)
         except BranchDecisionRequiredError as exc:
             resume_action = _resume_action_for_domain(
                 exc.decision.domain.value,
@@ -797,7 +845,7 @@ def session_select_data_category():
                 "decision": gate.to_dict(),
             })
 
-        if not exec_result.success:
+        if exec_result is not None and not exec_result.success:
             orch.emit_progress(session_id, f"select_data_category failed: {exec_result.error}")
             logger.warning("SESSION %s select_data_category failed error=%s", session_id, exec_result.error)
             return jsonify({
@@ -811,7 +859,7 @@ def session_select_data_category():
         return jsonify({
             "success": True,
             "session_id": session_id,
-            "result": exec_result.metadata,
+            "result": result if exec_result is None else exec_result.metadata,
         })
 
     except KeyError as exc:
