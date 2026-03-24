@@ -23,6 +23,11 @@ set "PYTHON_EXE="
 call :resolve_python
 
 if /I "%~1"=="--no-gds2" set "SKIP_GDS2=1"
+REM Detect Session 0 (scheduled task / SYSTEM context).
+REM %SESSIONNAME% is empty string in Session 0, NOT "Services" —
+REM "Services" is only the Task Manager column label, not the env var value.
+if not defined SESSIONNAME set "SKIP_GDS2=1"
+if "%SESSIONNAME%"=="" set "SKIP_GDS2=1"
 if /I "%SESSIONNAME%"=="Services" set "SKIP_GDS2=1"
 
 echo ============================================================
