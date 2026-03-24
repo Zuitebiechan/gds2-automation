@@ -14,6 +14,7 @@ setlocal enabledelayedexpansion
 for %%I in ("%~dp0..") do set "DEFAULT_PROJECT_DIR=%%~fI"
 if not defined PROJECT_DIR set "PROJECT_DIR=%DEFAULT_PROJECT_DIR%"
 if not defined START_DELAY set "START_DELAY=0000:30"
+set "TASK_NAME=DiagPlatform-AutoStart"
 
 echo ============================================================
 echo  Register Auto-Start Services
@@ -21,6 +22,7 @@ echo ============================================================
 echo.
 
 set "SCRIPT_PATH=%PROJECT_DIR%\scripts\cloud_start_services.bat"
+set "TASK_CMD=%ComSpec% /c \"\"%SCRIPT_PATH%\"\""
 
 REM Check if running as admin
 net session >nul 2>&1
@@ -40,7 +42,7 @@ if not exist "%SCRIPT_PATH%" (
 
 REM Register scheduled task to run at system startup
 echo Registering auto-start task...
-schtasks /create /tn "DiagPlatform-AutoStart" /tr "\"%SCRIPT_PATH%\"" /sc onstart /delay %START_DELAY% /ru SYSTEM /rl HIGHEST /f
+schtasks /create /tn "%TASK_NAME%" /tr "%TASK_CMD%" /sc onstart /delay %START_DELAY% /ru SYSTEM /rl HIGHEST /f
 
 if errorlevel 1 (
     echo [ERROR] Failed to create scheduled task!
@@ -51,16 +53,16 @@ if errorlevel 1 (
 echo.
 echo [OK] Auto-start registered successfully!
 echo.
-echo  Task name:  DiagPlatform-AutoStart
+echo  Task name:  %TASK_NAME%
 echo  Trigger:    At system startup
 echo  Delay:      %START_DELAY%
-echo  Action:     %SCRIPT_PATH%
+echo  Action:     %TASK_CMD%
 echo  Run as:     SYSTEM (highest privileges)
 echo.
 echo  Note:       Session 0 startup only launches headless services.
 echo              GDS2 is skipped automatically in this context.
 echo.
-echo  To verify:  schtasks /query /tn "DiagPlatform-AutoStart"
-echo  To remove:  schtasks /delete /tn "DiagPlatform-AutoStart" /f
+echo  To verify:  schtasks /query /tn "%TASK_NAME%"
+echo  To remove:  schtasks /delete /tn "%TASK_NAME%" /f
 echo.
 pause
