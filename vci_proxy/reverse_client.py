@@ -11,6 +11,7 @@ VCI Proxy 反向连接模式
 
 import asyncio
 import socket
+import struct
 import time
 import logging
 import argparse
@@ -22,6 +23,7 @@ from vci_proxy.j2534_driver import J2534Driver
 from vci_proxy.config import ProxyConfig
 from vci_proxy.cache_vbatt import VbattCache
 from vci_proxy.auth import compute_signature
+from vci_proxy.benchmark import attach_timing_trailer
 
 # NOTE: logging.basicConfig is intentionally NOT called here.
 # When used as a library (imported by client_gui.py), the GUI's main()
@@ -249,10 +251,15 @@ class ReverseProxyClient:
                 body_len = length - HEADER_SIZE
                 body = await reader.readexactly(body_len) if body_len > 0 else b''
 
-                # 处理请求
+                # 处理请求 — measure J2534 execution time
+                t0 = time.monotonic()
                 response = await self._handle_message(msg_type, body, sequence)
+                hw_ms = (time.monotonic() - t0) * 1000
 
                 if response:
+                    # Attach timing trailer so the server can separate
+                    # hardware execution time from network transit time.
+                    response = attach_timing_trailer(response, hw_ms)
                     writer.write(response)
                     await writer.drain()
 

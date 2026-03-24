@@ -11,6 +11,44 @@ from typing import Any, Iterable
 
 from .protocol import HEADER_SIZE, MSG_NAMES, MsgType, ProtocolDecoder
 
+# Timing trailer: 4-byte magic + 8-byte double (hw_ms)
+TIMING_MAGIC = 0x544D4530  # "TME0"
+TIMING_TRAILER_SIZE = 12
+
+
+def attach_timing_trailer(encoded_response: bytes, hw_ms: float) -> bytes:
+    """Append a timing trailer to an encoded protocol response.
+
+    The trailer is 12 bytes: 4-byte magic (TIMING_MAGIC) + 8-byte double (hw_ms).
+    The header length field is updated to account for the extra bytes.
+    """
+    if len(encoded_response) < HEADER_SIZE:
+        return encoded_response
+    trailer = struct.pack(">Id", TIMING_MAGIC, hw_ms)
+    # Update length field at offset 4 (4 bytes, big-endian unsigned int)
+    old_length = struct.unpack(">I", encoded_response[4:8])[0]
+    new_length = old_length + TIMING_TRAILER_SIZE
+    return (
+        encoded_response[:4]
+        + struct.pack(">I", new_length)
+        + encoded_response[8:]
+        + trailer
+    )
+
+
+def strip_timing_trailer(body: bytes) -> tuple[bytes, float | None]:
+    """Strip the timing trailer from a response body if present.
+
+    Returns (clean_body, hw_ms).  hw_ms is None if no valid trailer found.
+    """
+    if len(body) < TIMING_TRAILER_SIZE:
+        return body, None
+    marker = struct.unpack(">I", body[-TIMING_TRAILER_SIZE:-8])[0]
+    if marker != TIMING_MAGIC:
+        return body, None
+    hw_ms = struct.unpack(">d", body[-8:])[0]
+    return body[:-TIMING_TRAILER_SIZE], hw_ms
+
 
 def _percentile(values: list[float], percentile: float) -> float:
     if not values:
@@ -113,14 +151,27 @@ def make_proxy_benchmark_event(
     resp_body: bytes,
     cache_hit: bool,
     status: str,
+    hw_ms: float | None = None,
 ) -> dict[str, Any]:
-    """Build a normalized benchmark event for one proxied J2534 call."""
+    """Build a normalized benchmark event for one proxied J2534 call.
+
+    Args:
+        hw_ms: Client-side J2534 hardware execution time in milliseconds.
+               When provided, ``network_ms`` is computed as
+               ``duration_ms - hw_ms`` (round-trip network transit only).
+    """
+    network_ms: float | None = None
+    if hw_ms is not None and duration_ms > 0:
+        network_ms = round(max(duration_ms - hw_ms, 0.0), 3)
+
     event = {
         "run_label": run_label,
         "source": source,
         "started_at_s": round(started_at_s, 6),
         "completed_at_s": round(started_at_s + (duration_ms / 1000.0), 6),
         "duration_ms": round(duration_ms, 3),
+        "hw_ms": round(hw_ms, 3) if hw_ms is not None else None,
+        "network_ms": network_ms,
         "msg_type": int(msg_type),
         "msg_name": MSG_NAMES.get(msg_type, f"0x{int(msg_type):04x}"),
         "resp_type": int(resp_type) if resp_type is not None else None,
@@ -133,9 +184,68 @@ def make_proxy_benchmark_event(
     return event
 
 
+def _build_latency_block(durations: list[float]) -> dict[str, float]:
+    """Build a latency statistics block from a list of durations."""
+    if not durations:
+        return {"min": 0.0, "avg": 0.0, "p50": 0.0, "p95": 0.0, "p99": 0.0, "max": 0.0}
+    return {
+        "min": round(min(durations), 3),
+        "avg": round(fmean(durations), 3),
+        "p50": _percentile(durations, 0.5),
+        "p95": _percentile(durations, 0.95),
+        "p99": _percentile(durations, 0.99),
+        "max": round(max(durations), 3),
+    }
+
+
+def _build_message_summary(
+    msg_rows: list[dict[str, Any]], window_s: float
+) -> dict[str, Any]:
+    """Build summary stats for a group of benchmark rows."""
+    durations = [float(row["duration_ms"]) for row in msg_rows]
+    message_count_total = int(
+        sum(int(row.get("message_count", 0) or 0) for row in msg_rows)
+    )
+
+    hw_values = [float(row["hw_ms"]) for row in msg_rows if row.get("hw_ms") is not None]
+    net_values = [float(row["network_ms"]) for row in msg_rows if row.get("network_ms") is not None]
+
+    result: dict[str, Any] = {
+        "count": len(msg_rows),
+        "success_count": sum(1 for row in msg_rows if row.get("status") == "success"),
+        "cache_hit_count": sum(1 for row in msg_rows if row.get("cache_hit")),
+        "message_count_total": message_count_total,
+        "payload_bytes_total": int(
+            sum(int(row.get("payload_bytes", 0) or 0) for row in msg_rows)
+        ),
+        "request_rate_hz": round(len(msg_rows) / window_s, 3),
+        "message_rate_hz": round(message_count_total / window_s, 3),
+        "latency_ms": _build_latency_block(durations),
+    }
+
+    if hw_values:
+        result["hw_ms"] = _build_latency_block(hw_values)
+    if net_values:
+        result["network_ms"] = _build_latency_block(net_values)
+
+    return result
+
+
 def summarize_benchmark_events(events: Iterable[dict[str, Any]]) -> dict[str, Any]:
-    """Summarize one benchmark run into latency and throughput metrics."""
-    rows = sorted((dict(event) for event in events), key=lambda row: row["started_at_s"])
+    """Summarize one benchmark run into latency and throughput metrics.
+
+    READ_MSGS_REQ events are additionally split into two sub-buckets:
+    - ``READ_MSGS_REQ(empty)``: responses with ``message_count == 0``
+      (BUFFER_EMPTY polls)
+    - ``READ_MSGS_REQ(data)``: responses with ``message_count > 0``
+      (actual vehicle data)
+
+    When ``hw_ms`` is present on events, each message group also reports
+    ``hw_ms`` and ``network_ms`` latency distribution blocks.
+    """
+    rows = sorted(
+        (dict(event) for event in events), key=lambda row: row["started_at_s"]
+    )
     if not rows:
         return {
             "label": None,
@@ -145,41 +255,43 @@ def summarize_benchmark_events(events: Iterable[dict[str, Any]]) -> dict[str, An
 
     label = rows[0].get("run_label")
     window_s = max(rows[-1]["started_at_s"] - rows[0]["started_at_s"], 1.0)
+
     by_message: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         by_message.setdefault(str(row["msg_name"]), []).append(row)
 
-    summary = {
+    summary: dict[str, Any] = {
         "label": label,
         "overall": {
             "event_count": len(rows),
             "window_s": round(window_s, 3),
-            "success_count": sum(1 for row in rows if row.get("status") == "success"),
+            "success_count": sum(
+                1 for row in rows if row.get("status") == "success"
+            ),
             "cache_hit_count": sum(1 for row in rows if row.get("cache_hit")),
         },
         "by_message": {},
     }
 
     for msg_name, msg_rows in by_message.items():
-        durations = [float(row["duration_ms"]) for row in msg_rows]
-        message_count_total = int(sum(int(row.get("message_count", 0) or 0) for row in msg_rows))
-        summary["by_message"][msg_name] = {
-            "count": len(msg_rows),
-            "success_count": sum(1 for row in msg_rows if row.get("status") == "success"),
-            "cache_hit_count": sum(1 for row in msg_rows if row.get("cache_hit")),
-            "message_count_total": message_count_total,
-            "payload_bytes_total": int(sum(int(row.get("payload_bytes", 0) or 0) for row in msg_rows)),
-            "request_rate_hz": round(len(msg_rows) / window_s, 3),
-            "message_rate_hz": round(message_count_total / window_s, 3),
-            "latency_ms": {
-                "min": round(min(durations), 3),
-                "avg": round(fmean(durations), 3),
-                "p50": _percentile(durations, 0.5),
-                "p95": _percentile(durations, 0.95),
-                "p99": _percentile(durations, 0.99),
-                "max": round(max(durations), 3),
-            },
-        }
+        summary["by_message"][msg_name] = _build_message_summary(msg_rows, window_s)
+
+        # READ_MSGS bucketing: split into empty vs data
+        if msg_name == "READ_MSGS_REQ":
+            empty_rows = [
+                r for r in msg_rows if int(r.get("message_count", 0) or 0) == 0
+            ]
+            data_rows = [
+                r for r in msg_rows if int(r.get("message_count", 0) or 0) > 0
+            ]
+            if empty_rows:
+                summary["by_message"]["READ_MSGS_REQ(empty)"] = (
+                    _build_message_summary(empty_rows, window_s)
+                )
+            if data_rows:
+                summary["by_message"]["READ_MSGS_REQ(data)"] = (
+                    _build_message_summary(data_rows, window_s)
+                )
 
     return summary
 
@@ -256,3 +368,222 @@ def decode_benchmark_response(encoded_response: bytes) -> tuple[int, bytes]:
         raise ValueError("Encoded response shorter than header")
     _, _, msg_type, _ = struct.unpack(">IIHI", encoded_response[:HEADER_SIZE])
     return msg_type, encoded_response[HEADER_SIZE:]
+
+
+# ---------------------------------------------------------------------------
+# Markdown report generation
+# ---------------------------------------------------------------------------
+
+def _latency_table_row(label: str, block: dict[str, float]) -> str:
+    """Format one row in a latency markdown table."""
+    return (
+        f"| {label} "
+        f"| {block['min']:.1f} "
+        f"| {block['avg']:.1f} "
+        f"| {block['p50']:.1f} "
+        f"| {block['p95']:.1f} "
+        f"| {block['p99']:.1f} "
+        f"| {block['max']:.1f} |"
+    )
+
+
+_LATENCY_TABLE_HEADER = (
+    "| Metric | min | avg | p50 | p95 | p99 | max |\n"
+    "|--------|-----|-----|-----|-----|-----|-----|"
+)
+
+
+def generate_benchmark_report(
+    summary: dict[str, Any],
+    *,
+    title: str = "VCI Proxy Benchmark Report",
+) -> str:
+    """Generate a Markdown benchmark report from a summary dict.
+
+    The report includes:
+    - Measurement methodology
+    - Overall statistics
+    - Per-message-type latency tables
+    - READ_MSGS empty vs data bucketing
+    - Network vs hardware latency breakdown (when available)
+    - Cache effectiveness
+    """
+    lines: list[str] = []
+    _a = lines.append  # shorthand
+
+    label = summary.get("label") or "unnamed"
+    overall = summary.get("overall", {})
+    by_msg = summary.get("by_message", {})
+
+    # --- Title ---
+    _a(f"# {title}")
+    _a("")
+    _a(f"**Run label:** `{label}`")
+    _a("")
+
+    # --- Methodology ---
+    _a("## Measurement Methodology")
+    _a("")
+    _a("Each J2534 API call made by the cloud-side OEM diagnostic software")
+    _a("(e.g. GDS2) is intercepted at the Reverse Proxy Server and timed.")
+    _a("")
+    _a("```")
+    _a("Cloud GDS2 ─► virtual_j2534.dll ─► localhost:9001")
+    _a("                                        │")
+    _a("                            ┌────────────▼────────────────┐")
+    _a("                            │  ReverseProxyServer          │")
+    _a("                            │  t_start ──────── t_end      │")
+    _a("                            │     duration_ms (monotonic)  │")
+    _a("                            └────────────┬────────────────┘")
+    _a("                                         │  TCP tunnel")
+    _a("                            ┌────────────▼────────────────┐")
+    _a("                            │  ReverseProxyClient (local)  │")
+    _a("                            │  hw_ms = J2534 driver time   │")
+    _a("                            │  ─► VCI ─► Vehicle           │")
+    _a("                            └─────────────────────────────┘")
+    _a("```")
+    _a("")
+    _a("- **duration_ms**: Full round-trip measured with `time.monotonic()` at")
+    _a("  the proxy server — includes network transit (both legs) plus")
+    _a("  client-side J2534 hardware execution.")
+    _a("- **hw_ms**: J2534 driver execution time measured at the client with")
+    _a("  `time.monotonic()`. Reported only when the client sends a timing")
+    _a("  trailer (12-byte `TME0` magic + double).")
+    _a("- **network_ms**: `duration_ms − hw_ms` — pure network round-trip")
+    _a("  transit time (cloud → local + local → cloud).")
+    _a("- **Cache hits**: Certain high-frequency calls (ReadMsgs BUFFER_EMPTY,")
+    _a("  duplicate StartFilter, READ_VBATT) are served from server-side cache")
+    _a("  with `duration_ms = 0`.")
+    _a("")
+
+    # --- Overall ---
+    _a("## Overall Statistics")
+    _a("")
+    event_count = overall.get("event_count", 0)
+    success_count = overall.get("success_count", 0)
+    cache_count = overall.get("cache_hit_count", 0)
+    window_s = overall.get("window_s", 0.0)
+    _a(f"| Metric | Value |")
+    _a(f"|--------|-------|")
+    _a(f"| Total events | {event_count} |")
+    _a(f"| Successful | {success_count} ({_pct(success_count, event_count)}) |")
+    _a(f"| Cache hits | {cache_count} ({_pct(cache_count, event_count)}) |")
+    _a(f"| Measurement window | {window_s:.1f}s |")
+    if event_count and window_s:
+        _a(f"| Overall request rate | {event_count / window_s:.1f} req/s |")
+    _a("")
+
+    # --- Per-message-type ---
+    _a("## Latency by Message Type")
+    _a("")
+
+    # Determine display order: regular types first, then buckets
+    regular_names = sorted(
+        n for n in by_msg if "(" not in n
+    )
+    bucket_names = sorted(
+        n for n in by_msg if "(" in n
+    )
+
+    for msg_name in regular_names + bucket_names:
+        stats = by_msg[msg_name]
+        count = stats.get("count", 0)
+        if count == 0:
+            continue
+
+        _a(f"### {msg_name}")
+        _a("")
+        _a(f"- **Requests:** {count}"
+           f" (success: {stats.get('success_count', 0)},"
+           f" cache: {stats.get('cache_hit_count', 0)})")
+        msg_total = stats.get("message_count_total", 0)
+        if msg_total:
+            _a(f"- **J2534 messages:** {msg_total}"
+               f" ({stats.get('message_rate_hz', 0):.1f} msg/s)")
+        payload = stats.get("payload_bytes_total", 0)
+        if payload:
+            _a(f"- **Payload:** {payload:,} bytes")
+        _a(f"- **Request rate:** {stats.get('request_rate_hz', 0):.1f} req/s")
+        _a("")
+
+        _a("**Round-trip latency (ms):**")
+        _a("")
+        _a(_LATENCY_TABLE_HEADER)
+        _a(_latency_table_row("duration", stats["latency_ms"]))
+        if "hw_ms" in stats:
+            _a(_latency_table_row("hw (J2534)", stats["hw_ms"]))
+        if "network_ms" in stats:
+            _a(_latency_table_row("network", stats["network_ms"]))
+        _a("")
+
+    # --- READ_MSGS bucketing explanation ---
+    has_empty = "READ_MSGS_REQ(empty)" in by_msg
+    has_data = "READ_MSGS_REQ(data)" in by_msg
+    if has_empty or has_data:
+        _a("## READ_MSGS Bucketing")
+        _a("")
+        _a("GDS2 polls `PassThruReadMsgs` at high frequency. Most calls return")
+        _a("`BUFFER_EMPTY` (no vehicle data). To separate signal from noise,")
+        _a("READ_MSGS_REQ is split into two sub-buckets based on")
+        _a("`message_count` in the response:")
+        _a("")
+        _a("- **READ_MSGS_REQ(empty)**: `message_count == 0` — polling noise")
+        _a("- **READ_MSGS_REQ(data)**: `message_count > 0` — actual vehicle data")
+        _a("")
+        if has_empty and has_data:
+            e = by_msg["READ_MSGS_REQ(empty)"]
+            d = by_msg["READ_MSGS_REQ(data)"]
+            total = e["count"] + d["count"]
+            _a(f"| Bucket | Count | % of ReadMsgs | Avg latency |")
+            _a(f"|--------|-------|---------------|-------------|")
+            _a(f"| empty | {e['count']} | {_pct(e['count'], total)} "
+               f"| {e['latency_ms']['avg']:.1f} ms |")
+            _a(f"| data | {d['count']} | {_pct(d['count'], total)} "
+               f"| {d['latency_ms']['avg']:.1f} ms |")
+            _a("")
+
+    # --- Network vs Hardware breakdown ---
+    has_hw = any("hw_ms" in by_msg.get(n, {}) for n in by_msg)
+    if has_hw:
+        _a("## Network vs Hardware Latency")
+        _a("")
+        _a("When the client reports `hw_ms` (J2534 driver execution time),")
+        _a("we can decompose the round-trip into network transit and")
+        _a("hardware execution:")
+        _a("")
+        _a("| Message | Avg duration | Avg hw | Avg network | Network % |")
+        _a("|---------|-------------|--------|-------------|-----------|")
+        for msg_name in regular_names:
+            stats = by_msg[msg_name]
+            if "hw_ms" not in stats:
+                continue
+            dur_avg = stats["latency_ms"]["avg"]
+            hw_avg = stats["hw_ms"]["avg"]
+            net_avg = stats["network_ms"]["avg"]
+            net_pct = f"{net_avg / dur_avg * 100:.0f}%" if dur_avg > 0 else "—"
+            _a(f"| {msg_name} | {dur_avg:.1f} ms | {hw_avg:.1f} ms "
+               f"| {net_avg:.1f} ms | {net_pct} |")
+        _a("")
+
+    # --- Cache effectiveness ---
+    if cache_count > 0:
+        _a("## Cache Effectiveness")
+        _a("")
+        _a("| Message | Total | Cache hits | Hit rate |")
+        _a("|---------|-------|------------|----------|")
+        for msg_name in regular_names:
+            stats = by_msg[msg_name]
+            ch = stats.get("cache_hit_count", 0)
+            if ch > 0:
+                _a(f"| {msg_name} | {stats['count']} | {ch} "
+                   f"| {_pct(ch, stats['count'])} |")
+        _a("")
+
+    return "\n".join(lines)
+
+
+def _pct(numerator: int, denominator: int) -> str:
+    """Format a percentage string, guarding against division by zero."""
+    if denominator == 0:
+        return "—"
+    return f"{numerator / denominator * 100:.1f}%"

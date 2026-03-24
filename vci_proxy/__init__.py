@@ -25,9 +25,12 @@ from .cache_vbatt import VbattCache
 from .auth import compute_signature, verify_signature
 from .benchmark import (
     JsonlBenchmarkWriter,
+    attach_timing_trailer,
     compare_benchmark_summaries,
+    generate_benchmark_report,
     load_benchmark_events,
     make_proxy_benchmark_event,
+    strip_timing_trailer,
     summarize_benchmark_events,
 )
 from .j2534_driver import J2534Driver
@@ -53,10 +56,13 @@ __all__ = [
     "compute_signature",
     "verify_signature",
     "JsonlBenchmarkWriter",
+    "attach_timing_trailer",
     "make_proxy_benchmark_event",
     "summarize_benchmark_events",
     "compare_benchmark_summaries",
+    "generate_benchmark_report",
     "load_benchmark_events",
+    "strip_timing_trailer",
     "J2534Driver",
     "ReverseProxyClient",
     "ReverseProxyServer",

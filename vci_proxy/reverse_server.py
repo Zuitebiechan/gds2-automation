@@ -25,6 +25,7 @@ from .benchmark import (
     JsonlBenchmarkWriter,
     decode_benchmark_response,
     make_proxy_benchmark_event,
+    strip_timing_trailer,
 )
 from .protocol import MAGIC, HEADER_SIZE, MsgType, MSG_NAMES, ProtocolDecoder, ProtocolEncoder
 
@@ -287,7 +288,8 @@ class ReverseProxyServer:
                 # 查找对应的 Future（响应消息）
                 if sequence in self.response_futures:
                     future = self.response_futures.pop(sequence)
-                    future.set_result((msg_type, body))
+                    clean_body, hw_ms = strip_timing_trailer(body)
+                    future.set_result((msg_type, clean_body, hw_ms))
                 else:
                     logger.warning(f"收到未知消息: type={msg_type:#x}, seq={sequence}")
 
@@ -379,6 +381,7 @@ class ReverseProxyServer:
         resp_body: bytes,
         cache_hit: bool,
         status: str,
+        hw_ms: float | None = None,
     ) -> None:
         if self.benchmark_writer is None:
             return
@@ -394,6 +397,7 @@ class ReverseProxyServer:
             resp_body=resp_body,
             cache_hit=cache_hit,
             status=status,
+            hw_ms=hw_ms,
         )
         self.benchmark_writer.write_event(event)
 
@@ -471,7 +475,7 @@ class ReverseProxyServer:
 
                 # 等待响应
                 try:
-                    resp_type, resp_body = await asyncio.wait_for(future, timeout=30.0)
+                    resp_type, resp_body, hw_ms = await asyncio.wait_for(future, timeout=30.0)
                     fwd_ms = (time.monotonic() - fwd_start) * 1000
 
                     self._record_in_caches(msg_type, body, resp_type, resp_body, ioctl_id)
@@ -484,6 +488,7 @@ class ReverseProxyServer:
                         resp_body=resp_body,
                         cache_hit=False,
                         status="success",
+                        hw_ms=hw_ms,
                     )
 
                     # 发送响应给客户端（使用原始 sequence）
