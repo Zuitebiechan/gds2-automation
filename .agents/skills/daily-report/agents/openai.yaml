@@ -1,0 +1,4 @@
+﻿interface:
+  display_name: "日报"
+  short_description: "Generate a boss-facing daily project report"
+  default_prompt: "Generate a concise Chinese daily report for the boss, focused on project progress, impact, decisions, and blockers rather than code-level implementation details."

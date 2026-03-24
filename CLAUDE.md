@@ -1,4 +1,4 @@
-# Diagnostic Platform RPA — Cloud Remote Vehicle Diagnostics
+﻿# Diagnostic Platform RPA — Cloud Remote Vehicle Diagnostics
 
 ## WHY
 
@@ -219,3 +219,4 @@ Tests fall into two categories:
 
 - **Regression tests** — generic, long-lived. Any future change must still pass these. Keep them in `tests/` permanently.
 - **One-off tests** — written to validate a specific change or debug a specific issue. Delete them after the test passes and the change is merged. Do not accumulate throwaway test scripts in `scripts/` or `tests/`.
+

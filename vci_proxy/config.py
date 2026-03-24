@@ -12,7 +12,7 @@ from typing import Optional
 class ReadMsgsCacheConfig:
     """ReadMsgs BUFFER_EMPTY short-circuit cache."""
     enabled: bool = True
-    ttl_ms: int = 50
+    ttl_ms: int = 150
 
 
 @dataclass(frozen=True)
@@ -31,7 +31,14 @@ class FilterDeduplicationConfig:
 
 @dataclass(frozen=True)
 class VbattCacheConfig:
-    """READ_VBATT response cache."""
+    """READ_VBATT response cache (legacy, kept for backward compat)."""
+    enabled: bool = True
+    ttl_s: int = 5
+
+
+@dataclass(frozen=True)
+class IoctlCacheConfig:
+    """Generalized read-only IOCTL response cache."""
     enabled: bool = True
     ttl_s: int = 5
 
@@ -43,6 +50,7 @@ class ProxyConfig:
     auth: AuthConfig = AuthConfig()
     filter_dedup: FilterDeduplicationConfig = FilterDeduplicationConfig()
     vbatt_cache: VbattCacheConfig = VbattCacheConfig()
+    ioctl_cache: IoctlCacheConfig = IoctlCacheConfig()
 
     @classmethod
     def from_args(cls, **kwargs) -> "ProxyConfig":
@@ -58,7 +66,7 @@ class ProxyConfig:
         )
         read_msgs_cache = ReadMsgsCacheConfig(
             enabled=not kwargs.get("no_read_cache", False),
-            ttl_ms=kwargs.get("read_cache_ttl", 50),
+            ttl_ms=kwargs.get("read_cache_ttl", 150),
         )
         filter_dedup = FilterDeduplicationConfig(
             enabled=not kwargs.get("no_filter_dedup", False),
@@ -67,9 +75,14 @@ class ProxyConfig:
             enabled=not kwargs.get("no_vbatt_cache", False),
             ttl_s=kwargs.get("vbatt_ttl", 5),
         )
+        ioctl_cache = IoctlCacheConfig(
+            enabled=not kwargs.get("no_ioctl_cache", False),
+            ttl_s=kwargs.get("ioctl_ttl", 5),
+        )
         return cls(
             read_msgs_cache=read_msgs_cache,
             auth=auth,
             filter_dedup=filter_dedup,
             vbatt_cache=vbatt_cache,
+            ioctl_cache=ioctl_cache,
         )

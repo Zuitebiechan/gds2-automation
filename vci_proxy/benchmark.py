@@ -551,17 +551,20 @@ def generate_benchmark_report(
         _a("we can decompose the round-trip into network transit and")
         _a("hardware execution:")
         _a("")
-        _a("| Message | Avg duration | Avg hw | Avg network | Network % |")
-        _a("|---------|-------------|--------|-------------|-----------|")
+        _a("| Message | Avg duration (no cache) | Avg hw | Avg network | Network % |")
+        _a("|---------|------------------------|--------|-------------|-----------|")
         for msg_name in regular_names:
             stats = by_msg[msg_name]
             if "hw_ms" not in stats:
                 continue
-            dur_avg = stats["latency_ms"]["avg"]
             hw_avg = stats["hw_ms"]["avg"]
             net_avg = stats["network_ms"]["avg"]
-            net_pct = f"{net_avg / dur_avg * 100:.0f}%" if dur_avg > 0 else "—"
-            _a(f"| {msg_name} | {dur_avg:.1f} ms | {hw_avg:.1f} ms "
+            # Use hw + network as the effective non-cached duration.
+            # This avoids the distortion from cache hits (duration=0)
+            # pulling down the overall avg duration.
+            effective_dur = hw_avg + net_avg
+            net_pct = f"{net_avg / effective_dur * 100:.0f}%" if effective_dur > 0 else "—"
+            _a(f"| {msg_name} | {effective_dur:.1f} ms | {hw_avg:.1f} ms "
                f"| {net_avg:.1f} ms | {net_pct} |")
         _a("")
 

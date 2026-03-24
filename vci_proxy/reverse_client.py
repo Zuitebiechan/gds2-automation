@@ -21,7 +21,7 @@ from typing import Optional, Callable
 from vci_proxy.protocol import MAGIC, HEADER_SIZE, MsgType, MSG_NAMES, Message, ProtocolEncoder, ProtocolDecoder
 from vci_proxy.j2534_driver import J2534Driver
 from vci_proxy.config import ProxyConfig
-from vci_proxy.cache_vbatt import VbattCache
+from vci_proxy.cache_ioctl import IoctlCache
 from vci_proxy.auth import compute_signature
 from vci_proxy.benchmark import attach_timing_trailer
 
@@ -59,7 +59,7 @@ class ReverseProxyClient:
                 self._on_status_change(status, detail)
             except Exception:
                 pass
-        self._vbatt_cache = VbattCache(self.config.vbatt_cache)
+        self._ioctl_cache = IoctlCache(self.config.ioctl_cache)
 
     def _ensure_driver(self) -> bool:
         """确保驱动已加载"""
@@ -97,6 +97,7 @@ class ReverseProxyClient:
                 sock = writer.get_extra_info('socket')
                 if sock is not None:
                     sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                     if hasattr(socket, 'TCP_KEEPIDLE'):
                         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 20)
                     if hasattr(socket, 'TCP_KEEPINTVL'):
@@ -134,7 +135,7 @@ class ReverseProxyClient:
                 logger.error(f"连接错误: {e}，{backoff_seconds:.0f}秒后重试...")
 
             # Invalidate caches on disconnect
-            self._vbatt_cache.invalidate()
+            self._ioctl_cache.invalidate()
 
             if self.running:
                 await asyncio.sleep(backoff_seconds)
@@ -341,7 +342,7 @@ class ReverseProxyClient:
         loop = asyncio.get_running_loop()
         ret = await loop.run_in_executor(None, self.driver.close, device_id)
         logger.info(f"<< PassThruClose -> ret={ret}")
-        self._vbatt_cache.invalidate()
+        self._ioctl_cache.invalidate()
         # Invalidate pre-warm cache on close
         self._prewarm_device_id = None
         self._prewarm_ret = None
@@ -363,7 +364,7 @@ class ReverseProxyClient:
         loop = asyncio.get_running_loop()
         ret = await loop.run_in_executor(None, self.driver.disconnect, channel_id)
         logger.info(f"<< PassThruDisconnect -> ret={ret}")
-        self._vbatt_cache.invalidate()
+        self._ioctl_cache.invalidate()
         return ProtocolEncoder.encode_disconnect_rsp(ret, sequence)
 
     async def _handle_read_msgs(self, body: bytes, sequence: int) -> bytes:
@@ -421,7 +422,7 @@ class ReverseProxyClient:
     async def _handle_ioctl(self, body: bytes, sequence: int) -> bytes:
         channel_id, ioctl_id, input_data = ProtocolDecoder.decode_ioctl_req(body)
 
-        cached = self._vbatt_cache.try_get_cached(ioctl_id)
+        cached = self._ioctl_cache.try_get_cached(channel_id, ioctl_id)
         if cached is not None:
             ret, output_data = cached
             logger.debug(f"<< Ioctl(0x{ioctl_id:02x}) -> [CACHED] ret={ret}")
@@ -434,7 +435,7 @@ class ReverseProxyClient:
         )
         logger.info(f"<< Ioctl(0x{ioctl_id:02x}) -> ret={ret}")
 
-        self._vbatt_cache.record_result(ioctl_id, ret, output_data)
+        self._ioctl_cache.record_result(channel_id, ioctl_id, ret, output_data)
         return ProtocolEncoder.encode_ioctl_rsp(ret, output_data, sequence)
 
     # Dispatch table: msg_type -> handler method
@@ -484,15 +485,21 @@ def main():
     parser.add_argument('--auth-token', type=str, default=None,
                        help='PSK authentication token')
     parser.add_argument('--no-vbatt-cache', action='store_true',
-                       help='Disable READ_VBATT response cache')
+                       help='Disable READ_VBATT response cache (legacy)')
     parser.add_argument('--vbatt-ttl', type=int, default=5,
                        help='VBATT cache TTL in seconds (默认: 5)')
+    parser.add_argument('--no-ioctl-cache', action='store_true',
+                       help='Disable generalized read-only IOCTL cache')
+    parser.add_argument('--ioctl-ttl', type=int, default=5,
+                       help='IOCTL cache TTL in seconds (默认: 5)')
     args = parser.parse_args()
 
     config = ProxyConfig.from_args(
         auth_token=args.auth_token,
         no_vbatt_cache=args.no_vbatt_cache,
         vbatt_ttl=args.vbatt_ttl,
+        no_ioctl_cache=args.no_ioctl_cache,
+        ioctl_ttl=args.ioctl_ttl,
     )
 
     print("=" * 50)
@@ -500,8 +507,8 @@ def main():
     print("=" * 50)
     print(f"目标服务器: {args.host}:{args.port}")
     print(f"Auth: {'enabled' if config.auth.enabled else 'disabled'}")
-    print(f"VBATT cache: {'enabled' if config.vbatt_cache.enabled else 'disabled'}"
-          f" (TTL={config.vbatt_cache.ttl_s}s)")
+    print(f"IOCTL cache: {'enabled' if config.ioctl_cache.enabled else 'disabled'}"
+          f" (TTL={config.ioctl_cache.ttl_s}s)")
     print("按 Ctrl+C 停止")
     print("=" * 50)
     print()

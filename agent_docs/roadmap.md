@@ -149,3 +149,23 @@ Goal: Validate that the `DiagnosticBackend` contract actually works for a non-GD
 - [ ] Unified diagnostic API behavior across OEM stacks
 - [ ] MDI/MDI2 VCI support
 - [ ] Mechanic-facing mobile/miniprogram client
+
+### VCI Proxy Performance Optimization (In Progress)
+
+- [ ] **Client-side ReadAheadBuffer**: Background thread in `reverse_client.py`
+  continuously drains VCI hardware buffer (1-2ms polling, `timeout=0`) into an
+  in-memory deque (cap: 10,000 msgs). Cloud ReadMsgs requests served from
+  memory instead of hardware — eliminates `hw_ms` for reads, prevents
+  hardware buffer overflow regardless of network latency.
+  - Start per-channel buffer on `PassThruConnect` success
+  - Stop and clear on `PassThruDisconnect` / connection drop
+  - Return NOERROR + buffered data or BUFFER_EMPTY when deque is empty
+- [x] **TCP_NODELAY**: Set on both server and client sockets to eliminate
+  Nagle algorithm delay (est. 1-5ms saving per request)
+- [x] **ReadMsgs cache TTL tuning**: Increased from 50ms to 150ms to
+  intercept more BUFFER_EMPTY polls (target: cache hit rate 70% → 85%+)
+- [x] **IOCTL cache expansion**: Generalized `cache_ioctl.py` replaces
+  VBATT-only cache; covers GET_CONFIG (0x01), READ_VBATT (0x03),
+  READ_PROG_VOLTAGE (0x09) with 5s TTL per (channel, ioctl_id)
+- ~~WriteMsgs response caching~~: Skipped — caching write return codes
+  would mask hardware write failures and break ECU communication

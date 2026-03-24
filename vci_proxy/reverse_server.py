@@ -10,6 +10,7 @@ VCI Proxy 反向连接服务器（运行在阿里云）
 """
 
 import asyncio
+import socket
 import struct
 import time
 import logging
@@ -19,7 +20,7 @@ from typing import Optional
 from .config import ProxyConfig
 from .cache_read_msgs import ReadMsgsCache
 from .cache_filter_dedup import FilterDeduplicationCache
-from .cache_vbatt import VbattCache
+from .cache_ioctl import IoctlCache
 from .auth import verify_signature
 from .benchmark import (
     JsonlBenchmarkWriter,
@@ -61,8 +62,8 @@ class ReverseProxyServer:
         self._read_cache = ReadMsgsCache(self.config.read_msgs_cache)
         # P2-1: Filter deduplication cache
         self._filter_cache = FilterDeduplicationCache(self.config.filter_dedup)
-        # P2-2: VBATT cache (server-side)
-        self._vbatt_cache = VbattCache(self.config.vbatt_cache)
+        # Generalized read-only IOCTL cache (replaces VBATT-only cache)
+        self._ioctl_cache = IoctlCache(self.config.ioctl_cache)
 
     async def start(self):
         """启动服务器"""
@@ -90,6 +91,11 @@ class ReverseProxyServer:
             logger.info(
                 f"VBATT cache enabled (TTL={self.config.vbatt_cache.ttl_s}s)"
             )
+        if self.config.ioctl_cache.enabled:
+            logger.info(
+                f"IOCTL cache enabled (TTL={self.config.ioctl_cache.ttl_s}s, "
+                f"covers GET_CONFIG/READ_VBATT/READ_PROG_VOLTAGE)"
+            )
         if self.benchmark_writer is not None:
             logger.info("Proxy benchmark logging enabled: %s", self.benchmark_writer.path)
 
@@ -107,7 +113,7 @@ class ReverseProxyServer:
         self.response_futures.clear()
         self._read_cache.clear()
         self._filter_cache.clear()
-        self._vbatt_cache.invalidate()
+        self._ioctl_cache.invalidate()
         for seq, future in pending:
             if not future.done():
                 future.set_exception(ConnectionError("VCI Proxy 已断开"))
@@ -233,6 +239,12 @@ class ReverseProxyServer:
         addr = writer.get_extra_info('peername')
         logger.info(f"VCI Proxy 已连接: {addr}")
 
+        # Disable Nagle algorithm for lower latency
+        sock = writer.get_extra_info('socket')
+        if sock is not None:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        logger.info(f"VCI Proxy 已连接: {addr}")
+
         # Authenticate before accepting the connection
         if not await self._authenticate_vci(reader, writer):
             logger.warning(f"VCI Proxy authentication failed, closing: {addr}")
@@ -329,8 +341,8 @@ class ReverseProxyServer:
                 return cached, ioctl_id
 
         elif msg_type == MsgType.IOCTL_REQ:
-            _ch, ioctl_id, _input = ProtocolDecoder.decode_ioctl_req(body)
-            cached = self._vbatt_cache.try_get_cached(ioctl_id)
+            channel_id, ioctl_id, _input = ProtocolDecoder.decode_ioctl_req(body)
+            cached = self._ioctl_cache.try_get_cached(channel_id, ioctl_id)
             if cached is not None:
                 ret, output_data = cached
                 resp = ProtocolEncoder.encode_ioctl_rsp(ret, output_data, sequence)
@@ -344,11 +356,11 @@ class ReverseProxyServer:
             channel_id = ProtocolDecoder.decode_disconnect_req(body)
             self._read_cache.invalidate_channel(channel_id)
             self._filter_cache.invalidate_channel(channel_id)
-            self._vbatt_cache.invalidate()
+            self._ioctl_cache.invalidate_channel(channel_id)
         elif msg_type == MsgType.CLOSE_REQ:
             self._read_cache.clear()
             self._filter_cache.clear()
-            self._vbatt_cache.invalidate()
+            self._ioctl_cache.invalidate()
         elif msg_type == MsgType.STOP_FILTER_REQ:
             _ch_id, filter_id = ProtocolDecoder.decode_stop_filter_req(body)
             self._filter_cache.on_stop_filter(filter_id)
@@ -367,8 +379,9 @@ class ReverseProxyServer:
             self._filter_cache.record_result(body, filter_id, return_code, resp_body)
 
         elif msg_type == MsgType.IOCTL_REQ and ioctl_id is not None and resp_type == MsgType.IOCTL_RSP:
+            channel_id = struct.unpack('>I', body[:4])[0]
             ret, output_data = ProtocolDecoder.decode_ioctl_rsp(resp_body)
-            self._vbatt_cache.record_result(ioctl_id, ret, output_data)
+            self._ioctl_cache.record_result(channel_id, ioctl_id, ret, output_data)
 
     def _record_benchmark_event(
         self,
@@ -406,6 +419,11 @@ class ReverseProxyServer:
         """处理本地代理连接"""
         addr = writer.get_extra_info('peername')
         logger.info(f"代理客户端连接: {addr}")
+
+        # Disable Nagle algorithm for lower latency
+        sock = writer.get_extra_info('socket')
+        if sock is not None:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
         try:
             while True:
@@ -536,14 +554,18 @@ def main():
                        help='PSK authentication token')
     parser.add_argument('--no-read-cache', action='store_true',
                        help='Disable ReadMsgs BUFFER_EMPTY cache')
-    parser.add_argument('--read-cache-ttl', type=int, default=50,
-                       help='ReadMsgs cache TTL in ms (默认: 50)')
+    parser.add_argument('--read-cache-ttl', type=int, default=150,
+                       help='ReadMsgs cache TTL in ms (默认: 150)')
     parser.add_argument('--no-filter-dedup', action='store_true',
                        help='Disable StartFilter deduplication')
     parser.add_argument('--no-vbatt-cache', action='store_true',
                        help='Disable READ_VBATT response cache')
     parser.add_argument('--vbatt-ttl', type=int, default=5,
                        help='VBATT cache TTL in seconds (默认: 5)')
+    parser.add_argument('--no-ioctl-cache', action='store_true',
+                       help='Disable generalized read-only IOCTL cache')
+    parser.add_argument('--ioctl-ttl', type=int, default=5,
+                       help='IOCTL cache TTL in seconds (默认: 5)')
     parser.add_argument('--benchmark-log', type=str, default=None,
                        help='Write structured JSONL benchmark events to this file')
     parser.add_argument('--benchmark-label', type=str, default='proxy_run',
@@ -557,6 +579,8 @@ def main():
         no_filter_dedup=args.no_filter_dedup,
         no_vbatt_cache=args.no_vbatt_cache,
         vbatt_ttl=args.vbatt_ttl,
+        no_ioctl_cache=args.no_ioctl_cache,
+        ioctl_ttl=args.ioctl_ttl,
     )
 
     print("=" * 50)

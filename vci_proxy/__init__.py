@@ -18,10 +18,12 @@ from .config import (
     AuthConfig,
     FilterDeduplicationConfig,
     VbattCacheConfig,
+    IoctlCacheConfig,
 )
 from .cache_read_msgs import ReadMsgsCache
 from .cache_filter_dedup import FilterDeduplicationCache
 from .cache_vbatt import VbattCache
+from .cache_ioctl import IoctlCache
 from .auth import compute_signature, verify_signature
 from .benchmark import (
     JsonlBenchmarkWriter,
@@ -50,9 +52,11 @@ __all__ = [
     "AuthConfig",
     "FilterDeduplicationConfig",
     "VbattCacheConfig",
+    "IoctlCacheConfig",
     "ReadMsgsCache",
     "FilterDeduplicationCache",
     "VbattCache",
+    "IoctlCache",
     "compute_signature",
     "verify_signature",
     "JsonlBenchmarkWriter",

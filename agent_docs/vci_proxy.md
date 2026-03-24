@@ -48,11 +48,12 @@ This blocks random probes that accidentally match protocol headers but cannot co
 
 | Cache | File | Purpose | TTL |
 |-------|------|---------|-----|
-| **ReadMsgs** | `cache_read_msgs.py` | Short-circuit BUFFER_EMPTY | 50ms per-channel |
+| **ReadMsgs** | `cache_read_msgs.py` | Short-circuit BUFFER_EMPTY | 150ms per-channel |
 | **Filter Dedup** | `cache_filter_dedup.py` | Deduplicate StartFilter | SHA-256 key |
-| **VBATT** | `cache_vbatt.py` | Cache battery voltage | 5s global |
+| **IOCTL** | `cache_ioctl.py` | Cache read-only IOCTLs (GET_CONFIG, READ_VBATT, READ_PROG_VOLTAGE) | 5s per-(channel, ioctl_id) |
+| **VBATT** *(legacy)* | `cache_vbatt.py` | Superseded by IOCTL cache; kept for backward compat | 5s global |
 
-All caches invalidate on Disconnect/Close. VBATT runs on **both** server and client.
+All caches invalidate on Disconnect/Close. IOCTL cache runs on **both** server and client.
 
 ## Key Components
 
@@ -78,6 +79,14 @@ All caches invalidate on Disconnect/Close. VBATT runs on **both** server and cli
 - **SM2 cold-start mitigation**: background pre-warm `PassThruOpen` in `reverse_client` after registration
 - **NAT timeout mitigation**: TCP keepalive + shorter heartbeat interval for long-lived idle tunnels
 - **Client diagnostics logging**: `%APPDATA%\VCI_Proxy\client.log` for tray exe runs (console-less mode)
+
+## Performance Optimization (2026-03)
+
+- **TCP_NODELAY**: Set on all sockets (server VCI port, proxy port, client connection) to eliminate Nagle algorithm delay
+- **ReadMsgs cache TTL**: Increased from 50ms to 150ms to intercept more BUFFER_EMPTY polls
+- **Generalized IOCTL cache** (`cache_ioctl.py`): Caches all read-only IOCTLs (GET_CONFIG `0x01`, READ_VBATT `0x03`, READ_PROG_VOLTAGE `0x09`) with 5s TTL per `(channel_id, ioctl_id)`, replacing the narrow VBATT-only cache. Write-type IOCTLs (SET_CONFIG, CLEAR_*_BUFFER) are never cached.
+- **Benchmark tooling**: Client-side timing trailer (`hw_ms`) decomposes round-trip into network vs hardware latency. `generate_benchmark_report()` outputs Markdown reports with methodology, per-message-type latency tables, READ_MSGS empty/data bucketing, and cache effectiveness.
+- **WriteMsgs caching deliberately skipped**: Caching write return codes would mask actual write failures and could break ECU communication.
 
 Implementation notes:
 
