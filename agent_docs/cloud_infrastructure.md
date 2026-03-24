@@ -6,6 +6,8 @@ Manual operation: RDP into cloud VM → open two terminals → start services ma
 
 Solved with `scripts/cloud_start_services.bat` + `scripts/cloud_register_autostart.bat` for auto-start on boot.
 
+Important nuance: the startup task is for **headless services** (`reverse_server` + Flask API). `cloud_start_services.bat` automatically skips GDS2 when it detects the Windows Session 0 startup context. GDS2 should be launched in an interactive desktop session (for example via a logged-in service account / DCV session) or by a higher-level session scheduler.
+
 ## Future Architecture: Per-User VM Sessions
 
 Each mechanic session gets a dedicated Windows VM, created on demand, destroyed after use.
@@ -30,6 +32,7 @@ Client App → Backend API → AWS EC2 RunInstances → VM boots
 | Need | Service | API / Feature |
 |---|---|---|
 | Create/start VM | EC2 | `RunInstances`, `StartInstances`, `TerminateInstances` |
+| Keep pre-initialized instances ready | EC2 Auto Scaling | Warm Pools |
 | Boot-time setup | EC2 User Data + EC2Launch v2 | `executeScript` task in User Data |
 | Post-launch commands | Systems Manager (SSM) | `SendCommand` (Run Command) |
 | Health check | SSM | `DescribeInstanceInformation` |
@@ -105,6 +108,22 @@ Instead of running User Data on every boot:
 4. User Data only needs to start services, not install anything
 
 This reduces cold start from ~10 min to ~2 min.
+
+### Recommended AWS Pattern For This Project
+
+For GDS2, the practical target is:
+
+1. Build a pre-baked Windows AMI with GDS2 + Java agent + Python env + this repo
+2. Put those instances behind an EC2 Auto Scaling Group with a **Warm Pool**
+3. Keep warm instances in `Stopped` or `Hibernated` state when cost matters, or `Running` when lowest latency matters
+4. On session allocation, move one instance into service, wait for SSM/health checks, then bind the mechanic session to that worker
+5. On session end, either return the worker to the warm pool, stop it, or terminate it
+
+This matches the codebase constraints:
+
+- one GDS2 instance per machine
+- GUI/JavaFX runtime needs a display context
+- multi-user requires one worker VM per user/session
 
 ### Implementation Priority
 
