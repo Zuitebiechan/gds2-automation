@@ -19,18 +19,20 @@ if not defined VENV_DIR set "VENV_DIR=%PROJECT_DIR%\venv32"
 if not defined GDS2_AGENT_DIR set "GDS2_AGENT_DIR=C:\tools\gds2-agent"
 if not defined LOG_DIR set "LOG_DIR=%PROJECT_DIR%\logs"
 set "SKIP_GDS2=0"
-set "PYTHON_CMD="
+set "PYTHON_EXE="
 
-if defined PYTHON if exist "%PYTHON%" set "PYTHON_CMD=""%PYTHON%"""
-if not defined PYTHON_CMD if exist "%PROJECT_DIR%\venv32\Scripts\python.exe" set "PYTHON_CMD=""%PROJECT_DIR%\venv32\Scripts\python.exe"""
-if not defined PYTHON_CMD if exist "%PROJECT_DIR%\venv\Scripts\python.exe" set "PYTHON_CMD=""%PROJECT_DIR%\venv\Scripts\python.exe"""
-if not defined PYTHON_CMD (
-    py -3 -c "import sys" >nul 2>&1
-    if not errorlevel 1 set "PYTHON_CMD=py -3"
+if defined PYTHON if exist "%PYTHON%" set "PYTHON_EXE=%PYTHON%"
+if not defined PYTHON_EXE if exist "%PROJECT_DIR%\venv32\Scripts\python.exe" set "PYTHON_EXE=%PROJECT_DIR%\venv32\Scripts\python.exe"
+if not defined PYTHON_EXE if exist "%PROJECT_DIR%\venv\Scripts\python.exe" set "PYTHON_EXE=%PROJECT_DIR%\venv\Scripts\python.exe"
+if not defined PYTHON_EXE (
+    for /f "usebackq delims=" %%I in (`py -3 -c "import sys; print(sys.executable)" 2^>nul`) do (
+        if not defined PYTHON_EXE set "PYTHON_EXE=%%I"
+    )
 )
-if not defined PYTHON_CMD (
-    python -c "import sys" >nul 2>&1
-    if not errorlevel 1 set "PYTHON_CMD=python"
+if not defined PYTHON_EXE (
+    for /f "usebackq delims=" %%I in (`python -c "import sys; print(sys.executable)" 2^>nul`) do (
+        if not defined PYTHON_EXE set "PYTHON_EXE=%%I"
+    )
 )
 
 REM Parse arguments
@@ -49,22 +51,22 @@ echo  Diagnostic Platform - Cloud Services
 echo ============================================================
 echo.
 echo  Project dir: %PROJECT_DIR%
-if defined PYTHON_CMD (
-    echo  Python:      %PYTHON_CMD%
+if defined PYTHON_EXE (
+    echo  Python:      %PYTHON_EXE%
 ) else (
     echo  Python:      [not found]
 )
 echo.
 
 REM Check prerequisites
-if not defined PYTHON_CMD (
+if not defined PYTHON_EXE (
     echo [ERROR] Python not found.
     echo Checked:
     echo   - %%PYTHON%% env var
     echo   - %PROJECT_DIR%\venv32\Scripts\python.exe
     echo   - %PROJECT_DIR%\venv\Scripts\python.exe
-    echo   - py -3
-    echo   - python on PATH
+    echo   - py -3 ^(resolved to sys.executable^)
+    echo   - python on PATH ^(resolved to sys.executable^)
     exit /b 1
 )
 
@@ -75,7 +77,7 @@ REM ---- 1. Start VCI Proxy Reverse Server ----
 call :is_port_listening 127.0.0.1 9000
 if errorlevel 1 (
     echo [1/3] Starting VCI Proxy reverse server...
-    start "VCI-Proxy-Server" /MIN cmd /c "cd /d ""%PROJECT_DIR%"" && %PYTHON_CMD% -m vci_proxy.reverse_server > ""%LOG_DIR%\vci_proxy.log"" 2>&1"
+    start "VCI-Proxy-Server" /D "%PROJECT_DIR%" /MIN "%ComSpec%" /c """%PYTHON_EXE%"" -m vci_proxy.reverse_server > ""%LOG_DIR%\vci_proxy.log"" 2>&1"
     call :wait_for_port 127.0.0.1 9000 15
     if errorlevel 1 (
         echo       [WARN] Port 9000 did not become ready in time. Check %LOG_DIR%\vci_proxy.log
@@ -90,7 +92,7 @@ REM ---- 2. Start Flask API Server ----
 call :is_port_listening 127.0.0.1 8080
 if errorlevel 1 (
     echo [2/3] Starting Flask API server...
-    start "Flask-API" /MIN cmd /c "cd /d ""%PROJECT_DIR%"" && %PYTHON_CMD% app.py --port 8080 > ""%LOG_DIR%\flask_api.log"" 2>&1"
+    start "Flask-API" /D "%PROJECT_DIR%" /MIN "%ComSpec%" /c """%PYTHON_EXE%"" app.py --port 8080 > ""%LOG_DIR%\flask_api.log"" 2>&1"
     call :wait_for_port 127.0.0.1 8080 15
     if errorlevel 1 (
         echo       [WARN] Port 8080 did not become ready in time. Check %LOG_DIR%\flask_api.log
