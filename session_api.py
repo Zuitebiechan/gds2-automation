@@ -10,7 +10,9 @@ SessionOrchestrator and does not touch existing diagnostics routes.
 import json
 import logging
 import queue
+import time
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from flask import Blueprint, Response, jsonify, request
@@ -163,6 +165,221 @@ def _resume_action_for_domain(domain: str, default_action: str) -> str:
     return mapping.get(domain, default_action)
 
 
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _network_quality_summary(snapshot: dict[str, Any] | None) -> str:
+    if not isinstance(snapshot, dict):
+        return "grade=unknown status=unknown epoch=None p95=n/a reason=none"
+    metrics = snapshot.get("network_ms") or {}
+    p95 = metrics.get("p95")
+    p95_text = "n/a" if p95 is None else f"{float(p95):.1f}ms"
+    return (
+        f"grade={snapshot.get('grade')} status={snapshot.get('status')} "
+        f"epoch={snapshot.get('connection_epoch')} p95={p95_text} "
+        f"reason={snapshot.get('reason')} samples={snapshot.get('sample_count')} "
+        f"fresh={snapshot.get('fresh')} connected={snapshot.get('connected')}"
+    )
+
+
+def _get_session_network_snapshot(session_id: str) -> dict[str, Any]:
+    session = get_orchestrator().get_session(session_id)
+    if session.workflow != "gds2":
+        return {
+            "network_quality": None,
+            "network_override": None,
+            "connection_epoch": None,
+        }
+
+    preflight = _get_backend().preflight()
+    network_quality = preflight.get("network_quality")
+    connection_epoch = preflight.get("connection_epoch")
+    effective_override = _get_effective_network_override(session, connection_epoch)
+    raw_override = getattr(session, "network_override", None)
+    if isinstance(raw_override, dict) and effective_override is None and raw_override.get("allowed"):
+        logger.info(
+            "[NETWORK_GATE] session=%s override_invalidated old_epoch=%s new_epoch=%s",
+            session_id,
+            raw_override.get("connection_epoch"),
+            connection_epoch,
+        )
+        _clear_network_override(session_id, reason="epoch_changed")
+    return {
+        "network_quality": network_quality,
+        "network_override": effective_override,
+        "connection_epoch": connection_epoch,
+    }
+
+
+def _get_effective_network_override(session: Any, connection_epoch: str | None) -> dict[str, Any] | None:
+    override = getattr(session, "network_override", None)
+    if not isinstance(override, dict):
+        return None
+    if not override.get("allowed"):
+        return None
+    if override.get("connection_epoch") != connection_epoch:
+        return None
+    return dict(override)
+
+
+def _set_network_override(session_id: str, connection_epoch: str | None) -> dict[str, Any]:
+    orch = get_orchestrator()
+    session = orch.get_session(session_id)
+    override = {
+        "allowed": True,
+        "confirmed_at": _utc_now_iso(),
+        "connection_epoch": connection_epoch,
+        "reason": "user_confirmed_high_latency",
+    }
+    session.network_override = override
+    session.updated_at = time.time()
+    logger.info(
+        "[NETWORK_GATE] session=%s override_set epoch=%s confirmed_at=%s",
+        session_id,
+        connection_epoch,
+        override["confirmed_at"],
+    )
+    return override
+
+
+def _clear_network_override(session_id: str, reason: str = "cleared") -> None:
+    session = get_orchestrator().get_session(session_id)
+    if session.network_override is not None:
+        logger.info(
+            "[NETWORK_GATE] session=%s override_cleared reason=%s previous_epoch=%s",
+            session_id,
+            reason,
+            session.network_override.get("connection_epoch")
+            if isinstance(session.network_override, dict)
+            else None,
+        )
+    session.network_override = None
+    session.updated_at = time.time()
+
+
+def _build_network_quality_gate(network_quality: dict[str, Any] | None) -> DecisionGate:
+    payload = dict(network_quality or {})
+    reason = str(payload.get("reason") or "network quality is blocked")
+    connection_epoch = payload.get("connection_epoch")
+    return DecisionGate(
+        decision_id=uuid.uuid4().hex[:12],
+        prompt=(
+            "Tunnel quality is currently blocked. "
+            f"Reason: {reason}. Continue anyway?"
+        ),
+        options=[
+            DecisionOption(
+                option_id="continue_anyway",
+                label="Continue anyway",
+                description="Start diagnostics for this tunnel epoch anyway",
+            ),
+            DecisionOption(
+                option_id="cancel",
+                label="Cancel",
+                description="Do not start diagnostics until the tunnel stabilizes",
+            ),
+        ],
+        kind="network_quality",
+        context={
+            "network_quality": payload,
+            "connection_epoch": connection_epoch,
+        },
+        timeout_sec=120.0,
+        fallback_option_id="cancel",
+    )
+
+
+def _network_signature(payload: dict[str, Any]) -> tuple[Any, ...]:
+    quality = payload.get("network_quality") or {}
+    return (
+        quality.get("grade"),
+        quality.get("status"),
+        quality.get("reason"),
+        payload.get("connection_epoch"),
+        payload.get("network_override", {}).get("connection_epoch")
+        if isinstance(payload.get("network_override"), dict)
+        else None,
+    )
+
+
+def _run_start_diagnostics(session_id: str, *, resumed: bool = False) -> dict[str, Any]:
+    orch = get_orchestrator()
+    session = orch.get_session(session_id)
+    if session.status != SessionStatus.RUNNING:
+        raise ValueError(f"Session not running (status={session.status.value})")
+    if session.workflow != "gds2":
+        raise ValueError(f"Session workflow is '{session.workflow}', not 'gds2'")
+
+    network_snapshot = _get_session_network_snapshot(session_id)
+    network_quality = network_snapshot["network_quality"]
+    effective_override = network_snapshot["network_override"]
+    logger.info(
+        "[NETWORK_GATE] session=%s phase=preflight resumed=%s override=%s %s",
+        session_id,
+        resumed,
+        bool(effective_override),
+        _network_quality_summary(network_quality),
+    )
+
+    if (
+        isinstance(network_quality, dict)
+        and str(network_quality.get("grade") or "").lower() == "block"
+        and effective_override is None
+    ):
+        gate = _build_network_quality_gate(network_quality)
+        session = orch.raise_decision(session_id, gate)
+        logger.warning(
+            "[NETWORK_GATE] session=%s decision_required decision_id=%s kind=%s %s",
+            session_id,
+            gate.decision_id,
+            gate.kind,
+            _network_quality_summary(network_quality),
+        )
+        return {
+            "success": True,
+            "session_id": session_id,
+            "status": session.status.value,
+            "workflow": session.workflow,
+            "decision_required": True,
+            "decision": gate.to_dict(),
+            **network_snapshot,
+        }
+
+    orch.emit_progress(session_id, "Starting GDS2 diagnostics...")
+    backend = _get_backend()
+    backend.start()
+    state = backend.get_state()
+    result = {
+        "modules": backend.get_modules(),
+        "vin": state.extra.get("vin"),
+        "device": state.extra.get("device"),
+    }
+    orch.emit_progress(session_id, "GDS2 diagnostics started", result)
+    logger.info(
+        "[NETWORK_GATE] session=%s decision=allow resumed=%s override=%s modules=%s device=%s %s",
+        session_id,
+        resumed,
+        bool(effective_override),
+        len(result["modules"]),
+        result.get("device") or "-",
+        _network_quality_summary(network_quality),
+    )
+
+    payload = {
+        "success": True,
+        "session_id": session_id,
+        "status": session.status.value,
+        "workflow": session.workflow,
+        "result": result,
+        **network_snapshot,
+    }
+    if resumed:
+        payload["resumed"] = True
+        payload["resume_action"] = "start_diagnostics"
+    return payload
+
+
 # ---------------------------------------------------------------------------
 # POST /api/session/start
 # ---------------------------------------------------------------------------
@@ -264,48 +481,21 @@ def session_start_diagnostics():
         return jsonify({"success": False, "error": "session_id required"}), 400
 
     try:
-        orch = get_orchestrator()
-        session = orch.get_session(session_id)
-        if session.status != SessionStatus.RUNNING:
-            return jsonify({
-                "success": False,
-                "error": f"Session not running (status={session.status.value})",
-            }), 409
-        if session.workflow != "gds2":
-            return jsonify({
-                "success": False,
-                "error": f"Session workflow is '{session.workflow}', not 'gds2'",
-            }), 409
-
-        orch.emit_progress(session_id, "Starting GDS2 diagnostics...")
-        backend = _get_backend()
-        backend.start()
-        state = backend.get_state()
-        result = {
-            "modules": backend.get_modules(),
-            "vin": state.extra.get("vin"),
-            "device": state.extra.get("device"),
-        }
-
-        orch.emit_progress(
-            session_id,
-            "GDS2 diagnostics started",
-            result,
-        )
-        logger.info(
-            "SESSION %s diagnostics started modules=%s device=%s",
-            session_id,
-            len(result["modules"]),
-            result.get("device") or '-',
-        )
-        return jsonify({
-            "success": True,
-            "session_id": session_id,
-            "result": result,
-        })
+        payload = _run_start_diagnostics(session_id)
+        if payload.get("result"):
+            result = payload["result"]
+            logger.info(
+                "SESSION %s diagnostics started modules=%s device=%s",
+                session_id,
+                len(result["modules"]),
+                result.get("device") or '-',
+            )
+        return jsonify(payload)
 
     except KeyError as exc:
         return jsonify({"success": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 409
     except Exception as exc:
         logger.exception("session_start_diagnostics failed")
         return jsonify({"success": False, "error": str(exc)}), 500
@@ -493,6 +683,11 @@ def session_events():
 
     def generate():
         yield f"event: connected\ndata: {json.dumps({'session_id': session_id})}\n\n"
+        last_network_signature: tuple[Any, ...] | None = None
+        try:
+            last_network_signature = _network_signature(_get_session_network_snapshot(session_id))
+        except Exception:
+            last_network_signature = None
 
         while True:
             try:
@@ -527,6 +722,28 @@ def session_events():
                     pass
 
             except queue.Empty:
+                try:
+                    network_snapshot = _get_session_network_snapshot(session_id)
+                    signature = _network_signature(network_snapshot)
+                    if last_network_signature is None:
+                        last_network_signature = signature
+                    elif signature != last_network_signature:
+                        last_network_signature = signature
+                        logger.info(
+                            "[NETWORK_GATE] session=%s sse=network_quality_changed override=%s %s",
+                            session_id,
+                            bool(network_snapshot.get("network_override")),
+                            _network_quality_summary(network_snapshot.get("network_quality")),
+                        )
+                        yield (
+                            "event: network_quality_changed\n"
+                            f"data: {json.dumps({'session_id': session_id, **network_snapshot})}\n\n"
+                        )
+                        continue
+                except KeyError:
+                    break
+                except Exception:
+                    pass
                 yield ": keepalive\n\n"
 
     return Response(
@@ -574,6 +791,37 @@ def session_decision():
         pending_gate = before.pending_decision
         session = orch.submit_decision(session_id, decision_id, option_id)
         logger.info("SESSION %s decision=%s option=%s", session_id, decision_id, option_id)
+
+        if pending_gate is not None and pending_gate.kind == "network_quality":
+            if option_id == "continue_anyway":
+                snapshot = _get_session_network_snapshot(session_id)
+                override = _set_network_override(session_id, snapshot.get("connection_epoch"))
+                logger.warning(
+                    "[NETWORK_GATE] session=%s decision=%s option=%s action=resume_start %s",
+                    session_id,
+                    decision_id,
+                    option_id,
+                    _network_quality_summary(snapshot.get("network_quality")),
+                )
+                payload = _run_start_diagnostics(session_id, resumed=True)
+                payload["network_override"] = override
+                return jsonify(payload)
+
+            logger.info(
+                "[NETWORK_GATE] session=%s decision=%s option=%s action=cancel_start",
+                session_id,
+                decision_id,
+                option_id,
+            )
+            _clear_network_override(session_id, reason="user_cancelled")
+            return jsonify({
+                "success": True,
+                "session_id": session.session_id,
+                "status": session.status.value,
+                "workflow": session.workflow,
+                "cancelled": True,
+                **_get_session_network_snapshot(session_id),
+            })
 
         if pending_gate is not None and pending_gate.kind == "branch":
             option_map = pending_gate.context.get("option_map", {})
@@ -935,6 +1183,7 @@ def session_status():
         return jsonify({
             "success": True,
             **session.to_dict(),
+            **_get_session_network_snapshot(session_id),
         })
 
     except KeyError as exc:

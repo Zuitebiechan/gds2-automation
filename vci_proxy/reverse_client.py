@@ -455,6 +455,8 @@ class ReverseProxyClient:
     async def _handle_message(self, msg_type: int, body: bytes,
                              sequence: int) -> Optional[bytes]:
         """Dispatch message to the appropriate handler."""
+        if msg_type == MsgType.PING_REQ:
+            return ProtocolEncoder.encode_ping_rsp(sequence)
         if msg_type == MsgType.HEARTBEAT:
             return ProtocolEncoder.encode_heartbeat_ack(sequence)
         if msg_type == MsgType.HEARTBEAT_ACK:

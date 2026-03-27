@@ -29,6 +29,10 @@ from .benchmark import (
     strip_timing_trailer,
 )
 from .protocol import MAGIC, HEADER_SIZE, MsgType, MSG_NAMES, ProtocolDecoder, ProtocolEncoder
+from .tunnel_quality import (
+    TunnelQualityTracker,
+    write_tunnel_quality_snapshot,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -57,6 +61,11 @@ class ReverseProxyServer:
         self.request_queue = asyncio.Queue()
         self.response_futures: dict[int, asyncio.Future] = {}
         self.sequence = 0
+        self._probe_task: asyncio.Task | None = None
+        self._connection_counter = 0
+        self._connection_epoch: str | None = None
+        self._tunnel_quality = TunnelQualityTracker()
+        self._last_quality_signature: tuple | None = None
 
         # P1-1: ReadMsgs BUFFER_EMPTY cache
         self._read_cache = ReadMsgsCache(self.config.read_msgs_cache)
@@ -256,6 +265,7 @@ class ReverseProxyServer:
             logger.warning(f"替换已有 VCI 连接，新连接: {addr}")
             old_writer = self.vci_writer
             self.vci_connected.clear()
+            self._cancel_probe_task()
             self._cancel_pending_futures()
             self.vci_reader = None
             self.vci_writer = None
@@ -268,7 +278,18 @@ class ReverseProxyServer:
 
         self.vci_reader = reader
         self.vci_writer = writer
+        self._connection_counter += 1
+        self._connection_epoch = f"epoch-{int(time.time() * 1000)}-{self._connection_counter:03d}"
+        self._tunnel_quality.mark_connected(self._connection_epoch)
+        logger.info(
+            "[TUNNEL_CONN] connected addr=%s epoch=%s connection_count=%s",
+            addr,
+            self._connection_epoch,
+            self._connection_counter,
+        )
+        self._write_tunnel_quality_snapshot()
         self.vci_connected.set()
+        self._probe_task = asyncio.create_task(self._probe_loop(self._connection_epoch))
 
         try:
             while True:
@@ -311,7 +332,15 @@ class ReverseProxyServer:
             logger.error(f"VCI 连接错误: {e}")
         finally:
             self.vci_connected.clear()
+            self._cancel_probe_task()
             self._cancel_pending_futures()
+            self._tunnel_quality.mark_disconnected(self._connection_epoch)
+            logger.info(
+                "[TUNNEL_CONN] disconnected addr=%s epoch=%s",
+                addr,
+                self._connection_epoch,
+            )
+            self._write_tunnel_quality_snapshot()
             self.vci_reader = None
             self.vci_writer = None
             writer.close()
@@ -414,6 +443,119 @@ class ReverseProxyServer:
         )
         self.benchmark_writer.write_event(event)
 
+    def _next_sequence(self) -> int:
+        self.sequence = (self.sequence + 1) & 0xFFFFFFFF
+        return self.sequence
+
+    def _write_tunnel_quality_snapshot(self) -> None:
+        snapshot = self._tunnel_quality.snapshot()
+        write_tunnel_quality_snapshot(snapshot)
+        signature = self._quality_signature(snapshot)
+        if signature != self._last_quality_signature:
+            self._last_quality_signature = signature
+            logger.info(
+                "[TUNNEL_QUALITY] epoch=%s grade=%s status=%s connected=%s fresh=%s "
+                "samples=%s p95=%s reason=%s probe_failures=%s",
+                snapshot.get("connection_epoch"),
+                snapshot.get("grade"),
+                snapshot.get("status"),
+                snapshot.get("connected"),
+                snapshot.get("fresh"),
+                snapshot.get("sample_count"),
+                self._format_ms(snapshot.get("network_ms", {}).get("p95")),
+                snapshot.get("reason"),
+                snapshot.get("probe_failures"),
+            )
+
+    @staticmethod
+    def _quality_signature(snapshot: dict) -> tuple:
+        metrics = snapshot.get("network_ms") or {}
+        return (
+            snapshot.get("connection_epoch"),
+            snapshot.get("grade"),
+            snapshot.get("status"),
+            snapshot.get("connected"),
+            snapshot.get("fresh"),
+            snapshot.get("sample_count"),
+            metrics.get("p95"),
+            snapshot.get("reason"),
+            snapshot.get("probe_failures"),
+        )
+
+    @staticmethod
+    def _format_ms(value: float | None) -> str:
+        if value is None:
+            return "n/a"
+        return f"{float(value):.1f}ms"
+
+    def _cancel_probe_task(self) -> None:
+        if self._probe_task is not None:
+            self._probe_task.cancel()
+            self._probe_task = None
+
+    async def _probe_loop(self, connection_epoch: str) -> None:
+        logger.info("[TUNNEL_PROBE] loop_started epoch=%s interval=3.0s", connection_epoch)
+        try:
+            while (
+                self.vci_connected.is_set()
+                and self.vci_writer is not None
+                and self._connection_epoch == connection_epoch
+            ):
+                await self._run_probe(connection_epoch)
+                await asyncio.sleep(3.0)
+        except asyncio.CancelledError:
+            logger.info("[TUNNEL_PROBE] loop_cancelled epoch=%s", connection_epoch)
+            raise
+        except Exception as exc:
+            logger.warning("[TUNNEL_PROBE] loop_stopped epoch=%s error=%s", connection_epoch, exc)
+
+    async def _run_probe(self, connection_epoch: str) -> None:
+        if self.vci_writer is None or self._connection_epoch != connection_epoch:
+            return
+
+        started_at = time.monotonic()
+        sequence = self._next_sequence()
+        future = asyncio.get_running_loop().create_future()
+        self.response_futures[sequence] = future
+
+        try:
+            async with self.vci_lock:
+                if self.vci_writer is None:
+                    raise ConnectionError("VCI disconnected")
+                self.vci_writer.write(ProtocolEncoder.encode_ping_req(sequence))
+                await self.vci_writer.drain()
+
+            resp_type, _resp_body, hw_ms = await asyncio.wait_for(future, timeout=5.0)
+            if resp_type != MsgType.PING_RSP:
+                raise RuntimeError(f"Unexpected probe response type: {resp_type}")
+
+            duration_ms = (time.monotonic() - started_at) * 1000.0
+            network_ms = max(0.0, duration_ms - float(hw_ms or 0.0))
+            self._tunnel_quality.record_probe(network_ms)
+            logger.info(
+                "[TUNNEL_PROBE] success epoch=%s seq=%s duration=%s hw=%s network=%s",
+                connection_epoch,
+                sequence,
+                self._format_ms(duration_ms),
+                self._format_ms(hw_ms),
+                self._format_ms(network_ms),
+            )
+        except asyncio.CancelledError:
+            self.response_futures.pop(sequence, None)
+            raise
+        except Exception as exc:
+            self.response_futures.pop(sequence, None)
+            self._tunnel_quality.record_probe_failure(reason="probe_failures")
+            logger.warning(
+                "[TUNNEL_PROBE] failure epoch=%s seq=%s error=%s failures=%s",
+                connection_epoch,
+                sequence,
+                exc,
+                self._tunnel_quality.probe_failures,
+            )
+        finally:
+            self._write_tunnel_quality_snapshot()
+
     async def _handle_proxy_connection(self, reader: asyncio.StreamReader,
                                        writer: asyncio.StreamWriter):
         """处理本地代理连接"""
@@ -472,8 +614,7 @@ class ReverseProxyServer:
                 self._invalidate_caches(msg_type, body)
 
                 # 转发请求到 VCI Proxy
-                self.sequence = (self.sequence + 1) & 0xFFFFFFFF
-                new_seq = self.sequence
+                new_seq = self._next_sequence()
                 fwd_start = time.monotonic()
 
                 future = asyncio.get_running_loop().create_future()

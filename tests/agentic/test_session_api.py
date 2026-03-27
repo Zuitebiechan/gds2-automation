@@ -5,6 +5,7 @@ Each test resets the module-level orchestrator to guarantee isolation.
 """
 
 import json
+from types import SimpleNamespace
 import pytest
 
 flask = pytest.importorskip("flask")
@@ -67,6 +68,73 @@ def _start_unknown(client):
     """Start an unknown-brand session, return response JSON."""
     resp = client.post("/api/session/start", json={"brand": "BMW"})
     return resp.get_json()
+
+
+def _make_network_quality(
+    grade: str,
+    *,
+    epoch: str = "epoch-1",
+    p95: float | None = None,
+    reason: str | None = None,
+) -> dict[str, object]:
+    metrics = {
+        "good": {"last": 54.0, "p50": 56.0, "p95": 60.0},
+        "warn": {"last": 102.0, "p50": 110.0, "p95": 120.0},
+        "block": {"last": 182.0, "p50": 176.0, "p95": 190.0},
+    }[grade]
+    if p95 is not None:
+        metrics["p95"] = p95
+    statuses = {
+        "good": "healthy",
+        "warn": "degraded",
+        "block": "blocked",
+    }
+    reasons = {
+        "good": "p95 within good threshold",
+        "warn": "p95 above good threshold",
+        "block": "p95 above warn threshold",
+    }
+    return {
+        "connection_epoch": epoch,
+        "connected": True,
+        "fresh": True,
+        "updated_at": "2026-03-27T00:00:00Z",
+        "source": "probe",
+        "sample_count": 5,
+        "network_ms": metrics,
+        "grade": grade,
+        "status": statuses[grade],
+        "reason": reason or reasons[grade],
+        "probe_failures": 0,
+    }
+
+
+class _FakeBackendWithQuality:
+    def __init__(self, quality: dict[str, object]):
+        self.quality = quality
+        self.start_calls = 0
+        self.modules_calls = 0
+
+    def preflight(self) -> dict[str, object]:
+        return {
+            "network_quality": self.quality,
+            "connection_epoch": self.quality.get("connection_epoch"),
+        }
+
+    def start(self) -> None:
+        self.start_calls += 1
+
+    def get_state(self):
+        return SimpleNamespace(extra={"vin": "VIN123", "device": "VCI Proxy (Remote)"})
+
+    def get_modules(self) -> list[str]:
+        self.modules_calls += 1
+        return ["ECM", "TCM"]
+
+
+def _patch_backend(monkeypatch: pytest.MonkeyPatch, backend: object) -> None:
+    monkeypatch.setattr(session_api, "_backend", backend)
+    monkeypatch.setattr(session_api, "_get_backend", lambda: backend)
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +277,114 @@ class TestSessionDecision:
             "option_id": "gds2",
         })
         assert resp.status_code == 400
+
+
+class TestSessionNetworkGate:
+    def test_blocked_quality_requires_explicit_decision(self, client, monkeypatch):
+        start = _start_gm(client)
+        backend = _FakeBackendWithQuality(_make_network_quality("block", epoch="epoch-block"))
+        _patch_backend(monkeypatch, backend)
+
+        resp = client.post("/api/session/start_diagnostics", json={"session_id": start["session_id"]})
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["success"] is True
+        assert data["decision_required"] is True
+        assert data["status"] == "awaiting_decision"
+        assert data["network_quality"]["grade"] == "block"
+        assert data["decision"]["kind"] == "network_quality"
+        option_ids = [opt["option_id"] for opt in data["decision"]["options"]]
+        assert option_ids == ["continue_anyway", "cancel"]
+        assert backend.start_calls == 0
+
+    def test_continue_anyway_resumes_start_and_stores_override(self, client, monkeypatch):
+        start = _start_gm(client)
+        backend = _FakeBackendWithQuality(_make_network_quality("block", epoch="epoch-1"))
+        _patch_backend(monkeypatch, backend)
+
+        gate_resp = client.post("/api/session/start_diagnostics", json={"session_id": start["session_id"]})
+        gate_payload = gate_resp.get_json()
+        decision_id = gate_payload["decision"]["decision_id"]
+
+        resp = client.post("/api/session/decision", json={
+            "session_id": start["session_id"],
+            "decision_id": decision_id,
+            "option_id": "continue_anyway",
+        })
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["success"] is True
+        assert data["resumed"] is True
+        assert data["result"]["modules"] == ["ECM", "TCM"]
+        assert data["network_quality"]["grade"] == "block"
+        assert data["network_override"]["allowed"] is True
+        assert data["network_override"]["connection_epoch"] == "epoch-1"
+        assert backend.start_calls == 1
+
+    def test_cancel_leaves_session_running_without_starting(self, client, monkeypatch):
+        start = _start_gm(client)
+        backend = _FakeBackendWithQuality(_make_network_quality("block", epoch="epoch-1"))
+        _patch_backend(monkeypatch, backend)
+
+        gate_resp = client.post("/api/session/start_diagnostics", json={"session_id": start["session_id"]})
+        gate_payload = gate_resp.get_json()
+
+        resp = client.post("/api/session/decision", json={
+            "session_id": start["session_id"],
+            "decision_id": gate_payload["decision"]["decision_id"],
+            "option_id": "cancel",
+        })
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["success"] is True
+        assert data["cancelled"] is True
+        assert data["status"] == "running"
+        assert backend.start_calls == 0
+
+    def test_warn_quality_starts_and_returns_quality(self, client, monkeypatch):
+        start = _start_gm(client)
+        backend = _FakeBackendWithQuality(_make_network_quality("warn", epoch="epoch-warn"))
+        _patch_backend(monkeypatch, backend)
+
+        resp = client.post("/api/session/start_diagnostics", json={"session_id": start["session_id"]})
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["success"] is True
+        assert data["result"]["modules"] == ["ECM", "TCM"]
+        assert data["network_quality"]["grade"] == "warn"
+        assert data["connection_epoch"] == "epoch-warn"
+        assert backend.start_calls == 1
+
+    def test_status_reports_network_fields_and_invalidates_override_on_epoch_change(
+        self,
+        client,
+        monkeypatch,
+    ):
+        start = _start_gm(client)
+        backend = _FakeBackendWithQuality(_make_network_quality("block", epoch="epoch-1"))
+        _patch_backend(monkeypatch, backend)
+
+        gate_resp = client.post("/api/session/start_diagnostics", json={"session_id": start["session_id"]})
+        decision_id = gate_resp.get_json()["decision"]["decision_id"]
+        client.post("/api/session/decision", json={
+            "session_id": start["session_id"],
+            "decision_id": decision_id,
+            "option_id": "continue_anyway",
+        })
+
+        backend.quality = _make_network_quality("block", epoch="epoch-2", reason="new tunnel epoch")
+
+        resp = client.get(f"/api/session/status?session_id={start['session_id']}")
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["network_quality"]["grade"] == "block"
+        assert data["connection_epoch"] == "epoch-2"
+        assert data["network_override"] is None
 
 
 # ---------------------------------------------------------------------------

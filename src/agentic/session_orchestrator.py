@@ -58,6 +58,7 @@ class SessionEventType(str, Enum):
     DECISION_REQUIRED = "decision_required"
     DECISION_RESOLVED = "decision_resolved"
     DECISION_TIMEOUT = "decision_timeout"
+    NETWORK_QUALITY_CHANGED = "network_quality_changed"
     ERROR = "error"
     DONE = "done"
 
@@ -166,6 +167,7 @@ class Session:
     status: SessionStatus = SessionStatus.PENDING
     workflow: Optional[str] = None
     pending_decision: Optional[DecisionGate] = None
+    network_override: Optional[Dict[str, Any]] = None
     resolved_decisions: List[Dict[str, Any]] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
@@ -182,6 +184,7 @@ class Session:
                 if self.pending_decision
                 else None
             ),
+            "network_override": self.network_override,
             "resolved_decisions": self.resolved_decisions,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -443,6 +446,7 @@ class SessionOrchestrator:
         session.status = SessionStatus.ABORTED
         session.error = reason or "Aborted by user"
         session.pending_decision = None
+        session.network_override = None
         self._touch(session)
 
         self._emit(session_id, SessionEventType.DONE, {
@@ -458,6 +462,7 @@ class SessionOrchestrator:
         """Mark session as completed and emit ``done``."""
         session = self._get_session(session_id)
         session.status = SessionStatus.COMPLETED
+        session.network_override = None
         self._touch(session)
         self._emit(session_id, SessionEventType.DONE, {
             "session_id": session_id,
@@ -470,6 +475,7 @@ class SessionOrchestrator:
         session = self._get_session(session_id)
         session.status = SessionStatus.FAILED
         session.error = error
+        session.network_override = None
         self._touch(session)
         self._emit(session_id, SessionEventType.ERROR, {
             "session_id": session_id,

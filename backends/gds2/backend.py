@@ -16,6 +16,7 @@ from diagnostic_platform.contracts import (
     LiveDataPoint,
     LiveDataStream,
 )
+from backends.gds2.controller_runtime import GDS2ControllerRuntime
 from src.navigation import GDS2Page, NavigationController
 from src.streaming import AgentDataCollector
 from src.streaming.agent_data_collector import AgentSnapshot
@@ -53,19 +54,18 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
         GDS2Page.J2534_DISCONNECT,
     }
 
-    def __init__(self, workflow: DataViewerWorkflow | None = None) -> None:
+    def __init__(
+        self,
+        workflow: DataViewerWorkflow | None = None,
+        *,
+        runtime: GDS2ControllerRuntime | None = None,
+    ) -> None:
         """Initialize the backend and bind it to the existing GDS2 workflow."""
-        self._workflow: Any | None = workflow
-        self._controller: NavigationController | None = (
-            workflow.controller if workflow is not None else None
-        )
+        self._runtime = runtime or GDS2ControllerRuntime(workflow=workflow)
         self._active_collector: AgentDataCollector | None = None
         self._active_stream: LiveDataStream | None = None
         self._latest_live_data: list[LiveDataPoint] = []
         self._stream_error: str | None = None
-
-        if self._controller is not None and not hasattr(self._controller, "get_available_items"):
-            setattr(self._controller, "get_available_items", self._controller.wait_for_list)
 
     @property
     def name(self) -> str:
@@ -85,9 +85,16 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
     def start(self) -> None:
         """Start GDS2 and auto-connect through the existing workflow."""
         try:
-            self._get_workflow().auto_start()
+            self._runtime.ensure_ready()
         except Exception as exc:  # pragma: no cover - runtime integration wrapper
             raise RuntimeError(f"Failed to start GDS2 backend: {exc}") from exc
+
+    def preflight(self) -> dict[str, Any]:
+        """Expose controller-runtime readiness and tunnel snapshot data."""
+        try:
+            return self._runtime.preflight()
+        except Exception as exc:  # pragma: no cover - runtime integration wrapper
+            raise RuntimeError(f"Failed to preflight GDS2 backend: {exc}") from exc
 
     def stop(self) -> None:
         """Stop active collection and clear monitoring state."""
@@ -267,53 +274,19 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
     def get_state(self) -> BackendState:
         """Build platform BackendState from the workflow and navigation controller."""
         try:
-            if self._workflow is None or self._controller is None:
-                return BackendState(
-                    current_page=GDS2Page.UNKNOWN.value,
-                    is_connected=False,
-                    current_module=None,
-                    current_data_category=None,
-                    extra={
-                        "device": None,
-                        "vin": None,
-                        "sub_category": None,
-                        "stream_active": bool(
-                            self._active_collector is not None and self._active_collector.is_running
-                        ),
-                        "stream_session_id": (
-                            self._active_stream.session_id if self._active_stream is not None else None
-                        ),
-                        "latest_live_data_count": len(self._latest_live_data),
-                        "stream_error": self._stream_error,
-                    },
-                )
-
-            page = self._controller.detect_current_page()
-            context = self._controller.get_context()
-            workflow_state = self._workflow.get_state()
-            device = context.get("device") or workflow_state.get("device")
-
-            return BackendState(
-                current_page=page.value,
-                is_connected=bool(device) or page in self._CONNECTED_PAGES,
-                current_module=context.get("module") or workflow_state.get("module"),
-                current_data_category=(
-                    context.get("data_category") or workflow_state.get("data_category")
+            state = self._runtime.status()
+            state.extra = {
+                **state.extra,
+                "stream_active": bool(
+                    self._active_collector is not None and self._active_collector.is_running
                 ),
-                extra={
-                    "device": device,
-                    "vin": workflow_state.get("vin"),
-                    "sub_category": context.get("sub_category"),
-                    "stream_active": bool(
-                        self._active_collector is not None and self._active_collector.is_running
-                    ),
-                    "stream_session_id": (
-                        self._active_stream.session_id if self._active_stream is not None else None
-                    ),
-                    "latest_live_data_count": len(self._latest_live_data),
-                    "stream_error": self._stream_error,
-                },
-            )
+                "stream_session_id": (
+                    self._active_stream.session_id if self._active_stream is not None else None
+                ),
+                "latest_live_data_count": len(self._latest_live_data),
+                "stream_error": self._stream_error,
+            }
+            return state
         except Exception as exc:  # pragma: no cover - runtime integration wrapper
             raise RuntimeError(f"Failed to get GDS2 backend state: {exc}") from exc
 
@@ -360,19 +333,11 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
 
     def _get_workflow(self) -> Any:
         """Return the bound workflow, creating it lazily when needed."""
-        if self._workflow is None:
-            self._workflow = self._create_workflow()
-            self._controller = self._workflow.controller
-            if not hasattr(self._controller, "get_available_items"):
-                setattr(self._controller, "get_available_items", self._controller.wait_for_list)
-        return self._workflow
+        return self._runtime.get_workflow()
 
     def _get_controller(self) -> NavigationController:
         """Return the bound navigation controller, creating the workflow if required."""
-        self._get_workflow()
-        if self._controller is None:
-            raise RuntimeError("Navigation controller is not initialized")
-        return self._controller
+        return self._runtime.get_controller()
 
     @staticmethod
     def _create_workflow() -> Any:
