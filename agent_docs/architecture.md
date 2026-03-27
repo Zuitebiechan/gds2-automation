@@ -122,6 +122,16 @@ This blueprint registration layer is the supported HTTP surface for the current 
 
 `session_api.py` uses the backend abstraction for GDS2 session lifecycle/orchestration and keeps its own in-memory session event queues for `/api/session/*`.
 
+It is the preferred public facade for product-facing flows. Session-scoped subroutes now wrap:
+
+- diagnostics start and selection
+- DTC reads
+- live-data start/stop/events
+- AI diagnosis start/retry/events
+- agentic navigation start/decision/events/abort/status
+
+`diagnostics_api.py` and `navigate_api.py` remain useful as lower-level capability/debug layers, but they are no longer the recommended external entrypoints for the mechanic/product flow.
+
 ### Navigate API
 
 `navigate_api.py` remains the GDS2 LangGraph navigation surface with its own in-memory navigation session store.

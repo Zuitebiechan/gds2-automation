@@ -18,11 +18,13 @@ from typing import Any, Callable
 from flask import Blueprint, Response, jsonify, request
 
 from backends.gds2 import GDS2DiagnosticBackend
+from diagnostic_platform.sse import agent_clients, agent_lock
 
 from src.agentic.contracts.action_schema import ActionStep, GDS2Action
 from src.agentic.executor import DeterministicExecutor
 from src.agentic.adapters.gds2_adapter import GDS2ActionAdapter
 from src.agentic.planner import BranchDecisionRequiredError
+from src.navigation import GDS2Page
 from src.agentic.session_orchestrator import (
     DecisionGate,
     DecisionOption,
@@ -85,6 +87,143 @@ def _get_backend() -> GDS2DiagnosticBackend:
     if _backend is None:
         _backend = GDS2DiagnosticBackend()
     return _backend
+
+
+def _get_ai_engine():
+    import diagnostics_api
+
+    return diagnostics_api._get_ai_engine()
+
+
+def _make_ai_collection_guard(data_category: str):
+    import diagnostics_api
+
+    return diagnostics_api._make_data_display_guard(
+        _get_backend(),
+        data_category,
+        mode="ai_collect",
+    )
+
+
+def _resolve_session_vehicle_context(session: Any, data: dict[str, Any]) -> dict[str, str]:
+    vin = (data.get("vin") or session.context.vin or "").strip()
+    module = (data.get("module") or getattr(session, "selected_module", "") or "").strip()
+    data_category = (
+        data.get("data_category")
+        or getattr(session, "selected_data_category", "")
+        or ""
+    ).strip()
+
+    if vin and module and data_category:
+        return {
+            "vin": vin,
+            "module": module,
+            "data_category": data_category,
+        }
+
+    state = None
+    try:
+        state = _get_backend().get_state()
+    except Exception:
+        state = None
+
+    state_extra = getattr(state, "extra", {}) if state is not None else {}
+    if not isinstance(state_extra, dict):
+        state_extra = {}
+
+    if not vin:
+        vin = (state_extra.get("vin") or "").strip()
+    if not module:
+        module = (
+            getattr(state, "current_module", "")
+            or state_extra.get("module")
+            or ""
+        ).strip()
+    if not data_category:
+        data_category = (
+            getattr(state, "current_data_category", "")
+            or state_extra.get("data_category")
+            or ""
+        ).strip()
+
+    return {
+        "vin": vin,
+        "module": module,
+        "data_category": data_category,
+    }
+
+
+def _set_session_selection(
+    session: Any,
+    *,
+    module: str | None = None,
+    data_category: str | None = None,
+) -> None:
+    if module is not None:
+        session.selected_module = module
+    if data_category is not None:
+        session.selected_data_category = data_category
+    session.updated_at = time.time()
+
+
+def _clear_navigation_binding(session: Any) -> None:
+    session.active_navigation_session_id = None
+    session.updated_at = time.time()
+
+
+def _clear_ai_binding(session: Any) -> None:
+    session.active_ai_session_id = None
+    session.updated_at = time.time()
+
+
+def _set_live_data_active(session: Any, active: bool) -> None:
+    session.live_data_active = active
+    session.updated_at = time.time()
+
+
+def _abort_active_navigation(session: Any) -> None:
+    nav_session_id = getattr(session, "active_navigation_session_id", None)
+    if not nav_session_id:
+        return
+
+    import navigate_api
+
+    try:
+        navigate_api.abort_navigation_session(nav_session_id)
+    except KeyError:
+        pass
+    except ValueError:
+        pass
+    finally:
+        _clear_navigation_binding(session)
+
+
+def _abort_active_ai(session: Any) -> None:
+    ai_session_id = getattr(session, "active_ai_session_id", None)
+    if not ai_session_id:
+        return
+
+    try:
+        engine = _get_ai_engine()
+        engine.abort_session(ai_session_id)
+    except Exception:
+        logger.exception("Failed to abort AI session for business session %s", session.session_id)
+    finally:
+        _clear_ai_binding(session)
+
+
+def _abort_active_live_data(session: Any) -> None:
+    if not getattr(session, "live_data_active", False):
+        return
+
+    try:
+        import diagnostics_api
+
+        diagnostics_api.stop_live_data_stream()
+    except Exception:
+        logger.exception("Failed to stop live data for business session %s", session.session_id)
+    finally:
+        _set_live_data_active(session, False)
 
 
 def get_executor() -> DeterministicExecutor:
@@ -366,6 +505,10 @@ def _run_start_diagnostics(session_id: str, *, resumed: bool = False) -> dict[st
             else state.extra.get("device")
         ),
     }
+    _set_session_selection(session, module="", data_category="")
+    _clear_navigation_binding(session)
+    _clear_ai_binding(session)
+    _set_live_data_active(session, False)
     orch.emit_progress(session_id, "GDS2 diagnostics started", result)
     logger.info(
         "[NETWORK_GATE] session=%s decision=allow resumed=%s override=%s modules=%s device=%s %s",
@@ -903,6 +1046,10 @@ def session_decision():
                     "selected_choice": selected_choice,
                 },
             )
+            if resume_action in {"select_module", "select_sub_module"}:
+                _set_session_selection(session, module=selected_choice)
+            if resume_action in {"select_data_category", "select_sub_category"}:
+                _set_session_selection(session, data_category=selected_choice)
             logger.info(
                 "SESSION %s resumed action=%s choice=%s",
                 session_id,
@@ -1018,6 +1165,7 @@ def session_select_module():
                 "error": exec_result.error,
             }), 500
 
+        _set_session_selection(session, module=module, data_category="")
         orch.emit_progress(session_id, f"Module selected: {module}")
         logger.info("SESSION %s module=%s selected", session_id, module)
         return jsonify({
@@ -1113,6 +1261,7 @@ def session_select_data_category():
                 "error": exec_result.error,
             }), 500
 
+        _set_session_selection(session, data_category=data_category)
         orch.emit_progress(session_id, f"Data category selected: {data_category}")
         logger.info("SESSION %s data_category=%s selected", session_id, data_category)
         return jsonify({
@@ -1127,6 +1276,712 @@ def session_select_data_category():
         return jsonify({"success": False, "error": str(exc)}), 400
     except Exception as exc:
         logger.exception("session_select_data_category failed")
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@session_bp.route("/ai_diagnose", methods=["POST"])
+def session_ai_diagnose():
+    """Start AI diagnosis through the public session facade."""
+    data = request.json or {}
+    session_id = (data.get("session_id") or "").strip()
+
+    if not session_id:
+        return jsonify({"success": False, "error": "session_id required"}), 400
+
+    try:
+        orch = get_orchestrator()
+        session = orch.get_session(session_id)
+        if session.status != SessionStatus.RUNNING:
+            return jsonify({
+                "success": False,
+                "error": f"Session not running (status={session.status.value})",
+            }), 409
+        if session.workflow != "gds2":
+            return jsonify({
+                "success": False,
+                "error": f"AI diagnosis is not supported for workflow={session.workflow}",
+            }), 409
+
+        vehicle_context = _resolve_session_vehicle_context(session, data)
+        data_category = vehicle_context["data_category"]
+        if not data_category:
+            return jsonify({"success": False, "error": "data_category required"}), 400
+
+        engine = _get_ai_engine()
+        if engine.is_active:
+            return jsonify({
+                "success": False,
+                "error": "AI diagnosis already in progress",
+            }), 409
+
+        ai_session_id = engine.start_session(
+            vehicle_context,
+            collection_guard=_make_ai_collection_guard(data_category),
+        )
+        session.active_ai_session_id = ai_session_id
+        _set_session_selection(
+            session,
+            module=vehicle_context.get("module", ""),
+            data_category=data_category,
+        )
+        orch.emit_progress(
+            session_id,
+            f"AI diagnosis started: {vehicle_context.get('module') or '-'} / {data_category}",
+        )
+        logger.info(
+            "SESSION %s ai_diagnose started ai_session=%s module=%s category=%s",
+            session_id,
+            ai_session_id,
+            vehicle_context.get("module") or "-",
+            data_category,
+        )
+        return jsonify({
+            "success": True,
+            "session_id": session_id,
+            "ai_session_id": ai_session_id,
+            "message": "AI diagnosis started. Subscribe to /api/session/ai_diagnose/events for progress.",
+        })
+
+    except KeyError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except Exception as exc:
+        logger.exception("session_ai_diagnose failed")
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@session_bp.route("/ai_diagnose/events")
+def session_ai_diagnose_events():
+    """Stream AI diagnosis SSE events through the business session id."""
+    session_id = request.args.get("session_id", "").strip()
+    if not session_id:
+        return jsonify({"success": False, "error": "session_id required"}), 400
+
+    try:
+        session = get_orchestrator().get_session(session_id)
+        ai_session_id = getattr(session, "active_ai_session_id", None)
+        if not ai_session_id:
+            return jsonify({
+                "success": False,
+                "error": f"No active AI session for {session_id}",
+            }), 404
+
+        event_queue = _get_ai_engine().get_event_queue(ai_session_id)
+        if event_queue is None:
+            session.active_ai_session_id = None
+            return jsonify({
+                "success": False,
+                "error": f"AI session {ai_session_id} not found",
+            }), 404
+
+        logger.info(
+            "SESSION %s ai_diagnose events bound ai_session=%s",
+            session_id,
+            ai_session_id,
+        )
+
+        def generate():
+            yield f"event: connected\ndata: {json.dumps({'session_id': session_id})}\n\n"
+
+            while True:
+                try:
+                    message = event_queue.get(timeout=60)
+                    yield message
+                    if message.startswith("event: done\n"):
+                        _clear_ai_binding(session)
+                        break
+                    if message.startswith("event: error\n"):
+                        _clear_ai_binding(session)
+                        break
+                except queue.Empty:
+                    yield ": keepalive\n\n"
+
+        return Response(
+            generate(),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    except KeyError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 404
+    except Exception as exc:
+        logger.exception("session_ai_diagnose_events failed")
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@session_bp.route("/ai_diagnose/retry", methods=["POST"])
+def session_ai_diagnose_retry():
+    """Retry AI diagnosis through the public session facade."""
+    data = request.json or {}
+    session_id = (data.get("session_id") or "").strip()
+    cached_payload_id = (data.get("cached_payload_id") or "").strip()
+
+    if not session_id:
+        return jsonify({"success": False, "error": "session_id required"}), 400
+    if not cached_payload_id:
+        return jsonify({"success": False, "error": "cached_payload_id required"}), 400
+
+    try:
+        orch = get_orchestrator()
+        session = orch.get_session(session_id)
+        if session.status != SessionStatus.RUNNING:
+            return jsonify({
+                "success": False,
+                "error": f"Session not running (status={session.status.value})",
+            }), 409
+        if session.workflow != "gds2":
+            return jsonify({
+                "success": False,
+                "error": f"AI diagnosis is not supported for workflow={session.workflow}",
+            }), 409
+
+        vehicle_context = _resolve_session_vehicle_context(session, data)
+        engine = _get_ai_engine()
+        if engine.is_active:
+            return jsonify({
+                "success": False,
+                "error": "AI diagnosis already in progress",
+            }), 409
+
+        ai_session_id = engine.retry_with_cached(cached_payload_id, vehicle_context)
+        session.active_ai_session_id = ai_session_id
+        _set_session_selection(
+            session,
+            module=vehicle_context.get("module", ""),
+            data_category=vehicle_context.get("data_category", ""),
+        )
+        orch.emit_progress(
+            session_id,
+            f"AI diagnosis retry started: {vehicle_context.get('module') or '-'} / {vehicle_context.get('data_category') or '-'}",
+        )
+        logger.info(
+            "SESSION %s ai_diagnose retry started ai_session=%s payload=%s",
+            session_id,
+            ai_session_id,
+            cached_payload_id,
+        )
+        return jsonify({
+            "success": True,
+            "session_id": session_id,
+            "ai_session_id": ai_session_id,
+            "message": "Retry started. Subscribe to /api/session/ai_diagnose/events for progress.",
+        })
+
+    except KeyError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except Exception as exc:
+        logger.exception("session_ai_diagnose_retry failed")
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@session_bp.route("/dtcs", methods=["POST"])
+def session_dtcs():
+    """Read DTCs through the public session facade."""
+    data = request.json or {}
+    session_id = (data.get("session_id") or "").strip()
+
+    if not session_id:
+        return jsonify({"success": False, "error": "session_id required"}), 400
+
+    try:
+        orch = get_orchestrator()
+        session = orch.get_session(session_id)
+        if session.status != SessionStatus.RUNNING:
+            return jsonify({
+                "success": False,
+                "error": f"Session not running (status={session.status.value})",
+            }), 409
+        if session.workflow != "gds2":
+            return jsonify({
+                "success": False,
+                "error": f"DTC read is not supported for workflow={session.workflow}",
+            }), 409
+
+        context = _resolve_session_vehicle_context(session, data)
+        backend = _get_backend()
+        state = backend.get_state()
+        current_page = backend.detect_current_page()
+
+        module_name = context.get("module", "")
+        data_category = context.get("data_category", "")
+
+        if module_name and not getattr(state, "current_module", ""):
+            backend.select_module(module_name)
+            _set_session_selection(session, module=module_name)
+            current_page = backend.detect_current_page()
+
+        if data_category and current_page != GDS2Page.DATA_DISPLAY.value:
+            backend.select_data_category(data_category)
+            _set_session_selection(session, data_category=data_category)
+
+        dtcs = backend.read_dtcs()
+        page_context = backend.detect_current_page()
+        orch.emit_progress(session_id, f"Read DTCs completed ({len(dtcs)} codes)")
+        logger.info("SESSION %s dtcs read count=%s page=%s", session_id, len(dtcs), page_context)
+        return jsonify({
+            "success": True,
+            "session_id": session_id,
+            "result": {
+                "dtcs": [
+                    {
+                        "code": dtc.code,
+                        "control_module": dtc.module,
+                        "module": dtc.module,
+                        "status": dtc.status,
+                        "description": dtc.description,
+                        "source_backend": dtc.source_backend,
+                    }
+                    for dtc in dtcs
+                ],
+                "dtc_count": len(dtcs),
+                "page_context": page_context,
+            },
+        })
+
+    except KeyError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except Exception as exc:
+        logger.exception("session_dtcs failed")
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@session_bp.route("/live_data/start", methods=["POST"])
+def session_live_data_start():
+    """Start live data streaming through the public session facade."""
+    data = request.json or {}
+    session_id = (data.get("session_id") or "").strip()
+    interval_ms = int(data.get("interval_ms", 100))
+
+    if not session_id:
+        return jsonify({"success": False, "error": "session_id required"}), 400
+
+    try:
+        orch = get_orchestrator()
+        session = orch.get_session(session_id)
+        if session.status != SessionStatus.RUNNING:
+            return jsonify({
+                "success": False,
+                "error": f"Session not running (status={session.status.value})",
+            }), 409
+        if session.workflow != "gds2":
+            return jsonify({
+                "success": False,
+                "error": f"Live data is not supported for workflow={session.workflow}",
+            }), 409
+
+        context = _resolve_session_vehicle_context(session, data)
+        data_category = context.get("data_category", "")
+        if not data_category:
+            return jsonify({"success": False, "error": "data_category required"}), 400
+
+        import diagnostics_api
+
+        payload = diagnostics_api.start_live_data_stream(data_category, interval_ms)
+        _set_session_selection(
+            session,
+            module=context.get("module", ""),
+            data_category=data_category,
+        )
+        _set_live_data_active(session, True)
+        orch.emit_progress(session_id, f"Live data started: {data_category}")
+        logger.info(
+            "SESSION %s live_data started category=%s interval=%sms",
+            session_id,
+            data_category,
+            interval_ms,
+        )
+        return jsonify({
+            "success": True,
+            "session_id": session_id,
+            **payload,
+        })
+
+    except KeyError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except Exception as exc:
+        logger.exception("session_live_data_start failed")
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@session_bp.route("/live_data/events")
+def session_live_data_events():
+    """SSE endpoint for session-scoped live data events."""
+    session_id = (request.args.get("session_id") or "").strip()
+    if not session_id:
+        return jsonify({"success": False, "error": "session_id required"}), 400
+
+    try:
+        session = get_orchestrator().get_session(session_id)
+        if not getattr(session, "live_data_active", False):
+            return jsonify({
+                "success": False,
+                "error": f"No active live data stream for {session_id}",
+            }), 404
+    except KeyError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 404
+
+    def generate():
+        client_queue = queue.Queue(maxsize=200)
+
+        with agent_lock:
+            agent_clients.append(client_queue)
+
+        try:
+            yield f"event: connected\ndata: {json.dumps({'session_id': session_id, 'message': 'Connected to stream'})}\n\n"
+
+            while True:
+                try:
+                    message = client_queue.get(timeout=30)
+                    yield message
+                except queue.Empty:
+                    yield ": keepalive\n\n"
+        except GeneratorExit:
+            pass
+        finally:
+            with agent_lock:
+                if client_queue in agent_clients:
+                    agent_clients.remove(client_queue)
+
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@session_bp.route("/live_data/stop", methods=["POST"])
+def session_live_data_stop():
+    """Stop live data streaming through the public session facade."""
+    data = request.json or {}
+    session_id = (data.get("session_id") or "").strip()
+
+    if not session_id:
+        return jsonify({"success": False, "error": "session_id required"}), 400
+
+    try:
+        orch = get_orchestrator()
+        session = orch.get_session(session_id)
+        if session.status != SessionStatus.RUNNING:
+            return jsonify({
+                "success": False,
+                "error": f"Session not running (status={session.status.value})",
+            }), 409
+
+        import diagnostics_api
+
+        payload = diagnostics_api.stop_live_data_stream()
+        _set_live_data_active(session, False)
+        orch.emit_progress(session_id, "Live data stopped")
+        logger.info("SESSION %s live_data stopped", session_id)
+        return jsonify({
+            "success": True,
+            "session_id": session_id,
+            **payload,
+        })
+
+    except KeyError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 404
+    except Exception as exc:
+        logger.exception("session_live_data_stop failed")
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@session_bp.route("/navigate/start", methods=["POST"])
+def session_navigate_start():
+    """Start agentic navigation through the public session facade."""
+    data = request.json or {}
+    session_id = (data.get("session_id") or "").strip()
+    goal = (data.get("goal") or "Navigate to Data Display").strip()
+
+    if not session_id:
+        return jsonify({"success": False, "error": "session_id required"}), 400
+
+    try:
+        orch = get_orchestrator()
+        session = orch.get_session(session_id)
+        if session.status != SessionStatus.RUNNING:
+            return jsonify({
+                "success": False,
+                "error": f"Session not running (status={session.status.value})",
+            }), 409
+        if session.workflow != "gds2":
+            return jsonify({
+                "success": False,
+                "error": f"Navigation is not supported for workflow={session.workflow}",
+            }), 409
+        if session.active_navigation_session_id:
+            return jsonify({
+                "success": False,
+                "error": "Navigation already in progress for this session",
+            }), 409
+
+        import navigate_api
+
+        nav_session = navigate_api.start_navigation_session(goal)
+        session.active_navigation_session_id = nav_session.session_id
+        session.updated_at = time.time()
+        orch.emit_progress(session_id, f"Navigation started: {goal}")
+        logger.info(
+            "SESSION %s navigation started nav_session=%s goal=%s",
+            session_id,
+            nav_session.session_id,
+            goal,
+        )
+        return jsonify({
+            "success": True,
+            "session_id": session_id,
+            "navigation_session_id": nav_session.session_id,
+            "status": nav_session.status.value,
+        })
+
+    except KeyError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except Exception as exc:
+        logger.exception("session_navigate_start failed")
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@session_bp.route("/navigate/events")
+def session_navigate_events():
+    """SSE endpoint for session-scoped navigation events."""
+    session_id = (request.args.get("session_id") or "").strip()
+    if not session_id:
+        return jsonify({"success": False, "error": "session_id required"}), 400
+
+    try:
+        session = get_orchestrator().get_session(session_id)
+        nav_session_id = getattr(session, "active_navigation_session_id", None)
+        if not nav_session_id:
+            return jsonify({
+                "success": False,
+                "error": f"No active navigation session for {session_id}",
+            }), 404
+
+        import navigate_api
+
+        nav_session = navigate_api.get_navigation_session(nav_session_id)
+    except KeyError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 404
+    except Exception as exc:
+        logger.exception("session_navigate_events failed to bind")
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+    def generate():
+        yield f"event: connected\ndata: {json.dumps({'session_id': session_id})}\n\n"
+
+        while True:
+            try:
+                event = nav_session.event_queue.get(timeout=1)
+            except queue.Empty:
+                yield ": keepalive\n\n"
+                if nav_session.thread and not nav_session.thread.is_alive():
+                    while not nav_session.event_queue.empty():
+                        try:
+                            event = nav_session.event_queue.get_nowait()
+                            event_type = event.get("type", "progress")
+                            yield f"event: {event_type}\ndata: {json.dumps(event)}\n\n"
+                        except queue.Empty:
+                            break
+                    nav_status = (
+                        nav_session.status
+                        if isinstance(nav_session.status, str)
+                        else nav_session.status.value
+                    )
+                    if nav_status in ("completed", "failed", "aborted"):
+                        _clear_navigation_binding(session)
+                        yield f"event: done\ndata: {json.dumps({'type': 'done', 'status': nav_status, 'error': nav_session.error})}\n\n"
+                        return
+                continue
+
+            event_type = event.get("type", "progress")
+            if event_type == "progress":
+                nav_session.current_page = event.get("page", nav_session.current_page)
+            elif event_type == "decision_required":
+                nav_session.status = navigate_api.NavSessionStatus.AWAITING_DECISION
+                nav_session.pending_decision_id = event.get("decision_id")
+                nav_session.pending_items = event.get("items", [])
+            elif event_type == "done":
+                selections = event.get("selections") or {}
+                module = str(selections.get("module") or "").strip()
+                data_category = str(
+                    selections.get("data_category")
+                    or selections.get("selected_item")
+                    or ""
+                ).strip()
+                if module or data_category:
+                    _set_session_selection(
+                        session,
+                        module=module if module else None,
+                        data_category=data_category if data_category else None,
+                    )
+                _clear_navigation_binding(session)
+            elif event_type == "error":
+                _clear_navigation_binding(session)
+
+            yield f"event: {event_type}\ndata: {json.dumps(event)}\n\n"
+
+            if event_type in ("done", "error"):
+                return
+
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@session_bp.route("/navigate/decision", methods=["POST"])
+def session_navigate_decision():
+    """Submit a navigation decision through the public session facade."""
+    data = request.json or {}
+    session_id = (data.get("session_id") or "").strip()
+    decision_id = (data.get("decision_id") or "").strip()
+    selected_item = (data.get("selected_item") or "").strip()
+
+    if not session_id:
+        return jsonify({"success": False, "error": "session_id required"}), 400
+    if not selected_item:
+        return jsonify({"success": False, "error": "selected_item required"}), 400
+
+    try:
+        session = get_orchestrator().get_session(session_id)
+        nav_session_id = getattr(session, "active_navigation_session_id", None)
+        if not nav_session_id:
+            return jsonify({
+                "success": False,
+                "error": f"No active navigation session for {session_id}",
+            }), 404
+
+        import navigate_api
+
+        payload = navigate_api.submit_navigation_decision(
+            nav_session_id,
+            decision_id=decision_id,
+            selected_item=selected_item,
+        )
+        logger.info(
+            "SESSION %s navigation decision submitted nav_session=%s selected=%s",
+            session_id,
+            nav_session_id,
+            selected_item,
+        )
+        return jsonify({
+            "success": True,
+            "session_id": session_id,
+            "navigation_session_id": nav_session_id,
+            "selected_item": payload["selected_item"],
+        })
+
+    except KeyError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        message = str(exc)
+        status_code = 409 if "awaiting a decision" in message else 400
+        return jsonify({"success": False, "error": message}), status_code
+    except Exception as exc:
+        logger.exception("session_navigate_decision failed")
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@session_bp.route("/navigate/abort", methods=["POST"])
+def session_navigate_abort():
+    """Abort the active navigation sub-session for a business session."""
+    data = request.json or {}
+    session_id = (data.get("session_id") or "").strip()
+
+    if not session_id:
+        return jsonify({"success": False, "error": "session_id required"}), 400
+
+    try:
+        session = get_orchestrator().get_session(session_id)
+        nav_session_id = getattr(session, "active_navigation_session_id", None)
+        if not nav_session_id:
+            return jsonify({
+                "success": False,
+                "error": f"No active navigation session for {session_id}",
+            }), 404
+
+        import navigate_api
+
+        payload = navigate_api.abort_navigation_session(nav_session_id)
+        _clear_navigation_binding(session)
+        return jsonify({
+            "success": True,
+            "session_id": session_id,
+            "navigation_session_id": nav_session_id,
+            "status": payload["status"],
+        })
+
+    except KeyError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except Exception as exc:
+        logger.exception("session_navigate_abort failed")
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@session_bp.route("/navigate/status")
+def session_navigate_status():
+    """Return navigation sub-session status by business session id."""
+    session_id = (request.args.get("session_id") or "").strip()
+    if not session_id:
+        return jsonify({"success": False, "error": "session_id required"}), 400
+
+    try:
+        session = get_orchestrator().get_session(session_id)
+        nav_session_id = getattr(session, "active_navigation_session_id", None)
+        if not nav_session_id:
+            return jsonify({
+                "success": False,
+                "error": f"No active navigation session for {session_id}",
+            }), 404
+
+        import navigate_api
+
+        nav_session = navigate_api.get_navigation_session(nav_session_id)
+        payload: dict[str, Any] = {
+            "success": True,
+            "session_id": session_id,
+            "navigation_session_id": nav_session_id,
+            "status": nav_session.status.value,
+            "goal": nav_session.goal,
+            "current_page": nav_session.current_page,
+        }
+        if nav_session.pending_decision_id:
+            payload["pending_decision"] = {
+                "decision_id": nav_session.pending_decision_id,
+                "items": nav_session.pending_items,
+            }
+        if nav_session.error:
+            payload["error"] = nav_session.error
+        return jsonify(payload)
+
+    except KeyError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 404
+    except Exception as exc:
+        logger.exception("session_navigate_status failed")
         return jsonify({"success": False, "error": str(exc)}), 500
 
 
@@ -1154,6 +2009,10 @@ def session_abort():
     try:
         orch = get_orchestrator()
         reason = (data.get("reason") or "").strip()
+        session = orch.get_session(session_id)
+        _abort_active_navigation(session)
+        _abort_active_live_data(session)
+        _abort_active_ai(session)
         session = orch.abort_session(session_id, reason)
         logger.info("SESSION %s aborted reason=%s", session_id, reason or "user")
         return jsonify({

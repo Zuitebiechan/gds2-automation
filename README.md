@@ -22,7 +22,10 @@ Key cloud ports:
 
 - `9000` — reverse VCI listener
 - `9001` — local proxy listener (virtual DLL side)
-- `8080` — Flask API (`/api/diagnose/*`, `/api/navigate/*`, `/api/session/*`)
+- `8080` – Flask API (`/api/diagnose/*`, `/api/navigate/*`, `/api/session/*`)
+
+Public/product-facing flows now converge on `/api/session/*`.
+`/api/diagnose/*` and `/api/navigate/*` remain available as lower-level capability/debug surfaces.
 
 ---
 
@@ -49,6 +52,12 @@ In the local Diagnostics window:
 5. Optionally use **Read DTCs** or **Start Stream**
 
 This keeps GDS2 on the Data Display page where DTC and live-data operations are valid.
+
+Recommended API layering:
+
+- `session` — stable business facade for session, selection, DTC, live data, AI, and session-scoped navigation
+- `diagnose` — lower-level diagnostics capability layer
+- `navigate` — lower-level agentic navigation/debug layer
 
 ---
 
@@ -202,6 +211,8 @@ Use the latest client build; errors are surfaced with explicit dialogs instead o
 ---
 
 ## Documentation Index
+- `agent_docs/cloud_infrastructure.md` — AWS VM lifecycle and worker provisioning direction
+- `agent_docs/aws_local_zones_deployment.md` — North America AWS Local Zones deployment plan for the current single-worker architecture
 
 - `CLAUDE.md` — concise operational guide
 - `agent_docs/architecture.md` — end-to-end architecture and platform layering

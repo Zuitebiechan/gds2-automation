@@ -846,10 +846,15 @@ class DiagnosticsWindow:
         """Continue the existing GUI path once session diagnostics is allowed."""
         self._start_button.configure(state=tk.DISABLED)
         self._set_status_text("Starting navigation to Data Display...")
+        path = "/api/navigate/start"
+        payload = {"goal": "Navigate to Data Display"}
+        if self._session_id:
+            path = "/api/session/navigate/start"
+            payload["session_id"] = self._session_id
         self._api_call(
             "POST",
-            "/api/navigate/start",
-            json_data={"goal": "Navigate to Data Display"},
+            path,
+            json_data=payload,
             callback_event="navigate_start_result",
         )
 
@@ -919,10 +924,16 @@ class DiagnosticsWindow:
         self._set_ai_result_text("")
         self._append_agent_message("user", f"启动 AI Diagnostics（{module} / {category}）")
 
+        path = "/api/diagnose/ai_diagnose"
+        payload = {"module": module, "data_category": category, "vin": self._vin}
+        if self._session_id:
+            path = "/api/session/ai_diagnose"
+            payload["session_id"] = self._session_id
+
         self._api_call(
             "POST",
-            "/api/diagnose/ai_diagnose",
-            json_data={"module": module, "data_category": category, "vin": self._vin},
+            path,
+            json_data=payload,
             callback_event="ai_start_result",
         )
 
@@ -942,15 +953,21 @@ class DiagnosticsWindow:
         self._set_ai_result_text("")
         self._append_agent_message("user", "重试 AI Diagnostics")
 
+        path = "/api/diagnose/ai_diagnose/retry"
+        payload = {
+            "cached_payload_id": self._cached_payload_id,
+            "vin": self._vin,
+            "module": module,
+            "data_category": category,
+        }
+        if self._session_id:
+            path = "/api/session/ai_diagnose/retry"
+            payload["session_id"] = self._session_id
+
         self._api_call(
             "POST",
-            "/api/diagnose/ai_diagnose/retry",
-            json_data={
-                "cached_payload_id": self._cached_payload_id,
-                "vin": self._vin,
-                "module": module,
-                "data_category": category,
-            },
+            path,
+            json_data=payload,
             callback_event="ai_start_result",
         )
     def _on_read_dtcs_clicked(self) -> None:
@@ -978,10 +995,11 @@ class DiagnosticsWindow:
         self._append_agent_message("user", "执行 Read DTCs")
         self._api_call(
             "POST",
-            "/api/session/execute",
+            "/api/session/dtcs",
             json_data={
                 "session_id": self._session_id,
-                "action": "read_dtcs",
+                "module": self._selected_module.get().strip(),
+                "data_category": self._selected_data_category.get().strip(),
             },
             callback_event="dtcs_result",
         )
@@ -1066,17 +1084,31 @@ class DiagnosticsWindow:
         self._stop_stream_button.configure(state=tk.DISABLED)
         self._set_status_text("Starting live stream...")
 
+        path = "/api/diagnose/live_data/start"
+        payload = {"data_category": category}
+        if self._session_id:
+            path = "/api/session/live_data/start"
+            payload = {
+                "session_id": self._session_id,
+                "module": module,
+                "data_category": category,
+            }
         self._api_call(
             "POST",
-            "/api/diagnose/live_data/start",
-            json_data={"data_category": category},
+            path,
+            json_data=payload,
             callback_event="live_start_result",
         )
 
     def _on_stop_stream_clicked(self) -> None:
         self._stop_stream_button.configure(state=tk.DISABLED)
         self._set_status_text("Stopping live stream...")
-        self._api_call("POST", "/api/diagnose/live_data/stop", callback_event="live_stop_result")
+        path = "/api/diagnose/live_data/stop"
+        payload = None
+        if self._session_id:
+            path = "/api/session/live_data/stop"
+            payload = {"session_id": self._session_id}
+        self._api_call("POST", path, json_data=payload, callback_event="live_stop_result")
 
     def _on_data_category_selected(self) -> None:
         """Enable actions only after user selects a data category."""
@@ -1445,7 +1477,11 @@ class DiagnosticsWindow:
         self._sse_running = True
 
         def _sse_worker() -> None:
-            url = f"{self._api_base}/api/diagnose/live_data/events"
+            if self._session_id:
+                path = f"/api/session/live_data/events?session_id={self._session_id}"
+            else:
+                path = "/api/diagnose/live_data/events"
+            url = f"{self._api_base}{path}"
             try:
                 with requests.get(url, stream=True, timeout=None) as response:
                     self._sse_response = response
@@ -1696,7 +1732,11 @@ class DiagnosticsWindow:
         self._ai_sse_running = True
 
         def _ai_sse_worker() -> None:
-            url = f"{self._api_base}/api/diagnose/ai_diagnose/events?session_id={session_id}"
+            if self._session_id and session_id == self._session_id:
+                path = f"/api/session/ai_diagnose/events?session_id={session_id}"
+            else:
+                path = f"/api/diagnose/ai_diagnose/events?session_id={session_id}"
+            url = f"{self._api_base}{path}"
             try:
                 with requests.get(url, stream=True, timeout=(10, 300)) as response:
                     self._ai_sse_response = response
@@ -1876,15 +1916,6 @@ class DiagnosticsWindow:
         )
 
     def _on_session_abort_clicked(self) -> None:
-        if self._navigate_session_id:
-            self._api_call(
-                "POST",
-                "/api/navigate/abort",
-                json_data={"session_id": self._navigate_session_id},
-                callback_event="navigate_abort_result",
-            )
-            self._navigate_session_id = None
-
         if not self._session_id:
             return
         self._session_abort_button.configure(state=tk.DISABLED)
@@ -2122,6 +2153,7 @@ class DiagnosticsWindow:
 
     def _handle_session_abort_result(self, payload: dict[str, Any]) -> None:
         if payload.get("success"):
+            self._navigate_session_id = None
             self._session_status_var.set("Abort request sent.")
             self._set_session_hint("正在结束 Session...")
             self._append_agent_message("agent", "Abort 请求已发送，正在结束 Session。")
@@ -2363,9 +2395,12 @@ class DiagnosticsWindow:
     def _navigate_submit_decision(self, decision_id: str, selected_item: str) -> None:
         if not self._navigate_session_id:
             return
+        path = "/api/navigate/decision"
+        if self._session_id:
+            path = "/api/session/navigate/decision"
         self._api_call(
             "POST",
-            "/api/navigate/decision",
+            path,
             json_data={
                 "session_id": self._navigate_session_id,
                 "decision_id": decision_id,
@@ -2443,7 +2478,11 @@ class DiagnosticsWindow:
         self._navigate_sse_running = True
 
         def _navigate_sse_worker() -> None:
-            url = f"{self._api_base}/api/navigate/events?session_id={session_id}"
+            if self._session_id and session_id == self._session_id:
+                path = f"/api/session/navigate/events?session_id={session_id}"
+            else:
+                path = f"/api/navigate/events?session_id={session_id}"
+            url = f"{self._api_base}{path}"
             try:
                 with requests.get(url, stream=True, timeout=(10, None)) as response:
                     self._navigate_sse_response = response

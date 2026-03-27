@@ -106,6 +106,7 @@ Deferred until multi-user/session-manager work becomes a priority.
 - [x] Session lifecycle, decision gates, and SSE event flow
 - [x] Session-aware start/select/decision/abort/status endpoints
 - [x] GDS2-backed session operations through retained executor/adapter path
+- [x] Public facade convergence for GUI/product-facing flows (`session` wrapping AI/live-data/navigation)
 - [ ] Broader convergence between session orchestration and the long-term multi-backend platform model
 
 ## Phase 4: Session Manager / Productization (Planned)

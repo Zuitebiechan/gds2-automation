@@ -172,6 +172,11 @@ class Session:
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     error: Optional[str] = None
+    selected_module: str = ""
+    selected_data_category: str = ""
+    active_navigation_session_id: Optional[str] = None
+    active_ai_session_id: Optional[str] = None
+    live_data_active: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -189,6 +194,11 @@ class Session:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "error": self.error,
+            "selected_module": self.selected_module,
+            "selected_data_category": self.selected_data_category,
+            "active_navigation_session_id": self.active_navigation_session_id,
+            "active_ai_session_id": self.active_ai_session_id,
+            "live_data_active": self.live_data_active,
         }
 
 

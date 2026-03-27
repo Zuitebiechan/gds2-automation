@@ -90,6 +90,7 @@ class AIEngine:
         self._session_lock = threading.Lock()
         self._event_queues: dict[str, queue.Queue] = {}
         self._worker_thread: Optional[threading.Thread] = None
+        self._cancelled_sessions: set[str] = set()
 
     @property
     def is_active(self) -> bool:
@@ -181,6 +182,24 @@ class AIEngine:
 
         return session_id
 
+    def abort_session(self, session_id: str) -> bool:
+        """Request cooperative cancellation for an AI session."""
+        with self._session_lock:
+            if session_id not in self._event_queues and self._active_session != session_id:
+                return False
+            self._cancelled_sessions.add(session_id)
+
+        self._emit(session_id, 'error', {
+            'error': 'Aborted by user',
+            'retryable': False,
+        })
+        logger.info("AI-DIAG %s abort requested", session_id)
+        return True
+
+    def _is_cancelled(self, session_id: str) -> bool:
+        with self._session_lock:
+            return session_id in self._cancelled_sessions
+
     def _emit(self, session_id: str, event_type: str, data: dict[str, Any]) -> None:
         """Push an SSE event to the session queue."""
         q = self._event_queues.get(session_id)
@@ -242,6 +261,9 @@ class AIEngine:
             last_collection_log = -1
             try:
                 while time.time() - start_time < self._collection_seconds:
+                    if self._is_cancelled(session_id):
+                        logger.info("AI-DIAG %s cancelled during collection", session_id)
+                        return
                     elapsed = int(time.time() - start_time)
                     if collector_guard_error['error']:
                         self._emit(session_id, 'error', {
@@ -345,6 +367,9 @@ class AIEngine:
     ) -> None:
         """Retry worker: skip collection, go straight to LLM."""
         try:
+            if self._is_cancelled(session_id):
+                logger.info("AI-DIAG %s cancelled before retry start", session_id)
+                return
             delta_payload = cached.get('delta_payload', {})
             # Re-cache for potential further retries
             cache_data = {
@@ -397,6 +422,9 @@ class AIEngine:
                 brand=brand,
                 software=software,
             ):
+                if self._is_cancelled(session_id):
+                    logger.info("AI-DIAG %s cancelled during LLM streaming", session_id)
+                    return
                 full_response.append(chunk)
                 chunk_count += 1
                 self._emit(session_id, 'llm_chunk', {
@@ -521,6 +549,7 @@ class AIEngine:
         with self._session_lock:
             if self._active_session == session_id:
                 self._active_session = None
+            self._cancelled_sessions.discard(session_id)
 
         # Delay queue cleanup to give SSE consumer time to read remaining events.
         # The queue will be garbage-collected after the timer fires.

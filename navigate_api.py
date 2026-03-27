@@ -73,6 +73,97 @@ def _get_session(session_id: str) -> NavSession:
     return session
 
 
+def start_navigation_session(goal: str = "Navigate to Data Display") -> NavSession:
+    """Create and start an internal navigation session."""
+    normalized_goal = (goal or "Navigate to Data Display").strip()
+    session_id = uuid.uuid4().hex[:16]
+    session = NavSession(session_id=session_id, goal=normalized_goal)
+
+    thread = threading.Thread(
+        target=_run_graph_thread,
+        args=(session,),
+        daemon=True,
+        name=f"nav-graph-{session_id}",
+    )
+    session.thread = thread
+
+    with _sessions_lock:
+        _sessions[session_id] = session
+
+    thread.start()
+    logger.info("NAV session=%s started goal=%s", session_id, normalized_goal)
+    return session
+
+
+def get_navigation_session(session_id: str) -> NavSession:
+    """Return an internal navigation session by id."""
+    return _get_session(session_id)
+
+
+def submit_navigation_decision(
+    session_id: str,
+    *,
+    decision_id: str = "",
+    selected_item: str,
+) -> dict[str, Any]:
+    """Resume a paused navigation session with a selected item."""
+    session = _get_session(session_id)
+
+    if session.status != NavSessionStatus.AWAITING_DECISION:
+        raise ValueError(
+            f"Session is not awaiting a decision (status={session.status.value})"
+        )
+
+    if decision_id and session.pending_decision_id and decision_id != session.pending_decision_id:
+        raise ValueError(
+            f"Decision ID mismatch: expected '{session.pending_decision_id}', got '{decision_id}'"
+        )
+
+    session.status = NavSessionStatus.RUNNING
+    session.pending_decision_id = None
+    session.pending_items = []
+    session.decision_queue.put({"selected_item": selected_item})
+    logger.info("NAV session=%s decision=%s selected=%s", session_id, decision_id or "-", selected_item)
+
+    return {
+        "success": True,
+        "session_id": session_id,
+        "selected_item": selected_item,
+    }
+
+
+def abort_navigation_session(session_id: str) -> dict[str, Any]:
+    """Abort a running or paused internal navigation session."""
+    session = _get_session(session_id)
+
+    if session.status in (
+        NavSessionStatus.COMPLETED,
+        NavSessionStatus.FAILED,
+        NavSessionStatus.ABORTED,
+    ):
+        raise ValueError(f"Session already terminated (status={session.status.value})")
+
+    session.status = NavSessionStatus.ABORTED
+    session.error = "Aborted by user"
+
+    try:
+        session.decision_queue.put_nowait({"selected_item": ""})
+    except queue.Full:
+        pass
+
+    try:
+        session.event_queue.put_nowait({"type": "error", "error": "Aborted by user"})
+    except queue.Full:
+        pass
+
+    logger.info("NAV session=%s aborted", session_id)
+    return {
+        "success": True,
+        "session_id": session_id,
+        "status": session.status.value,
+    }
+
+
 def _run_graph_thread(session: NavSession) -> None:
     """Background thread that runs the LangGraph navigation graph."""
     try:
@@ -133,27 +224,11 @@ def navigate_start():
     data = request.json or {}
     goal = (data.get("goal") or "Navigate to Data Display").strip()
 
-    session_id = uuid.uuid4().hex[:16]
-    session = NavSession(session_id=session_id, goal=goal)
-
-    # Start the graph in a background thread
-    thread = threading.Thread(
-        target=_run_graph_thread,
-        args=(session,),
-        daemon=True,
-        name=f"nav-graph-{session_id}",
-    )
-    session.thread = thread
-
-    with _sessions_lock:
-        _sessions[session_id] = session
-
-    thread.start()
-    logger.info("NAV session=%s started goal=%s", session_id, goal)
+    session = start_navigation_session(goal)
 
     return jsonify({
         "success": True,
-        "session_id": session_id,
+        "session_id": session.session_id,
         "status": session.status.value,
     })
 
@@ -265,34 +340,19 @@ def navigate_decision():
         return jsonify({"success": False, "error": "selected_item required"}), 400
 
     try:
-        session = _get_session(session_id)
+        return jsonify(
+            submit_navigation_decision(
+                session_id,
+                decision_id=decision_id,
+                selected_item=selected_item,
+            )
+        )
     except KeyError as exc:
         return jsonify({"success": False, "error": str(exc)}), 404
-
-    if session.status != NavSessionStatus.AWAITING_DECISION:
-        return jsonify({
-            "success": False,
-            "error": f"Session is not awaiting a decision (status={session.status.value})",
-        }), 409
-
-    if decision_id and session.pending_decision_id and decision_id != session.pending_decision_id:
-        return jsonify({
-            "success": False,
-            "error": f"Decision ID mismatch: expected '{session.pending_decision_id}', got '{decision_id}'",
-        }), 400
-
-    # Resume the graph
-    session.status = NavSessionStatus.RUNNING
-    session.pending_decision_id = None
-    session.pending_items = []
-    session.decision_queue.put({"selected_item": selected_item})
-    logger.info("NAV session=%s decision=%s selected=%s", session_id, decision_id or "-", selected_item)
-
-    return jsonify({
-        "success": True,
-        "session_id": session_id,
-        "selected_item": selected_item,
-    })
+    except ValueError as exc:
+        message = str(exc)
+        status_code = 409 if "awaiting a decision" in message or "terminated" in message else 400
+        return jsonify({"success": False, "error": message}), status_code
 
 
 # ---------------------------------------------------------------------------
@@ -345,35 +405,8 @@ def navigate_abort():
         return jsonify({"success": False, "error": "session_id required"}), 400
 
     try:
-        session = _get_session(session_id)
+        return jsonify(abort_navigation_session(session_id))
     except KeyError as exc:
         return jsonify({"success": False, "error": str(exc)}), 404
-
-    if session.status in (NavSessionStatus.COMPLETED, NavSessionStatus.FAILED, NavSessionStatus.ABORTED):
-        return jsonify({
-            "success": False,
-            "error": f"Session already terminated (status={session.status.value})",
-        }), 400
-
-    session.status = NavSessionStatus.ABORTED
-    session.error = "Aborted by user"
-
-    # Unblock decision_queue if graph is waiting
-    try:
-        session.decision_queue.put_nowait({"selected_item": ""})
-    except queue.Full:
-        pass
-
-    # Push abort event
-    try:
-        session.event_queue.put_nowait({"type": "error", "error": "Aborted by user"})
-    except queue.Full:
-        pass
-
-    logger.info("NAV session=%s aborted", session_id)
-
-    return jsonify({
-        "success": True,
-        "session_id": session_id,
-        "status": session.status.value,
-    })
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400

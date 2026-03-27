@@ -177,6 +177,71 @@ def _make_data_display_guard(backend: GDS2DiagnosticBackend, data_category: str,
     return guard
 
 
+def start_live_data_stream(data_category: str, interval_ms: int = 100) -> dict[str, object]:
+    """Start the shared live-data collector and return the JSON payload."""
+    global _diag_collector
+
+    if not data_category:
+        raise ValueError("Data category required")
+
+    if _diag_collector and _diag_collector.is_running:
+        return {
+            "success": True,
+            "message": "Streaming already running",
+        }
+
+    if _diag_collector is not None:
+        try:
+            _diag_collector.stop()
+        except Exception:
+            pass
+        _diag_collector = None
+
+    backend = _get_backend()
+    backend.select_data_category(data_category)
+    page_guard = _make_data_display_guard(backend, data_category, mode='stream')
+
+    def on_guard_event(event: dict[str, object]) -> None:
+        message = event.get('message')
+        if message:
+            broadcast_to_agent_clients('guard', {'message': message})
+
+    _diag_collector = AgentDataCollector(
+        on_snapshot=on_agent_snapshot,
+        on_param_change=on_agent_param_change,
+        on_dtc_change=on_agent_dtc_change,
+        on_error=on_agent_error,
+        page_guard=page_guard,
+        on_guard_event=on_guard_event,
+        interval_ms=interval_ms,
+    )
+    _diag_collector.start()
+
+    logger.info("DIAG live start category=%s interval=%sms", data_category, interval_ms)
+    return {
+        "success": True,
+        "message": "Live data streaming started",
+        "interval_ms": interval_ms,
+    }
+
+
+def stop_live_data_stream() -> dict[str, object]:
+    """Stop the shared live-data collector and return the JSON payload."""
+    global _diag_collector
+
+    if _diag_collector:
+        _diag_collector.stop()
+        _diag_collector = None
+
+    backend = _get_backend()
+    current_page = backend.detect_current_page()
+    if current_page == GDS2Page.DATA_DISPLAY.value:
+        backend.go_back()
+
+    logger.info("DIAG live stopped")
+    return {"success": True, "message": "Live data stopped"}
+
+
 @diagnostics_bp.route('/start', methods=['POST'])
 def diagnose_start():
     """One-button start: start + auto-connect + modules."""
@@ -307,8 +372,6 @@ def diagnose_select_module():
 @diagnostics_bp.route('/live_data/start', methods=['POST'])
 def diagnose_live_data_start():
     """Navigate to Data Display and start live Agent streaming."""
-    global _diag_collector
-
     data = request.json or {}
     data_category = data.get('data_category')
     interval_ms = data.get('interval_ms', 100)
@@ -317,42 +380,7 @@ def diagnose_live_data_start():
         return jsonify({"success": False, "error": "Data category required"}), 400
 
     try:
-        if _diag_collector and _diag_collector.is_running:
-            return jsonify({"success": True, "message": "Streaming already running"})
-
-        if _diag_collector is not None:
-            try:
-                _diag_collector.stop()
-            except Exception:
-                pass
-            _diag_collector = None
-
-        backend = _get_backend()
-        backend.select_data_category(data_category)
-        page_guard = _make_data_display_guard(backend, data_category, mode='stream')
-
-        def on_guard_event(event: dict[str, object]) -> None:
-            message = event.get('message')
-            if message:
-                broadcast_to_agent_clients('guard', {'message': message})
-
-        _diag_collector = AgentDataCollector(
-            on_snapshot=on_agent_snapshot,
-            on_param_change=on_agent_param_change,
-            on_dtc_change=on_agent_dtc_change,
-            on_error=on_agent_error,
-            page_guard=page_guard,
-            on_guard_event=on_guard_event,
-            interval_ms=interval_ms,
-        )
-        _diag_collector.start()
-
-        logger.info("DIAG live start category=%s interval=%sms", data_category, interval_ms)
-        return jsonify({
-            "success": True,
-            "message": "Live data streaming started",
-            "interval_ms": interval_ms,
-        })
+        return jsonify(start_live_data_stream(data_category, interval_ms))
 
     except WorkflowRecoveryError as e:
         logger.info(f"diagnose_live_data_start recovered: {e}")
@@ -412,20 +440,8 @@ def diagnose_live_data_events():
 @diagnostics_bp.route('/live_data/stop', methods=['POST'])
 def diagnose_live_data_stop():
     """Stop diagnostics live streaming and go back from Data Display."""
-    global _diag_collector
-
     try:
-        if _diag_collector:
-            _diag_collector.stop()
-            _diag_collector = None
-
-        backend = _get_backend()
-        current_page = backend.detect_current_page()
-        if current_page == GDS2Page.DATA_DISPLAY.value:
-            backend.go_back()
-
-        logger.info("DIAG live stopped")
-        return jsonify({"success": True, "message": "Live data stopped"})
+        return jsonify(stop_live_data_stream())
 
     except Exception as e:
         logger.exception("diagnose_live_data_stop failed")
