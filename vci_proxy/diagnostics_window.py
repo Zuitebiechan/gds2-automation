@@ -842,6 +842,17 @@ class DiagnosticsWindow:
     # UI callbacks
     # ------------------------------------------------------------------
 
+    def _start_navigation_to_data_display(self) -> None:
+        """Continue the existing GUI path once session diagnostics is allowed."""
+        self._start_button.configure(state=tk.DISABLED)
+        self._set_status_text("Starting navigation to Data Display...")
+        self._api_call(
+            "POST",
+            "/api/navigate/start",
+            json_data={"goal": "Navigate to Data Display"},
+            callback_event="navigate_start_result",
+        )
+
     def _on_start_clicked(self) -> None:
         self._start_button.configure(state=tk.DISABLED)
         self._set_status_text("Connecting...")
@@ -873,9 +884,9 @@ class DiagnosticsWindow:
         self._append_agent_message("agent", "正在启动 LangGraph 导航流程...")
         self._api_call(
             "POST",
-            "/api/navigate/start",
-            json_data={"goal": "Navigate to Data Display"},
-            callback_event="navigate_start_result",
+            "/api/session/start_diagnostics",
+            json_data={"session_id": self._session_id},
+            callback_event="session_start_exec_result",
         )
 
     def _on_ai_diagnose_clicked(self) -> None:
@@ -1114,6 +1125,26 @@ class DiagnosticsWindow:
     def _handle_session_start_exec_result(self, payload: dict[str, Any]) -> None:
         """Handle session-mode start diagnostics via /api/session/execute."""
         self._start_button.configure(state=tk.NORMAL)
+
+        if payload.get("success"):
+            if payload.get("decision_required"):
+                decision = payload.get("decision")
+                self._set_server_connected(True)
+                self._set_status_text("Diagnostics gate requires confirmation.")
+                self._session_status_var.set("Awaiting diagnostics gate decision...")
+                self._append_agent_message(
+                    "agent",
+                    "Tunnel quality gate requires your decision before navigation continues.",
+                )
+                if decision:
+                    if not self._prompt_decision(decision):
+                        self._show_decision_modal(decision)
+                return
+
+            self._set_server_connected(True)
+            self._session_status_var.set("Diagnostics gate passed. Continuing navigation...")
+            self._start_navigation_to_data_display()
+            return
 
         if not payload.get("success"):
             error_text = self._error_message(payload, "Unable to start diagnostics in session mode.")
@@ -2004,11 +2035,31 @@ class DiagnosticsWindow:
             if str(payload.get("status", "")).lower() == "running":
                 self._start_button.configure(state=tk.NORMAL)
 
+            if payload.get("cancelled"):
+                self._set_status_text("Diagnostics start cancelled.")
+                self._session_status_var.set("Diagnostics start cancelled.")
+                self._append_agent_message(
+                    "agent",
+                    "Diagnostics start was cancelled at the tunnel quality gate.",
+                )
+                self._refresh_action_buttons()
+                return
+
             if payload.get("resumed"):
                 resume_action = payload.get("resume_action", "")
                 result = payload.get("result") or {}
 
-                if resume_action == "select_module":
+                if resume_action == "start_diagnostics":
+                    self._set_status_text("Decision applied. Continuing navigation...")
+                    self._session_status_var.set("Decision applied. Continuing...")
+                    self._append_agent_message(
+                        "agent",
+                        "Diagnostics gate override accepted. Continuing navigation...",
+                    )
+                    self._start_navigation_to_data_display()
+                    self._refresh_action_buttons()
+                    return
+                elif resume_action == "select_module":
                     categories = result.get("data_categories") or []
                     if not isinstance(categories, list):
                         categories = []
