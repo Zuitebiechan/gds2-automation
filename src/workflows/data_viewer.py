@@ -262,9 +262,12 @@ class DataViewerWorkflow:
                             )
                         except TimeoutError:
                             logger.warning("Page did not transition after Module Diagnostics selection")
-                        self.controller._current_page = self.controller.detect_current_page()
-                        self.controller._current_page = GDS2Page.MODULE_LIST
-                        return
+                        current = self.controller.detect_current_page()
+                        self.controller._current_page = current
+                        if current != GDS2Page.MODULE_LIST:
+                            current = GDS2Page.MODULE_LIST
+                            self.controller._current_page = current
+                        break
 
         # If at Data Display/Data List, navigate back to Module List
         if current in (GDS2Page.DATA_DISPLAY, GDS2Page.DATA_LIST, GDS2Page.SUB_DATA_LIST):
