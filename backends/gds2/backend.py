@@ -66,6 +66,7 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
         self._active_stream: LiveDataStream | None = None
         self._latest_live_data: list[LiveDataPoint] = []
         self._stream_error: str | None = None
+        self._last_start_result: dict[str, Any] | None = None
 
     @property
     def name(self) -> str:
@@ -82,11 +83,14 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
         """Return the latest converted live data points from the active stream."""
         return list(self._latest_live_data)
 
-    def start(self) -> None:
+    def start(self) -> dict[str, Any]:
         """Start GDS2 and auto-connect through the existing workflow."""
         try:
-            self._runtime.ensure_ready()
+            result = self._runtime.ensure_ready()
+            self._last_start_result = result if isinstance(result, dict) else None
+            return dict(self._last_start_result or {})
         except Exception as exc:  # pragma: no cover - runtime integration wrapper
+            self._last_start_result = None
             raise RuntimeError(f"Failed to start GDS2 backend: {exc}") from exc
 
     def preflight(self) -> dict[str, Any]:
@@ -99,6 +103,7 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
     def stop(self) -> None:
         """Stop active collection and clear monitoring state."""
         try:
+            self._last_start_result = None
             if self._active_collector is not None and self._active_collector.is_running:
                 self._active_collector.stop()
 
@@ -115,6 +120,7 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
     def connect_vci(self, device: str) -> None:
         """Connect to a VCI device using the existing workflow."""
         try:
+            self._last_start_result = None
             self._get_workflow().connect_device(device)
         except Exception as exc:  # pragma: no cover - runtime integration wrapper
             raise RuntimeError(f"Failed to connect GDS2 VCI '{device}': {exc}") from exc
@@ -128,11 +134,19 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
                 raise RuntimeError("No modules available on the module list page")
             return modules
         except Exception as exc:  # pragma: no cover - runtime integration wrapper
+            cached_modules = self._get_cached_start_modules()
+            if cached_modules:
+                logger.info(
+                    "GDS2 module page check failed; using cached start result modules (%s)",
+                    len(cached_modules),
+                )
+                return cached_modules
             raise RuntimeError(f"Failed to get GDS2 modules: {exc}") from exc
 
     def select_module(self, module: str) -> None:
         """Select a diagnostic module."""
         try:
+            self._last_start_result = None
             self._get_workflow().select_module(module)
         except Exception as exc:  # pragma: no cover - runtime integration wrapper
             raise RuntimeError(f"Failed to select GDS2 module '{module}': {exc}") from exc
@@ -150,6 +164,7 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
 
     def go_back(self) -> None:
         """Navigate back one step in GDS2."""
+        self._last_start_result = None
         self._get_controller().go_back()
 
     def detect_current_page(self) -> str:
@@ -195,6 +210,7 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
     def select_data_category(self, category: str) -> list[str]:
         """Select a data category and return any available sub-items."""
         try:
+            self._last_start_result = None
             result = self._get_workflow().select_data_category(category)
             if isinstance(result, dict):
                 sub_categories = result.get("sub_categories")
@@ -319,6 +335,14 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
         """Record stream errors from AgentDataCollector callbacks."""
         self._stream_error = message
         logger.warning("GDS2 live data stream error: %s", message)
+
+    def _get_cached_start_modules(self) -> list[str]:
+        if not isinstance(self._last_start_result, dict):
+            return []
+        modules = self._last_start_result.get("modules")
+        if not isinstance(modules, list):
+            return []
+        return [str(module) for module in modules if str(module).strip()]
 
     def _get_available_items(self) -> list[str]:
         """Read current-page list items through the controller helper/fallback."""

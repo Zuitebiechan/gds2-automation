@@ -348,12 +348,23 @@ def _run_start_diagnostics(session_id: str, *, resumed: bool = False) -> dict[st
 
     orch.emit_progress(session_id, "Starting GDS2 diagnostics...")
     backend = _get_backend()
-    backend.start()
+    start_result = backend.start() or {}
     state = backend.get_state()
+    modules = start_result.get("modules") if isinstance(start_result, dict) else None
+    if not isinstance(modules, list) or not modules:
+        modules = backend.get_modules()
     result = {
-        "modules": backend.get_modules(),
-        "vin": state.extra.get("vin"),
-        "device": state.extra.get("device"),
+        "modules": modules,
+        "vin": (
+            start_result.get("vin")
+            if isinstance(start_result, dict) and start_result.get("vin")
+            else state.extra.get("vin")
+        ),
+        "device": (
+            start_result.get("device")
+            if isinstance(start_result, dict) and start_result.get("device")
+            else state.extra.get("device")
+        ),
     }
     orch.emit_progress(session_id, "GDS2 diagnostics started", result)
     logger.info(

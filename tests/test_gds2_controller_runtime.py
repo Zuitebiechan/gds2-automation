@@ -63,6 +63,23 @@ def test_backend_start_delegates_to_controller_runtime():
     runtime.ensure_ready.assert_called_once_with()
 
 
+def test_backend_get_modules_uses_cached_start_result_when_page_check_is_unstable():
+    runtime = MagicMock()
+    runtime.ensure_ready.return_value = {
+        "modules": ["ECM", "TCM"],
+        "vin": "VIN123",
+        "device": "VCI Proxy (Remote)",
+    }
+    backend = GDS2DiagnosticBackend(runtime=runtime)
+    backend._require_page = MagicMock(side_effect=RuntimeError("still at diagnostics_menu"))
+
+    backend.start()
+    modules = backend.get_modules()
+
+    assert modules == ["ECM", "TCM"]
+    backend._require_page.assert_called_once()
+
+
 def test_backend_get_state_delegates_to_runtime_status():
     expected = BackendState(
         current_page="module_list",

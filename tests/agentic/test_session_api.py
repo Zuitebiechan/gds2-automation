@@ -132,6 +132,20 @@ class _FakeBackendWithQuality:
         return ["ECM", "TCM"]
 
 
+class _FakeBackendWithStartResult(_FakeBackendWithQuality):
+    def __init__(self, quality: dict[str, object], start_result: dict[str, object]):
+        super().__init__(quality)
+        self.start_result = start_result
+
+    def start(self) -> dict[str, object]:
+        self.start_calls += 1
+        return dict(self.start_result)
+
+    def get_modules(self) -> list[str]:
+        self.modules_calls += 1
+        raise AssertionError("session_start_diagnostics should reuse modules returned by start()")
+
+
 def _patch_backend(monkeypatch: pytest.MonkeyPatch, backend: object) -> None:
     monkeypatch.setattr(session_api, "_backend", backend)
     monkeypatch.setattr(session_api, "_get_backend", lambda: backend)
@@ -358,6 +372,30 @@ class TestSessionNetworkGate:
         assert data["network_quality"]["grade"] == "warn"
         assert data["connection_epoch"] == "epoch-warn"
         assert backend.start_calls == 1
+
+    def test_warn_quality_reuses_start_result_without_second_module_read(self, client, monkeypatch):
+        start = _start_gm(client)
+        backend = _FakeBackendWithStartResult(
+            _make_network_quality("warn", epoch="epoch-warn"),
+            {
+                "modules": ["ECM", "TCM"],
+                "vin": "VIN123",
+                "device": "VCI Proxy (Remote)",
+            },
+        )
+        _patch_backend(monkeypatch, backend)
+
+        resp = client.post("/api/session/start_diagnostics", json={"session_id": start["session_id"]})
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["success"] is True
+        assert data["result"]["modules"] == ["ECM", "TCM"]
+        assert data["result"]["vin"] == "VIN123"
+        assert data["result"]["device"] == "VCI Proxy (Remote)"
+        assert data["network_quality"]["grade"] == "warn"
+        assert backend.start_calls == 1
+        assert backend.modules_calls == 0
 
     def test_status_reports_network_fields_and_invalidates_override_on_epoch_change(
         self,
