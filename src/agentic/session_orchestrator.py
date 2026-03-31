@@ -174,9 +174,6 @@ class Session:
     error: Optional[str] = None
     selected_module: str = ""
     selected_data_category: str = ""
-    active_navigation_session_id: Optional[str] = None
-    active_ai_session_id: Optional[str] = None
-    live_data_active: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -196,9 +193,6 @@ class Session:
             "error": self.error,
             "selected_module": self.selected_module,
             "selected_data_category": self.selected_data_category,
-            "active_navigation_session_id": self.active_navigation_session_id,
-            "active_ai_session_id": self.active_ai_session_id,
-            "live_data_active": self.live_data_active,
         }
 
 
@@ -285,6 +279,17 @@ class SessionOrchestrator:
     def _touch(self, session: Session) -> None:
         session.updated_at = time.time()
 
+    def _find_active_session(self) -> Optional[Session]:
+        terminal = {
+            SessionStatus.COMPLETED,
+            SessionStatus.FAILED,
+            SessionStatus.ABORTED,
+        }
+        for session in self._sessions.values():
+            if session.status not in terminal:
+                return session
+        return None
+
     # -- public API ----------------------------------------------------------
 
     def start_session(self, context: SessionContext) -> Session:
@@ -295,6 +300,13 @@ class SessionOrchestrator:
         ``awaiting_decision`` with a ``decision_required`` event asking
         the user to select a workflow.
         """
+        active_session = self._find_active_session()
+        if active_session is not None:
+            raise RuntimeError(
+                "Another session is already active "
+                f"(session_id={active_session.session_id}, status={active_session.status.value})"
+            )
+
         session_id = uuid.uuid4().hex[:16]
         session = Session(session_id=session_id, context=context)
         self._sessions[session_id] = session
@@ -334,6 +346,10 @@ class SessionOrchestrator:
             })
 
         return session
+
+    def get_active_session(self) -> Optional[Session]:
+        """Return the current non-terminal session, if one exists."""
+        return self._find_active_session()
 
     def get_session(self, session_id: str) -> Session:
         """Return the session or raise ``KeyError``."""
