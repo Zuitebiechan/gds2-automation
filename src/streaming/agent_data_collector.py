@@ -33,6 +33,11 @@ from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
+_AGENT_JSON_ENCODINGS: Tuple[str, ...] = ("gbk", "utf-8", "latin-1")
+_AGENT_AVAILABILITY_MAX_AGE_SECONDS = 10.0
+_AGENT_AVAILABILITY_READ_ATTEMPTS = 3
+_AGENT_AVAILABILITY_RETRY_DELAY_SECONDS = 0.05
+
 
 @dataclass
 class DTCInfo:
@@ -366,6 +371,32 @@ class AgentDataCollector:
     def json_path(self) -> Path:
         return self._json_path
 
+    def _read_agent_json(
+        self,
+        *,
+        attempts: int = 1,
+        retry_delay_sec: float = 0.0,
+    ) -> Tuple[Optional[dict], int, Optional[str], Optional[str]]:
+        """Read Agent JSON with encoding fallback and optional retry."""
+        last_error: Optional[Exception] = None
+
+        for attempt in range(1, max(1, attempts) + 1):
+            for encoding in _AGENT_JSON_ENCODINGS:
+                try:
+                    with open(self._json_path, 'r', encoding=encoding) as f:
+                        data = json.load(f)
+                    return data, attempt, None, encoding
+                except Exception as exc:
+                    last_error = exc
+
+            if attempt < max(1, attempts) and retry_delay_sec > 0:
+                time.sleep(retry_delay_sec)
+
+        error = None
+        if last_error is not None:
+            error = f"{type(last_error).__name__}: {last_error}"
+        return None, max(1, attempts), error, None
+
     def check_agent_available(self) -> dict:
         """Check if the Agent JSON file exists and is being updated."""
         result = {
@@ -374,6 +405,10 @@ class AgentDataCollector:
             'exists': self._json_path.exists(),
             'age_seconds': None,
             'extraction_count': None,
+            'version': None,
+            'encoding': None,
+            'attempts': 0,
+            'error': None,
         }
 
         if not self._json_path.exists():
@@ -383,18 +418,35 @@ class AgentDataCollector:
             mtime = self._json_path.stat().st_mtime
             age = time.time() - mtime
             result['age_seconds'] = round(age, 1)
+            data, attempts, error, encoding = self._read_agent_json(
+                attempts=_AGENT_AVAILABILITY_READ_ATTEMPTS,
+                retry_delay_sec=_AGENT_AVAILABILITY_RETRY_DELAY_SECONDS,
+            )
+            result['attempts'] = attempts
+            result['encoding'] = encoding
+            result['error'] = error
 
-            with open(self._json_path, 'r', encoding='gbk') as f:
-                data = json.load(f)
+            if data is None:
+                logger.debug(
+                    "Agent availability read failed path=%s attempts=%s age=%s error=%s",
+                    self._json_path,
+                    attempts,
+                    result['age_seconds'],
+                    error,
+                )
+                return result
 
             result['extraction_count'] = data.get('extractionCount', 0)
             result['version'] = data.get('version', '1.0')
-
-            # Consider available if file was updated within last 10 seconds
-            result['available'] = age < 10.0
+            result['available'] = age < _AGENT_AVAILABILITY_MAX_AGE_SECONDS
 
         except Exception as e:
-            logger.debug(f"Error checking agent availability: {e}")
+            result['error'] = f"{type(e).__name__}: {e}"
+            logger.debug(
+                "Error checking agent availability path=%s error=%s",
+                self._json_path,
+                result['error'],
+            )
 
         return result
 
@@ -498,15 +550,7 @@ class AgentDataCollector:
 
             self._last_mtime = mtime
 
-            # Try multiple encodings (GBK for Chinese Windows, UTF-8 as fallback)
-            data = None
-            for encoding in ['gbk', 'utf-8', 'latin-1']:
-                try:
-                    with open(self._json_path, 'r', encoding=encoding) as f:
-                        data = json.load(f)
-                    break
-                except (UnicodeDecodeError, json.JSONDecodeError):
-                    continue
+            data, _attempts, _error, _encoding = self._read_agent_json()
 
             if data is None:
                 return None

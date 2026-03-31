@@ -247,7 +247,11 @@ class AIEngine:
             # Check agent availability
             avail = collector.check_agent_available()
             if not avail.get('available'):
-                logger.warning("AI-DIAG %s aborted: Java Agent unavailable", session_id)
+                logger.warning(
+                    "AI-DIAG %s aborted: Java Agent unavailable details=%s",
+                    session_id,
+                    avail,
+                )
                 self._emit(session_id, 'error', {
                     'error': 'Java Agent not available. Start GDS2 with the agent.',
                     'retryable': False,
