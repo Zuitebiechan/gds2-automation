@@ -12,6 +12,7 @@ import threading
 import time
 from typing import Any, Literal, Optional, cast
 
+from diagnostic_platform.runtime.worker_runtime import OperationCancelledError
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from .state import NavigationState
@@ -177,6 +178,8 @@ def _wait_for_enter_enabled(controller, timeout: float = 30.0, poll_interval: fl
     start = _time.time()
     while _time.time() - start < timeout:
         try:
+            if hasattr(controller, "_check_cancel"):
+                controller._check_cancel()
             buttons = controller.nav.get_buttons()
             for btn in buttons:
                 if btn.get('text') == 'Enter':
@@ -190,7 +193,11 @@ def _wait_for_enter_enabled(controller, timeout: float = 30.0, poll_interval: fl
                         logger.debug("Enter button found but disabled, waiting...")
                         break  # found button, but disabled — keep polling
         except Exception as e:
+            if isinstance(e, OperationCancelledError):
+                raise
             logger.debug(f"Button poll error (non-fatal): {e}")
+        if hasattr(controller, "_check_cancel"):
+            controller._check_cancel()
         _time.sleep(poll_interval)
     logger.warning(f"Enter button did not become enabled within {timeout}s")
     return False
@@ -264,6 +271,8 @@ def _handle_vehicle_selection(state: NavigationState) -> dict:
                 }],
                 "step_count": state.get("step_count", 0) + 1,
             }
+    except OperationCancelledError:
+        raise
     except Exception as e:
         logger.exception(f"Vehicle selection handler error: {e}")
         return {
@@ -920,6 +929,8 @@ def agent_node(state: NavigationState) -> dict:
     # 1. Get fresh snapshot
     try:
         snapshot = _invoke_tool(get_current_snapshot, {})
+    except OperationCancelledError:
+        raise
     except Exception as e:
         logger.exception(f"Agent: failed to get snapshot: {e}")
         return {
@@ -992,6 +1003,8 @@ def agent_node(state: NavigationState) -> dict:
             )
             break  # success
 
+        except OperationCancelledError:
+            raise
         except Exception as e:
             error_str = str(e)
             is_rate_limit = (
@@ -1062,6 +1075,8 @@ def agent_node(state: NavigationState) -> dict:
                 "agent_reasoning": f"Called {tool_call['name']}({tool_call.get('args', {})})",
                 **tool_result,
             }
+        except OperationCancelledError:
+            raise
         except Exception as e:
             retry_count = state.get("retry_count", 0)
             if retry_count < MAX_AGENT_RETRIES:

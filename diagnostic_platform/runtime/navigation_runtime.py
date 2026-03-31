@@ -13,6 +13,7 @@ from enum import Enum
 from typing import Any
 
 from .worker_runtime import WorkerRuntime
+from .worker_runtime import OperationCancelledError
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,14 @@ class NavSession:
     pending_decision_id: str | None = None
     pending_items: list[Any] = field(default_factory=list)
     error: str | None = None
+    cancel_event: Any = field(default_factory=threading.Event, repr=False)
+
+    def cancel(self) -> None:
+        self.cancel_event.set()
+
+    def check_cancelled(self) -> None:
+        if self.cancel_event.is_set():
+            raise OperationCancelledError(f"Navigation session {self.session_id} cancelled")
 
 
 def get_navigation_session(runtime: WorkerRuntime, session_id: str) -> NavSession:
@@ -116,6 +125,7 @@ def abort_navigation_session(runtime: WorkerRuntime, session_id: str) -> dict[st
 
     session.status = NavSessionStatus.ABORTED
     session.error = "Aborted by user"
+    session.cancel()
 
     try:
         session.decision_queue.put_nowait({"selected_item": ""})
@@ -205,6 +215,7 @@ def _run_graph_thread(session: NavSession) -> None:
             goal=session.goal,
             event_queue=session.event_queue,
             decision_queue=session.decision_queue,
+            cancel_checker=session.check_cancelled,
         )
         session.final_state = final
         if session.status not in (NavSessionStatus.ABORTED,):
@@ -221,6 +232,11 @@ def _run_graph_thread(session: NavSession) -> None:
                     final_page,
                     len(final.get("navigation_history", [])) if final else 0,
                 )
+    except OperationCancelledError:
+        logger.info("NAV session=%s cancellation acknowledged", session.session_id)
+        if session.status != NavSessionStatus.ABORTED:
+            session.status = NavSessionStatus.ABORTED
+            session.error = "Aborted by user"
     except Exception as exc:
         logger.exception("Navigation graph thread failed: %s", exc)
         session.status = NavSessionStatus.FAILED

@@ -13,12 +13,19 @@ from langgraph.checkpoint.memory import MemorySaver
 import logging
 import queue
 import time
-from typing import Any, cast
+from typing import Any, Callable, cast
+
+from diagnostic_platform.runtime.worker_runtime import OperationCancelledError
 
 from .state import NavigationState
 from .nodes import deterministic_node, agent_node, human_node, should_continue
 
 logger = logging.getLogger(__name__)
+
+
+def _check_cancel(cancel_checker: Callable[[], None] | None) -> None:
+    if cancel_checker is not None:
+        cancel_checker()
 
 
 def _record_trace(state: dict):
@@ -340,6 +347,7 @@ def run_with_event_queue(
     event_queue: queue.Queue,
     decision_queue: queue.Queue,
     thread_id: str | None = None,
+    cancel_checker: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """
     Run the navigation graph driven by queues instead of console input.
@@ -369,6 +377,8 @@ def run_with_event_queue(
     if thread_id is None:
         thread_id = f"api_{_uuid.uuid4().hex[:8]}"
 
+    from . import tools as agentic_tools
+
     graph = create_navigation_graph()
     config = cast(Any, {"configurable": {"thread_id": thread_id}})
     initial_state = make_initial_state(goal)
@@ -377,12 +387,16 @@ def run_with_event_queue(
     decision_counter = 0
 
     try:
+        agentic_tools.set_cancel_checker(cancel_checker)
         while True:
+            _check_cancel(cancel_checker)
             # Stream graph events
             for event in graph.stream(cast(Any, current_input), cast(Any, config)):
+                _check_cancel(cancel_checker)
                 if not isinstance(event, dict):
                     continue
                 for node_name, node_output in event.items():
+                    _check_cancel(cancel_checker)
                     if node_name == "__end__" or not isinstance(node_output, dict):
                         continue
                     history = node_output.get("navigation_history", [])
@@ -396,6 +410,7 @@ def run_with_event_queue(
                     })
 
             # Check graph state after streaming completes
+            _check_cancel(cancel_checker)
             state = graph.get_state(cast(Any, config))
 
             if not state.next:
@@ -429,14 +444,21 @@ def run_with_event_queue(
                 })
 
                 # Block until user submits a decision
-                try:
-                    decision = decision_queue.get(timeout=300)  # 5 min timeout
-                except _queue_mod.Empty:
-                    event_queue.put({
-                        "type": "error",
-                        "error": "Decision timeout: no user response within 5 minutes",
-                    })
-                    return state.values
+                decision_deadline = time.time() + 300
+                while True:
+                    _check_cancel(cancel_checker)
+                    remaining = max(0.0, decision_deadline - time.time())
+                    if remaining <= 0:
+                        event_queue.put({
+                            "type": "error",
+                            "error": "Decision timeout: no user response within 5 minutes",
+                        })
+                        return state.values
+                    try:
+                        decision = decision_queue.get(timeout=min(1.0, remaining))
+                        break
+                    except _queue_mod.Empty:
+                        continue
 
                 selected_item = decision.get("selected_item", "")
                 if not selected_item:
@@ -466,6 +488,9 @@ def run_with_event_queue(
                 })
                 return state.values
 
+    except OperationCancelledError:
+        logger.info("run_with_event_queue cancelled goal=%s thread_id=%s", goal, thread_id)
+        raise
     except Exception as exc:
         logger.exception(f"run_with_event_queue failed: {exc}")
         event_queue.put({"type": "error", "error": str(exc)})
@@ -473,3 +498,8 @@ def run_with_event_queue(
             return graph.get_state(cast(Any, config)).values
         except Exception:
             return {}
+    finally:
+        try:
+            agentic_tools.clear_cancel_checker()
+        except Exception:
+            pass

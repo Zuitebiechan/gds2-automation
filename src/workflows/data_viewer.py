@@ -994,8 +994,23 @@ class DataViewerWorkflow:
                         result.page.value,
                     )
                     if result.page == GDS2Page.VEHICLE_SELECTION:
-                        logger.info("Home landed on Vehicle Selection - returning")
-                        return
+                        logger.info("Home landed on Vehicle Selection - waiting for final destination")
+                        if hasattr(self.controller, "wait_for_page_stable"):
+                            try:
+                                stabilized = self.controller.wait_for_page_stable(
+                                    timeout=3.0,
+                                    stable_duration=0.8,
+                                    poll_interval=0.2,
+                                )
+                                logger.info(
+                                    "Home stabilized at %s after transient vehicle_selection",
+                                    stabilized.value,
+                                )
+                            except TimeoutError:
+                                logger.info("Home stabilization timed out; rechecking current page")
+                        else:
+                            self._sleep(1.0)
+                        continue
                     self._sleep(0.5)
                     continue
                 else:

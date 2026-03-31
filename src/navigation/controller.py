@@ -467,6 +467,7 @@ class NavigationController:
         """
         with self._lock:
             try:
+                self._check_cancel()
                 result = self.nav.click_button("Back")
                 if not result.get('success'):
                     return NavigationResult(
@@ -525,6 +526,7 @@ class NavigationController:
         """
         with self._lock:
             try:
+                self._check_cancel()
                 result = self.nav.click_button("Home")
                 if not result.get('success'):
                     return NavigationResult(
@@ -578,6 +580,7 @@ class NavigationController:
         """
         with self._lock:
             try:
+                self._check_cancel()
                 result = self.nav.click_button("Vehicle Menu")
                 if not result.get('success'):
                     return NavigationResult(
@@ -855,6 +858,7 @@ class NavigationController:
             NavigationResult
         """
         with self._lock:
+            self._check_cancel()
             items = self.wait_for_list(list_index)
             if not items:
                 return NavigationResult(
@@ -883,6 +887,7 @@ class NavigationController:
                     context=self._context.copy(),
                 )
 
+            self._check_cancel()
             result = self.nav.select_list_item(list_index, target_index, double_click=double_click)
             if not result.get('success'):
                 return NavigationResult(
@@ -922,6 +927,7 @@ class NavigationController:
             NavigationResult
         """
         with self._lock:
+            self._check_cancel()
             result = self.nav.click_button(button_text)
             if not result.get('success'):
                 return NavigationResult(
@@ -1125,6 +1131,7 @@ class NavigationController:
         """
         with self._lock:
             try:
+                self._check_cancel()
                 result = self.nav.click_button("Diagnostics")
                 if not result.get('success'):
                     return NavigationResult(
@@ -1291,6 +1298,7 @@ class NavigationController:
                     )
 
                 # Click Disconnect button
+                self._check_cancel()
                 result = self.nav.click_button("Disconnect")
                 if not result.get('success'):
                     return NavigationResult(
@@ -1350,6 +1358,7 @@ class NavigationController:
                     )
 
                 # Click Select Device button
+                self._check_cancel()
                 result = self.nav.click_button("Select Device")
                 if not result.get('success'):
                     return NavigationResult(
@@ -1407,6 +1416,7 @@ class NavigationController:
         """
         with self._lock:
             try:
+                self._check_cancel()
                 result = self.nav.click_button("Enter")
                 if not result.get('success'):
                     return NavigationResult(
@@ -1434,6 +1444,7 @@ class NavigationController:
                 # If still at Vehicle Selection after first attempt, retry
                 if new_page == GDS2Page.VEHICLE_SELECTION:
                     logger.info("NAV vehicle_selection retrying Enter")
+                    self._check_cancel()
                     self.nav.click_button("Enter")
                     try:
                         new_page = self.wait_for_page_transition(
@@ -1450,6 +1461,7 @@ class NavigationController:
                 # click Back to return to Diagnostics Menu so user can choose
                 if new_page == GDS2Page.MODULE_LIST:
                     logger.info("NAV module_list auto-skip detected; returning to diagnostics_menu")
+                    self._check_cancel()
                     back_result = self.nav.click_button("Back")
                     if back_result.get('success'):
                         try:
@@ -1531,6 +1543,7 @@ class NavigationController:
             - choices: Sub-category list if SUB_DATA_LIST
         """
         with self._lock:
+            self._check_cancel()
             items = self.wait_for_list()
             if not items:
                 return NavigationResult(
@@ -1559,6 +1572,7 @@ class NavigationController:
                 )
 
             # Select the item
+            self._check_cancel()
             result = self.nav.select_list_item(0, target_index, double_click=True)
             if not result.get('success'):
                 return NavigationResult(
@@ -1625,6 +1639,7 @@ class NavigationController:
             NavigationResult with page info (should be DATA_DISPLAY)
         """
         with self._lock:
+            self._check_cancel()
             items = self.wait_for_list()
             if not items:
                 return NavigationResult(
@@ -1652,6 +1667,7 @@ class NavigationController:
                     context=self._context.copy(),
                 )
 
+            self._check_cancel()
             result = self.nav.select_list_item(0, target_index, double_click=True)
             if not result.get('success'):
                 return NavigationResult(

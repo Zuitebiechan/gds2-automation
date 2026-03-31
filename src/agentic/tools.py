@@ -10,11 +10,25 @@ from typing import Dict, Any, List
 import logging
 import threading
 
+from diagnostic_platform.runtime.worker_runtime import OperationCancelledError
+
 logger = logging.getLogger(__name__)
 
 # Lazy-loaded controller (shared across tools)
 _controller = None
 _controller_lock = threading.Lock()
+_cancel_checker = None
+
+
+def set_cancel_checker(cancel_checker) -> None:
+    global _cancel_checker
+    _cancel_checker = cancel_checker
+    if _controller is not None and hasattr(_controller, "set_cancel_checker"):
+        _controller.set_cancel_checker(cancel_checker)
+
+
+def clear_cancel_checker() -> None:
+    set_cancel_checker(None)
 
 
 def get_controller():
@@ -29,6 +43,8 @@ def get_controller():
             if _controller is None:
                 from ..navigation.controller import NavigationController
                 _controller = NavigationController()
+    if hasattr(_controller, "set_cancel_checker"):
+        _controller.set_cancel_checker(_cancel_checker)
     return _controller
 
 
@@ -79,6 +95,8 @@ def click_button(button_text: str) -> Dict[str, Any]:
             "error": None,
         }
 
+    except OperationCancelledError:
+        raise
     except Exception as e:
         logger.exception(f"Tool: click_button error: {e}")
         return {"success": False, "snapshot": None, "error": str(e)}
@@ -119,6 +137,8 @@ def select_list_item(item_text: str) -> Dict[str, Any]:
             "error": None,
         }
 
+    except OperationCancelledError:
+        raise
     except Exception as e:
         logger.exception(f"Tool: select_list_item error: {e}")
         return {"success": False, "snapshot": None, "choices": None, "error": str(e)}
@@ -136,6 +156,8 @@ def get_current_snapshot() -> Dict[str, Any]:
 
     try:
         return _snapshot_from_controller(controller)
+    except OperationCancelledError:
+        raise
     except Exception as e:
         logger.exception(f"Tool: get_current_snapshot error: {e}")
         return {"page": "UNKNOWN", "buttons": [], "lists": [], "context": {}, "error": str(e)}
@@ -161,6 +183,8 @@ def go_back() -> Dict[str, Any]:
             "error": result.error,
         }
 
+    except OperationCancelledError:
+        raise
     except Exception as e:
         logger.exception(f"Tool: go_back error: {e}")
         return {"success": False, "snapshot": None, "error": str(e)}
@@ -186,6 +210,8 @@ def go_home() -> Dict[str, Any]:
             "error": result.error,
         }
 
+    except OperationCancelledError:
+        raise
     except Exception as e:
         logger.exception(f"Tool: go_home error: {e}")
         return {"success": False, "snapshot": None, "error": str(e)}
@@ -204,6 +230,8 @@ def get_list_items() -> Dict[str, Any]:
     try:
         items = controller.get_list_items(0)
         return {"items": items, "count": len(items)}
+    except OperationCancelledError:
+        raise
     except Exception as e:
         logger.exception(f"Tool: get_list_items error: {e}")
         return {"items": [], "count": 0, "error": str(e)}
