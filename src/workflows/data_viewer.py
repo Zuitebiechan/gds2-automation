@@ -145,7 +145,9 @@ class DataViewerWorkflow:
             if not enter_enabled:
                 raise RuntimeError("Enter button did not become enabled within 30 seconds")
 
+            self._check_cancel()
             status("Entering vehicle...")
+            self._check_cancel()
             result = self.controller.click_enter()
             if not result.success:
                 raise RuntimeError(f"Failed to enter vehicle: {result.error}")
@@ -262,7 +264,9 @@ class DataViewerWorkflow:
             if not enter_enabled:
                 raise RuntimeError("Enter button did not become enabled within 30 seconds")
 
+            self._check_cancel()
             status("Entering vehicle...")
+            self._check_cancel()
             result = self.controller.click_enter()
             if not result.success:
                 raise RuntimeError(f"Failed to enter vehicle: {result.error}")
@@ -901,7 +905,9 @@ class DataViewerWorkflow:
             raise RuntimeError(f"Device '{device_name}' not found in Device Explorer")
         self._sleep(0.5)
 
+        self._check_cancel()
         status("Clicking Continue...")
+        self._check_cancel()
         if not explorer.click_continue():
             raise RuntimeError("Failed to click Continue in Device Explorer")
         self._sleep(2)  # Wait for device to connect and page to load
@@ -977,16 +983,27 @@ class DataViewerWorkflow:
 
             # Check if Home is enabled
             if home_btn and home_btn.get('enabled', False):
+                self._check_cancel()
                 status("Clicking Home...")
                 result = self.controller.go_home()
                 if result.success:
-                    # go_home uses wait_for_page_transition internally
-                    return
+                    if result.page == GDS2Page.MAIN_MENU:
+                        return
+                    logger.info(
+                        "Home landed on %s instead of main_menu; re-evaluating",
+                        result.page.value,
+                    )
+                    if result.page == GDS2Page.VEHICLE_SELECTION:
+                        logger.info("Home landed on Vehicle Selection - returning")
+                        return
+                    self._sleep(0.5)
+                    continue
                 else:
                     logger.warning(f"Home click failed: {result.error}")
 
             # Home is disabled or not found - click Back
             if back_btn and back_btn.get('enabled', False):
+                self._check_cancel()
                 status(f"Going back... ({attempt + 1})")
                 result = self.controller.go_back()
                 if result.success:
@@ -1079,6 +1096,36 @@ class DataViewerWorkflow:
         # Last resort: go home and start over
         logger.warning("Fallback: going home to reach Module List")
         self._navigate_to_main_menu(status)
+
+    def reset_startup_state(self) -> None:
+        """Best-effort cleanup after cancelled or failed startup."""
+        self.set_cancel_checker(None)
+
+        try:
+            self.stop_monitoring()
+        except Exception as exc:
+            logger.debug("Ignoring monitoring cleanup failure during startup reset: %s", exc)
+
+        try:
+            self.controller.dismiss_warning_dialog()
+        except Exception as exc:
+            logger.debug("Ignoring warning-dialog cleanup failure: %s", exc)
+
+        try:
+            from ..native.device_explorer import DeviceExplorerController
+
+            explorer = DeviceExplorerController()
+            if explorer.is_visible() and explorer.find_dialog(timeout_sec=1.0):
+                if not explorer.click_cancel():
+                    explorer.close()
+                self._sleep(1.0)
+        except Exception as exc:
+            logger.debug("Ignoring device-explorer cleanup failure: %s", exc)
+
+        try:
+            self._navigate_to_main_menu(lambda msg: logger.info(msg))
+        except Exception as exc:
+            logger.warning("Failed to normalize startup state: %s", exc)
 
     def _extract_vin(self) -> Optional[str]:
         """Extract VIN from Agent page_context or latest HTML report."""

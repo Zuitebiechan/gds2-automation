@@ -120,10 +120,21 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
             self._latest_live_data = []
             self._stream_error = None
 
-            if self._workflow is not None and self._workflow.get_state().get("data_category"):
-                self._workflow.stop_monitoring()
+            workflow = getattr(self._runtime, "_workflow", None)
+            if workflow is not None and workflow.get_state().get("data_category"):
+                workflow.stop_monitoring()
         except Exception as exc:  # pragma: no cover - runtime integration wrapper
             raise RuntimeError(f"Failed to stop GDS2 backend: {exc}") from exc
+
+    def reset_startup_state(self) -> None:
+        """Best-effort cleanup for interrupted GDS2 startup flows."""
+        try:
+            self._last_start_result = None
+            workflow = getattr(self._runtime, "_workflow", None)
+            if workflow is not None:
+                workflow.reset_startup_state()
+        except Exception as exc:  # pragma: no cover - runtime integration wrapper
+            raise RuntimeError(f"Failed to reset GDS2 startup state: {exc}") from exc
 
     def connect_vci(self, device: str) -> None:
         """Connect to a VCI device using the existing workflow."""

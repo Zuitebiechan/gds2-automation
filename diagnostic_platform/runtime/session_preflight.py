@@ -163,6 +163,17 @@ def network_signature(payload: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
+def reset_backend_startup_state(backend: Any, *, session_id: str, reason: str) -> None:
+    resetter = getattr(backend, "reset_startup_state", None)
+    if not callable(resetter):
+        return
+    try:
+        resetter()
+        logger.info("SESSION %s startup state reset after %s", session_id, reason)
+    except Exception:
+        logger.exception("SESSION %s startup reset failed after %s", session_id, reason)
+
+
 def run_start_diagnostics(
     runtime: WorkerRuntime,
     *,
@@ -267,7 +278,11 @@ def run_start_diagnostics(
             payload["resume_action"] = "start_diagnostics"
         return payload
     except OperationCancelledError:
+        reset_backend_startup_state(backend, session_id=session_id, reason="cancel")
         logger.info("SESSION %s start_diagnostics cancelled", session_id)
+        raise
+    except Exception:
+        reset_backend_startup_state(backend, session_id=session_id, reason="failure")
         raise
     finally:
         runtime.finish_operation(operation)

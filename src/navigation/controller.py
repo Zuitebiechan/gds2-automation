@@ -521,7 +521,7 @@ class NavigationController:
         Click Home button to return to Main Menu.
 
         Returns:
-            NavigationResult with Main Menu page
+            NavigationResult with the actual landing page
         """
         with self._lock:
             try:
@@ -537,9 +537,10 @@ class NavigationController:
                 # Wait for page transition to Main Menu
                 old_page = self._current_page
                 try:
-                    self.wait_for_page_transition(old_page, timeout=15)
+                    new_page = self.wait_for_page_transition(old_page, timeout=15)
                 except TimeoutError:
                     logger.warning("Page did not transition after Home click")
+                    new_page = self.detect_current_page()
 
                 # Clear history and context
                 self._history.clear()
@@ -550,11 +551,11 @@ class NavigationController:
                     "device": self._context.get("device"),
                 }
 
-                self._current_page = GDS2Page.MAIN_MENU
+                self._current_page = new_page
 
                 return NavigationResult(
                     success=True,
-                    page=GDS2Page.MAIN_MENU,
+                    page=new_page,
                     context=self._context.copy(),
                 )
 
