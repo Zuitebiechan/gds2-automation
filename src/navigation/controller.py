@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Any
 
+from diagnostic_platform.runtime.worker_runtime import OperationCancelledError
+
 logger = logging.getLogger(__name__)
 
 
@@ -101,6 +103,20 @@ class NavigationController:
             "sub_category": None,
             "device": None,
         }
+        self._cancel_checker = None
+
+    def set_cancel_checker(self, cancel_checker) -> None:
+        self._cancel_checker = cancel_checker
+
+    def _check_cancel(self) -> None:
+        if self._cancel_checker is not None:
+            self._cancel_checker()
+
+    def _sleep(self, seconds: float, poll_interval: float = 0.1) -> None:
+        deadline = time.time() + max(0.0, seconds)
+        while time.time() < deadline:
+            self._check_cancel()
+            time.sleep(min(poll_interval, max(0.0, deadline - time.time())))
 
     @property
     def nav(self):
@@ -189,6 +205,7 @@ class NavigationController:
         """
         with self._lock:
             for attempt in range(1 + retries):
+                self._check_cancel()
                 try:
                     # 0. Native Device Explorer (Win32 dialog) takes precedence.
                     # Java Agent cannot see this dialog, so without this check
@@ -217,16 +234,18 @@ class NavigationController:
                     # Still UNKNOWN - retry if attempts remain
                     if attempt < retries:
                         logger.debug("Page detection returned UNKNOWN, retrying in %.1fs", retry_delay)
-                        time.sleep(retry_delay)
+                        self._sleep(retry_delay)
                         continue
 
                     self._current_page = GDS2Page.UNKNOWN
                     return GDS2Page.UNKNOWN
 
+                except OperationCancelledError:
+                    raise
                 except Exception as e:
                     logger.error(f"Page detection failed: {e}")
                     if attempt < retries:
-                        time.sleep(retry_delay)
+                        self._sleep(retry_delay)
                         continue
                     self._current_page = GDS2Page.UNKNOWN
                     return GDS2Page.UNKNOWN
@@ -281,6 +300,8 @@ class NavigationController:
         except TimeoutError:
             logger.debug("get_page_id timed out, falling back to heuristic")
             return GDS2Page.UNKNOWN
+        except OperationCancelledError:
+            raise
         except Exception as e:
             logger.debug(f"get_page_id failed: {e}, falling back to heuristic")
             return GDS2Page.UNKNOWN
@@ -400,6 +421,8 @@ class NavigationController:
 
             return GDS2Page.UNKNOWN
 
+        except OperationCancelledError:
+            raise
         except Exception as e:
             logger.error(f"Heuristic page detection failed: {e}")
             return GDS2Page.UNKNOWN
@@ -482,6 +505,8 @@ class NavigationController:
                     context=self._context.copy(),
                 )
 
+            except OperationCancelledError:
+                raise
             except Exception as e:
                 logger.exception(f"go_back failed: {e}")
                 return NavigationResult(
@@ -533,6 +558,8 @@ class NavigationController:
                     context=self._context.copy(),
                 )
 
+            except OperationCancelledError:
+                raise
             except Exception as e:
                 logger.exception(f"go_home failed: {e}")
                 return NavigationResult(
@@ -576,6 +603,8 @@ class NavigationController:
                     context=self._context.copy(),
                 )
 
+            except OperationCancelledError:
+                raise
             except Exception as e:
                 logger.exception(f"go_vehicle_menu failed: {e}")
                 return NavigationResult(
@@ -678,6 +707,7 @@ class NavigationController:
             transition_candidate = GDS2Page.UNKNOWN
             transition_candidate_hits = 0
             while time.time() - start < timeout:
+                self._check_cancel()
                 current = self.detect_current_page(retries=0)
                 last_detected = current
                 if current != from_page and current != GDS2Page.UNKNOWN:
@@ -690,7 +720,7 @@ class NavigationController:
                         transition_candidate_hits = 1
 
                     if transition_candidate_hits < 2:
-                        time.sleep(poll_interval)
+                        self._sleep(poll_interval)
                         continue
 
                     logger.info(
@@ -706,7 +736,7 @@ class NavigationController:
                     self.dismiss_warning_dialog()
                 transition_candidate = GDS2Page.UNKNOWN
                 transition_candidate_hits = 0
-                time.sleep(poll_interval)
+                self._sleep(poll_interval)
             raise TimeoutError(
                 f"Page did not transition from {from_page.value} within {timeout}s. "
                 f"Last detected: {last_detected.value}"
@@ -741,6 +771,7 @@ class NavigationController:
             stable_since = start
 
             while time.time() - start < timeout:
+                self._check_cancel()
                 current = self.detect_current_page(retries=0)
                 if current != last_page or current == GDS2Page.UNKNOWN:
                     last_page = current
@@ -753,7 +784,7 @@ class NavigationController:
                     )
                     self._current_page = current
                     return current
-                time.sleep(poll_interval)
+                self._sleep(poll_interval)
 
             raise TimeoutError(
                 f"Page did not stabilize within {timeout}s. "
@@ -788,16 +819,17 @@ class NavigationController:
             List of item texts, or [] on timeout
         """
         for attempt in range(max_attempts):
+            self._check_cancel()
             items = self.nav.get_list_items(list_index)
             if items:
                 # If caller told us what was on screen before, reject stale data
                 if previous_items is not None and items == previous_items:
                     logger.debug(f"List unchanged (stale), waiting... ({attempt + 1}/{max_attempts})")
-                    time.sleep(1)
+                    self._sleep(1)
                     continue
                 return items
             logger.debug(f"Waiting for list... ({attempt + 1}/{max_attempts})")
-            time.sleep(1)
+            self._sleep(1)
         return []
 
     # =========================================================================
@@ -962,7 +994,7 @@ class NavigationController:
                 for attempt in range(min(soft_retry_attempts, len(delays))):
                     delay = delays[attempt]
                     if delay > 0:
-                        time.sleep(delay)
+                        self._sleep(delay)
 
                     result = self.nav.click_button("OK")
                     if not result.get('success'):
@@ -1069,9 +1101,9 @@ class NavigationController:
                     logger.info("NAV warning dialog dismissed")
                     result = self.nav.click_button("OK")
                     if result.get('success'):
-                        time.sleep(1)
+                        self._sleep(1)
                         return True
-                time.sleep(0.3)
+                self._sleep(0.3)
             return False
 
     # =========================================================================
@@ -1103,7 +1135,7 @@ class NavigationController:
 
                 # Wait for page transition or Device Explorer
                 # Use a short initial wait + page detection instead of blind 3s sleep
-                time.sleep(1)  # Brief settle time for Device Explorer dialog
+                self._sleep(1)  # Brief settle time for Device Explorer dialog
 
                 # Check if Device Explorer appeared
                 from ..native import DeviceExplorerController
@@ -1143,6 +1175,8 @@ class NavigationController:
                     context=self._context.copy(),
                 )
 
+            except OperationCancelledError:
+                raise
             except Exception as e:
                 logger.exception(f"start_diagnostics failed: {e}")
                 return NavigationResult(
@@ -1188,7 +1222,7 @@ class NavigationController:
                         context=self._context.copy(),
                     )
 
-                time.sleep(0.3)
+                self._sleep(0.3)
 
                 # Click Continue
                 if not device_controller.click_continue():
@@ -1222,6 +1256,8 @@ class NavigationController:
                     context=self._context.copy(),
                 )
 
+            except OperationCancelledError:
+                raise
             except Exception as e:
                 logger.exception(f"select_device failed: {e}")
                 return NavigationResult(
@@ -1264,7 +1300,7 @@ class NavigationController:
                     )
 
                 # Wait briefly for disconnect to process
-                time.sleep(1)
+                self._sleep(1)
 
                 # Clear device from context
                 self._context["device"] = None
@@ -1277,6 +1313,8 @@ class NavigationController:
                     context=self._context.copy(),
                 )
 
+            except OperationCancelledError:
+                raise
             except Exception as e:
                 logger.exception(f"disconnect_device failed: {e}")
                 return NavigationResult(
@@ -1320,7 +1358,7 @@ class NavigationController:
                         context=self._context.copy(),
                     )
 
-                time.sleep(1)  # Brief settle for dialog to appear
+                self._sleep(1)  # Brief settle for dialog to appear
 
                 # Check if Device Explorer appeared
                 from ..native import DeviceExplorerController
@@ -1344,6 +1382,8 @@ class NavigationController:
                         context=self._context.copy(),
                     )
 
+            except OperationCancelledError:
+                raise
             except Exception as e:
                 logger.exception(f"open_device_selector failed: {e}")
                 return NavigationResult(
@@ -1430,6 +1470,8 @@ class NavigationController:
                     context=self._context.copy(),
                 )
 
+            except OperationCancelledError:
+                raise
             except Exception as e:
                 logger.exception(f"click_enter failed: {e}")
                 return NavigationResult(

@@ -42,6 +42,10 @@ from diagnostic_platform.runtime.session_lifecycle import (
     start_business_session,
 )
 from diagnostic_platform.runtime.worker_runtime import get_worker_runtime
+from diagnostic_platform.runtime.worker_runtime import (
+    OperationCancelledError,
+    WorkerBusyError,
+)
 from diagnostic_platform.runtime.session_state import (
     live_data_active as is_live_data_active,
 )
@@ -261,6 +265,8 @@ def session_start_diagnostics():
     except KeyError as exc:
         return jsonify({"success": False, "error": str(exc)}), 404
     except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 409
+    except (OperationCancelledError, WorkerBusyError) as exc:
         return jsonify({"success": False, "error": str(exc)}), 409
     except Exception as exc:
         logger.exception("session_start_diagnostics failed")

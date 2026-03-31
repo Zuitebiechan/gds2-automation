@@ -41,11 +41,19 @@ class GDS2ControllerRuntime:
         self._snapshot_reader = snapshot_reader
         self._ensure_controller_helpers()
 
-    def ensure_ready(self) -> dict[str, Any]:
+    def ensure_ready(
+        self,
+        *,
+        cancel_checker: Callable[[], None] | None = None,
+    ) -> dict[str, Any]:
         workflow = self.get_workflow()
         logger.info("[GDS2_RUNTIME] ensure_ready workflow=%s", type(workflow).__name__)
-        result = workflow.auto_start()
-        return result if isinstance(result, dict) else {}
+        workflow.set_cancel_checker(cancel_checker)
+        try:
+            result = workflow.auto_start()
+            return result if isinstance(result, dict) else {}
+        finally:
+            workflow.set_cancel_checker(None)
 
     def preflight(self) -> dict[str, Any]:
         network_quality = self.get_network_quality()

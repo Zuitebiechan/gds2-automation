@@ -17,6 +17,7 @@ from .session_state import (
     set_session_selection,
 )
 from .worker_runtime import WorkerRuntime
+from .worker_runtime import OperationCancelledError
 
 logger = logging.getLogger(__name__)
 
@@ -215,49 +216,58 @@ def run_start_diagnostics(
             **network_snapshot,
         }
 
-    orchestrator.emit_progress(session_id, "Starting GDS2 diagnostics...")
-    start_result = backend.start() or {}
-    state = backend.get_state()
-    modules = start_result.get("modules") if isinstance(start_result, dict) else None
-    if not isinstance(modules, list) or not modules:
-        modules = backend.get_modules()
-    result = {
-        "modules": modules,
-        "vin": (
-            start_result.get("vin")
-            if isinstance(start_result, dict) and start_result.get("vin")
-            else state.extra.get("vin")
-        ),
-        "device": (
-            start_result.get("device")
-            if isinstance(start_result, dict) and start_result.get("device")
-            else state.extra.get("device")
-        ),
-    }
-    set_session_selection(session, module="", data_category="")
-    clear_navigation_binding(runtime, session)
-    clear_ai_binding(runtime, session)
-    set_live_data_active(runtime, session, False)
-    orchestrator.emit_progress(session_id, "GDS2 diagnostics started", result)
-    logger.info(
-        "[NETWORK_GATE] session=%s decision=allow resumed=%s override=%s modules=%s device=%s %s",
-        session_id,
-        resumed,
-        bool(effective_override),
-        len(result["modules"]),
-        result.get("device") or "-",
-        network_quality_summary(network_quality),
-    )
+    operation = runtime.start_operation(session_id, "start_diagnostics")
+    try:
+        orchestrator.emit_progress(session_id, "Starting GDS2 diagnostics...")
+        start_result = backend.start(cancel_checker=operation.check_cancelled) or {}
+        operation.check_cancelled()
+        state = backend.get_state()
+        modules = start_result.get("modules") if isinstance(start_result, dict) else None
+        if not isinstance(modules, list) or not modules:
+            modules = backend.get_modules()
+        operation.check_cancelled()
+        result = {
+            "modules": modules,
+            "vin": (
+                start_result.get("vin")
+                if isinstance(start_result, dict) and start_result.get("vin")
+                else state.extra.get("vin")
+            ),
+            "device": (
+                start_result.get("device")
+                if isinstance(start_result, dict) and start_result.get("device")
+                else state.extra.get("device")
+            ),
+        }
+        set_session_selection(session, module="", data_category="")
+        clear_navigation_binding(runtime, session)
+        clear_ai_binding(runtime, session)
+        set_live_data_active(runtime, session, False)
+        orchestrator.emit_progress(session_id, "GDS2 diagnostics started", result)
+        logger.info(
+            "[NETWORK_GATE] session=%s decision=allow resumed=%s override=%s modules=%s device=%s %s",
+            session_id,
+            resumed,
+            bool(effective_override),
+            len(result["modules"]),
+            result.get("device") or "-",
+            network_quality_summary(network_quality),
+        )
 
-    payload = {
-        "success": True,
-        "session_id": session_id,
-        "status": session.status.value,
-        "workflow": session.workflow,
-        "result": result,
-        **network_snapshot,
-    }
-    if resumed:
-        payload["resumed"] = True
-        payload["resume_action"] = "start_diagnostics"
-    return payload
+        payload = {
+            "success": True,
+            "session_id": session_id,
+            "status": session.status.value,
+            "workflow": session.workflow,
+            "result": result,
+            **network_snapshot,
+        }
+        if resumed:
+            payload["resumed"] = True
+            payload["resume_action"] = "start_diagnostics"
+        return payload
+    except OperationCancelledError:
+        logger.info("SESSION %s start_diagnostics cancelled", session_id)
+        raise
+    finally:
+        runtime.finish_operation(operation)

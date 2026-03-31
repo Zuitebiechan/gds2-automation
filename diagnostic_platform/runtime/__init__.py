@@ -1,6 +1,12 @@
 """Worker-scoped runtime helpers."""
 
-from .worker_runtime import WorkerRuntime, get_worker_runtime
+from .worker_runtime import (
+    OperationCancelledError,
+    WorkerBusyError,
+    WorkerOperation,
+    WorkerRuntime,
+    get_worker_runtime,
+)
 from .session_state import (
     ai_session_id,
     bind_ai_session,
@@ -93,6 +99,9 @@ from .session_streams import (
 __all__ = [
     "WorkerRuntime",
     "get_worker_runtime",
+    "WorkerOperation",
+    "OperationCancelledError",
+    "WorkerBusyError",
     "ai_session_id",
     "bind_ai_session",
     "bind_business_session",

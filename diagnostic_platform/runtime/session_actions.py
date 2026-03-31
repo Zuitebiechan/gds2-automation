@@ -188,6 +188,11 @@ def start_navigation(
     emit_progress: Callable[[str], None],
 ) -> Any:
     """Start and bind one navigation sub-session."""
+    active_operation = runtime.current_operation_name()
+    if active_operation is not None:
+        raise RuntimeError(
+            f"Worker busy with active operation '{active_operation}'"
+        )
     if navigation_session_id(runtime, session.session_id):
         raise RuntimeError("Navigation already in progress for this session")
 

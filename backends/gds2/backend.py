@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -16,6 +17,7 @@ from diagnostic_platform.contracts import (
     LiveDataPoint,
     LiveDataStream,
 )
+from diagnostic_platform.runtime.worker_runtime import OperationCancelledError
 from backends.gds2.controller_runtime import GDS2ControllerRuntime
 from src.navigation import GDS2Page, NavigationController
 from src.streaming import AgentDataCollector
@@ -83,12 +85,18 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
         """Return the latest converted live data points from the active stream."""
         return list(self._latest_live_data)
 
-    def start(self) -> dict[str, Any]:
+    def start(self, *, cancel_checker: Callable[[], None] | None = None) -> dict[str, Any]:
         """Start GDS2 and auto-connect through the existing workflow."""
         try:
-            result = self._runtime.ensure_ready()
+            if cancel_checker is None:
+                result = self._runtime.ensure_ready()
+            else:
+                result = self._runtime.ensure_ready(cancel_checker=cancel_checker)
             self._last_start_result = result if isinstance(result, dict) else None
             return dict(self._last_start_result or {})
+        except OperationCancelledError:
+            self._last_start_result = None
+            raise
         except Exception as exc:  # pragma: no cover - runtime integration wrapper
             self._last_start_result = None
             raise RuntimeError(f"Failed to start GDS2 backend: {exc}") from exc

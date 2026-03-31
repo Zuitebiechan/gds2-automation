@@ -56,6 +56,7 @@ def abort_business_session(
 ) -> dict[str, Any]:
     """Abort one business session and clear worker bindings."""
     session = orchestrator.get_session(session_id)
+    runtime.cancel_operation(session_id)
     abort_active_execution(runtime, session, get_ai_engine=get_ai_engine)
     session = orchestrator.abort_session(session_id, reason)
     clear_business_session(runtime, session_id)

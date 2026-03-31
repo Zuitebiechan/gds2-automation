@@ -36,6 +36,22 @@ class DataViewerWorkflow:
         self._device = None
         self._module = None
         self._data_category = None
+        self._cancel_checker: Optional[Callable[[], None]] = None
+
+    def set_cancel_checker(self, cancel_checker: Optional[Callable[[], None]]) -> None:
+        self._cancel_checker = cancel_checker
+        if hasattr(self.controller, "set_cancel_checker"):
+            self.controller.set_cancel_checker(cancel_checker)
+
+    def _check_cancel(self) -> None:
+        if self._cancel_checker is not None:
+            self._cancel_checker()
+
+    def _sleep(self, seconds: float, poll_interval: float = 0.1) -> None:
+        deadline = time.time() + max(0.0, seconds)
+        while time.time() < deadline:
+            self._check_cancel()
+            time.sleep(min(poll_interval, max(0.0, deadline - time.time())))
 
     @property
     def mapping(self):
@@ -120,6 +136,8 @@ class DataViewerWorkflow:
 
         Returns: {"modules": [...], "device_connected": True, ...}
         """
+        self._check_cancel()
+
         # Handle Vehicle Selection - click Enter
         if current == GDS2Page.VEHICLE_SELECTION:
             status("Waiting for vehicle to load...")
@@ -160,7 +178,7 @@ class DataViewerWorkflow:
 
         # Now at Module List - scan modules
         status("Scanning modules...")
-        modules = self.controller.wait_for_list()
+        modules = self._read_module_list_with_retry(status)
         if not modules:
             raise RuntimeError("No modules found at Module List")
 
@@ -206,6 +224,8 @@ class DataViewerWorkflow:
             logger.info(msg)
             if on_status:
                 on_status(msg)
+
+        self._check_cancel()
 
         # Stop any active monitoring
         self.stop_monitoring()
@@ -282,7 +302,7 @@ class DataViewerWorkflow:
 
         # Now we should be at Module List
         status("Scanning modules...")
-        modules = self.controller.wait_for_list()
+        modules = self._read_module_list_with_retry(status)
         if not modules:
             raise RuntimeError("No modules found at Module List")
 
@@ -660,7 +680,7 @@ class DataViewerWorkflow:
         result = self.controller.disconnect_device()
         if not result.success:
             raise RuntimeError(f"Failed to disconnect: {result.error}")
-        time.sleep(1)
+        self._sleep(1)
 
         # Open Device Explorer
         status("Opening Device Explorer...")
@@ -815,7 +835,7 @@ class DataViewerWorkflow:
             disc_result = self.controller.disconnect_device()
             if not disc_result.success:
                 raise RuntimeError(f"Failed to disconnect: {disc_result.error}")
-            time.sleep(1)
+            self._sleep(1)
 
             status("Opening Device Explorer...")
             sel_result = self.controller.open_device_selector()
@@ -850,7 +870,7 @@ class DataViewerWorkflow:
                 disc_result = self.controller.disconnect_device()
                 if not disc_result.success:
                     raise RuntimeError(f"Failed to disconnect: {disc_result.error}")
-                time.sleep(1)
+                self._sleep(1)
 
                 status("Opening Device Explorer...")
                 sel_result = self.controller.open_device_selector()
@@ -875,15 +895,16 @@ class DataViewerWorkflow:
 
     def _select_in_explorer(self, explorer, device_name: str, status):
         """Select device in Device Explorer and click Continue."""
+        self._check_cancel()
         status(f"Selecting device: {device_name}...")
         if not explorer.select_device_by_name(device_name):
             raise RuntimeError(f"Device '{device_name}' not found in Device Explorer")
-        time.sleep(0.5)
+        self._sleep(0.5)
 
         status("Clicking Continue...")
         if not explorer.click_continue():
             raise RuntimeError("Failed to click Continue in Device Explorer")
-        time.sleep(2)  # Wait for device to connect and page to load
+        self._sleep(2)  # Wait for device to connect and page to load
 
     def _wait_for_button_enabled(self, button_text: str, timeout_sec: float = 30, _recursion_depth: int = 0) -> bool:
         """
@@ -906,6 +927,7 @@ class DataViewerWorkflow:
         start_time = time.time()
 
         while time.time() - start_time < timeout_sec:
+            self._check_cancel()
             # Check button status
             buttons = self.controller.nav.get_buttons()
             for btn in buttons:
@@ -916,7 +938,7 @@ class DataViewerWorkflow:
                     else:
                         logger.debug(f"Button '{button_text}' is disabled, waiting...")
                         break
-            time.sleep(1)
+            self._sleep(1)
 
         # Timeout
         elapsed = time.time() - start_time
@@ -936,6 +958,7 @@ class DataViewerWorkflow:
         MAX_BACK_CLICKS = 10
 
         for attempt in range(MAX_BACK_CLICKS):
+            self._check_cancel()
             current = self.controller.detect_current_page()
             logger.info(f"Navigation attempt {attempt + 1}: current page = {current.value}")
 
@@ -980,7 +1003,7 @@ class DataViewerWorkflow:
                 return
 
             # Try one more detection
-            time.sleep(1)
+            self._sleep(1)
 
         # Exhausted attempts
         current = self.controller.detect_current_page()
@@ -991,6 +1014,32 @@ class DataViewerWorkflow:
             f"Available buttons: {', '.join(buttons) if buttons else 'none'}. "
             f"Please manually navigate GDS2 to Main Menu and try again."
         )
+
+    def _read_module_list_with_retry(self, status, max_attempts: int = 3) -> List[str]:
+        items: List[str] = []
+        for attempt in range(max_attempts):
+            self._check_cancel()
+            items = self.controller.wait_for_list()
+            if items:
+                return items
+
+            if attempt == max_attempts - 1:
+                break
+
+            logger.warning(
+                "Module list empty on attempt %s/%s; waiting for UI to settle",
+                attempt + 1,
+                max_attempts,
+            )
+            status("Waiting for module list...")
+            if hasattr(self.controller, "wait_for_page_stable"):
+                try:
+                    self.controller.wait_for_page_stable(timeout=5.0, stable_duration=0.8)
+                except TimeoutError:
+                    pass
+            self._sleep(1.0)
+
+        return items
 
     def _navigate_to_module_list(self, status):
         """Smart navigation to Module List."""

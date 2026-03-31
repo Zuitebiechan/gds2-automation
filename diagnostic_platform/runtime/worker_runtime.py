@@ -24,6 +24,32 @@ if TYPE_CHECKING:
     from src.diagnosis.ai_engine import AIEngine
 
 
+class OperationCancelledError(RuntimeError):
+    """Raised when one in-flight worker operation is cooperatively cancelled."""
+
+
+class WorkerBusyError(RuntimeError):
+    """Raised when one worker-exclusive operation is already in progress."""
+
+
+@dataclass
+class WorkerOperation:
+    """One exclusive worker operation bound to one business session."""
+
+    session_id: str
+    name: str
+    cancel_event: Any = field(default_factory=threading.Event, repr=False)
+
+    def cancel(self) -> None:
+        self.cancel_event.set()
+
+    def check_cancelled(self) -> None:
+        if self.cancel_event.is_set():
+            raise OperationCancelledError(
+                f"Worker operation '{self.name}' cancelled for session {self.session_id}"
+            )
+
+
 @dataclass
 class ScopedEventHub:
     """Simple in-memory pub/sub hub keyed by stream scope."""
@@ -102,6 +128,7 @@ class WorkerRuntime:
     agent_event_hub: ScopedEventHub = field(default_factory=ScopedEventHub, repr=False)
     navigation_sessions: dict[str, Any] = field(default_factory=dict)
     navigation_sessions_lock: Any = field(default_factory=threading.Lock, repr=False)
+    active_operation: WorkerOperation | None = field(default=None, repr=False)
     state_lock: Any = field(default_factory=threading.RLock, repr=False)
 
     def set_orchestrator(self, orchestrator: SessionOrchestrator) -> None:
@@ -217,6 +244,38 @@ class WorkerRuntime:
             if session_id is not None and binding.session_id != session_id:
                 return
             self.business_session_binding = WorkerSessionBinding()
+
+    def start_operation(self, session_id: str, name: str) -> WorkerOperation:
+        with self.state_lock:
+            active = self.active_operation
+            if active is not None:
+                raise WorkerBusyError(
+                    "Worker busy with active operation "
+                    f"'{active.name}' for session {active.session_id}"
+                )
+
+            operation = WorkerOperation(session_id=session_id, name=name)
+            self.active_operation = operation
+            return operation
+
+    def finish_operation(self, operation: WorkerOperation) -> None:
+        with self.state_lock:
+            if self.active_operation is operation:
+                self.active_operation = None
+
+    def cancel_operation(self, session_id: str | None = None) -> bool:
+        with self.state_lock:
+            operation = self.active_operation
+            if operation is None:
+                return False
+            if session_id is not None and operation.session_id != session_id:
+                return False
+            operation.cancel()
+            return True
+
+    def current_operation_name(self) -> str | None:
+        with self.state_lock:
+            return self.active_operation.name if self.active_operation is not None else None
 
     def bind_navigation_session(self, session_id: str, navigation_session_id: str) -> None:
         with self.state_lock:
