@@ -96,12 +96,8 @@ data/gds2_knowledge.lance/
 !**/SKILL.md
 *.pdf
 
-# Tests
-tests/**
-!tests/README.md
-**/test_*.py
-**/*_test.py
-**/conftest.py
+# Local agent workspace
+.agents/
 
 # Local benchmark artifacts
 .sisyphus/
