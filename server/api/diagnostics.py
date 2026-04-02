@@ -6,10 +6,10 @@ import os
 
 from flask import Blueprint, Response, jsonify, request
 
-from backends.gds2 import GDS2DiagnosticBackend
+from diagnostic_platform.backend_registry import get_backend_registry
+from diagnostic_platform.contracts import BackendCapability, UnsupportedCapabilityError
 from diagnostic_platform.runtime.diagnostics_runtime import (
     build_diagnostics_start_payload,
-    make_data_display_guard,
     read_diagnostic_dtcs,
     retry_public_ai_diagnosis,
     select_diagnostic_module,
@@ -74,23 +74,40 @@ def _load_zhipu_api_key() -> str | None:
         return None
 
 
-def _get_backend() -> GDS2DiagnosticBackend:
-    return _runtime().get_backend(GDS2DiagnosticBackend)
+def _default_backend_name() -> str:
+    registry = get_backend_registry()
+    if "gds2" in registry.list_backends():
+        return "gds2"
+    backend_names = registry.list_backends()
+    if not backend_names:
+        raise RuntimeError("No diagnostic backends registered")
+    return backend_names[0]
 
 
-def _make_data_display_guard(
-    backend: GDS2DiagnosticBackend,
-    data_category: str,
-    *,
-    mode: str,
-    check_interval: float = 5.0,
-):
-    return make_data_display_guard(
-        backend,
-        data_category,
-        mode=mode,
-        check_interval=check_interval,
-    )
+def _resolve_backend_name(data: dict[str, object] | None = None) -> str:
+    payload = data or {}
+    explicit = str(payload.get("backend_name") or "").strip()
+    if explicit:
+        return explicit
+    active_bundle = _runtime().get_active_backend_bundle()
+    if active_bundle is not None:
+        return active_bundle.backend_name
+    return _default_backend_name()
+
+
+def _get_backend(backend_name: str | None = None):
+    registry = get_backend_registry()
+    resolved_name = backend_name or _default_backend_name()
+    backend = registry.get_by_name(resolved_name)
+    with _runtime().state_lock:
+        _runtime().backend = backend
+    return backend
+
+
+def _ensure_backend_capability(backend: object, capability: BackendCapability) -> None:
+    descriptor = getattr(backend, "descriptor", None)
+    if descriptor is None or not descriptor.supports(capability):
+        raise UnsupportedCapabilityError(capability, getattr(backend, "name", "unknown"))
 
 
 def _sse_response(stream) -> Response:
@@ -109,28 +126,36 @@ def start_live_data_stream(
     data_category: str,
     interval_ms: int = 100,
     *,
+    backend_name: str | None = None,
     stream_scope: str = DEFAULT_AGENT_STREAM_SCOPE,
 ) -> dict[str, object]:
     """Start the shared live-data collector and return the JSON payload."""
+    backend = _get_backend(backend_name)
+    _ensure_backend_capability(backend, BackendCapability.LIVE_DATA)
     return runtime_start_live_data_stream(
         _runtime(),
-        backend=_get_backend(),
+        backend=backend,
         data_category=data_category,
         interval_ms=interval_ms,
         stream_scope=stream_scope,
     )
 
 
-def stop_live_data_stream() -> dict[str, object]:
+def stop_live_data_stream(*, backend_name: str | None = None) -> dict[str, object]:
     """Stop the shared live-data collector and return the JSON payload."""
-    return runtime_stop_live_data_stream(_runtime(), backend=_get_backend())
+    backend = _get_backend(backend_name)
+    _ensure_backend_capability(backend, BackendCapability.LIVE_DATA)
+    return runtime_stop_live_data_stream(_runtime(), backend=backend)
 
 
 @diagnostics_bp.route('/start', methods=['POST'])
 def diagnose_start():
     """One-button start: start + auto-connect + modules."""
     try:
-        payload = build_diagnostics_start_payload(backend=_get_backend())
+        data = request.json or {}
+        payload = build_diagnostics_start_payload(
+            backend=_get_backend(_resolve_backend_name(data)),
+        )
         logger.info(
             "DIAG start ready modules=%s device=%s",
             len(payload["modules"]),
@@ -157,8 +182,10 @@ def diagnose_start():
 def diagnose_dtcs():
     """Read DTCs directly from the diagnostics backend."""
     try:
+        backend = _get_backend((request.args.get('backend_name') or '').strip() or None)
+        _ensure_backend_capability(backend, BackendCapability.READ_DTCS)
         payload = read_diagnostic_dtcs(
-            backend=_get_backend(),
+            backend=backend,
             module_name=request.args.get('module', '').strip(),
             data_category=request.args.get('data_category', '').strip(),
         )
@@ -180,6 +207,9 @@ def diagnose_dtcs():
             "dtcs": [],
         }), 200
 
+    except UnsupportedCapabilityError as e:
+        return jsonify({"success": False, "error": str(e), "dtcs": []}), 501
+
     except RuntimeError as e:
         logger.info(f"diagnose_dtcs invalid state: {e}")
         return jsonify({"success": False, "error": str(e), "dtcs": []}), 400
@@ -199,7 +229,8 @@ def diagnose_select_module():
         return jsonify({"success": False, "error": "Module name required"}), 400
 
     try:
-        payload = select_diagnostic_module(backend=_get_backend(), module=module)
+        backend = _get_backend(_resolve_backend_name(data))
+        payload = select_diagnostic_module(backend=backend, module=module)
         logger.info("DIAG module=%s categories=%s", module, len(payload["data_categories"]))
         return jsonify(payload)
 
@@ -229,7 +260,13 @@ def diagnose_live_data_start():
         return jsonify({"success": False, "error": "Data category required"}), 400
 
     try:
-        return jsonify(start_live_data_stream(data_category, interval_ms))
+        return jsonify(
+            start_live_data_stream(
+                data_category,
+                interval_ms,
+                backend_name=_resolve_backend_name(data),
+            )
+        )
 
     except WorkflowRecoveryError as e:
         logger.info(f"diagnose_live_data_start recovered: {e}")
@@ -240,6 +277,9 @@ def diagnose_live_data_start():
             "reasoning": e.reasoning,
             "error": str(e),
         }), 200
+
+    except UnsupportedCapabilityError as e:
+        return jsonify({"success": False, "error": str(e)}), 501
 
     except Exception as e:
         logger.exception("diagnose_live_data_start failed")
@@ -261,8 +301,11 @@ def diagnose_live_data_events():
 def diagnose_live_data_stop():
     """Stop diagnostics live streaming and go back from Data Display."""
     try:
-        return jsonify(stop_live_data_stream())
+        data = request.json or {}
+        return jsonify(stop_live_data_stream(backend_name=_resolve_backend_name(data)))
 
+    except UnsupportedCapabilityError as e:
+        return jsonify({"success": False, "error": str(e)}), 501
     except Exception as e:
         logger.exception("diagnose_live_data_stop failed")
         return jsonify({"success": False, "error": str(e)}), 500
@@ -282,6 +325,8 @@ def diagnose_ai_start():
         'vin': data.get('vin', ''),
         'module': data.get('module', ''),
         'data_category': data_category,
+        'brand': data.get('brand', ''),
+        'model': data.get('model', ''),
     }
 
     if not data_category:
@@ -289,8 +334,10 @@ def diagnose_ai_start():
 
     try:
         engine = _get_ai_engine()
+        backend = _get_backend(_resolve_backend_name(data))
+        _ensure_backend_capability(backend, BackendCapability.AI_DATA_COLLECTION)
         session_id = start_public_ai_diagnosis(
-            backend=_get_backend(),
+            backend=backend,
             engine=engine,
             vehicle_context=vehicle_context,
             data_category=data_category,
@@ -316,6 +363,9 @@ def diagnose_ai_start():
             "reasoning": e.reasoning,
             "error": str(e),
         }), 409
+
+    except UnsupportedCapabilityError as e:
+        return jsonify({"success": False, "error": str(e)}), 501
 
     except RuntimeError as e:
         return jsonify({"success": False, "error": str(e)}), 409

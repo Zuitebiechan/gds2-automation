@@ -5,9 +5,13 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
-from src.agentic.contracts.action_schema import ActionStep, GDS2Action
-from src.agentic.session_orchestrator import SessionStatus
-from src.navigation import GDS2Page
+from diagnostic_platform.contracts import (
+    BackendCapability,
+    DiagnosticBackend,
+    UnsupportedCapabilityError,
+)
+from src.gds2_orchestration.contracts.action_schema import ActionStep, GDS2Action
+from src.gds2_orchestration.session_orchestrator import SessionStatus
 
 from .diagnostics_runtime import (
     start_live_data_stream as start_diagnostics_live_data_stream,
@@ -36,12 +40,31 @@ from .worker_runtime import WorkerRuntime
 logger = logging.getLogger(__name__)
 
 
-def ensure_running_gds2_session(session: Any, *, capability: str) -> None:
-    """Validate the session is in a runnable GDS2 state."""
+def ensure_session_capability(session: Any, capability: BackendCapability) -> None:
+    """Validate one running session supports the requested capability."""
     if session.status != SessionStatus.RUNNING:
         raise ValueError(f"Session not running (status={session.status.value})")
-    if session.workflow != "gds2":
-        raise ValueError(f"{capability} is not supported for workflow={session.workflow}")
+    available = {
+        str(item)
+        for item in (getattr(session, "capabilities", None) or [])
+    }
+    if capability.value not in available:
+        backend_name = getattr(session, "backend_name", None) or "unknown"
+        raise UnsupportedCapabilityError(capability, backend_name)
+
+
+def ensure_running_gds2_session(session: Any, *, capability: str) -> None:
+    """Backward-compatible wrapper while callers migrate to capability checks."""
+    capability_map = {
+        "dtc read": BackendCapability.READ_DTCS,
+        "live data": BackendCapability.LIVE_DATA,
+        "ai diagnosis": BackendCapability.AI_DATA_COLLECTION,
+        "navigation": BackendCapability.NAVIGATION,
+    }
+    ensure_session_capability(
+        session,
+        capability_map.get(capability.strip().lower(), BackendCapability.CORE_SESSION),
+    )
 
 
 def resolve_session_vehicle_context(
@@ -105,14 +128,16 @@ def start_ai_diagnosis(
     vehicle_context: dict[str, Any],
     data_category: str,
     engine: Any,
-    collection_guard: Any,
+    diagnostic_payload: Any,
     emit_progress: Callable[[str], None],
 ) -> str:
     """Start and bind one AI diagnosis session."""
     if engine.is_active:
         raise RuntimeError("AI diagnosis already in progress")
 
-    ai_sid = engine.start_session(vehicle_context, collection_guard=collection_guard)
+    if not hasattr(engine, "start_session_from_payload"):
+        raise RuntimeError("AI engine does not support payload-based sessions")
+    ai_sid = engine.start_session_from_payload(vehicle_context, diagnostic_payload)
     bind_ai_session(runtime, session, ai_sid)
     set_session_selection(
         session,
@@ -313,10 +338,13 @@ def read_dtcs(
     backend: Any,
     emit_progress: Callable[[str], None],
 ) -> dict[str, Any]:
-    """Read DTCs for one running GDS2 session."""
+    """Read DTCs for one running backend-neutral session."""
     context = resolve_session_vehicle_context(session, data, backend=backend)
     state = backend.get_state()
-    current_page = backend.detect_current_page()
+    try:
+        current_page = backend.detect_current_page()
+    except (UnsupportedCapabilityError, NotImplementedError):
+        current_page = getattr(state, "current_page", "")
 
     module_name = context.get("module", "")
     data_category = context.get("data_category", "")
@@ -324,14 +352,21 @@ def read_dtcs(
     if module_name and not getattr(state, "current_module", ""):
         backend.select_module(module_name)
         set_session_selection(session, module=module_name)
-        current_page = backend.detect_current_page()
+        state = backend.get_state()
+        try:
+            current_page = backend.detect_current_page()
+        except (UnsupportedCapabilityError, NotImplementedError):
+            current_page = getattr(state, "current_page", "")
 
-    if data_category and current_page != GDS2Page.DATA_DISPLAY.value:
+    if data_category and not getattr(state, "current_data_category", ""):
         backend.select_data_category(data_category)
         set_session_selection(session, data_category=data_category)
 
     dtcs = backend.read_dtcs()
-    page_context = backend.detect_current_page()
+    try:
+        page_context = backend.detect_current_page()
+    except (UnsupportedCapabilityError, NotImplementedError):
+        page_context = getattr(backend.get_state(), "current_page", "")
     emit_progress(f"Read DTCs completed ({len(dtcs)} codes)")
     return {
         "dtcs": [
@@ -355,16 +390,26 @@ def select_module_action(
     session: Any,
     *,
     module: str,
-    get_data_viewer: Callable[[], Any],
-    get_executor: Callable[[], Any],
-    get_adapter: Callable[[], Any],
+    backend: Any | None = None,
+    get_data_viewer: Callable[[], Any] | None = None,
+    get_executor: Callable[[], Any] | None = None,
+    get_adapter: Callable[[], Any] | None = None,
     emit_progress: Callable[[str], None],
 ) -> dict[str, Any]:
     """Select one module and update session-scoped selection state."""
     if runtime.has_data_viewer_getter():
         result = get_data_viewer().select_module(module)
         exec_result = None
+    elif backend is not None:
+        backend.select_module(module)
+        result = {
+            "selected_module": module,
+            "data_categories": backend.get_data_categories(),
+        }
+        exec_result = None
     else:
+        if get_executor is None or get_adapter is None:
+            raise RuntimeError("Executor-backed module selection requires executor helpers")
         executor = get_executor()
         adapter = get_adapter()
         if adapter is None:
@@ -398,16 +443,25 @@ def select_data_category_action(
     session: Any,
     *,
     data_category: str,
-    get_data_viewer: Callable[[], Any],
-    get_executor: Callable[[], Any],
-    get_adapter: Callable[[], Any],
+    backend: Any | None = None,
+    get_data_viewer: Callable[[], Any] | None = None,
+    get_executor: Callable[[], Any] | None = None,
+    get_adapter: Callable[[], Any] | None = None,
     emit_progress: Callable[[str], None],
 ) -> dict[str, Any]:
     """Select one data category and update session-scoped selection state."""
     if runtime.has_data_viewer_getter():
         result = get_data_viewer().select_data_category(data_category)
         exec_result = None
+    elif backend is not None:
+        result = {
+            "selected_data_category": data_category,
+            "items": backend.select_data_category(data_category),
+        }
+        exec_result = None
     else:
+        if get_executor is None or get_adapter is None:
+            raise RuntimeError("Executor-backed category selection requires executor helpers")
         executor = get_executor()
         adapter = get_adapter()
         if adapter is None:
@@ -456,8 +510,8 @@ def resume_branch_selection(
     if not resume_action:
         raise ValueError("Missing resume_action in branch decision context")
 
+    viewer = get_data_viewer()
     if runtime.has_data_viewer_getter():
-        viewer = get_data_viewer()
         if resume_action == "select_module":
             resume_result = viewer.select_module(selected_choice)
         elif resume_action == "select_sub_module":
@@ -469,16 +523,14 @@ def resume_branch_selection(
         else:
             raise ValueError(f"Unsupported resume action: {resume_action}")
     else:
-        backend = get_backend()
-        workflow = backend._get_workflow()
-        controller = workflow.controller
+        controller = viewer.controller
 
         if resume_action == "select_module":
-            resume_result = workflow.select_module(selected_choice)
+            resume_result = viewer.select_module(selected_choice)
         elif resume_action == "select_sub_module":
             resume_result = controller.select_list_item(selected_choice).to_dict()
         elif resume_action == "select_data_category":
-            resume_result = workflow.select_data_category(selected_choice)
+            resume_result = viewer.select_data_category(selected_choice)
         elif resume_action == "select_sub_category":
             resume_result = controller.select_sub_category(selected_choice).to_dict()
         else:
@@ -503,72 +555,64 @@ def resume_branch_selection(
     }
 
 
-def execute_gds2_action(
+def execute_backend_action(
     session_id: str,
     *,
+    backend: Any,
     action_name: str,
     action_args: dict[str, Any],
     timeout_sec: float,
-    get_executor: Callable[[], Any],
-    get_adapter: Callable[[], Any],
     emit_progress: Callable[[str], None],
 ) -> dict[str, Any]:
-    """Execute one generic GDS2 action through the deterministic executor."""
-    try:
-        action = GDS2Action(action_name)
-    except ValueError:
-        valid = [candidate.value for candidate in GDS2Action]
-        raise ValueError(f"Unknown action '{action_name}'. Valid: {valid}") from None
-
-    executor = get_executor()
-    adapter = get_adapter()
-    if adapter is None:
-        raise RuntimeError("Adapter not initialized")
-
-    step = ActionStep(
-        action=action,
+    """Execute one generic backend action through the active backend contract."""
+    emit_progress(f"Executing {action_name}...")
+    outcome = backend.execute_action(
+        action_name,
         args=action_args,
         timeout_sec=timeout_sec,
     )
+    if not isinstance(outcome, dict):
+        raise RuntimeError("Backend action returned a non-dict result")
 
-    ui_state = adapter.get_current_ui_state()
-    if action == GDS2Action.CONNECT_DEVICE and ui_state.current_page == "unknown":
-        emit_progress(
-            "Current page unknown; retrying detection before connect_device...",
-        )
-        ui_state = adapter.get_current_ui_state()
-        if ui_state.current_page == "unknown":
-            try:
-                from src.native import DeviceExplorerController
-
-                if DeviceExplorerController().is_visible():
-                    ui_state.current_page = "device_explorer"
-                    emit_progress(
-                        "Device Explorer detected via native check; continuing connect_device.",
-                    )
-            except Exception:
-                pass
-
-    emit_progress(f"Executing {action_name}...")
-    exec_result = executor.execute_step(step, ui_state)
-    if not exec_result.success:
-        emit_progress(f"{action_name} failed: {exec_result.error}")
+    if not outcome.get("success"):
+        error = str(outcome.get("error") or f"{action_name} failed")
+        emit_progress(f"{action_name} failed: {error}")
         return {
             "success": False,
             "action": action_name,
-            "error": exec_result.error,
-            "attempts": exec_result.attempts,
-            "elapsed_time": exec_result.elapsed_time,
+            "error": error,
+            "attempts": int(outcome.get("attempts") or 1),
+            "elapsed_time": float(outcome.get("elapsed_time") or 0.0),
         }
 
     emit_progress(f"{action_name} completed")
     return {
         "success": True,
         "action": action_name,
-        "result": exec_result.metadata,
-        "attempts": exec_result.attempts,
-        "elapsed_time": exec_result.elapsed_time,
+        "result": outcome.get("result", outcome.get("metadata", {})),
+        "attempts": int(outcome.get("attempts") or 1),
+        "elapsed_time": float(outcome.get("elapsed_time") or 0.0),
     }
+
+
+def execute_gds2_action(
+    session_id: str,
+    *,
+    backend: Any,
+    action_name: str,
+    action_args: dict[str, Any],
+    timeout_sec: float,
+    emit_progress: Callable[[str], None],
+) -> dict[str, Any]:
+    """Compatibility alias for older callers while action routing is generalized."""
+    return execute_backend_action(
+        session_id,
+        backend=backend,
+        action_name=action_name,
+        action_args=action_args,
+        timeout_sec=timeout_sec,
+        emit_progress=emit_progress,
+    )
 
 
 def start_live_data(
@@ -587,13 +631,20 @@ def start_live_data(
     if not data_category:
         raise ValueError("data_category required")
 
-    payload = start_diagnostics_live_data_stream(
-        runtime,
-        backend=backend,
-        data_category=data_category,
-        interval_ms=interval_ms,
-        stream_scope=stream_scope,
-    )
+    if backend.__class__.start_live_data_session is not DiagnosticBackend.start_live_data_session:
+        payload = backend.start_live_data_session(
+            data_category=data_category,
+            interval_ms=interval_ms,
+            stream_scope=stream_scope,
+        )
+    else:
+        payload = start_diagnostics_live_data_stream(
+            runtime,
+            backend=backend,
+            data_category=data_category,
+            interval_ms=interval_ms,
+            stream_scope=stream_scope,
+        )
     set_session_selection(
         session,
         module=context.get("module", ""),
@@ -612,7 +663,10 @@ def stop_live_data(
     emit_progress: Callable[[str], None],
 ) -> dict[str, Any]:
     """Stop live-data streaming for one business session."""
-    payload = stop_diagnostics_live_data_stream(runtime, backend=backend)
+    if backend.__class__.stop_live_data_session is not DiagnosticBackend.stop_live_data_session:
+        payload = backend.stop_live_data_session()
+    else:
+        payload = stop_diagnostics_live_data_stream(runtime, backend=backend)
     set_live_data_active(runtime, session, False)
     emit_progress("Live data stopped")
     return payload
@@ -638,10 +692,10 @@ def abort_active_live_data(runtime: WorkerRuntime, session: Any) -> None:
         return
 
     try:
-        from backends.gds2 import GDS2DiagnosticBackend
-
-        backend = runtime.get_backend(GDS2DiagnosticBackend)
-        stop_diagnostics_live_data_stream(runtime, backend=backend)
+        bundle = runtime.get_active_backend_bundle(session.session_id)
+        backend = bundle.backend if bundle is not None else runtime.backend
+        if backend is not None:
+            stop_diagnostics_live_data_stream(runtime, backend=backend)
     except Exception:
         logger.exception("Failed to stop live data for business session %s", session.session_id)
     finally:

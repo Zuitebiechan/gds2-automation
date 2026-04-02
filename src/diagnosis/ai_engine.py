@@ -1,13 +1,11 @@
 """
-AI Diagnosis Engine — orchestrates the full diagnostic workflow.
+AI Diagnosis Engine analyzes backend-collected diagnostic payloads.
 
 Flow:
-1. Start AgentDataCollector with DiagnosticBuffer
-2. Collect 30 seconds of live sensor data
-3. Extract DTCs from final snapshot
-4. Assemble delta-compressed payload
-5. Call ZhipuAI LLM (streaming)
-6. Stream progress + result via SSE queue
+1. Receive one standardized DiagnosticPayload
+2. Convert it into the shared delta payload shape
+3. Call ZhipuAI LLM (streaming)
+4. Stream progress + result via SSE queue
 
 Thread-safe. One active session at a time (enforced by caller).
 """
@@ -18,11 +16,9 @@ import queue
 import threading
 import time
 import uuid
-from collections.abc import Callable
 from typing import Any, Optional
 
-from ..streaming.agent_data_collector import AgentDataCollector, AgentSnapshot
-from ..streaming.diagnostic_buffer import DiagnosticBuffer
+from diagnostic_platform.contracts import DiagnosticPayload, SamplingQuality
 from .llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -70,13 +66,115 @@ def get_cached_payload(payload_id: str) -> Optional[dict[str, Any]]:
         return payload
 
 
+def _sampling_quality_to_grade(sampling_quality: SamplingQuality) -> str:
+    if sampling_quality == SamplingQuality.EXCELLENT:
+        return "A"
+    if sampling_quality == SamplingQuality.GOOD:
+        return "A"
+    if sampling_quality == SamplingQuality.FAIR:
+        return "B"
+    return "C"
+
+
+def _sampling_quality_to_status(sampling_quality: SamplingQuality) -> str:
+    if sampling_quality in (SamplingQuality.EXCELLENT, SamplingQuality.GOOD):
+        return "healthy"
+    if sampling_quality == SamplingQuality.FAIR:
+        return "degraded"
+    return "insufficient"
+
+
+def _diagnostic_payload_to_delta_payload(payload: DiagnosticPayload) -> dict[str, Any]:
+    live_data = sorted(payload.live_data, key=lambda point: point.timestamp)
+    timeline: list[dict[str, Any]] = []
+    initial_state: list[dict[str, Any]] = []
+    last_values: dict[tuple[str, str], tuple[float, float]] = {}
+
+    if live_data:
+        start_ts = live_data[0].timestamp
+        end_ts = live_data[-1].timestamp
+    else:
+        start_ts = 0.0
+        end_ts = 0.0
+
+    for point in live_data:
+        key = (point.parameter, point.unit)
+        relative_t = max(0.0, point.timestamp - start_ts)
+        if key not in last_values:
+            initial_state.append(
+                {
+                    "name": point.parameter,
+                    "value": str(point.value),
+                    "unit": point.unit,
+                }
+            )
+            last_values[key] = (point.timestamp, point.value)
+            continue
+
+        previous_ts, previous_value = last_values[key]
+        if previous_value != point.value:
+            timeline.append(
+                {
+                    "t": f"{relative_t:.1f}s",
+                    "param": point.parameter,
+                    "from": str(previous_value),
+                    "to": str(point.value),
+                    "unit": point.unit,
+                }
+            )
+            last_values[key] = (point.timestamp, point.value)
+
+    actual_duration = max(0.0, end_ts - start_ts)
+    snapshot_times = sorted({point.timestamp for point in live_data})
+    snapshot_count = len(snapshot_times)
+    observed_rate = round(snapshot_count / actual_duration, 2) if actual_duration > 0 else float(snapshot_count)
+    grade = _sampling_quality_to_grade(payload.sampling_quality)
+    sampling_quality = {
+        "grade": grade,
+        "status": _sampling_quality_to_status(payload.sampling_quality),
+        "snapshot_count": snapshot_count,
+        "expected_snapshot_count": snapshot_count,
+        "completeness_ratio": 1.0 if snapshot_count else 0.0,
+        "observed_rate_hz": observed_rate,
+        "target_rate_hz": observed_rate,
+        "gap_ms": {"avg": 0.0, "p95": 0.0, "max": 0.0},
+        "lag_ms": {"avg": 0.0, "p95": 0.0, "max": 0.0},
+        "degradation_reasons": [] if grade == "A" else [payload.sampling_quality.value],
+    }
+    quality_summary = (
+        f"[AI-Sampling] grade={grade} status={sampling_quality['status']} "
+        f"| samples={snapshot_count}/{snapshot_count}"
+    )
+
+    return {
+        "window_seconds": int(actual_duration),
+        "actual_duration": round(actual_duration, 1),
+        "snapshot_count": snapshot_count,
+        "initial_state": initial_state,
+        "timeline": timeline,
+        "dtcs": [
+            {
+                "code": dtc.code,
+                "description": dtc.description,
+                "status": dtc.status,
+                "dtc_type": dtc.module,
+            }
+            for dtc in payload.dtcs
+        ],
+        "significant_changes": [],
+        "sampling_quality": sampling_quality,
+        "quality_summary": quality_summary,
+        "gaps": [],
+    }
+
+
 class AIEngine:
     """
     Orchestrates the AI diagnosis workflow.
 
     Usage:
         engine = AIEngine(api_key="...")
-        session_id = engine.start_session(vehicle_context)
+        session_id = engine.start_session_from_payload(vehicle_context, diagnostic_payload)
         # Subscribe to SSE events via engine.get_event_queue(session_id)
         # Events: progress, llm_chunk, result, error
     """
@@ -101,47 +199,9 @@ class AIEngine:
     def active_session_id(self) -> Optional[str]:
         return self._active_session
 
-    def start_session(
-        self,
-        vehicle_context: dict[str, Any],
-        collection_guard: Optional[Callable[[], Optional[dict[str, Any]]]] = None,
-    ) -> str:
-        """
-        Start a new AI diagnosis session.
-
-        Args:
-            vehicle_context: {"vin": "...", "module": "...", "data_category": "..."}
-
-        Returns:
-            session_id: UUID for this session
-
-        Raises:
-            RuntimeError: If a session is already active
-        """
-        with self._session_lock:
-            if self._active_session is not None:
-                raise RuntimeError("AI diagnosis session already in progress")
-
-            session_id = str(uuid.uuid4())
-            self._active_session = session_id
-            self._event_queues[session_id] = queue.Queue(maxsize=500)
-
-        logger.info(
-            "AI-DIAG %s started module=%s category=%s",
-            session_id,
-            vehicle_context.get('module') or '-',
-            vehicle_context.get('data_category') or '-',
-        )
-
-        # Launch worker thread
-        self._worker_thread = threading.Thread(
-            target=self._diagnosis_worker,
-            args=(session_id, vehicle_context, collection_guard),
-            daemon=True,
-        )
-        self._worker_thread.start()
-
-        return session_id
+    @property
+    def collection_seconds(self) -> int:
+        return self._collection_seconds
 
     def get_event_queue(self, session_id: str) -> Optional[queue.Queue]:
         """Get the SSE event queue for a session."""
@@ -182,6 +242,41 @@ class AIEngine:
 
         return session_id
 
+    def start_session_from_payload(
+        self,
+        vehicle_context: dict[str, Any],
+        diagnostic_payload: DiagnosticPayload | dict[str, Any],
+    ) -> str:
+        with self._session_lock:
+            if self._active_session is not None:
+                raise RuntimeError("AI diagnosis session already in progress")
+
+            session_id = str(uuid.uuid4())
+            self._active_session = session_id
+            self._event_queues[session_id] = queue.Queue(maxsize=500)
+
+        delta_payload = (
+            _diagnostic_payload_to_delta_payload(diagnostic_payload)
+            if isinstance(diagnostic_payload, DiagnosticPayload)
+            else dict(diagnostic_payload)
+        )
+
+        logger.info(
+            "AI-DIAG %s started from payload module=%s category=%s",
+            session_id,
+            vehicle_context.get('module') or '-',
+            vehicle_context.get('data_category') or '-',
+        )
+
+        self._worker_thread = threading.Thread(
+            target=self._payload_worker,
+            args=(session_id, vehicle_context, delta_payload),
+            daemon=True,
+        )
+        self._worker_thread.start()
+
+        return session_id
+
     def abort_session(self, session_id: str) -> bool:
         """Request cooperative cancellation for an AI session."""
         with self._session_lock:
@@ -209,159 +304,6 @@ class AIEngine:
             q.put_nowait(_sse_event(event_type, data))
         except queue.Full:
             logger.warning(f"Event queue full for session {session_id}")
-
-    def _diagnosis_worker(
-        self,
-        session_id: str,
-        vehicle_context: dict[str, Any],
-        collection_guard: Optional[Callable[[], Optional[dict[str, Any]]]] = None,
-    ) -> None:
-        """Main worker: collect data → assemble payload → call LLM → stream result."""
-        try:
-            # Phase 1: Collect 30 seconds of live data
-            self._emit(session_id, 'progress', {
-                'phase': 'collecting',
-                'elapsed': 0,
-                'total': self._collection_seconds,
-                'message': 'Starting data collection...',
-            })
-
-            collector_guard_error: dict[str, Optional[str]] = {'error': None}
-            collector_guard_event: dict[str, Optional[dict[str, Any]]] = {'event': None}
-
-            def _on_collector_error(message: str) -> None:
-                collector_guard_error['error'] = message
-
-            def _on_guard_event(event: dict[str, Any]) -> None:
-                collector_guard_event['event'] = event
-
-            buffer = DiagnosticBuffer(window_seconds=self._collection_seconds)
-            collector = AgentDataCollector(
-                on_snapshot=lambda snap, _changes=None: buffer.append_snapshot(snap),
-                on_error=_on_collector_error,
-                page_guard=collection_guard,
-                on_guard_event=_on_guard_event,
-                interval_ms=100,
-            )
-
-            # Check agent availability
-            avail = collector.check_agent_available()
-            if not avail.get('available'):
-                logger.warning(
-                    "AI-DIAG %s aborted: Java Agent unavailable details=%s",
-                    session_id,
-                    avail,
-                )
-                self._emit(session_id, 'error', {
-                    'error': 'Java Agent not available. Start GDS2 with the agent.',
-                    'retryable': False,
-                })
-                return
-
-            collector.start()
-            logger.info("AI-DIAG %s collecting 0/%ss", session_id, self._collection_seconds)
-
-            start_time = time.time()
-            last_collection_log = -1
-            try:
-                while time.time() - start_time < self._collection_seconds:
-                    if self._is_cancelled(session_id):
-                        logger.info("AI-DIAG %s cancelled during collection", session_id)
-                        return
-                    elapsed = int(time.time() - start_time)
-                    if collector_guard_error['error']:
-                        self._emit(session_id, 'error', {
-                            'error': collector_guard_error['error'],
-                            'retryable': False,
-                        })
-                        return
-
-                    guard_event = collector_guard_event.get('event')
-                    if guard_event:
-                        new_start_time = self._handle_collection_guard_event(
-                            session_id,
-                            guard_event,
-                            buffer,
-                            start_time,
-                            elapsed,
-                        )
-                        if new_start_time != start_time:
-                            last_collection_log = -1
-                        start_time = new_start_time
-                        collector_guard_event['event'] = None
-
-                    if elapsed > 0 and elapsed % 5 == 0 and elapsed != last_collection_log:
-                        last_collection_log = elapsed
-                        logger.info(
-                            "AI-DIAG %s collecting %s/%ss (%s snapshots)",
-                            session_id,
-                            elapsed,
-                            self._collection_seconds,
-                            buffer.snapshot_count,
-                        )
-
-                    self._emit(session_id, 'progress', {
-                        'phase': 'collecting',
-                        'elapsed': elapsed,
-                        'total': self._collection_seconds,
-                        'message': f'Collecting data... {elapsed}/{self._collection_seconds}s',
-                    })
-                    time.sleep(1)
-            finally:
-                collector.stop()
-
-            logger.info(
-                "AI-DIAG %s collection complete snapshots=%s duration=%.1fs",
-                session_id,
-                buffer.snapshot_count,
-                buffer.duration_seconds,
-            )
-
-            # Phase 2: Assemble payload
-            self._emit(session_id, 'progress', {
-                'phase': 'assembling',
-                'message': 'Processing collected data...',
-            })
-
-            delta_payload = buffer.get_delta_payload()
-            sampling_quality = delta_payload.get('sampling_quality', {})
-            quality_summary = delta_payload.get('quality_summary', '')
-
-            self._emit(session_id, 'progress', {
-                'phase': 'assembling',
-                'message': quality_summary or 'Sampling quality calculated.',
-                'sampling_quality': sampling_quality,
-            })
-
-            # Cache payload for retry
-            cache_data = {
-                'delta_payload': delta_payload,
-                'vehicle_context': vehicle_context,
-            }
-            payload_id = _cache_payload(cache_data)
-
-            logger.info(
-                "AI-DIAG %s payload ready snapshots=%s dtcs=%s timeline=%s changes=%s quality=%s",
-                session_id,
-                delta_payload.get('snapshot_count', 0),
-                len(delta_payload.get('dtcs', [])),
-                len(delta_payload.get('timeline', [])),
-                len(delta_payload.get('significant_changes', [])),
-                sampling_quality.get('grade', '?'),
-            )
-
-            # Phase 3: Call LLM (streaming)
-            self._stream_llm(session_id, vehicle_context, delta_payload, payload_id)
-
-        except Exception as e:
-            logger.exception(f"AI diagnosis worker failed: {e}")
-            self._emit(session_id, 'error', {
-                'error': str(e),
-                'retryable': False,
-            })
-
-        finally:
-            self._cleanup_session(session_id)
 
     def _retry_worker(
         self,
@@ -391,6 +333,37 @@ class AIEngine:
                 'retryable': False,
             })
 
+        finally:
+            self._cleanup_session(session_id)
+
+    def _payload_worker(
+        self,
+        session_id: str,
+        vehicle_context: dict[str, Any],
+        delta_payload: dict[str, Any],
+    ) -> None:
+        try:
+            if self._is_cancelled(session_id):
+                logger.info("AI-DIAG %s cancelled before payload analysis", session_id)
+                return
+            payload_id = _cache_payload(
+                {
+                    'delta_payload': delta_payload,
+                    'vehicle_context': vehicle_context,
+                }
+            )
+            self._emit(session_id, 'progress', {
+                'phase': 'assembling',
+                'message': 'Backend payload collected. Preparing AI analysis...',
+                'sampling_quality': delta_payload.get('sampling_quality', {}),
+            })
+            self._stream_llm(session_id, vehicle_context, delta_payload, payload_id)
+        except Exception as e:
+            logger.exception(f"AI diagnosis payload worker failed: {e}")
+            self._emit(session_id, 'error', {
+                'error': str(e),
+                'retryable': False,
+            })
         finally:
             self._cleanup_session(session_id)
 
@@ -512,38 +485,6 @@ class AIEngine:
             f"Capped from {original_confidence} due to grade {grade} sampling quality."
         )
         return updated
-
-    def _handle_collection_guard_event(
-        self,
-        session_id: str,
-        guard_event: dict[str, Any],
-        buffer: DiagnosticBuffer,
-        start_time: float,
-        elapsed: int,
-    ) -> float:
-        """Emit guard status and restart the AI collection window if requested."""
-        guard_message = str(guard_event.get('message') or '')
-        if guard_message:
-            self._emit(session_id, 'progress', {
-                'phase': 'collecting',
-                'elapsed': elapsed,
-                'total': self._collection_seconds,
-                'message': guard_message,
-            })
-
-        if guard_event.get('restart_collection'):
-            logger.info("AI-DIAG %s collection restarted after reconnect recovery", session_id)
-            buffer.clear()
-            restart_time = time.time()
-            self._emit(session_id, 'progress', {
-                'phase': 'collecting',
-                'elapsed': 0,
-                'total': self._collection_seconds,
-                'message': 'Recovered connection. Restarting a fresh 30s AI collection window...',
-            })
-            return restart_time
-
-        return start_time
 
 
     def _cleanup_session(self, session_id: str) -> None:

@@ -6,9 +6,3 @@ flask-cors>=3.0.0
 
 # Phase 3.5: AI-powered diagnosis
 zhipuai>=2.1.5
-
-# Agentic navigation / multi-provider LLM support
-langgraph
-langchain-core
-langchain-openai
-langchain-google-genai

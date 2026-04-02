@@ -5,9 +5,10 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
-from src.agentic.session_orchestrator import SessionContext
+from src.gds2_orchestration.session_orchestrator import SessionContext
 
 from .session_actions import abort_active_execution
+from .session_backends import summarize_backend_state
 from .session_preflight import get_session_network_snapshot
 from .session_state import (
     bind_business_session,
@@ -29,17 +30,19 @@ def start_business_session(
     session = orchestrator.start_session(context)
     bind_business_session(runtime, session)
     logger.info(
-        "SESSION %s started brand=%s workflow=%s status=%s",
+        "SESSION %s started brand=%s backend=%s status=%s",
         session.session_id,
         context.brand,
-        session.workflow,
+        session.backend_name,
         session.status.value,
     )
     payload = {
         "success": True,
         "session_id": session.session_id,
         "status": session.status.value,
-        "workflow": session.workflow,
+        "backend_name": session.backend_name,
+        "workflow": session.backend_name,
+        "capabilities": list(getattr(session, "capabilities", []) or []),
     }
     if session.pending_decision is not None:
         payload["decision"] = session.pending_decision.to_dict()
@@ -80,6 +83,7 @@ def build_session_status_payload(
     return {
         "success": True,
         **session.to_dict(),
+        "backend_state_summary": summarize_backend_state(backend),
         **session_binding_payload(runtime, session_id),
         **get_session_network_snapshot(
             orchestrator=orchestrator,

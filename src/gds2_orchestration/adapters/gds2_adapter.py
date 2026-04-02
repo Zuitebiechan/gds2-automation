@@ -1,12 +1,12 @@
-"""GDS2 Action Adapter — bridges agentic executor to real GDS2 automation.
+"""GDS2 Action Adapter — bridges deterministic executor to real GDS2 automation.
 
 Registers StepHandler callables for each GDS2Action that delegate to the
 existing DataViewerWorkflow and NavigationController methods.
 
 Usage::
 
-    from src.agentic.adapters import GDS2ActionAdapter
-    from src.agentic.executor import DeterministicExecutor
+    from src.gds2_orchestration.adapters import GDS2ActionAdapter
+    from src.gds2_orchestration.executor import DeterministicExecutor
 
     workflow = DataViewerWorkflow()
     executor = DeterministicExecutor()

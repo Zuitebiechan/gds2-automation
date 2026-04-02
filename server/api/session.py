@@ -8,29 +8,16 @@ SessionOrchestrator and does not touch existing diagnostics routes.
 # pyright: reportMissingImports=false
 
 import logging
-import time
-from typing import Any, Callable
+from typing import Any
 
 from flask import Blueprint, Response, jsonify, request
 
-from backends.gds2 import GDS2DiagnosticBackend
+from diagnostic_platform.contracts import BackendCapability, UnsupportedCapabilityError
 from diagnostic_platform.runtime.session_actions import (
-    abort_navigation,
-    execute_gds2_action,
-    ensure_running_gds2_session,
-    navigation_status_payload,
-    read_dtcs,
-    resolve_session_vehicle_context,
-    resolve_ai_event_stream,
-    resolve_navigation,
-    retry_ai_diagnosis,
+    ensure_session_capability,
+    execute_backend_action,
     select_data_category_action,
     select_module_action,
-    start_ai_diagnosis,
-    start_live_data,
-    start_navigation,
-    stop_live_data,
-    submit_navigation_decision,
 )
 from diagnostic_platform.runtime.session_decisions import (
     raise_branch_decision,
@@ -41,109 +28,40 @@ from diagnostic_platform.runtime.session_lifecycle import (
     build_session_status_payload,
     start_business_session,
 )
-from diagnostic_platform.runtime.worker_runtime import get_worker_runtime
 from diagnostic_platform.runtime.worker_runtime import (
     OperationCancelledError,
     WorkerBusyError,
-)
-from diagnostic_platform.runtime.session_state import (
-    live_data_active as is_live_data_active,
 )
 from diagnostic_platform.runtime.session_preflight import (
     run_start_diagnostics,
 )
 from diagnostic_platform.runtime.session_streams import (
-    iter_ai_events,
-    iter_navigation_events,
-    iter_scoped_agent_events,
     iter_session_events,
 )
-from diagnostic_platform.sse import (
-    session_agent_stream_scope,
-)
 
-from src.agentic.executor import DeterministicExecutor
-from src.agentic.adapters.gds2_adapter import GDS2ActionAdapter
-from src.agentic.planner import BranchDecisionRequiredError
-from src.agentic.session_orchestrator import (
+from src.gds2_orchestration.planner import BranchDecisionRequiredError
+from src.gds2_orchestration.session_orchestrator import (
     SessionContext,
-    SessionOrchestrator,
     SessionStatus,
 )
+from server.api import session_ai_handlers
+from server.api.session_dependencies import (
+    _runtime,
+    get_adapter,
+    get_backend as _get_backend,
+    get_data_viewer as _get_data_viewer,
+    get_executor,
+    get_orchestrator,
+    get_ai_engine as _get_ai_engine,
+    reset_executor,
+    set_data_viewer_getter,
+    set_orchestrator,
+)
+from server.api import session_live_data_handlers
+from server.api import session_navigation_handlers
 logger = logging.getLogger(__name__)
 
 session_bp = Blueprint("session", __name__, url_prefix="/api/session")
-
-
-def _runtime():
-    return get_worker_runtime()
-
-
-def get_orchestrator() -> SessionOrchestrator:
-    """Return the shared worker-scoped orchestrator.
-
-    Exposed so tests can swap / reset it.
-    """
-    return _runtime().orchestrator
-
-
-def set_orchestrator(orch: SessionOrchestrator) -> None:
-    """Replace the shared worker-scoped orchestrator (for testing)."""
-    _runtime().set_orchestrator(orch)
-
-
-def set_data_viewer_getter(getter: Callable[[], Any] | None) -> None:
-    """Inject a lightweight viewer object for tests that bypass GDS2 startup."""
-    _runtime().set_data_viewer_getter(getter)
-
-
-def _get_data_viewer() -> Any:
-    """Return the injected viewer when present, otherwise the real workflow."""
-    return _runtime().get_data_viewer(GDS2DiagnosticBackend)
-
-
-def _get_backend() -> GDS2DiagnosticBackend:
-    return _runtime().get_backend(GDS2DiagnosticBackend)
-
-
-def _get_ai_engine():
-    import diagnostics_api
-
-    return diagnostics_api._get_ai_engine()
-
-
-def _make_ai_collection_guard(data_category: str):
-    import diagnostics_api
-
-    return diagnostics_api._make_data_display_guard(
-        _get_backend(),
-        data_category,
-        mode="ai_collect",
-    )
-
-
-def get_executor() -> DeterministicExecutor:
-    """Return the worker-scoped executor, lazily wired with the GDS2 adapter.
-
-    Creates a DeterministicExecutor + GDS2ActionAdapter on first call,
-    using the DataViewerWorkflow wrapped by GDS2DiagnosticBackend.
-    """
-    if _runtime().get_adapter() is None:
-        # Transitional pattern: session_api still depends on the executor chain,
-        # so we reach through the backend to reuse its underlying workflow until
-        # this module is migrated to backend.execute_action().
-        logger.debug("Session API executor wiring with GDS2 adapter")
-    return _runtime().get_executor(lambda: _get_backend()._get_workflow())
-
-
-def get_adapter() -> GDS2ActionAdapter | None:
-    """Return the current adapter (available after get_executor() is called)."""
-    return _runtime().get_adapter()
-
-
-def reset_executor() -> None:
-    """Reset executor/adapter (for testing or when DataViewerWorkflow changes)."""
-    _runtime().reset_executor()
 
 
 def _sse_response(stream) -> Response:
@@ -180,7 +98,8 @@ def session_start():
             "success": true,
             "session_id": "abc123...",
             "status": "running",       # or "awaiting_decision"
-            "workflow": "gds2",        # or null
+            "backend_name": "gds2",    # primary field
+            "workflow": "gds2",        # deprecated alias
         }
     """
     data = request.json or {}
@@ -194,7 +113,12 @@ def session_start():
             brand=brand,
             model=(data.get("model") or "").strip(),
             vin=(data.get("vin") or "").strip(),
-            extra={k: v for k, v in data.items() if k not in ("brand", "model", "vin")},
+            backend_name=(data.get("backend_name") or "").strip(),
+            extra={
+                k: v
+                for k, v in data.items()
+                if k not in ("brand", "model", "vin", "backend_name")
+            },
         )
         return jsonify(
             start_business_session(
@@ -220,7 +144,7 @@ def session_start():
 
 @session_bp.route("/start_diagnostics", methods=["POST"])
 def session_start_diagnostics():
-    """Start GDS2 diagnostics via the agentic executor.
+    """Start GDS2 diagnostics via the deterministic executor.
 
     Executes START_DIAGNOSTICS through the DeterministicExecutor,
     which dispatches to the real DataViewerWorkflow.start().
@@ -279,16 +203,16 @@ def session_start_diagnostics():
 
 @session_bp.route("/execute", methods=["POST"])
 def session_execute():
-    """Execute a single GDS2 action through the agentic executor.
+    """Execute a single backend action through the active backend contract.
 
-    Generic endpoint for any GDS2Action.  The action is validated
-    by the PolicyGuard against current GDS2 UI state before execution.
+    Generic endpoint for one backend-owned action. The active backend
+    validates and executes the action behind the shared session facade.
 
     Request body (JSON)::
 
         {
             "session_id": "abc123...",
-            "action": "select_module",    // GDS2Action enum value
+            "action": "select_module",    // backend-specific action id
             "args": {"module_name": "ECM"},  // action-specific arguments
             "timeout_sec": 30.0             // optional
         }
@@ -305,22 +229,17 @@ def session_execute():
     try:
         orch = get_orchestrator()
         session = orch.get_session(session_id)
-        if session.status != SessionStatus.RUNNING:
-            return jsonify({
-                "success": False,
-                "error": f"Session not running (status={session.status.value})",
-            }), 409
+        ensure_session_capability(session, BackendCapability.GENERIC_ACTIONS)
 
         logger.info("SESSION %s action=%s start", session_id, action_name)
 
         try:
-            outcome = execute_gds2_action(
+            outcome = execute_backend_action(
                 session_id,
+                backend=_get_backend(),
                 action_name=action_name,
                 action_args=data.get("args") or {},
                 timeout_sec=float(data.get("timeout_sec", 30.0)),
-                get_executor=get_executor,
-                get_adapter=get_adapter,
                 emit_progress=lambda message: orch.emit_progress(session_id, message),
             )
         except BranchDecisionRequiredError as exc:
@@ -374,8 +293,11 @@ def session_execute():
 
     except KeyError as exc:
         return jsonify({"success": False, "error": str(exc)}), 404
+    except UnsupportedCapabilityError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 501
     except ValueError as exc:
-        return jsonify({"success": False, "error": str(exc)}), 400
+        status = 409 if "Session not running" in str(exc) else 400
+        return jsonify({"success": False, "error": str(exc)}), status
     except Exception as exc:
         logger.exception("session_execute failed")
         return jsonify({"success": False, "error": str(exc)}), 500
@@ -491,6 +413,7 @@ def session_select_module():
                 _runtime(),
                 session,
                 module=module,
+                backend=_get_backend(),
                 get_data_viewer=_get_data_viewer,
                 get_executor=get_executor,
                 get_adapter=get_adapter,
@@ -564,6 +487,7 @@ def session_select_data_category():
                 _runtime(),
                 session,
                 data_category=data_category,
+                backend=_get_backend(),
                 get_data_viewer=_get_data_viewer,
                 get_executor=get_executor,
                 get_adapter=get_adapter,
@@ -611,474 +535,105 @@ def session_select_data_category():
 @session_bp.route("/ai_diagnose", methods=["POST"])
 def session_ai_diagnose():
     """Start AI diagnosis through the public session facade."""
-    data = request.json or {}
-    session_id = (data.get("session_id") or "").strip()
-
-    if not session_id:
-        return jsonify({"success": False, "error": "session_id required"}), 400
-
-    try:
-        orch = get_orchestrator()
-        session = orch.get_session(session_id)
-        ensure_running_gds2_session(session, capability="AI diagnosis")
-
-        vehicle_context = resolve_session_vehicle_context(
-            session,
-            data,
-            backend=_get_backend(),
-        )
-        data_category = vehicle_context["data_category"]
-        if not data_category:
-            return jsonify({"success": False, "error": "data_category required"}), 400
-
-        engine = _get_ai_engine()
-        ai_session_id = start_ai_diagnosis(
-            _runtime(),
-            session,
-            vehicle_context=vehicle_context,
-            data_category=data_category,
-            engine=engine,
-            collection_guard=_make_ai_collection_guard(data_category),
-            emit_progress=lambda message: orch.emit_progress(session_id, message),
-        )
-        logger.info(
-            "SESSION %s ai_diagnose started ai_session=%s module=%s category=%s",
-            session_id,
-            ai_session_id,
-            vehicle_context.get("module") or "-",
-            data_category,
-        )
-        return jsonify({
-            "success": True,
-            "session_id": session_id,
-            "ai_session_id": ai_session_id,
-            "message": "AI diagnosis started. Subscribe to /api/session/ai_diagnose/events for progress.",
-        })
-
-    except KeyError as exc:
-        return jsonify({"success": False, "error": str(exc)}), 404
-    except RuntimeError as exc:
-        return jsonify({"success": False, "error": str(exc)}), 409
-    except ValueError as exc:
-        return jsonify({"success": False, "error": str(exc)}), 400
-    except Exception as exc:
-        logger.exception("session_ai_diagnose failed")
-        return jsonify({"success": False, "error": str(exc)}), 500
+    payload, status = session_ai_handlers.start_ai_diagnose(request.json or {})
+    return jsonify(payload), status
 
 
 @session_bp.route("/ai_diagnose/events")
 def session_ai_diagnose_events():
     """Stream AI diagnosis SSE events through the business session id."""
-    session_id = request.args.get("session_id", "").strip()
-    if not session_id:
-        return jsonify({"success": False, "error": "session_id required"}), 400
-
-    try:
-        session = get_orchestrator().get_session(session_id)
-        ai_session_id, event_queue = resolve_ai_event_stream(
-            _runtime(),
-            session,
-            engine=_get_ai_engine(),
-        )
-
-        logger.info(
-            "SESSION %s ai_diagnose events bound ai_session=%s",
-            session_id,
-            ai_session_id,
-        )
-
-        return _sse_response(
-            iter_ai_events(
-                runtime=_runtime(),
-                session=session,
-                session_id=session_id,
-                event_queue=event_queue,
-            )
-        )
-
-    except KeyError as exc:
-        return jsonify({"success": False, "error": str(exc)}), 404
-    except LookupError as exc:
-        return jsonify({"success": False, "error": str(exc)}), 404
-    except Exception as exc:
-        logger.exception("session_ai_diagnose_events failed")
-        return jsonify({"success": False, "error": str(exc)}), 500
+    result = session_ai_handlers.stream_ai_diagnose_events(
+        request.args.get("session_id", "").strip(),
+        sse_response=_sse_response,
+    )
+    if isinstance(result, tuple):
+        payload, status = result
+        return jsonify(payload), status
+    return result
 
 
 @session_bp.route("/ai_diagnose/retry", methods=["POST"])
 def session_ai_diagnose_retry():
     """Retry AI diagnosis through the public session facade."""
-    data = request.json or {}
-    session_id = (data.get("session_id") or "").strip()
-    cached_payload_id = (data.get("cached_payload_id") or "").strip()
-
-    if not session_id:
-        return jsonify({"success": False, "error": "session_id required"}), 400
-    if not cached_payload_id:
-        return jsonify({"success": False, "error": "cached_payload_id required"}), 400
-
-    try:
-        orch = get_orchestrator()
-        session = orch.get_session(session_id)
-        ensure_running_gds2_session(session, capability="AI diagnosis")
-
-        vehicle_context = resolve_session_vehicle_context(
-            session,
-            data,
-            backend=_get_backend(),
-        )
-        engine = _get_ai_engine()
-        ai_session_id = retry_ai_diagnosis(
-            _runtime(),
-            session,
-            cached_payload_id=cached_payload_id,
-            vehicle_context=vehicle_context,
-            engine=engine,
-            emit_progress=lambda message: orch.emit_progress(session_id, message),
-        )
-        logger.info(
-            "SESSION %s ai_diagnose retry started ai_session=%s payload=%s",
-            session_id,
-            ai_session_id,
-            cached_payload_id,
-        )
-        return jsonify({
-            "success": True,
-            "session_id": session_id,
-            "ai_session_id": ai_session_id,
-            "message": "Retry started. Subscribe to /api/session/ai_diagnose/events for progress.",
-        })
-
-    except KeyError as exc:
-        return jsonify({"success": False, "error": str(exc)}), 404
-    except RuntimeError as exc:
-        return jsonify({"success": False, "error": str(exc)}), 409
-    except ValueError as exc:
-        return jsonify({"success": False, "error": str(exc)}), 400
-    except Exception as exc:
-        logger.exception("session_ai_diagnose_retry failed")
-        return jsonify({"success": False, "error": str(exc)}), 500
+    payload, status = session_ai_handlers.retry_ai_diagnose(request.json or {})
+    return jsonify(payload), status
 
 
 @session_bp.route("/dtcs", methods=["POST"])
 def session_dtcs():
     """Read DTCs through the public session facade."""
-    data = request.json or {}
-    session_id = (data.get("session_id") or "").strip()
-
-    if not session_id:
-        return jsonify({"success": False, "error": "session_id required"}), 400
-
-    try:
-        orch = get_orchestrator()
-        session = orch.get_session(session_id)
-        ensure_running_gds2_session(session, capability="DTC read")
-        result = read_dtcs(
-            session,
-            data,
-            backend=_get_backend(),
-            emit_progress=lambda message: orch.emit_progress(session_id, message),
-        )
-        logger.info(
-            "SESSION %s dtcs read count=%s page=%s",
-            session_id,
-            result["dtc_count"],
-            result["page_context"],
-        )
-        return jsonify({
-            "success": True,
-            "session_id": session_id,
-            "result": result,
-        })
-
-    except KeyError as exc:
-        return jsonify({"success": False, "error": str(exc)}), 404
-    except ValueError as exc:
-        return jsonify({"success": False, "error": str(exc)}), 400
-    except Exception as exc:
-        logger.exception("session_dtcs failed")
-        return jsonify({"success": False, "error": str(exc)}), 500
+    payload, status = session_live_data_handlers.read_session_dtcs(request.json or {})
+    return jsonify(payload), status
 
 
 @session_bp.route("/live_data/start", methods=["POST"])
 def session_live_data_start():
     """Start live data streaming through the public session facade."""
-    data = request.json or {}
-    session_id = (data.get("session_id") or "").strip()
-    interval_ms = int(data.get("interval_ms", 100))
-
-    if not session_id:
-        return jsonify({"success": False, "error": "session_id required"}), 400
-
-    try:
-        orch = get_orchestrator()
-        session = orch.get_session(session_id)
-        ensure_running_gds2_session(session, capability="Live data")
-        data_category, payload = start_live_data(
-            _runtime(),
-            session,
-            data,
-            interval_ms,
-            backend=_get_backend(),
-            stream_scope=session_agent_stream_scope(session_id),
-            emit_progress=lambda message: orch.emit_progress(session_id, message),
-        )
-        logger.info(
-            "SESSION %s live_data started category=%s interval=%sms",
-            session_id,
-            data_category,
-            interval_ms,
-        )
-        return jsonify({
-            "success": True,
-            "session_id": session_id,
-            **payload,
-        })
-
-    except KeyError as exc:
-        return jsonify({"success": False, "error": str(exc)}), 404
-    except ValueError as exc:
-        return jsonify({"success": False, "error": str(exc)}), 400
-    except Exception as exc:
-        logger.exception("session_live_data_start failed")
-        return jsonify({"success": False, "error": str(exc)}), 500
+    payload, status = session_live_data_handlers.start_live_data_session(request.json or {})
+    return jsonify(payload), status
 
 
 @session_bp.route("/live_data/events")
 def session_live_data_events():
     """SSE endpoint for session-scoped live data events."""
-    session_id = (request.args.get("session_id") or "").strip()
-    if not session_id:
-        return jsonify({"success": False, "error": "session_id required"}), 400
-
-    try:
-        session = get_orchestrator().get_session(session_id)
-        if not is_live_data_active(_runtime(), session_id):
-            return jsonify({
-                "success": False,
-                "error": f"No active live data stream for {session_id}",
-            }), 404
-    except KeyError as exc:
-        return jsonify({"success": False, "error": str(exc)}), 404
-
-    return _sse_response(
-        iter_scoped_agent_events(
-            scope=session_agent_stream_scope(session_id),
-            session_id=session_id,
-        )
+    result = session_live_data_handlers.stream_live_data_events(
+        (request.args.get("session_id") or "").strip(),
+        sse_response=_sse_response,
     )
+    if isinstance(result, tuple):
+        payload, status = result
+        return jsonify(payload), status
+    return result
 
 
 @session_bp.route("/live_data/stop", methods=["POST"])
 def session_live_data_stop():
     """Stop live data streaming through the public session facade."""
-    data = request.json or {}
-    session_id = (data.get("session_id") or "").strip()
-
-    if not session_id:
-        return jsonify({"success": False, "error": "session_id required"}), 400
-
-    try:
-        orch = get_orchestrator()
-        session = orch.get_session(session_id)
-        if session.status != SessionStatus.RUNNING:
-            return jsonify({
-                "success": False,
-                "error": f"Session not running (status={session.status.value})",
-            }), 409
-        payload = stop_live_data(
-            _runtime(),
-            session,
-            backend=_get_backend(),
-            emit_progress=lambda message: orch.emit_progress(session_id, message),
-        )
-        logger.info("SESSION %s live_data stopped", session_id)
-        return jsonify({
-            "success": True,
-            "session_id": session_id,
-            **payload,
-        })
-
-    except KeyError as exc:
-        return jsonify({"success": False, "error": str(exc)}), 404
-    except Exception as exc:
-        logger.exception("session_live_data_stop failed")
-        return jsonify({"success": False, "error": str(exc)}), 500
+    payload, status = session_live_data_handlers.stop_live_data_session(request.json or {})
+    return jsonify(payload), status
 
 
 @session_bp.route("/navigate/start", methods=["POST"])
 def session_navigate_start():
-    """Start agentic navigation through the public session facade."""
-    data = request.json or {}
-    session_id = (data.get("session_id") or "").strip()
-    goal = (data.get("goal") or "Navigate to Data Display").strip()
-
-    if not session_id:
-        return jsonify({"success": False, "error": "session_id required"}), 400
-
-    try:
-        orch = get_orchestrator()
-        session = orch.get_session(session_id)
-        ensure_running_gds2_session(session, capability="Navigation")
-        nav_session = start_navigation(
-            _runtime(),
-            session,
-            goal=goal,
-            emit_progress=lambda message: orch.emit_progress(session_id, message),
-        )
-        session.updated_at = time.time()
-        logger.info(
-            "SESSION %s navigation started nav_session=%s goal=%s",
-            session_id,
-            nav_session.session_id,
-            goal,
-        )
-        return jsonify({
-            "success": True,
-            "session_id": session_id,
-            "navigation_session_id": nav_session.session_id,
-            "status": nav_session.status.value,
-        })
-
-    except KeyError as exc:
-        return jsonify({"success": False, "error": str(exc)}), 404
-    except RuntimeError as exc:
-        return jsonify({"success": False, "error": str(exc)}), 409
-    except ValueError as exc:
-        return jsonify({"success": False, "error": str(exc)}), 400
-    except Exception as exc:
-        logger.exception("session_navigate_start failed")
-        return jsonify({"success": False, "error": str(exc)}), 500
+    """Start guided navigation through the public session facade."""
+    payload, status = session_navigation_handlers.start_navigation_session_for_business(request.json or {})
+    return jsonify(payload), status
 
 
 @session_bp.route("/navigate/events")
 def session_navigate_events():
     """SSE endpoint for session-scoped navigation events."""
-    session_id = (request.args.get("session_id") or "").strip()
-    if not session_id:
-        return jsonify({"success": False, "error": "session_id required"}), 400
-
-    try:
-        session = get_orchestrator().get_session(session_id)
-        nav_session_id, nav_session = resolve_navigation(_runtime(), session)
-    except KeyError as exc:
-        return jsonify({"success": False, "error": str(exc)}), 404
-    except LookupError as exc:
-        return jsonify({"success": False, "error": str(exc)}), 404
-    except Exception as exc:
-        logger.exception("session_navigate_events failed to bind")
-        return jsonify({"success": False, "error": str(exc)}), 500
-
-    return _sse_response(
-        iter_navigation_events(
-            runtime=_runtime(),
-            session=session,
-            session_id=session_id,
-            nav_session=nav_session,
-        )
+    result = session_navigation_handlers.stream_navigation_events(
+        (request.args.get("session_id") or "").strip(),
+        sse_response=_sse_response,
     )
+    if isinstance(result, tuple):
+        payload, status = result
+        return jsonify(payload), status
+    return result
 
 
 @session_bp.route("/navigate/decision", methods=["POST"])
 def session_navigate_decision():
     """Submit a navigation decision through the public session facade."""
-    data = request.json or {}
-    session_id = (data.get("session_id") or "").strip()
-    decision_id = (data.get("decision_id") or "").strip()
-    selected_item = (data.get("selected_item") or "").strip()
-
-    if not session_id:
-        return jsonify({"success": False, "error": "session_id required"}), 400
-    if not selected_item:
-        return jsonify({"success": False, "error": "selected_item required"}), 400
-
-    try:
-        session = get_orchestrator().get_session(session_id)
-        nav_session_id, payload = submit_navigation_decision(
-            _runtime(),
-            session,
-            decision_id=decision_id,
-            selected_item=selected_item,
-        )
-        logger.info(
-            "SESSION %s navigation decision submitted nav_session=%s selected=%s",
-            session_id,
-            nav_session_id,
-            selected_item,
-        )
-        return jsonify({
-            "success": True,
-            "session_id": session_id,
-            "navigation_session_id": nav_session_id,
-            "selected_item": payload["selected_item"],
-        })
-
-    except KeyError as exc:
-        return jsonify({"success": False, "error": str(exc)}), 404
-    except LookupError as exc:
-        return jsonify({"success": False, "error": str(exc)}), 404
-    except ValueError as exc:
-        message = str(exc)
-        status_code = 409 if "awaiting a decision" in message else 400
-        return jsonify({"success": False, "error": message}), status_code
-    except Exception as exc:
-        logger.exception("session_navigate_decision failed")
-        return jsonify({"success": False, "error": str(exc)}), 500
+    payload, status = session_navigation_handlers.submit_navigation_decision_for_business(request.json or {})
+    return jsonify(payload), status
 
 
 @session_bp.route("/navigate/abort", methods=["POST"])
 def session_navigate_abort():
     """Abort the active navigation sub-session for a business session."""
-    data = request.json or {}
-    session_id = (data.get("session_id") or "").strip()
-
-    if not session_id:
-        return jsonify({"success": False, "error": "session_id required"}), 400
-
-    try:
-        session = get_orchestrator().get_session(session_id)
-        nav_session_id, payload = abort_navigation(_runtime(), session)
-        return jsonify({
-            "success": True,
-            "session_id": session_id,
-            "navigation_session_id": nav_session_id,
-            "status": payload["status"],
-        })
-
-    except KeyError as exc:
-        return jsonify({"success": False, "error": str(exc)}), 404
-    except LookupError as exc:
-        return jsonify({"success": False, "error": str(exc)}), 404
-    except ValueError as exc:
-        return jsonify({"success": False, "error": str(exc)}), 400
-    except Exception as exc:
-        logger.exception("session_navigate_abort failed")
-        return jsonify({"success": False, "error": str(exc)}), 500
+    payload, status = session_navigation_handlers.abort_navigation_session_for_business(request.json or {})
+    return jsonify(payload), status
 
 
 @session_bp.route("/navigate/status")
 def session_navigate_status():
     """Return navigation sub-session status by business session id."""
-    session_id = (request.args.get("session_id") or "").strip()
-    if not session_id:
-        return jsonify({"success": False, "error": "session_id required"}), 400
-
-    try:
-        session = get_orchestrator().get_session(session_id)
-        payload = navigation_status_payload(_runtime(), session)
-        return jsonify({
-            "success": True,
-            "session_id": session_id,
-            **payload,
-        })
-
-    except KeyError as exc:
-        return jsonify({"success": False, "error": str(exc)}), 404
-    except LookupError as exc:
-        return jsonify({"success": False, "error": str(exc)}), 404
-    except Exception as exc:
-        logger.exception("session_navigate_status failed")
-        return jsonify({"success": False, "error": str(exc)}), 500
+    payload, status = session_navigation_handlers.build_navigation_status_for_business(
+        (request.args.get("session_id") or "").strip()
+    )
+    return jsonify(payload), status
 
 
 # ---------------------------------------------------------------------------

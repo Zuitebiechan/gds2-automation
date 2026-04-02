@@ -1,11 +1,11 @@
 """Shared worker-scoped runtime container.
 
 This module centralizes process-level state that used to live separately in
-`session_api.py`, `diagnostics_api.py`, `navigate_api.py`, and
-`diagnostic_platform/sse.py`.
+`server/api/session.py`, `server/api/diagnostics.py`, `server/api/navigate.py`,
+and `diagnostic_platform/sse.py`.
 
 Current MVP assumption:
-    1 worker process = 1 GDS2 runtime = 1 active customer session
+    1 worker process = 1 active business session = 1 active backend bundle
 """
 
 from __future__ import annotations
@@ -16,9 +16,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from src.agentic.adapters.gds2_adapter import GDS2ActionAdapter
-from src.agentic.executor import DeterministicExecutor
-from src.agentic.session_orchestrator import SessionOrchestrator
+from diagnostic_platform.contracts import (
+    ActiveBackendBundle,
+    BackendActionRuntime,
+    BackendDescriptor,
+)
+from src.gds2_orchestration.session_orchestrator import SessionOrchestrator
 
 if TYPE_CHECKING:
     from src.diagnosis.ai_engine import AIEngine
@@ -112,13 +115,13 @@ class WorkerRuntime:
 
     orchestrator: SessionOrchestrator = field(default_factory=SessionOrchestrator)
     backend: Any | None = None
-    executor: DeterministicExecutor | None = None
-    adapter: GDS2ActionAdapter | None = None
+    active_backend_bundle: ActiveBackendBundle | None = None
+    action_runtime: BackendActionRuntime | None = None
+    executor: Any | None = None
+    adapter: Any | None = None
     data_viewer_getter: Callable[[], Any] | None = None
     data_viewer: Any | None = None
     ai_engine: AIEngine | None = None
-    diag_collector: Any | None = None
-    active_live_data_scope: str | None = None
     business_session_binding: WorkerSessionBinding = field(
         default_factory=WorkerSessionBinding,
         repr=False,
@@ -135,7 +138,55 @@ class WorkerRuntime:
         with self.state_lock:
             self.orchestrator = orchestrator
 
+    def ensure_backend_bundle(
+        self,
+        session_id: str,
+        *,
+        descriptor: BackendDescriptor,
+        backend_factory: Callable[[], Any],
+    ) -> ActiveBackendBundle:
+        self.bind_business_session(session_id)
+        with self.state_lock:
+            bundle = self.active_backend_bundle
+            if bundle is None or bundle.backend_name != descriptor.backend_name:
+                bundle = ActiveBackendBundle(
+                    backend_name=descriptor.backend_name,
+                    descriptor=descriptor,
+                )
+                self.active_backend_bundle = bundle
+                self.backend = None
+                self.action_runtime = None
+                self.executor = None
+                self.adapter = None
+                self.data_viewer = None
+            if bundle.backend is None:
+                bundle.backend = backend_factory()
+            self.backend = bundle.backend
+            return bundle
+
+    def get_active_backend_bundle(
+        self,
+        session_id: str | None = None,
+    ) -> ActiveBackendBundle | None:
+        with self.state_lock:
+            if session_id is not None and self.business_session_binding.session_id != session_id:
+                return None
+            return self.active_backend_bundle
+
+    def clear_active_backend_bundle(self, session_id: str | None = None) -> None:
+        with self.state_lock:
+            if session_id is not None and self.business_session_binding.session_id != session_id:
+                return
+            self.active_backend_bundle = None
+            self.backend = None
+            self.action_runtime = None
+            self.executor = None
+            self.adapter = None
+            self.data_viewer = None
+
     def get_backend(self, factory: Callable[[], Any]) -> Any:
+        if self.active_backend_bundle is not None and self.active_backend_bundle.backend is not None:
+            return self.active_backend_bundle.backend
         if self.backend is not None:
             return self.backend
 
@@ -158,7 +209,21 @@ class WorkerRuntime:
 
     def get_data_viewer(self, backend_factory: Callable[[], Any]) -> Any:
         if self.data_viewer_getter is None:
-            return self.get_backend(backend_factory)._get_workflow()
+            if self.data_viewer is not None:
+                return self.data_viewer
+
+            with self.state_lock:
+                if self.data_viewer is None:
+                    backend = self.get_backend(backend_factory)
+                    guided_runtime_getter = getattr(backend, "get_guided_runtime", None)
+                    if not callable(guided_runtime_getter):
+                        raise RuntimeError(
+                            f"Backend '{getattr(backend, 'name', 'unknown')}' does not expose a guided runtime"
+                        )
+                    self.data_viewer = guided_runtime_getter()
+                    if self.data_viewer is None:
+                        raise RuntimeError("Backend guided runtime getter returned None")
+            return self.data_viewer
 
         if self.data_viewer is not None:
             return self.data_viewer
@@ -171,26 +236,43 @@ class WorkerRuntime:
 
         return self.data_viewer
 
-    def get_executor(self, workflow_factory: Callable[[], Any]) -> DeterministicExecutor:
+    def get_action_runtime(
+        self,
+        action_runtime_factory: Callable[[], BackendActionRuntime],
+    ) -> BackendActionRuntime:
+        if self.action_runtime is not None:
+            return self.action_runtime
+
+        with self.state_lock:
+            if self.action_runtime is None:
+                self.action_runtime = action_runtime_factory()
+                self.executor = self.action_runtime.executor
+                self.adapter = self.action_runtime.adapter
+                if self.active_backend_bundle is not None:
+                    self.active_backend_bundle.action_executor = self.executor
+                    self.active_backend_bundle.backend_private["action_adapter"] = self.adapter
+
+        return self.action_runtime
+
+    def get_executor(self, action_runtime_factory: Callable[[], BackendActionRuntime]) -> Any:
         if self.executor is not None:
             return self.executor
 
-        with self.state_lock:
-            if self.executor is None:
-                workflow = workflow_factory()
-                self.adapter = GDS2ActionAdapter(workflow)
-                self.executor = DeterministicExecutor()
-                self.adapter.register_all(self.executor)
+        return self.get_action_runtime(action_runtime_factory).executor
 
-        return self.executor
-
-    def get_adapter(self) -> GDS2ActionAdapter | None:
+    def get_adapter(self) -> Any | None:
+        if self.action_runtime is not None:
+            return self.action_runtime.adapter
         return self.adapter
 
     def reset_executor(self) -> None:
         with self.state_lock:
+            self.action_runtime = None
             self.executor = None
             self.adapter = None
+            if self.active_backend_bundle is not None:
+                self.active_backend_bundle.action_executor = None
+                self.active_backend_bundle.backend_private.pop("action_adapter", None)
 
     def get_ai_engine(self, factory: Callable[[], AIEngine]) -> AIEngine:
         if self.ai_engine is not None:
@@ -225,6 +307,7 @@ class WorkerRuntime:
                 )
             if binding.session_id != session_id:
                 self.business_session_binding = WorkerSessionBinding(session_id=session_id)
+                self.clear_active_backend_bundle()
 
     def get_business_session_binding(self, session_id: str | None = None) -> WorkerSessionBinding:
         with self.state_lock:
@@ -244,6 +327,7 @@ class WorkerRuntime:
             if session_id is not None and binding.session_id != session_id:
                 return
             self.business_session_binding = WorkerSessionBinding()
+            self.clear_active_backend_bundle()
 
     def start_operation(self, session_id: str, name: str) -> WorkerOperation:
         with self.state_lock:

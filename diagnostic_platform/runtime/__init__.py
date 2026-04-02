@@ -70,7 +70,6 @@ from .session_preflight import (
 )
 from .diagnostics_runtime import (
     build_diagnostics_start_payload,
-    make_data_display_guard,
     read_diagnostic_dtcs,
     retry_public_ai_diagnosis,
     select_diagnostic_module,
@@ -154,7 +153,6 @@ __all__ = [
     "set_network_override",
     "utc_now_iso",
     "build_diagnostics_start_payload",
-    "make_data_display_guard",
     "read_diagnostic_dtcs",
     "retry_public_ai_diagnosis",
     "select_diagnostic_module",

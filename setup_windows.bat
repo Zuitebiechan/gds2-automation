@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 echo ================================================
-echo GDS2 RPA Demo - Windows Setup
+echo Diagnostic Platform RPA - Windows Setup
 echo ================================================
 echo.
 
@@ -30,16 +30,22 @@ echo.
 echo Installing dependencies...
 call venv32\Scripts\activate.bat
 python -m pip install --upgrade pip
-python -m pip install -r requirements-minimal.txt
+python -m pip install -r requirements-cloud.txt
+python -m pip install -r requirements-client.txt
 
 echo.
 echo ================================================
 echo Setup complete!
 echo ================================================
 echo.
-echo To run the demo:
+echo To run the cloud API server:
 echo   1. Open Command Prompt in this folder
 echo   2. Run: venv32\Scripts\activate
-echo   3. Run: python main.py inspect
+echo   3. Run: python app.py --port 8080
+echo.
+echo To run the local client GUI:
+echo   1. Open Command Prompt in this folder
+echo   2. Run: venv32\Scripts\activate
+echo   3. Run: python -m vci_proxy.client_gui
 echo.
 pause

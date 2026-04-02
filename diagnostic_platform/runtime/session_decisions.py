@@ -6,8 +6,8 @@ import logging
 import uuid
 from typing import Any, Callable
 
-from src.agentic.planner import BranchDecisionRequiredError
-from src.agentic.session_orchestrator import DecisionGate, DecisionOption
+from src.gds2_orchestration.planner import BranchDecisionRequiredError
+from src.gds2_orchestration.session_orchestrator import DecisionGate, DecisionOption
 
 from .session_actions import resume_branch_selection
 from .session_preflight import (
@@ -95,7 +95,9 @@ def raise_branch_decision(
         "success": True,
         "session_id": session.session_id,
         "status": session.status.value,
-        "workflow": session.workflow,
+        "backend_name": session.backend_name,
+        "capabilities": list(getattr(session, "capabilities", []) or []),
+        "workflow": session.backend_name,
         "decision_required": True,
         "decision": gate.to_dict(),
     }
@@ -162,7 +164,9 @@ def submit_session_decision(
             "success": True,
             "session_id": session.session_id,
             "status": session.status.value,
-            "workflow": session.workflow,
+            "backend_name": session.backend_name,
+            "capabilities": list(getattr(session, "capabilities", []) or []),
+            "workflow": session.backend_name,
             "cancelled": True,
             **get_session_network_snapshot(
                 orchestrator=orchestrator,
@@ -205,7 +209,9 @@ def submit_session_decision(
             "success": True,
             "session_id": session.session_id,
             "status": session.status.value,
-            "workflow": session.workflow,
+            "backend_name": session.backend_name,
+            "capabilities": list(getattr(session, "capabilities", []) or []),
+            "workflow": session.backend_name,
             "resumed": True,
             "resume_action": resume_payload["resume_action"],
             "selected_choice": resume_payload["selected_choice"],
@@ -216,5 +222,7 @@ def submit_session_decision(
         "success": True,
         "session_id": session.session_id,
         "status": session.status.value,
-        "workflow": session.workflow,
+        "backend_name": session.backend_name,
+        "capabilities": list(getattr(session, "capabilities", []) or []),
+        "workflow": session.backend_name,
     }

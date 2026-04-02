@@ -8,8 +8,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from src.agentic.session_orchestrator import DecisionGate, DecisionOption, SessionStatus
+from src.gds2_orchestration.session_orchestrator import DecisionGate, DecisionOption, SessionStatus
 
+from diagnostic_platform.contracts import BackendCapability
+
+from .session_backends import ensure_session_capability
 from .session_state import (
     clear_ai_binding,
     clear_navigation_binding,
@@ -87,16 +90,17 @@ def clear_network_override(*, orchestrator: Any, session_id: str, reason: str = 
 
 def get_session_network_snapshot(*, orchestrator: Any, backend: Any, session_id: str) -> dict[str, Any]:
     session = orchestrator.get_session(session_id)
-    if session.workflow != "gds2":
+    preflight = getattr(backend, "preflight", None)
+    if not callable(preflight):
         return {
             "network_quality": None,
             "network_override": None,
             "connection_epoch": None,
         }
 
-    preflight = backend.preflight()
-    network_quality = preflight.get("network_quality")
-    connection_epoch = preflight.get("connection_epoch")
+    snapshot = preflight() or {}
+    network_quality = snapshot.get("network_quality")
+    connection_epoch = snapshot.get("connection_epoch")
     effective_override = get_effective_network_override(session, connection_epoch)
     raw_override = getattr(session, "network_override", None)
     if isinstance(raw_override, dict) and effective_override is None and raw_override.get("allowed"):
@@ -183,10 +187,7 @@ def run_start_diagnostics(
     resumed: bool = False,
 ) -> dict[str, Any]:
     session = orchestrator.get_session(session_id)
-    if session.status != SessionStatus.RUNNING:
-        raise ValueError(f"Session not running (status={session.status.value})")
-    if session.workflow != "gds2":
-        raise ValueError(f"Session workflow is '{session.workflow}', not 'gds2'")
+    ensure_session_capability(session, BackendCapability.CORE_SESSION)
 
     network_snapshot = get_session_network_snapshot(
         orchestrator=orchestrator,
@@ -221,7 +222,9 @@ def run_start_diagnostics(
             "success": True,
             "session_id": session_id,
             "status": session.status.value,
-            "workflow": session.workflow,
+            "backend_name": session.backend_name,
+            "capabilities": list(getattr(session, "capabilities", []) or []),
+            "workflow": session.backend_name,
             "decision_required": True,
             "decision": gate.to_dict(),
             **network_snapshot,
@@ -229,8 +232,15 @@ def run_start_diagnostics(
 
     operation = runtime.start_operation(session_id, "start_diagnostics")
     try:
-        orchestrator.emit_progress(session_id, "Starting GDS2 diagnostics...")
-        start_result = backend.start(cancel_checker=operation.check_cancelled) or {}
+        orchestrator.emit_progress(
+            session_id,
+            f"Starting {session.backend_name or 'diagnostic'} backend...",
+        )
+        start_method = getattr(backend, "start")
+        try:
+            start_result = start_method(cancel_checker=operation.check_cancelled) or {}
+        except TypeError:
+            start_result = start_method() or {}
         operation.check_cancelled()
         state = backend.get_state()
         modules = start_result.get("modules") if isinstance(start_result, dict) else None
@@ -254,7 +264,11 @@ def run_start_diagnostics(
         clear_navigation_binding(runtime, session)
         clear_ai_binding(runtime, session)
         set_live_data_active(runtime, session, False)
-        orchestrator.emit_progress(session_id, "GDS2 diagnostics started", result)
+        orchestrator.emit_progress(
+            session_id,
+            f"{session.backend_name or 'Diagnostic'} backend started",
+            result,
+        )
         logger.info(
             "[NETWORK_GATE] session=%s decision=allow resumed=%s override=%s modules=%s device=%s %s",
             session_id,
@@ -269,7 +283,9 @@ def run_start_diagnostics(
             "success": True,
             "session_id": session_id,
             "status": session.status.value,
-            "workflow": session.workflow,
+            "backend_name": session.backend_name,
+            "capabilities": list(getattr(session, "capabilities", []) or []),
+            "workflow": session.backend_name,
             "result": result,
             **network_snapshot,
         }

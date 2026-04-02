@@ -10,17 +10,27 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from diagnostic_platform.contracts import (
+    BackendActionRuntime,
+    BackendCapability,
     BackendState,
     ClearResult,
     DTC,
+    DiagnosticPayload,
     DiagnosticBackend,
     LiveDataPoint,
     LiveDataStream,
+    SamplingQuality,
+    VehicleContext,
 )
 from diagnostic_platform.runtime.worker_runtime import OperationCancelledError
+from diagnostic_platform.sse import (
+    DEFAULT_AGENT_STREAM_SCOPE,
+    broadcast_agent_event,
+    make_scoped_agent_event_callbacks,
+)
 from backends.gds2.controller_runtime import GDS2ControllerRuntime
 from src.navigation import GDS2Page, NavigationController
-from src.streaming import AgentDataCollector
+from src.streaming import AgentDataCollector, DiagnosticBuffer
 from src.streaming.agent_data_collector import AgentSnapshot
 
 if TYPE_CHECKING:
@@ -66,6 +76,7 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
         self._runtime = runtime or GDS2ControllerRuntime(workflow=workflow)
         self._active_collector: AgentDataCollector | None = None
         self._active_stream: LiveDataStream | None = None
+        self._active_stream_scope: str | None = None
         self._latest_live_data: list[LiveDataPoint] = []
         self._stream_error: str | None = None
         self._last_start_result: dict[str, Any] | None = None
@@ -76,9 +87,24 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
         return "gds2"
 
     @property
+    def display_name(self) -> str:
+        return "GDS2"
+
+    @property
     def supported_brands(self) -> list[str]:
         """Return the GM brands supported by GDS2."""
         return GM_BRANDS.copy()
+
+    @property
+    def capabilities(self) -> list[BackendCapability]:
+        return [
+            BackendCapability.CORE_SESSION,
+            BackendCapability.READ_DTCS,
+            BackendCapability.LIVE_DATA,
+            BackendCapability.AI_DATA_COLLECTION,
+            BackendCapability.NAVIGATION,
+            BackendCapability.GENERIC_ACTIONS,
+        ]
 
     @property
     def latest_live_data(self) -> list[LiveDataPoint]:
@@ -117,6 +143,7 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
 
             self._active_collector = None
             self._active_stream = None
+            self._active_stream_scope = None
             self._latest_live_data = []
             self._stream_error = None
 
@@ -196,29 +223,30 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
         args: dict[str, Any] | None = None,
         timeout_sec: float = 30.0,
     ) -> dict[str, Any]:
-        """Execute a named GDS2 action through the shared agentic executor."""
+        """Execute a named backend action through the GDS2 action runtime."""
         try:
             try:
-                from src.agentic import DeterministicExecutor, GDS2ActionAdapter
-                from src.agentic import ActionStep, GDS2Action
+                from src.gds2_orchestration import ActionStep, GDS2Action
             except ImportError:
-                from src.agentic import DeterministicExecutor, GDS2ActionAdapter
-                from src.agentic.contracts import ActionStep, GDS2Action
+                from src.gds2_orchestration.contracts import ActionStep, GDS2Action
+            from src.gds2_orchestration.planner import BranchDecisionRequiredError
 
             step = ActionStep(
                 action=GDS2Action[action.upper()],
                 args=args or {},
                 timeout_sec=timeout_sec,
             )
-            executor = DeterministicExecutor()
-            adapter = GDS2ActionAdapter(self._get_workflow())
-            adapter.register_all(executor)
+            action_runtime = self.build_action_runtime()
+            executor = action_runtime.executor
+            adapter = action_runtime.adapter
             result = executor.execute_step(step, adapter.get_current_ui_state())
             return {
                 "success": result.success,
                 "metadata": result.metadata,
                 "error": result.error,
             }
+        except BranchDecisionRequiredError:
+            raise
         except Exception as exc:  # pragma: no cover - runtime integration wrapper
             return {
                 "success": False,
@@ -302,6 +330,167 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
         except Exception as exc:  # pragma: no cover - runtime integration wrapper
             raise RuntimeError(f"Failed to stop GDS2 live data: {exc}") from exc
 
+    def start_live_data_session(
+        self,
+        *,
+        data_category: str,
+        interval_ms: int,
+        stream_scope: str,
+    ) -> dict[str, Any]:
+        """Own GDS2 live-data collection, SSE wiring, and Data Display guarding."""
+        if not data_category:
+            raise ValueError("Data category required")
+
+        resolved_scope = stream_scope or DEFAULT_AGENT_STREAM_SCOPE
+        if self._active_collector is not None and self._active_collector.is_running:
+            if self._active_stream_scope == resolved_scope:
+                return {
+                    "success": True,
+                    "message": "Streaming already running",
+                }
+            self.stop_live_data_session()
+
+        self._ensure_data_display(data_category)
+        callbacks = make_scoped_agent_event_callbacks(resolved_scope)
+        page_guard = self.build_data_display_guard(
+            data_category=data_category,
+            mode="stream",
+        )
+
+        def on_snapshot(snapshot: AgentSnapshot, changes: list[dict[str, Any]]) -> None:
+            self._handle_snapshot(snapshot, changes)
+            callbacks["on_snapshot"](snapshot, changes)
+
+        def on_error(message: str) -> None:
+            self._handle_stream_error(message)
+            callbacks["on_error"](message)
+
+        def on_guard_event(event: dict[str, Any]) -> None:
+            message = str(event.get("message") or "").strip()
+            if message:
+                broadcast_agent_event(resolved_scope, "guard", {"message": message})
+
+        self._stream_error = None
+        self._latest_live_data = []
+        self._active_stream = LiveDataStream(session_id=uuid4().hex, active=True)
+        self._active_stream_scope = resolved_scope
+        self._active_collector = AgentDataCollector(
+            on_snapshot=on_snapshot,
+            on_param_change=callbacks["on_param_change"],
+            on_dtc_change=callbacks["on_dtc_change"],
+            on_error=on_error,
+            page_guard=page_guard,
+            on_guard_event=on_guard_event,
+            interval_ms=interval_ms,
+        )
+        self._active_collector.start()
+        return {
+            "success": True,
+            "message": "Live data streaming started",
+            "interval_ms": interval_ms,
+        }
+
+    def stop_live_data_session(self) -> dict[str, Any]:
+        """Stop backend-owned GDS2 live-data collection."""
+        if self._active_collector is not None:
+            self._active_collector.stop()
+        self._active_collector = None
+        self._active_stream_scope = None
+
+        if self._active_stream is not None:
+            self._active_stream = LiveDataStream(
+                session_id=self._active_stream.session_id,
+                active=False,
+            )
+
+        current_page = self.detect_current_page()
+        if current_page == GDS2Page.DATA_DISPLAY.value:
+            self.go_back()
+
+        return {"success": True, "message": "Live data stopped"}
+
+    def collect_ai_payload(
+        self,
+        *,
+        vehicle_context: dict[str, Any],
+        data_category: str,
+        collection_seconds: int,
+    ) -> DiagnosticPayload:
+        """Collect a backend-owned AI payload from GDS2 Data Display."""
+        if not data_category:
+            raise ValueError("Data category required")
+
+        self._ensure_data_display(data_category)
+        buffer = DiagnosticBuffer(window_seconds=max(1, collection_seconds or 1))
+        live_data: list[LiveDataPoint] = []
+        latest_dtcs: list[DTC] = []
+        collector_error: dict[str, str | None] = {"error": None}
+        guard_event_state: dict[str, dict[str, Any] | None] = {"event": None}
+
+        def on_snapshot(snapshot: AgentSnapshot, _changes: list[dict[str, Any]]) -> None:
+            nonlocal latest_dtcs
+            buffer.append_snapshot(snapshot)
+            live_data.extend(self._snapshot_to_live_data_points(snapshot))
+            latest_dtcs = self._snapshot_to_dtcs(snapshot)
+
+        def on_error(message: str) -> None:
+            collector_error["error"] = message
+
+        def on_guard_event(event: dict[str, Any]) -> None:
+            guard_event_state["event"] = event
+
+        collector = AgentDataCollector(
+            on_snapshot=on_snapshot,
+            on_error=on_error,
+            page_guard=self.build_data_display_guard(
+                data_category=data_category,
+                mode="ai_collect",
+            ),
+            on_guard_event=on_guard_event,
+            interval_ms=100,
+        )
+
+        availability_checker = getattr(collector, "check_agent_available", None)
+        if callable(availability_checker):
+            availability = availability_checker()
+            if isinstance(availability, dict) and not availability.get("available"):
+                raise RuntimeError("Java Agent not available. Start GDS2 with the agent.")
+
+        collector.start()
+        try:
+            deadline = time.time() + max(0, collection_seconds)
+            while time.time() < deadline:
+                if collector_error["error"]:
+                    raise RuntimeError(str(collector_error["error"]))
+
+                guard_event = guard_event_state.get("event")
+                if guard_event:
+                    guard_event_state["event"] = None
+                    if not guard_event.get("ok", True):
+                        raise RuntimeError(
+                            str(guard_event.get("error") or "Data Display guard failed.")
+                        )
+                    if guard_event.get("restart_collection"):
+                        buffer.clear()
+                        live_data.clear()
+                        latest_dtcs = []
+                        deadline = time.time() + max(0, collection_seconds)
+
+                time.sleep(1.0)
+        finally:
+            collector.stop()
+
+        if collector_error["error"]:
+            raise RuntimeError(str(collector_error["error"]))
+
+        return DiagnosticPayload(
+            vehicle_context=self._build_vehicle_context(vehicle_context),
+            dtcs=latest_dtcs,
+            live_data=live_data,
+            sampling_quality=self._sampling_quality_from_buffer(buffer),
+            source_backend=self.name,
+        )
+
     def clear_dtcs(self) -> ClearResult:
         """Clear DTCs is not implemented for GDS2 yet."""
         raise NotImplementedError("GDS2 clear DTC not yet implemented.")
@@ -355,6 +544,105 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
         self._stream_error = message
         logger.warning("GDS2 live data stream error: %s", message)
 
+    def build_data_display_guard(
+        self,
+        *,
+        data_category: str,
+        mode: str,
+        check_interval: float = 5.0,
+    ):
+        """Build the GDS2-specific Data Display guard used by live and AI collection."""
+        if mode not in {"stream", "ai_collect"}:
+            raise ValueError(f"Unsupported guard mode: {mode}")
+
+        last_check_ts: list[float] = [0.0]
+        last_result: list[dict[str, Any] | None] = [None]
+
+        def guard() -> dict[str, Any] | None:
+            now = time.time()
+            if now - last_check_ts[0] < check_interval:
+                return last_result[0]
+
+            last_check_ts[0] = now
+            page = self.detect_current_page()
+            if page == GDS2Page.DATA_DISPLAY.value:
+                last_result[0] = None
+                return None
+
+            last_check_ts[0] = 0.0
+
+            if page == GDS2Page.LOADING.value:
+                last_result[0] = {
+                    "ok": True,
+                    "mode": mode,
+                    "message": "Waiting for GDS2 loading page to finish...",
+                }
+                return last_result[0]
+
+            if page == GDS2Page.J2534_DISCONNECT.value:
+                recovery = self._get_workflow().controller.recover_data_display_connection(
+                    data_category=data_category,
+                    allow_backtrack=True,
+                )
+                if recovery.success and recovery.page == GDS2Page.DATA_DISPLAY:
+                    recovery_method = (recovery.context or {}).get("recovery_method", "unknown")
+                    if mode == "ai_collect" and recovery_method == "backtrack":
+                        message = (
+                            "Recovered Data Display after reconnect; restarting AI collection "
+                            "window."
+                        )
+                    elif mode == "ai_collect":
+                        message = (
+                            "Recovered temporary J2534 disconnect and returned to Data Display."
+                        )
+                    else:
+                        message = "Recovered Data Display after J2534 disconnect."
+                    last_result[0] = {
+                        "ok": True,
+                        "mode": mode,
+                        "recovered": True,
+                        "recovery_method": recovery_method,
+                        "restart_collection": (
+                            mode == "ai_collect" and recovery_method == "backtrack"
+                        ),
+                        "message": message,
+                    }
+                    return last_result[0]
+
+                if mode == "ai_collect":
+                    last_result[0] = {
+                        "ok": False,
+                        "mode": mode,
+                        "error": (
+                            "Lost communication with J2534 during AI collection and could not "
+                            "restore Data Display in-place. Please reconnect and restart AI "
+                            "Diagnostics."
+                        ),
+                    }
+                    return last_result[0]
+
+                last_result[0] = {
+                    "ok": False,
+                    "mode": mode,
+                    "error": (
+                        "Lost communication with J2534 and could not restore Data Display. "
+                        "Please reconnect and restart live monitoring."
+                    ),
+                }
+                return last_result[0]
+
+            last_result[0] = {
+                "ok": False,
+                "mode": mode,
+                "error": (
+                    f"Data Display guard detected page drift to {page}. "
+                    "Please return to Data Display and retry."
+                ),
+            }
+            return last_result[0]
+
+        return guard
+
     def _get_cached_start_modules(self) -> list[str]:
         if not isinstance(self._last_start_result, dict):
             return []
@@ -382,6 +670,22 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
         """Return the bound navigation controller, creating the workflow if required."""
         return self._runtime.get_controller()
 
+    def get_guided_runtime(self) -> Any:
+        """Expose the backend-owned guided runtime for selection flows."""
+        return self._get_workflow()
+
+    def build_action_runtime(self) -> BackendActionRuntime:
+        """Build a backend-owned executor/adapter bridge for generic actions."""
+        try:
+            from src.gds2_orchestration import DeterministicExecutor, GDS2ActionAdapter
+        except ImportError:
+            from src.gds2_orchestration import DeterministicExecutor, GDS2ActionAdapter
+
+        executor = DeterministicExecutor()
+        adapter = GDS2ActionAdapter(self.get_guided_runtime())
+        adapter.register_all(executor)
+        return BackendActionRuntime(executor=executor, adapter=adapter)
+
     @staticmethod
     def _create_workflow() -> Any:
         """Lazily import and construct DataViewerWorkflow."""
@@ -400,6 +704,73 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
                 f"Cannot {action} while on page '{current_page.value}'; expected '{expected_page.value}'"
             )
         return current_page
+
+    def _ensure_data_display(self, data_category: str) -> None:
+        current_page = self.detect_current_page()
+        if current_page != GDS2Page.DATA_DISPLAY.value:
+            self.select_data_category(data_category)
+
+    def _snapshot_to_live_data_points(self, snapshot: AgentSnapshot) -> list[LiveDataPoint]:
+        timestamp = snapshot.collected_at_s or snapshot.agent_timestamp_s or time.time()
+        converted_points: list[LiveDataPoint] = []
+
+        for parameter in snapshot.parameters:
+            numeric_value = self._coerce_float(parameter.get("value"))
+            if numeric_value is None:
+                continue
+
+            name = str(parameter.get("name") or "").strip()
+            if not name:
+                continue
+
+            converted_points.append(
+                LiveDataPoint(
+                    parameter=name,
+                    value=numeric_value,
+                    unit=str(parameter.get("unit") or "").strip(),
+                    timestamp=timestamp,
+                )
+            )
+
+        return converted_points
+
+    def _snapshot_to_dtcs(self, snapshot: AgentSnapshot) -> list[DTC]:
+        return [
+            DTC(
+                code=str(dtc.code).strip(),
+                module=str(dtc.control_module or "Unknown Module"),
+                status=str(dtc.status or "unknown"),
+                description=str(dtc.description or ""),
+                source_backend=self.name,
+            )
+            for dtc in snapshot.dtcs
+            if str(dtc.code).strip()
+        ]
+
+    def _build_vehicle_context(self, vehicle_context: dict[str, Any]) -> VehicleContext:
+        state = self.get_state()
+        extra = state.extra if isinstance(state.extra, dict) else {}
+        return VehicleContext(
+            brand=str(vehicle_context.get("brand") or "GM"),
+            model=str(vehicle_context.get("model") or ""),
+            vin=(
+                str(vehicle_context.get("vin") or "").strip()
+                or str(extra.get("vin") or "").strip()
+                or None
+            ),
+            problem_description=str(vehicle_context.get("problem_description") or "").strip()
+            or None,
+        )
+
+    @staticmethod
+    def _sampling_quality_from_buffer(buffer: DiagnosticBuffer) -> SamplingQuality:
+        quality = buffer.get_delta_payload().get("sampling_quality", {})
+        grade = str(quality.get("grade") or "").upper()
+        if grade == "A":
+            return SamplingQuality.GOOD
+        if grade == "B":
+            return SamplingQuality.FAIR
+        return SamplingQuality.POOR
 
     @staticmethod
     def _coerce_float(value: Any) -> float | None:

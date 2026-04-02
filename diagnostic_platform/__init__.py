@@ -19,16 +19,6 @@ from .contracts import (
     DiagnosticBackend,
     BackendRegistry,
 )
-from .sse import (
-    agent_clients,
-    agent_lock,
-    broadcast_to_agent_clients,
-    on_agent_snapshot,
-    on_agent_param_change,
-    on_agent_dtc_change,
-    on_agent_error,
-)
-
 __all__ = [
     "VehicleContext",
     "DTC",
@@ -49,3 +39,19 @@ __all__ = [
     "on_agent_dtc_change",
     "on_agent_error",
 ]
+
+
+def __getattr__(name: str):
+    if name in {
+        "agent_clients",
+        "agent_lock",
+        "broadcast_to_agent_clients",
+        "on_agent_snapshot",
+        "on_agent_param_change",
+        "on_agent_dtc_change",
+        "on_agent_error",
+    }:
+        from . import sse
+
+        return getattr(sse, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

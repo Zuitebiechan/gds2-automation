@@ -1,19 +1,18 @@
 """In-memory session orchestration with decision flow and SSE events.
 
-Manages session lifecycle: routing by brand, decision gates for
-uncertain/missing workflows, and SSE-formatted event strings for
+Manages session lifecycle: backend routing by brand, decision gates for
+uncertain/missing backend selection, and SSE-formatted event strings for
 real-time client communication.
 
 NOTE on session management layers:
     This module provides the *business-level* session manager used by
-    session_api.py (/api/session/*).  It handles brand-to-workflow
+    server/api/session.py (/api/session/*).  It handles brand-to-backend
     routing, DecisionGate with timeout/fallback, and ad-hoc progress
-    events from workflow executors.
+    events from backend executors.
 
-    A separate, simpler session mechanism exists in navigate_api.py
-    (NavSession / _sessions) which manages the *execution-level*
-    LangGraph lifecycle (graph.stream + HITL pause/resume) for the
-    /api/navigate/* endpoints.  The two are intentionally independent.
+    A separate, simpler session mechanism exists in server/api/navigate.py
+    for the *execution-level* deterministic navigation flow used by
+    the /api/navigate/* endpoints. The two are intentionally independent.
 """
 
 import json
@@ -23,9 +22,14 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
+
+from diagnostic_platform.backend_registry import get_backend_registry
+from diagnostic_platform.contracts import BackendDescriptor
 
 logger = logging.getLogger(__name__)
+
+BACKEND_DECISION_KINDS = {"backend"}
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -33,7 +37,6 @@ logger = logging.getLogger(__name__)
 
 # Module-level singleton registry for brand → backend routing.
 # Lazily initialised on first call to avoid circular imports.
-_registry = None
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -97,7 +100,7 @@ class DecisionGate:
     decision_id: str
     prompt: str
     options: List[DecisionOption]
-    kind: str = "workflow"
+    kind: str = "backend"
     context: Dict[str, Any] = field(default_factory=dict)
     timeout_sec: float = 120.0
     fallback_option_id: Optional[str] = None
@@ -143,6 +146,7 @@ class SessionContext:
     brand: str
     model: str = ""
     vin: str = ""
+    backend_name: str = ""
     extra: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -154,6 +158,7 @@ class SessionContext:
             "brand": self.brand,
             "model": self.model,
             "vin": self.vin,
+            "backend_name": self.backend_name,
             "extra": self.extra,
         }
 
@@ -165,7 +170,8 @@ class Session:
     session_id: str
     context: SessionContext
     status: SessionStatus = SessionStatus.PENDING
-    workflow: Optional[str] = None
+    backend_name: Optional[str] = None
+    capabilities: List[str] = field(default_factory=list)
     pending_decision: Optional[DecisionGate] = None
     network_override: Optional[Dict[str, Any]] = None
     resolved_decisions: List[Dict[str, Any]] = field(default_factory=list)
@@ -180,7 +186,9 @@ class Session:
             "session_id": self.session_id,
             "context": self.context.to_dict(),
             "status": self.status.value,
-            "workflow": self.workflow,
+            "backend_name": self.backend_name,
+            "workflow": self.backend_name,
+            "capabilities": self.capabilities,
             "pending_decision": (
                 self.pending_decision.to_dict()
                 if self.pending_decision
@@ -216,29 +224,61 @@ def sse_event(event_type: str, data: Dict[str, Any]) -> str:
 
 def _get_registry():
     """Return the shared backend registry for brand routing."""
-    global _registry
-
-    if _registry is None:
-        from backends.gds2 import GDS2DiagnosticBackend
-        from diagnostic_platform.contracts import BackendRegistry
-
-        _registry = BackendRegistry()
-        _registry.register(GDS2DiagnosticBackend())
-
-    return _registry
+    return get_backend_registry()
 
 
-def route_workflow(brand: str) -> Optional[str]:
+def _descriptor_capabilities(descriptor: BackendDescriptor) -> list[str]:
+    return descriptor.capability_values()
+
+
+def _descriptors_for_brand(brand: str) -> list[BackendDescriptor]:
+    return [backend.descriptor for backend in _get_registry().find_by_brand(brand)]
+
+
+def _all_backend_descriptors() -> list[BackendDescriptor]:
+    return _get_registry().list_descriptors()
+
+
+def _backend_option(descriptor: BackendDescriptor) -> DecisionOption:
+    supported = ", ".join(descriptor.supported_brands[:3])
+    return DecisionOption(
+        option_id=f"backend:{descriptor.backend_name}",
+        label=descriptor.display_name,
+        description=supported or descriptor.ui_mode,
+    )
+
+
+def _build_backend_decision(
+    *,
+    brand: str,
+    descriptors: list[BackendDescriptor],
+) -> DecisionGate:
+    prompt = (
+        f"Multiple backends can handle brand '{brand}'. Please choose a backend."
+        if descriptors
+        else f"No automatic backend for brand '{brand}'. Please choose a backend."
+    )
+    options = [_backend_option(descriptor) for descriptor in (descriptors or _all_backend_descriptors())]
+    options.append(
+        DecisionOption(
+            option_id="manual",
+            label="Manual",
+            description="Skip automated backend binding",
+        )
+    )
+    return DecisionGate(
+        decision_id=uuid.uuid4().hex[:12],
+        prompt=prompt,
+        options=options,
+        kind="backend",
+        timeout_sec=120.0,
+        fallback_option_id="manual",
+    )
+
+
+def route_backend(brand: str) -> Optional[str]:
     """Return the backend name for a brand, or ``None`` if unsupported."""
-    normalized_brand = brand.lower().strip()
-    if not normalized_brand:
-        return None
-
-    try:
-        backend = _get_registry().get_by_brand(normalized_brand)
-        return backend.name
-    except KeyError:
-        return None
+    return _get_registry().resolve_brand(brand).selected_backend_name
 
 
 # ---------------------------------------------------------------------------
@@ -253,9 +293,13 @@ class SessionOrchestrator:
     transitions consumed by the API layer.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, registry_provider: Callable[[], Any] | None = None) -> None:
         self._sessions: Dict[str, Session] = {}
         self._queues: Dict[str, queue.Queue] = {}
+        self._registry_provider = registry_provider or get_backend_registry
+
+    def _registry(self):
+        return self._registry_provider()
 
     # -- helpers -------------------------------------------------------------
 
@@ -293,12 +337,12 @@ class SessionOrchestrator:
     # -- public API ----------------------------------------------------------
 
     def start_session(self, context: SessionContext) -> Session:
-        """Create a session, route by brand, and emit initial events.
+        """Create a session, resolve a backend by brand, and emit initial events.
 
-        If the brand maps to a known workflow, status becomes ``running``
+        If the brand maps to a known backend, status becomes ``running``
         and a ``progress`` event is emitted.  Otherwise status becomes
         ``awaiting_decision`` with a ``decision_required`` event asking
-        the user to select a workflow.
+        the user to select a backend.
         """
         active_session = self._find_active_session()
         if active_session is not None:
@@ -312,30 +356,39 @@ class SessionOrchestrator:
         self._sessions[session_id] = session
         self._queues[session_id] = queue.Queue(maxsize=500)
 
-        workflow = route_workflow(context.brand)
+        preferred_backend_name = (
+            context.backend_name
+            or str(context.extra.get("backend_name") or "").strip()
+        )
+        routed_backend_name = (
+            preferred_backend_name
+            or route_backend(context.brand)
+        )
+        resolution = self._registry().resolve_brand(
+            context.brand,
+            preferred_backend_name=routed_backend_name or None,
+        )
+        descriptors = list(resolution.candidates)
 
-        if workflow is not None:
-            session.workflow = workflow
+        if resolution.selected_backend_name is not None:
+            descriptor = resolution.selected_descriptor or self._registry().get_descriptor(
+                resolution.selected_backend_name
+            )
+            session.backend_name = descriptor.backend_name
+            session.capabilities = _descriptor_capabilities(descriptor)
             session.status = SessionStatus.RUNNING
             self._touch(session)
             self._emit(session_id, SessionEventType.PROGRESS, {
-                "message": f"Routed to {workflow} workflow",
-                "workflow": workflow,
+                "message": f"Routed to {descriptor.backend_name} backend",
+                "workflow": session.backend_name,
+                "backend_name": session.backend_name,
+                "capabilities": session.capabilities,
                 "session_id": session_id,
             })
         else:
-            # Unknown brand — ask user to pick
-            decision = DecisionGate(
-                decision_id=uuid.uuid4().hex[:12],
-                prompt=f"No automatic workflow for brand '{context.brand}'. Please select a workflow.",
-                options=[
-                    DecisionOption(option_id="gds2", label="GDS2",
-                                   description="General Motors GDS2 diagnostic tool"),
-                    DecisionOption(option_id="manual", label="Manual",
-                                   description="Skip automated workflow"),
-                ],
-                timeout_sec=120.0,
-                fallback_option_id="manual",
+            decision = _build_backend_decision(
+                brand=context.brand,
+                descriptors=descriptors,
             )
             session.pending_decision = decision
             session.status = SessionStatus.AWAITING_DECISION
@@ -400,14 +453,23 @@ class SessionOrchestrator:
         }
         session.resolved_decisions.append(resolution)
 
-        # Apply decision only for workflow-routing gates.
-        if gate.kind == "workflow":
-            if option_id == "gds2":
-                session.workflow = "gds2"
-            elif option_id == "manual":
-                session.workflow = "manual"
+        is_backend_gate = gate.kind in BACKEND_DECISION_KINDS
+        if is_backend_gate:
+            if option_id == "manual":
+                session.backend_name = "manual"
+                session.capabilities = []
+            elif option_id.startswith("backend:"):
+                backend_name = option_id.split(":", 1)[1]
+                descriptor = self._registry().get_descriptor(backend_name)
+                session.backend_name = descriptor.backend_name
+                session.capabilities = _descriptor_capabilities(descriptor)
             else:
-                session.workflow = option_id
+                session.backend_name = option_id
+                try:
+                    descriptor = self._registry().get_descriptor(option_id)
+                    session.capabilities = _descriptor_capabilities(descriptor)
+                except KeyError:
+                    session.capabilities = []
 
         session.pending_decision = None
         session.status = SessionStatus.RUNNING
@@ -422,11 +484,13 @@ class SessionOrchestrator:
         self._emit(session_id, SessionEventType.PROGRESS, {
             "session_id": session_id,
             "message": (
-                f"Workflow set to {session.workflow}"
-                if gate.kind == "workflow"
+                f"Backend set to {session.backend_name}"
+                if is_backend_gate
                 else f"Decision '{option_id}' applied"
             ),
-            "workflow": session.workflow,
+            "workflow": session.backend_name,
+            "backend_name": session.backend_name,
+            "capabilities": session.capabilities,
         })
 
         return session
@@ -523,7 +587,7 @@ class SessionOrchestrator:
         self._emit(session_id, SessionEventType.PROGRESS, data)
 
     def raise_decision(self, session_id: str, gate: DecisionGate) -> Session:
-        """Push a new decision gate mid-workflow.
+        """Push a new decision gate mid-session.
 
         Transitions session to ``awaiting_decision``.
         """

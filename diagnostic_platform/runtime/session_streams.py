@@ -8,7 +8,7 @@ import queue
 from collections.abc import Iterator
 from typing import Any, Callable
 
-from src.agentic.session_orchestrator import SessionStatus
+from src.gds2_orchestration.session_orchestrator import SessionStatus
 
 from .session_actions import (
     apply_navigation_event,

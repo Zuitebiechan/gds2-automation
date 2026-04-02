@@ -91,6 +91,82 @@ class SamplingQuality(Enum):
     POOR = "poor"
 
 
+class BackendCapability(str, Enum):
+    CORE_SESSION = "core_session"
+    READ_DTCS = "read_dtcs"
+    LIVE_DATA = "live_data"
+    AI_DATA_COLLECTION = "ai_data_collection"
+    NAVIGATION = "navigation"
+    GENERIC_ACTIONS = "generic_actions"
+    CLEAR_DTCS = "clear_dtcs"
+
+
+class UnsupportedCapabilityError(RuntimeError):
+    """Raised when one backend capability is requested but not implemented."""
+
+    def __init__(self, capability: BackendCapability, backend_name: str):
+        self.capability = capability
+        self.backend_name = backend_name
+        capability_label = capability.value.replace("_", " ").capitalize()
+        super().__init__(
+            f"Backend '{backend_name}' does not support {capability_label}"
+        )
+
+
+@dataclass(frozen=True)
+class BackendDescriptor:
+    backend_name: str
+    display_name: str
+    supported_brands: list[str]
+    capabilities: list[BackendCapability]
+    default_for_brands: list[str]
+    ui_mode: str = "guided"
+
+    def capability_values(self) -> list[str]:
+        return [capability.value for capability in self.capabilities]
+
+    def supports(self, capability: BackendCapability | str) -> bool:
+        capability_value = capability.value if isinstance(capability, BackendCapability) else str(capability)
+        return capability_value in self.capability_values()
+
+
+@dataclass
+class ActiveBackendBundle:
+    backend_name: str
+    descriptor: BackendDescriptor
+    backend: Any | None = None
+    live_data_handle: Any | None = None
+    ai_collection_handle: Any | None = None
+    navigation_handle: Any | None = None
+    action_executor: Any | None = None
+    backend_private: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class BackendActionRuntime:
+    """Backend-provided executor/adapter bridge for generic actions."""
+
+    executor: Any
+    adapter: Any
+
+
+@dataclass(frozen=True)
+class BackendResolutionResult:
+    selected_backend_name: str | None
+    candidates: tuple[BackendDescriptor, ...]
+    decision_required: bool
+    reason: str
+
+    @property
+    def selected_descriptor(self) -> BackendDescriptor | None:
+        if self.selected_backend_name is None:
+            return None
+        for descriptor in self.candidates:
+            if descriptor.backend_name == self.selected_backend_name:
+                return descriptor
+        return None
+
+
 @dataclass
 class DiagnosticPayload:
     """
@@ -214,6 +290,51 @@ class DiagnosticBackend(ABC):
         """
         pass
 
+    @property
+    def display_name(self) -> str:
+        """Return a human-friendly backend name."""
+        return self.name.upper()
+
+    @property
+    def default_for_brands(self) -> list[str]:
+        """Return brands for which this backend is the preferred default."""
+        return []
+
+    @property
+    def ui_mode(self) -> str:
+        """Return one frontend hint describing backend interaction style."""
+        return "guided"
+
+    @property
+    def capabilities(self) -> list[BackendCapability]:
+        """Return the platform capabilities implemented by this backend."""
+        capabilities: list[BackendCapability] = [
+            BackendCapability.CORE_SESSION,
+            BackendCapability.READ_DTCS,
+        ]
+        if self.__class__.start_live_data is not DiagnosticBackend.start_live_data:
+            capabilities.append(BackendCapability.LIVE_DATA)
+        if self.__class__.collect_ai_payload is not DiagnosticBackend.collect_ai_payload:
+            capabilities.append(BackendCapability.AI_DATA_COLLECTION)
+        if self.__class__.start_navigation_session is not DiagnosticBackend.start_navigation_session:
+            capabilities.append(BackendCapability.NAVIGATION)
+        if self.__class__.execute_action is not DiagnosticBackend.execute_action:
+            capabilities.append(BackendCapability.GENERIC_ACTIONS)
+        if self.__class__.clear_dtcs is not DiagnosticBackend.clear_dtcs:
+            capabilities.append(BackendCapability.CLEAR_DTCS)
+        return capabilities
+
+    @property
+    def descriptor(self) -> BackendDescriptor:
+        return BackendDescriptor(
+            backend_name=self.name,
+            display_name=self.display_name,
+            supported_brands=self.supported_brands,
+            capabilities=self.capabilities,
+            default_for_brands=self.default_for_brands,
+            ui_mode=self.ui_mode,
+        )
+
     @abstractmethod
     def start(self) -> None:
         """
@@ -302,17 +423,14 @@ class DiagnosticBackend(ABC):
         """
         pass
 
-    @abstractmethod
     def go_back(self) -> None:
         """Navigate back one step in the diagnostic software UI."""
-        pass
+        raise UnsupportedCapabilityError(BackendCapability.NAVIGATION, self.name)
 
-    @abstractmethod
     def detect_current_page(self) -> str:
         """Detect and return the current page/screen identifier."""
-        pass
+        raise UnsupportedCapabilityError(BackendCapability.NAVIGATION, self.name)
 
-    @abstractmethod
     def execute_action(
         self,
         action: str,
@@ -329,7 +447,15 @@ class DiagnosticBackend(ABC):
         Returns:
             Dict with at minimum 'success' (bool) and optional 'metadata', 'error' keys
         """
-        pass
+        raise UnsupportedCapabilityError(BackendCapability.GENERIC_ACTIONS, self.name)
+
+    def get_guided_runtime(self) -> Any:
+        """Return a backend-owned guided runtime when the backend exposes one."""
+        raise RuntimeError(f"Backend '{self.name}' does not expose a guided runtime")
+
+    def build_action_runtime(self) -> BackendActionRuntime:
+        """Return a backend-owned executor/adapter bridge for generic actions."""
+        raise UnsupportedCapabilityError(BackendCapability.GENERIC_ACTIONS, self.name)
 
     @abstractmethod
     def select_data_category(self, category: str) -> list[str]:
@@ -358,7 +484,6 @@ class DiagnosticBackend(ABC):
         """
         pass
 
-    @abstractmethod
     def start_live_data(self) -> LiveDataStream:
         """
         Start collecting live data from the current data category.
@@ -373,9 +498,8 @@ class DiagnosticBackend(ABC):
         Raises:
             RuntimeError: If no data category is selected or start fails
         """
-        pass
+        raise UnsupportedCapabilityError(BackendCapability.LIVE_DATA, self.name)
 
-    @abstractmethod
     def stop_live_data(self) -> None:
         """
         Stop the current live data stream.
@@ -383,9 +507,20 @@ class DiagnosticBackend(ABC):
         Raises:
             RuntimeError: If no stream is active or stop fails
         """
-        pass
+        raise UnsupportedCapabilityError(BackendCapability.LIVE_DATA, self.name)
 
-    @abstractmethod
+    def start_live_data_session(
+        self,
+        *,
+        data_category: str,
+        interval_ms: int,
+        stream_scope: str,
+    ) -> dict[str, Any]:
+        raise UnsupportedCapabilityError(BackendCapability.LIVE_DATA, self.name)
+
+    def stop_live_data_session(self) -> dict[str, Any]:
+        raise UnsupportedCapabilityError(BackendCapability.LIVE_DATA, self.name)
+
     def clear_dtcs(self) -> ClearResult:
         """
         Clear all DTCs from the currently selected module.
@@ -400,7 +535,19 @@ class DiagnosticBackend(ABC):
             RuntimeError: If no module is selected or clear operation fails
             PermissionError: If user lacks credentials to clear DTCs
         """
-        pass
+        raise UnsupportedCapabilityError(BackendCapability.CLEAR_DTCS, self.name)
+
+    def collect_ai_payload(self, *args: Any, **kwargs: Any) -> DiagnosticPayload:
+        raise UnsupportedCapabilityError(BackendCapability.AI_DATA_COLLECTION, self.name)
+
+    def start_navigation_session(self, *args: Any, **kwargs: Any) -> Any:
+        raise UnsupportedCapabilityError(BackendCapability.NAVIGATION, self.name)
+
+    def submit_navigation_decision(self, *args: Any, **kwargs: Any) -> Any:
+        raise UnsupportedCapabilityError(BackendCapability.NAVIGATION, self.name)
+
+    def iter_navigation_events(self, *args: Any, **kwargs: Any) -> Any:
+        raise UnsupportedCapabilityError(BackendCapability.NAVIGATION, self.name)
 
     @abstractmethod
     def get_state(self) -> BackendState:
@@ -443,7 +590,8 @@ class BackendRegistry:
     def __init__(self):
         """Initialize an empty registry."""
         self._backends: dict[str, DiagnosticBackend] = {}
-        self._brand_index: dict[str, str] = {}  # Maps brand -> backend name
+        self._brand_index: dict[str, list[str]] = {}  # Maps brand -> backend names
+        self._brand_defaults: dict[str, str] = {}
 
     def register(self, backend: DiagnosticBackend) -> None:
         """
@@ -462,7 +610,16 @@ class BackendRegistry:
         
         # Index all supported brands
         for brand in backend.supported_brands:
-            self._brand_index[brand] = backend.name
+            normalized_brand = brand.lower().strip()
+            if not normalized_brand:
+                continue
+            self._brand_index.setdefault(normalized_brand, []).append(backend.name)
+
+        descriptor = backend.descriptor
+        for brand in descriptor.default_for_brands:
+            normalized_brand = brand.lower().strip()
+            if normalized_brand:
+                self._brand_defaults[normalized_brand] = backend.name
 
     def get_by_name(self, name: str) -> DiagnosticBackend:
         """
@@ -494,10 +651,81 @@ class BackendRegistry:
         Raises:
             KeyError: If no backend supports that brand
         """
-        if brand not in self._brand_index:
-            raise KeyError(f"No backend found for brand '{brand}'")
-        backend_name = self._brand_index[brand]
-        return self._backends[backend_name]
+        resolution = self.resolve_brand(brand)
+        if resolution.selected_backend_name is None:
+            raise KeyError(f"No unique backend found for brand '{brand}'")
+        return self._backends[resolution.selected_backend_name]
+
+    def find_by_brand(self, brand: str) -> list[DiagnosticBackend]:
+        normalized_brand = brand.lower().strip()
+        if not normalized_brand:
+            return []
+        backend_names = self._brand_index.get(normalized_brand, [])
+        return [self._backends[name] for name in backend_names]
+
+    def resolve_brand(
+        self,
+        brand: str,
+        *,
+        preferred_backend_name: str | None = None,
+    ) -> BackendResolutionResult:
+        if preferred_backend_name:
+            descriptor = self.get_descriptor(preferred_backend_name)
+            return BackendResolutionResult(
+                selected_backend_name=preferred_backend_name,
+                candidates=(descriptor,),
+                decision_required=False,
+                reason="explicit_backend",
+            )
+
+        normalized_brand = brand.lower().strip()
+        if not normalized_brand:
+            return BackendResolutionResult(
+                selected_backend_name=None,
+                candidates=tuple(self.list_descriptors()),
+                decision_required=True,
+                reason="no_brand_match",
+            )
+
+        backend_names = list(self._brand_index.get(normalized_brand, []))
+        if not backend_names:
+            return BackendResolutionResult(
+                selected_backend_name=None,
+                candidates=tuple(self.list_descriptors()),
+                decision_required=True,
+                reason="no_brand_match",
+            )
+
+        if len(backend_names) == 1:
+            backend_name = backend_names[0]
+            return BackendResolutionResult(
+                selected_backend_name=backend_name,
+                candidates=(self.get_descriptor(backend_name),),
+                decision_required=False,
+                reason="unique_match",
+            )
+
+        default_backend_name = self._brand_defaults.get(normalized_brand)
+        if default_backend_name and default_backend_name in backend_names:
+            return BackendResolutionResult(
+                selected_backend_name=default_backend_name,
+                candidates=tuple(self.get_descriptor(name) for name in backend_names),
+                decision_required=False,
+                reason="default_match",
+            )
+
+        return BackendResolutionResult(
+            selected_backend_name=None,
+            candidates=tuple(self.get_descriptor(name) for name in backend_names),
+            decision_required=True,
+            reason="ambiguous_brand",
+        )
+
+    def list_descriptors(self) -> list[BackendDescriptor]:
+        return [backend.descriptor for backend in self._backends.values()]
+
+    def get_descriptor(self, name: str) -> BackendDescriptor:
+        return self.get_by_name(name).descriptor
 
     def list_backends(self) -> list[str]:
         """

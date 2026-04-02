@@ -1,8 +1,7 @@
-"""LangGraph Navigation API blueprint.
+"""Deterministic navigation API blueprint.
 
-Provides endpoints for running the full LangGraph navigation graph
-via HTTP/SSE, replacing the console-based HITL loop with a
-decision_required / decision submission flow over the network.
+Provides endpoints for running the guided navigation loop via HTTP/SSE,
+with decision_required / decision submission over the network.
 
 Endpoints:
     POST /api/navigate/start      - Start navigation session
@@ -88,7 +87,7 @@ def abort_navigation_session(session_id: str) -> dict[str, Any]:
 
 @navigate_bp.route("/start", methods=["POST"])
 def navigate_start():
-    """Start a new LangGraph navigation session."""
+    """Start a new deterministic navigation session."""
     data = request.json or {}
     goal = (data.get("goal") or "Navigate to Data Display").strip()
 

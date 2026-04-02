@@ -36,8 +36,8 @@ Public/product-facing flows now converge on `/api/session/*`.
 | **VCI Proxy Tunnel** | `vci_proxy/` | Bridge cloud diagnostic software to local VCI hardware |
 | **Platform Core** | `diagnostic_platform/` | `DiagnosticBackend`, `BackendRegistry`, standard schemas, SSE helpers |
 | **Backend Facades** | `backends/`, `backends/gds2/` | Per-software adapters behind the shared backend contract |
-| **RPA Automation** | `src/` | GDS2-specific navigation, streaming, recovery, AI diagnosis |
-| **API + Client UX** | `app.py`, `diagnostics_api.py`, `navigate_api.py`, `session_api.py`, `vci_proxy/*.py` | Thin Flask entry point and mechanic-facing local UX |
+| **RPA Automation** | `src/`, `src/gds2_orchestration/` | GDS2-specific navigation, orchestration, streaming, recovery, AI diagnosis |
+| **API + Client UX** | `app.py`, `server/app.py`, `server/api/*.py`, `vci_proxy/*.py` | Thin Flask compatibility entry point plus mechanic-facing HTTP and local UX |
 
 ---
 
@@ -57,7 +57,7 @@ Recommended API layering:
 
 - `session` — stable business facade for session, selection, DTC, live data, AI, and session-scoped navigation
 - `diagnose` — lower-level diagnostics capability layer
-- `navigate` — lower-level agentic navigation/debug layer
+- `navigate` — lower-level guided navigation/debug layer
 
 ---
 
@@ -66,10 +66,10 @@ Recommended API layering:
 ```bash
 python -m venv venv
 venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements-cloud.txt
 ```
 
-For client-only build/runtime:
+For full Windows development on one machine, also install the client/runtime extras:
 
 ```bash
 pip install -r requirements-client.txt
@@ -165,7 +165,7 @@ Only these APIs are supported:
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/navigate/start` | POST | Start LangGraph navigation session |
+| `/api/navigate/start` | POST | Start deterministic navigation session |
 | `/api/navigate/events` | GET | SSE stream: progress / decision_required / done / error |
 | `/api/navigate/decision` | POST | Submit paused HITL choice |
 | `/api/navigate/status` | GET | Query navigation session status |
@@ -175,7 +175,7 @@ Only these APIs are supported:
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/session/start` | POST | Start session and select workflow/backend context |
+| `/api/session/start` | POST | Start session and select backend context |
 | `/api/session/start_diagnostics` | POST | Start GDS2 diagnostics for a running session |
 | `/api/session/execute` | POST | Execute one guarded backend action |
 | `/api/session/events` | GET | SSE stream for session lifecycle and decisions |
@@ -184,6 +184,9 @@ Only these APIs are supported:
 | `/api/session/select_data_category` | POST | Session-aware category selection |
 | `/api/session/abort` | POST | Abort the current session safely |
 | `/api/session/status` | GET | Query current session state |
+
+`/api/session/*` responses use `backend_name` as the primary backend field.
+`workflow` remains a deprecated alias for `backend_name` during the compatibility window.
 
 ## Troubleshooting
 
@@ -219,4 +222,4 @@ Use the latest client build; errors are surfaced with explicit dialogs instead o
 - `agent_docs/vci_proxy.md` — tunnel/protocol/cache details
 - `agent_docs/rpa_automation.md` — GDS2 automation/runtime/API details
 - `agent_docs/roadmap.md` — delivery status and migration progress
-- `agent_docs/gds2_agentic_navigation_implementation.md` — LangGraph + LanceDB implementation details
+- `agent_docs/gds2_navigation_prototype_archive.md` — archived notes from the removed graph-based navigation prototype

@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Any
 
-from ..agentic.planner import (
+from ..gds2_orchestration.planner import (
     BranchDecisionRequiredError,
     ConstrainedPlanner,
     DecisionDomain,

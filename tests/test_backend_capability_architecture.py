@@ -1,0 +1,792 @@
+from __future__ import annotations
+
+import importlib
+import importlib.util
+import inspect
+import sys
+import types
+from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+import diagnostic_platform.contracts as contracts_module
+import diagnostic_platform.runtime.worker_runtime as worker_runtime_module
+from diagnostic_platform.runtime.session_lifecycle import (
+    build_session_status_payload,
+    start_business_session,
+)
+from diagnostic_platform.runtime.session_actions import (
+    start_live_data as start_session_live_data,
+    stop_live_data as stop_session_live_data,
+)
+from diagnostic_platform.runtime.worker_runtime import WorkerRuntime
+from src.gds2_orchestration.session_orchestrator import (
+    Session,
+    SessionContext,
+    SessionOrchestrator,
+    SessionStatus,
+)
+
+
+def _require_attr(obj: Any, name: str) -> Any:
+    assert hasattr(obj, name), f"{obj!r} should expose {name}"
+    return getattr(obj, name)
+
+
+def _require_module(module_name: str):
+    spec = importlib.util.find_spec(module_name)
+    assert spec is not None, f"{module_name} should exist"
+    return importlib.import_module(module_name)
+
+
+def _capability_values(capabilities: list[Any] | tuple[Any, ...]) -> list[str]:
+    return sorted(
+        capability.value if hasattr(capability, "value") else str(capability)
+        for capability in capabilities
+    )
+
+
+def _install_fake_flask_stack(monkeypatch):
+    class FakeBlueprint:
+        def __init__(self, name, import_name, url_prefix=""):
+            self.name = name
+            self.import_name = import_name
+            self.url_prefix = url_prefix
+            self._registered_routes = []
+
+        def route(self, path, methods=None):
+            def decorator(fn):
+                self._registered_routes.append(path)
+                return fn
+
+            return decorator
+
+    fake_request = types.SimpleNamespace(args={}, json=None)
+    fake_flask = types.ModuleType("flask")
+    fake_flask.Blueprint = FakeBlueprint
+    fake_flask.Response = object
+    fake_flask.jsonify = lambda payload=None, **kwargs: payload if payload is not None else kwargs
+    fake_flask.request = fake_request
+    monkeypatch.setitem(sys.modules, "flask", fake_flask)
+
+    return fake_request
+
+
+def _import_session_api(monkeypatch):
+    fake_request = _install_fake_flask_stack(monkeypatch)
+    for module_name in [
+        "server.api.session",
+        "server.api.session_ai_handlers",
+        "server.api.session_live_data_handlers",
+        "server.api.session_navigation_handlers",
+        "server.api.session_dependencies",
+    ]:
+        sys.modules.pop(module_name, None)
+    session_api = importlib.import_module("server.api.session")
+    return session_api, fake_request
+
+
+def _import_diagnostics_api(monkeypatch):
+    fake_request = _install_fake_flask_stack(monkeypatch)
+    for module_name in [
+        "server.api.diagnostics",
+    ]:
+        sys.modules.pop(module_name, None)
+    diagnostics_api = importlib.import_module("server.api.diagnostics")
+    return diagnostics_api, fake_request
+
+
+def _unwrap_response(result):
+    if isinstance(result, tuple):
+        payload, status = result
+        return payload, status
+    return result, 200
+
+
+class FakeCoreBackend(contracts_module.DiagnosticBackend):
+    def __init__(
+        self,
+        *,
+        name: str = "fakecore",
+        display_name: str = "Fake Core",
+        brands: list[str] | None = None,
+        default_brands: list[str] | None = None,
+        capabilities: list[Any] | None = None,
+    ) -> None:
+        self._name = name
+        self._display_name = display_name
+        self._brands = [str(brand).strip().lower() for brand in (brands or ["fakebrand"])]
+        self._default_brands = [
+            str(brand).strip().lower()
+            for brand in (default_brands if default_brands is not None else self._brands)
+        ]
+        self._capabilities = list(capabilities or [])
+        self.started = False
+        self.selected_module = ""
+        self.selected_category = ""
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def supported_brands(self) -> list[str]:
+        return list(self._brands)
+
+    @property
+    def descriptor(self) -> Any:
+        BackendDescriptor = _require_attr(contracts_module, "BackendDescriptor")
+        return BackendDescriptor(
+            backend_name=self._name,
+            display_name=self._display_name,
+            supported_brands=list(self._brands),
+            capabilities=tuple(self._capabilities),
+            default_for_brands=list(self._default_brands),
+            ui_mode="guided",
+        )
+
+    def preflight(self) -> dict[str, Any]:
+        return {
+            "network_quality": None,
+            "connection_epoch": None,
+        }
+
+    def start(self, *args, **kwargs) -> dict[str, Any]:
+        self.started = True
+        return {
+            "modules": self.get_modules(),
+            "vin": "VIN-FAKE-001",
+            "device": "FAKE-VCI",
+        }
+
+    def stop(self) -> None:
+        self.started = False
+
+    def connect_vci(self, device: str) -> None:
+        return None
+
+    def get_modules(self) -> list[str]:
+        return ["Engine", "ABS"]
+
+    def select_module(self, module: str) -> None:
+        self.selected_module = module
+
+    def get_data_categories(self) -> list[str]:
+        return ["DTCs", "Live Data"]
+
+    def go_back(self) -> None:
+        return None
+
+    def detect_current_page(self) -> str:
+        return "data_display" if self.selected_category else "module_list"
+
+    def execute_action(
+        self,
+        action: str,
+        args: dict[str, Any] | None = None,
+        timeout_sec: float = 30.0,
+    ) -> dict[str, Any]:
+        return {
+            "success": True,
+            "action": action,
+            "metadata": args or {},
+        }
+
+    def select_data_category(self, category: str) -> list[str]:
+        self.selected_category = category
+        return ["RPM", "Coolant Temp"]
+
+    def read_dtcs(self) -> list[contracts_module.DTC]:
+        return [
+            contracts_module.DTC(
+                code="P0001",
+                module=self.selected_module or "Engine",
+                status="active",
+                description="Fake DTC for backend-neutral regression",
+                source_backend=self._name,
+            )
+        ]
+
+    def start_live_data(self) -> contracts_module.LiveDataStream:
+        return contracts_module.LiveDataStream(session_id="fake-live", active=True)
+
+    def stop_live_data(self) -> None:
+        return None
+
+    def clear_dtcs(self) -> contracts_module.ClearResult:
+        return contracts_module.ClearResult(
+            success=True,
+            cleared_count=1,
+            message="Cleared by fake backend",
+        )
+
+    def get_state(self) -> contracts_module.BackendState:
+        return contracts_module.BackendState(
+            current_page=self.detect_current_page(),
+            is_connected=self.started,
+            current_module=self.selected_module or None,
+            current_data_category=self.selected_category or None,
+            extra={"device": "FAKE-VCI", "vin": "VIN-FAKE-001"},
+        )
+
+
+class FakeTelemetryBackend(FakeCoreBackend):
+    def __init__(self, *, capabilities: list[Any]) -> None:
+        super().__init__(
+            name="fake-telemetry",
+            display_name="Fake Telemetry",
+            brands=["telebrand"],
+            capabilities=capabilities,
+        )
+        self.live_start_calls: list[dict[str, Any]] = []
+        self.live_stop_calls = 0
+        self.ai_payload_calls: list[dict[str, Any]] = []
+
+    def start_live_data_session(
+        self,
+        *,
+        data_category: str,
+        interval_ms: int,
+        stream_scope: str,
+    ) -> dict[str, Any]:
+        self.live_start_calls.append(
+            {
+                "data_category": data_category,
+                "interval_ms": interval_ms,
+                "stream_scope": stream_scope,
+            }
+        )
+        self.selected_category = data_category
+        return {
+            "success": True,
+            "message": "Backend-owned live stream started",
+            "interval_ms": interval_ms,
+        }
+
+    def stop_live_data_session(self) -> dict[str, Any]:
+        self.live_stop_calls += 1
+        return {
+            "success": True,
+            "message": "Backend-owned live stream stopped",
+        }
+
+    def collect_ai_payload(
+        self,
+        *,
+        vehicle_context: dict[str, Any],
+        data_category: str,
+        collection_seconds: int,
+    ) -> contracts_module.DiagnosticPayload:
+        self.ai_payload_calls.append(
+            {
+                "vehicle_context": dict(vehicle_context),
+                "data_category": data_category,
+                "collection_seconds": collection_seconds,
+            }
+        )
+        return contracts_module.DiagnosticPayload(
+            vehicle_context=contracts_module.VehicleContext(
+                brand=vehicle_context.get("brand") or "telebrand",
+                model=vehicle_context.get("model") or "Demo",
+                vin=vehicle_context.get("vin") or "VIN-FAKE-001",
+            ),
+            dtcs=[
+                contracts_module.DTC(
+                    code="P0001",
+                    module=vehicle_context.get("module") or "Engine",
+                    status="active",
+                    description="Fake telemetry DTC",
+                    source_backend=self.name,
+                )
+            ],
+            live_data=[
+                contracts_module.LiveDataPoint(
+                    parameter="RPM",
+                    value=850.0,
+                    unit="rpm",
+                    timestamp=1.0,
+                )
+            ],
+            sampling_quality=contracts_module.SamplingQuality.GOOD,
+            source_backend=self.name,
+        )
+
+
+def test_backend_registry_resolves_unique_ambiguous_and_unmatched_brands():
+    BackendCapability = _require_attr(contracts_module, "BackendCapability")
+    BackendResolutionResult = _require_attr(contracts_module, "BackendResolutionResult")
+
+    registry = contracts_module.BackendRegistry()
+    registry.register(
+        FakeCoreBackend(
+            name="fakecore",
+            brands=["fakebrand"],
+            capabilities=[
+                BackendCapability.CORE_SESSION,
+                BackendCapability.READ_DTCS,
+            ],
+        )
+    )
+    registry.register(
+        FakeCoreBackend(
+            name="alt-a",
+            brands=["sharedbrand"],
+            default_brands=[],
+            capabilities=[BackendCapability.CORE_SESSION],
+        )
+    )
+    registry.register(
+        FakeCoreBackend(
+            name="alt-b",
+            brands=["sharedbrand"],
+            default_brands=[],
+            capabilities=[BackendCapability.CORE_SESSION],
+        )
+    )
+
+    assert hasattr(registry, "resolve_brand"), "BackendRegistry should support resolve_brand()"
+
+    unique = registry.resolve_brand("fakebrand")
+    assert isinstance(unique, BackendResolutionResult)
+    assert unique.reason == "unique_match"
+    assert unique.decision_required is False
+    assert unique.selected_backend_name == "fakecore"
+
+    ambiguous = registry.resolve_brand("sharedbrand")
+    assert ambiguous.reason == "ambiguous_brand"
+    assert ambiguous.decision_required is True
+    assert ambiguous.selected_backend_name is None
+    assert sorted(item.backend_name for item in ambiguous.candidates) == ["alt-a", "alt-b"]
+
+    unmatched = registry.resolve_brand("missingbrand")
+    assert unmatched.reason == "no_brand_match"
+    assert unmatched.decision_required is True
+    assert unmatched.selected_backend_name is None
+    assert sorted(item.backend_name for item in unmatched.candidates) == ["alt-a", "alt-b", "fakecore"]
+
+
+def test_start_business_session_and_status_include_backend_metadata():
+    BackendCapability = _require_attr(contracts_module, "BackendCapability")
+
+    assert "registry_provider" in inspect.signature(SessionOrchestrator).parameters
+
+    registry = contracts_module.BackendRegistry()
+    fake_backend = FakeCoreBackend(
+        capabilities=[
+            BackendCapability.CORE_SESSION,
+            BackendCapability.READ_DTCS,
+        ]
+    )
+    registry.register(fake_backend)
+
+    runtime = WorkerRuntime()
+    orchestrator = SessionOrchestrator(registry_provider=lambda: registry)
+
+    payload = start_business_session(
+        runtime,
+        orchestrator=orchestrator,
+        context=SessionContext(brand="fakebrand", model="Demo", vin="VIN-FAKE-001"),
+    )
+
+    expected_capabilities = _capability_values(
+        [BackendCapability.CORE_SESSION, BackendCapability.READ_DTCS]
+    )
+    assert payload.get("backend_name") == "fakecore"
+    assert sorted(payload.get("capabilities") or []) == expected_capabilities
+    assert payload.get("workflow") == "fakecore"
+
+    status = build_session_status_payload(
+        runtime,
+        orchestrator=orchestrator,
+        backend=fake_backend,
+        session_id=payload["session_id"],
+    )
+
+    assert status.get("backend_name") == "fakecore"
+    assert sorted(status.get("capabilities") or []) == expected_capabilities
+    summary = status.get("backend_state_summary") or {}
+    assert summary.get("current_page") == "module_list"
+    assert summary.get("is_connected") is False
+
+
+def test_session_api_runs_fake_backend_core_chain_and_gates_extensions(monkeypatch):
+    BackendCapability = _require_attr(contracts_module, "BackendCapability")
+    registry_module = _require_module("diagnostic_platform.backend_registry")
+    get_backend_registry = _require_attr(registry_module, "get_backend_registry")
+    set_backend_registry = _require_attr(registry_module, "set_backend_registry")
+
+    original_registry = get_backend_registry()
+    fake_registry = contracts_module.BackendRegistry()
+    fake_registry.register(
+        FakeCoreBackend(
+            capabilities=[
+                BackendCapability.CORE_SESSION,
+                BackendCapability.READ_DTCS,
+            ]
+        )
+    )
+
+    try:
+        set_backend_registry(fake_registry)
+        monkeypatch.setattr(
+            worker_runtime_module,
+            "_WORKER_RUNTIME",
+            worker_runtime_module.WorkerRuntime(),
+        )
+
+        session_api, fake_request = _import_session_api(monkeypatch)
+
+        fake_request.json = {"brand": "fakebrand", "model": "Demo"}
+        start_payload, start_status = _unwrap_response(session_api.session_start())
+        assert start_status == 200
+        session_id = start_payload["session_id"]
+        assert start_payload["backend_name"] == "fakecore"
+
+        fake_request.json = {"session_id": session_id}
+        diagnostics_payload, diagnostics_status = _unwrap_response(
+            session_api.session_start_diagnostics()
+        )
+        assert diagnostics_status == 200
+        assert diagnostics_payload["result"]["modules"] == ["Engine", "ABS"]
+
+        fake_request.json = {"session_id": session_id, "module": "Engine"}
+        module_payload, module_status = _unwrap_response(session_api.session_select_module())
+        assert module_status == 200
+        assert module_payload["result"]["data_categories"] == ["DTCs", "Live Data"]
+
+        fake_request.json = {"session_id": session_id, "data_category": "DTCs"}
+        category_payload, category_status = _unwrap_response(
+            session_api.session_select_data_category()
+        )
+        assert category_status == 200
+        assert category_payload["result"]["selected_data_category"] == "DTCs"
+
+        fake_request.json = {"session_id": session_id}
+        dtc_payload, dtc_status = _unwrap_response(session_api.session_dtcs())
+        assert dtc_status == 200
+        assert dtc_payload["result"]["dtc_count"] == 1
+
+        fake_request.json = {"session_id": session_id, "goal": "Go to Data Display"}
+        navigate_payload, navigate_status = _unwrap_response(session_api.session_navigate_start())
+        assert navigate_status == 501
+
+        fake_request.json = {"session_id": session_id, "action": "go_back"}
+        execute_payload, execute_status = _unwrap_response(session_api.session_execute())
+        assert execute_status == 501
+
+        fake_request.args = {"session_id": session_id}
+        status_payload, status_code = _unwrap_response(session_api.session_status())
+        assert status_code == 200
+        assert status_payload["backend_name"] == "fakecore"
+        assert "core_session" in status_payload["capabilities"]
+    finally:
+        set_backend_registry(original_registry)
+
+
+def test_session_live_data_uses_backend_owned_streaming_extensions(monkeypatch):
+    BackendCapability = _require_attr(contracts_module, "BackendCapability")
+    backend = FakeTelemetryBackend(
+        capabilities=[
+            BackendCapability.CORE_SESSION,
+            BackendCapability.READ_DTCS,
+            BackendCapability.LIVE_DATA,
+        ]
+    )
+    runtime = WorkerRuntime()
+    session = Session(
+        session_id="session-live",
+        context=SessionContext(brand="telebrand"),
+        status=SessionStatus.RUNNING,
+        backend_name=backend.name,
+        capabilities=_capability_values(
+            [
+                BackendCapability.CORE_SESSION,
+                BackendCapability.READ_DTCS,
+                BackendCapability.LIVE_DATA,
+            ]
+        ),
+    )
+    diagnostics_calls: list[dict[str, Any]] = []
+
+    import diagnostic_platform.runtime.session_actions as session_actions_module
+
+    monkeypatch.setattr(
+        session_actions_module,
+        "start_diagnostics_live_data_stream",
+        lambda *args, **kwargs: diagnostics_calls.append(kwargs) or {
+            "success": True,
+            "message": "legacy diagnostics runtime should stay unused here",
+        },
+    )
+    monkeypatch.setattr(
+        session_actions_module,
+        "stop_diagnostics_live_data_stream",
+        lambda *args, **kwargs: diagnostics_calls.append(kwargs) or {
+            "success": True,
+            "message": "legacy diagnostics runtime should stay unused here",
+        },
+    )
+
+    data_category, payload = start_session_live_data(
+        runtime,
+        session,
+        {"data_category": "Live Data"},
+        interval_ms=250,
+        backend=backend,
+        stream_scope="session:session-live",
+        emit_progress=lambda message: None,
+    )
+
+    assert data_category == "Live Data"
+    assert payload["message"] == "Backend-owned live stream started"
+    assert backend.live_start_calls == [
+        {
+            "data_category": "Live Data",
+            "interval_ms": 250,
+            "stream_scope": "session:session-live",
+        }
+    ]
+    assert diagnostics_calls == []
+    assert runtime.is_live_data_active(session.session_id) is True
+
+    stop_payload = stop_session_live_data(
+        runtime,
+        session,
+        backend=backend,
+        emit_progress=lambda message: None,
+    )
+
+    assert stop_payload["message"] == "Backend-owned live stream stopped"
+    assert backend.live_stop_calls == 1
+    assert diagnostics_calls == []
+    assert runtime.is_live_data_active(session.session_id) is False
+
+
+def test_session_ai_handler_uses_backend_owned_payload_collection(monkeypatch):
+    BackendCapability = _require_attr(contracts_module, "BackendCapability")
+    session_ai_handlers = importlib.import_module("server.api.session_ai_handlers")
+
+    backend = FakeTelemetryBackend(
+        capabilities=[
+            BackendCapability.CORE_SESSION,
+            BackendCapability.AI_DATA_COLLECTION,
+        ]
+    )
+    session = Session(
+        session_id="session-ai",
+        context=SessionContext(brand="telebrand", vin="VIN-FAKE-001"),
+        status=SessionStatus.RUNNING,
+        backend_name=backend.name,
+        capabilities=_capability_values(
+            [
+                BackendCapability.CORE_SESSION,
+                BackendCapability.AI_DATA_COLLECTION,
+            ]
+        ),
+        selected_module="Engine",
+        selected_data_category="Live Data",
+    )
+    observed: dict[str, Any] = {}
+
+    class FakeOrchestrator:
+        def get_session(self, session_id: str):
+            assert session_id == "session-ai"
+            return session
+
+        def emit_progress(self, session_id: str, message: str):
+            observed.setdefault("progress", []).append((session_id, message))
+
+    class FakeEngine:
+        is_active = False
+
+        def start_session_from_payload(self, vehicle_context, diagnostic_payload):
+            observed["vehicle_context"] = dict(vehicle_context)
+            observed["diagnostic_payload"] = diagnostic_payload
+            return "ai-session-1"
+
+        def start_session(self, *args, **kwargs):
+            raise AssertionError("Legacy AI collection path should not be used")
+
+    monkeypatch.setattr(session_ai_handlers, "get_orchestrator", lambda: FakeOrchestrator())
+    monkeypatch.setattr(session_ai_handlers, "get_backend", lambda: backend)
+    monkeypatch.setattr(session_ai_handlers, "get_ai_engine", lambda: FakeEngine())
+    monkeypatch.setattr(session_ai_handlers, "_runtime", lambda: WorkerRuntime())
+
+    payload, status = session_ai_handlers.start_ai_diagnose({"session_id": "session-ai"})
+
+    assert status == 200
+    assert payload["ai_session_id"] == "ai-session-1"
+    assert backend.ai_payload_calls == [
+        {
+            "vehicle_context": {
+                "vin": "VIN-FAKE-001",
+                "module": "Engine",
+                "data_category": "Live Data",
+                "brand": "telebrand",
+            },
+            "data_category": "Live Data",
+            "collection_seconds": 30,
+        }
+    ]
+    diagnostic_payload = observed["diagnostic_payload"]
+    assert diagnostic_payload.source_backend == "fake-telemetry"
+    assert observed["vehicle_context"]["module"] == "Engine"
+
+
+def test_session_ai_stack_drops_legacy_guard_shim():
+    session_dependencies = importlib.import_module("server.api.session_dependencies")
+    session_ai_handlers = importlib.import_module("server.api.session_ai_handlers")
+    session_ai_source = inspect.getsource(session_ai_handlers)
+
+    assert not hasattr(session_dependencies, "make_ai_collection_guard")
+    assert "make_ai_collection_guard" not in session_ai_source
+    assert "collection_guard" not in session_ai_source
+
+
+def test_diagnostics_api_start_uses_registry_backend_name(monkeypatch):
+    BackendCapability = _require_attr(contracts_module, "BackendCapability")
+    registry_module = _require_module("diagnostic_platform.backend_registry")
+    get_backend_registry = _require_attr(registry_module, "get_backend_registry")
+    set_backend_registry = _require_attr(registry_module, "set_backend_registry")
+
+    original_registry = get_backend_registry()
+    fake_registry = contracts_module.BackendRegistry()
+    fake_registry.register(
+        FakeCoreBackend(
+            capabilities=[
+                BackendCapability.CORE_SESSION,
+                BackendCapability.READ_DTCS,
+            ],
+        )
+    )
+
+    try:
+        set_backend_registry(fake_registry)
+        monkeypatch.setattr(
+            worker_runtime_module,
+            "_WORKER_RUNTIME",
+            worker_runtime_module.WorkerRuntime(),
+        )
+        diagnostics_api, fake_request = _import_diagnostics_api(monkeypatch)
+
+        fake_request.json = {"backend_name": "fakecore"}
+        payload, status = _unwrap_response(diagnostics_api.diagnose_start())
+
+        assert status == 200
+        assert payload["success"] is True
+        assert payload["modules"] == ["Engine", "ABS"]
+        assert payload["backend_name"] == "fakecore"
+        assert "core_session" in payload["capabilities"]
+    finally:
+        set_backend_registry(original_registry)
+
+
+def test_diagnostics_api_live_and_ai_use_backend_owned_extensions(monkeypatch):
+    BackendCapability = _require_attr(contracts_module, "BackendCapability")
+    registry_module = _require_module("diagnostic_platform.backend_registry")
+    get_backend_registry = _require_attr(registry_module, "get_backend_registry")
+    set_backend_registry = _require_attr(registry_module, "set_backend_registry")
+
+    original_registry = get_backend_registry()
+    fake_registry = contracts_module.BackendRegistry()
+    backend = FakeTelemetryBackend(
+        capabilities=[
+            BackendCapability.CORE_SESSION,
+            BackendCapability.READ_DTCS,
+            BackendCapability.LIVE_DATA,
+            BackendCapability.AI_DATA_COLLECTION,
+        ]
+    )
+    fake_registry.register(backend)
+
+    class FakeEngine:
+        is_active = False
+
+        def start_session_from_payload(self, vehicle_context, diagnostic_payload):
+            return "diag-ai-1"
+
+        def start_session(self, *args, **kwargs):
+            raise AssertionError("Legacy diagnostics AI path should not be used")
+
+    try:
+        set_backend_registry(fake_registry)
+        monkeypatch.setattr(
+            worker_runtime_module,
+            "_WORKER_RUNTIME",
+            worker_runtime_module.WorkerRuntime(),
+        )
+        diagnostics_api, fake_request = _import_diagnostics_api(monkeypatch)
+        monkeypatch.setattr(diagnostics_api, "_get_ai_engine", lambda: FakeEngine())
+        assert not hasattr(diagnostics_api, "_make_data_display_guard")
+
+        fake_request.json = {"backend_name": "fake-telemetry", "data_category": "Live Data", "interval_ms": 200}
+        live_payload, live_status = _unwrap_response(diagnostics_api.diagnose_live_data_start())
+
+        assert live_status == 200
+        assert live_payload["message"] == "Backend-owned live stream started"
+        assert backend.live_start_calls == [
+            {
+                "data_category": "Live Data",
+                "interval_ms": 200,
+                "stream_scope": "diagnostics",
+            }
+        ]
+
+        fake_request.json = {
+            "backend_name": "fake-telemetry",
+            "data_category": "Live Data",
+            "vin": "VIN-FAKE-001",
+            "module": "Engine",
+        }
+        ai_payload, ai_status = _unwrap_response(diagnostics_api.diagnose_ai_start())
+
+        assert ai_status == 200
+        assert ai_payload["session_id"] == "diag-ai-1"
+        assert backend.ai_payload_calls[-1]["data_category"] == "Live Data"
+        assert backend.ai_payload_calls[-1]["vehicle_context"]["module"] == "Engine"
+    finally:
+        set_backend_registry(original_registry)
+
+
+def test_platform_diagnostics_runtime_stays_backend_neutral():
+    diagnostics_runtime_module = importlib.import_module(
+        "diagnostic_platform.runtime.diagnostics_runtime"
+    )
+    source = inspect.getsource(diagnostics_runtime_module)
+
+    assert "AgentDataCollector" not in source
+    assert "GDS2Page" not in source
+
+
+def test_platform_ai_runtime_is_payload_only():
+    ai_engine_module = importlib.import_module("src.diagnosis.ai_engine")
+    source = inspect.getsource(ai_engine_module)
+
+    assert "AgentDataCollector" not in source
+    assert "DiagnosticBuffer" not in source
+    assert "def start_session(" not in source
+    assert "def _diagnosis_worker(" not in source
+
+
+def test_gds2_backend_owns_live_and_ai_collection_extensions():
+    gds2_backend_module = importlib.import_module("backends.gds2.backend")
+    GDS2DiagnosticBackend = getattr(gds2_backend_module, "GDS2DiagnosticBackend")
+
+    assert (
+        GDS2DiagnosticBackend.start_live_data_session
+        is not contracts_module.DiagnosticBackend.start_live_data_session
+    )
+    assert (
+        GDS2DiagnosticBackend.collect_ai_payload
+        is not contracts_module.DiagnosticBackend.collect_ai_payload
+    )
+
+
+def test_worker_runtime_drops_legacy_live_collector_fields():
+    runtime = WorkerRuntime()
+
+    assert not hasattr(runtime, "diag_collector")
+    assert not hasattr(runtime, "active_live_data_scope")
