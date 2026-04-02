@@ -15,6 +15,14 @@ from enum import Enum
 from typing import Any, Optional
 
 
+def _normalize_brand_key(brand: str) -> str:
+    normalized = str(brand or "").strip().lower()
+    if not normalized:
+        return ""
+    normalized = normalized.replace("_", " ").replace("-", " ")
+    return " ".join(normalized.split())
+
+
 # ============================================================================
 # Data Models (Dataclasses)
 # ============================================================================
@@ -610,14 +618,14 @@ class BackendRegistry:
         
         # Index all supported brands
         for brand in backend.supported_brands:
-            normalized_brand = brand.lower().strip()
+            normalized_brand = _normalize_brand_key(brand)
             if not normalized_brand:
                 continue
             self._brand_index.setdefault(normalized_brand, []).append(backend.name)
 
         descriptor = backend.descriptor
         for brand in descriptor.default_for_brands:
-            normalized_brand = brand.lower().strip()
+            normalized_brand = _normalize_brand_key(brand)
             if normalized_brand:
                 self._brand_defaults[normalized_brand] = backend.name
 
@@ -657,7 +665,7 @@ class BackendRegistry:
         return self._backends[resolution.selected_backend_name]
 
     def find_by_brand(self, brand: str) -> list[DiagnosticBackend]:
-        normalized_brand = brand.lower().strip()
+        normalized_brand = _normalize_brand_key(brand)
         if not normalized_brand:
             return []
         backend_names = self._brand_index.get(normalized_brand, [])
@@ -678,7 +686,7 @@ class BackendRegistry:
                 reason="explicit_backend",
             )
 
-        normalized_brand = brand.lower().strip()
+        normalized_brand = _normalize_brand_key(brand)
         if not normalized_brand:
             return BackendResolutionResult(
                 selected_backend_name=None,

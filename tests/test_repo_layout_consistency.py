@@ -33,6 +33,13 @@ def test_requirements_cloud_excludes_langgraph_stack():
     assert "langchain-google-genai" not in requirements
 
 
+def test_diagnostics_window_stops_describing_navigation_as_langgraph():
+    diagnostics_window = (ROOT / "vci_proxy" / "diagnostics_window.py").read_text(encoding="utf-8")
+
+    assert "LangGraph" not in diagnostics_window
+    assert "langgraph" not in diagnostics_window
+
+
 def test_gds2_orchestration_package_replaces_agentic_namespace():
     assert (ROOT / "src" / "gds2_orchestration").is_dir()
     assert not (ROOT / "src" / "agentic").exists()

@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from diagnostic_platform.contracts import BackendState
+from diagnostic_platform.contracts import BackendRegistry, BackendState
 
 from backends.gds2.backend import GDS2DiagnosticBackend
 from backends.gds2.controller_runtime import GDS2ControllerRuntime
@@ -101,6 +101,18 @@ def test_backend_get_state_delegates_to_runtime_status():
     assert state.current_data_category == "Engine Data"
     assert state.extra["connection_epoch"] == "epoch-1"
     runtime.status.assert_called_once_with()
+
+
+def test_gds2_backend_brand_aliases_route_without_manual_decision():
+    runtime = MagicMock()
+    backend = GDS2DiagnosticBackend(runtime=runtime)
+    registry = BackendRegistry()
+    registry.register(backend)
+
+    for brand in ("GM China", "gmchina", "GDS2"):
+        resolution = registry.resolve_brand(brand)
+        assert resolution.selected_backend_name == "gds2"
+        assert resolution.decision_required is False
 
 
 def test_gds2_backend_start_live_data_session_owns_agent_collector(monkeypatch):

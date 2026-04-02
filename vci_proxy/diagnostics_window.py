@@ -234,7 +234,7 @@ class DiagnosticsWindow:
         frame.columnconfigure(1, weight=1)
         frame.columnconfigure(4, weight=1)
 
-        ttk.Label(frame, text="Brand:", style="Subtle.TLabel").grid(
+        ttk.Label(frame, text="Vehicle Brand:", style="Subtle.TLabel").grid(
             row=0, column=0, sticky="w", padx=(0, 6),
         )
 
@@ -781,6 +781,11 @@ class DiagnosticsWindow:
             return False
 
         prompt = str(decision.get("prompt") or "检测到歧义，请选择一个候选项")
+        if (
+            self._agent_prompt_kind == "decision"
+            and self._agent_prompt_decision_id == decision_id
+        ):
+            return True
         self._set_agent_prompt("decision", prompt, options, decision_id=decision_id)
         self._append_agent_message("agent", prompt)
         return True
@@ -885,8 +890,8 @@ class DiagnosticsWindow:
             self._append_agent_message("agent", "未检测到 Session。请先点击 Start Session。")
             return
 
-        self._set_session_hint("正在通过 LangGraph Agent 导航到诊断页面...")
-        self._append_agent_message("agent", "正在启动 LangGraph 导航流程...")
+        self._set_session_hint("正在自动导航到诊断页面...")
+        self._append_agent_message("agent", "正在启动诊断导航流程...")
         self._api_call(
             "POST",
             "/api/session/start_diagnostics",
@@ -1901,7 +1906,10 @@ class DiagnosticsWindow:
     def _on_session_start_clicked(self) -> None:
         brand = self._session_brand.get().strip()
         if not brand:
-            messagebox.showwarning("Brand Required", "Please enter a vehicle brand.")
+            messagebox.showwarning(
+                "Brand Required",
+                "Please enter a vehicle brand (for example Chevrolet or GM China).",
+            )
             return
 
         self._session_start_button.configure(state=tk.DISABLED)
@@ -1940,7 +1948,7 @@ class DiagnosticsWindow:
             self._session_status_var.set(
                 f"Failed: {self._error_message(payload, 'Could not start session.')}"
             )
-            self._set_session_hint("Hint: 请输入品牌后重试 Start Session。")
+            self._set_session_hint("Hint: 请输入车辆品牌（例如 Chevrolet / GM China）后重试 Start Session。")
             self._append_agent_message("agent", "Session 启动失败，请检查品牌和后端状态。")
             return
 
@@ -2179,8 +2187,8 @@ class DiagnosticsWindow:
         self._navigate_session_id = session_id
         self._set_server_connected(True)
         self._set_status_text("Navigation started. Waiting for progress...")
-        self._set_session_hint("LangGraph Agent 正在自动导航中...")
-        self._append_agent_message("agent", "LangGraph 导航已启动，正在自动化中...")
+        self._set_session_hint("诊断导航正在自动执行中...")
+        self._append_agent_message("agent", "导航已启动，正在自动化中...")
         self._start_navigate_sse_thread(session_id)
 
     def _handle_navigate_progress(self, payload: dict[str, Any]) -> None:

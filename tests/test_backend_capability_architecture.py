@@ -368,6 +368,43 @@ def test_backend_registry_resolves_unique_ambiguous_and_unmatched_brands():
     assert sorted(item.backend_name for item in unmatched.candidates) == ["alt-a", "alt-b", "fakecore"]
 
 
+def test_default_backend_registry_routes_gds2_brand_aliases_without_decision():
+    registry_module = _require_module("diagnostic_platform.backend_registry")
+    create_backend_registry = _require_attr(registry_module, "create_backend_registry")
+
+    registry = create_backend_registry()
+
+    gds2_brand = registry.resolve_brand("GDS2")
+    gm_china_brand = registry.resolve_brand("GM China")
+    gm_china_hyphen = registry.resolve_brand("GM-China")
+
+    assert gds2_brand.selected_backend_name == "gds2"
+    assert gds2_brand.decision_required is False
+    assert gm_china_brand.selected_backend_name == "gds2"
+    assert gm_china_brand.decision_required is False
+    assert gm_china_hyphen.selected_backend_name == "gds2"
+    assert gm_china_hyphen.decision_required is False
+
+
+def test_start_business_session_routes_gds2_alias_inputs_without_backend_decision():
+    registry_module = _require_module("diagnostic_platform.backend_registry")
+    create_backend_registry = _require_attr(registry_module, "create_backend_registry")
+
+    for brand in ("GM China", "GDS2"):
+        runtime = WorkerRuntime()
+        orchestrator = SessionOrchestrator(registry_provider=create_backend_registry)
+
+        payload = start_business_session(
+            runtime,
+            orchestrator=orchestrator,
+            context=SessionContext(brand=brand, model="Demo"),
+        )
+
+        assert payload["status"] == "running"
+        assert payload["backend_name"] == "gds2"
+        assert payload.get("decision") is None
+
+
 def test_start_business_session_and_status_include_backend_metadata():
     BackendCapability = _require_attr(contracts_module, "BackendCapability")
 

@@ -50,6 +50,12 @@ GM_BRANDS = [
     "wuling",
 ]
 
+GDS2_ROUTING_ALIASES = [
+    "gm china",
+    "gmchina",
+    "gds2",
+]
+
 
 class GDS2DiagnosticBackend(DiagnosticBackend):
     """Facade that adapts the existing GDS2 automation stack to DiagnosticBackend."""
@@ -92,8 +98,13 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
 
     @property
     def supported_brands(self) -> list[str]:
-        """Return the GM brands supported by GDS2."""
-        return GM_BRANDS.copy()
+        """Return GM brand inputs and compatibility aliases routed to GDS2."""
+        return [*GM_BRANDS, *GDS2_ROUTING_ALIASES]
+
+    @property
+    def default_for_brands(self) -> list[str]:
+        """Return routing aliases that should resolve directly to GDS2."""
+        return GDS2_ROUTING_ALIASES.copy()
 
     @property
     def capabilities(self) -> list[BackendCapability]:
