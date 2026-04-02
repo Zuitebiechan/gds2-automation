@@ -1,111 +1,110 @@
 # Virtual J2534 DLL
 
-将 J2534 API 调用转发到 VCI Proxy 服务器的虚拟 DLL。
+This README is scoped only to the Windows virtual DLL component under `vci_proxy/virtual_dll/`.
 
-## 架构
+For the full tunnel and local/cloud architecture, read:
 
+- `../../agent_docs/ops/vci_proxy_and_tunnel.md`
+- `../../agent_docs/ops/deployment_and_operations.md`
+
+## Purpose
+
+`virtual_j2534.dll` is the cloud-side J2534 shim used by OEM software such as GDS2.
+
+Its job is to:
+
+- expose a standard J2534 DLL to the OEM software
+- forward J2534 requests to the local proxy server on `localhost:9001`
+- let the cloud-side diagnostics software talk to hardware that actually exists on the local side
+
+## Component Boundary
+
+The DLL does not implement vehicle communication itself.
+
+Instead, the data path is:
+
+1. cloud OEM software loads `virtual_j2534.dll`
+2. the DLL forwards J2534 calls to `reverse_server.py` on `localhost:9001`
+3. `reverse_server.py` bridges those calls over the reverse tunnel
+4. `reverse_client.py` executes the real J2534 calls against the local device
+
+## Build
+
+### Visual Studio (recommended)
+
+From an x86 Developer Command Prompt:
+
+```cmd
+build_msvc.bat
 ```
-GDS2 (云端)
-    ↓
-virtual_j2534.dll  ──TCP──▶  reverse_server.py (localhost:9001)
-                                    ↑
-                               reverse_client.py (本地)
-                                    ↓
-                              真实 J2534 设备
-```
 
-## 编译
-
-### 方法 1: Visual Studio (推荐)
-
-1. 安装 Visual Studio 2019/2022 (含 C++ 桌面开发工具)
-2. 打开 "Developer Command Prompt for VS 2022" (必须是 x86 版本)
-3. 进入此目录并运行:
-   ```cmd
-   build_msvc.bat
-   ```
-
-### 方法 2: MinGW 32-bit
+### MinGW 32-bit
 
 ```bash
 i686-w64-mingw32-gcc -shared -o virtual_j2534.dll virtual_j2534.c -lws2_32
 ```
 
-## 安装
+## Install
 
-### 1. 复制 DLL
+### 1. Copy the DLL
 
-将 `virtual_j2534.dll` 复制到:
-```
+Example destination:
+
+```text
 C:\Program Files (x86)\VCI_Proxy\virtual_j2534.dll
 ```
 
-### 2. 注册 J2534 设备
+### 2. Register the J2534 device
 
-创建注册表项 (以管理员身份运行):
+Use `register_vci_proxy.reg`, or create the equivalent registry entry under:
 
-```reg
-Windows Registry Editor Version 5.00
-
-[HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\PassThruSupport.04.04\VCI Proxy]
-"Name"="VCI Proxy (Remote)"
-"Vendor"="VCI Proxy"
-"ConfigApplication"=""
-"FunctionLibrary"="C:\\Program Files (x86)\\VCI_Proxy\\virtual_j2534.dll"
-"CAN"=dword:00000001
-"ISO15765"=dword:00000001
-"ISO14230"=dword:00000001
-"ISO9141"=dword:00000001
-"J1850PWM"=dword:00000001
-"J1850VPW"=dword:00000001
+```text
+HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\PassThruSupport.04.04\VCI Proxy
 ```
 
-保存为 `register_vci_proxy.reg` 并双击导入。
+Important values:
 
-### 3. 配置服务器地址
+- `Name` = `VCI Proxy (Remote)`
+- `FunctionLibrary` = full path to `virtual_j2534.dll`
 
-默认连接 `127.0.0.1:9001`。如需修改，编辑 `virtual_j2534.c` 中的:
-```c
-static const char* SERVER_HOST = "127.0.0.1";
-static const int SERVER_PORT = 9001;
-```
+### 3. Match the local proxy listener
 
-## 使用
+The DLL forwards to `127.0.0.1:9001` by default.
 
-1. 在云端运行 `reverse_server.py`:
-   ```
-   python reverse_server.py
-   ```
+If you change that, update `virtual_j2534.c` accordingly.
 
-2. 在本地运行 `reverse_client.py`:
-   ```
-   python reverse_client.py --host <云端IP> --port 9000
+## Typical Usage
+
+1. Start the cloud reverse server:
+
+   ```bash
+   python -m vci_proxy.reverse_server
    ```
 
-3. 启动 GDS2，选择 "VCI Proxy (Remote)" 作为设备
+2. Start the local reverse client and connect it to the cloud listener.
+3. Launch the OEM software on the cloud machine.
+4. In the OEM software, select `VCI Proxy (Remote)` as the J2534 device.
 
-## 已实现的 API
+## Supported J2534 Coverage
 
-| API | 状态 |
-|-----|------|
-| PassThruOpen | ✅ 完成 |
-| PassThruClose | ✅ 完成 |
-| PassThruConnect | ✅ 完成 |
-| PassThruDisconnect | ✅ 完成 |
-| PassThruReadMsgs | ✅ 完成 |
-| PassThruWriteMsgs | ✅ 完成 |
-| PassThruReadVersion | ✅ 完成 |
-| PassThruGetLastError | ✅ 完成 |
-| PassThruStartMsgFilter | ⚠️ 存根 |
-| PassThruStopMsgFilter | ⚠️ 存根 |
-| PassThruIoctl | ⚠️ 部分 |
-| PassThruStartPeriodicMsg | ❌ 未实现 |
-| PassThruStopPeriodicMsg | ❌ 未实现 |
-| PassThruSetProgrammingVoltage | ❌ 未实现 |
+Current implementation status in this component:
 
-## 测试
+- implemented:
+  - `PassThruOpen`
+  - `PassThruClose`
+  - `PassThruConnect`
+  - `PassThruDisconnect`
+  - `PassThruReadMsgs`
+  - `PassThruWriteMsgs`
+  - `PassThruReadVersion`
+  - `PassThruGetLastError`
+- partial:
+  - `PassThruStartMsgFilter`
+  - `PassThruStopMsgFilter`
+  - `PassThruIoctl`
+- not implemented:
+  - `PassThruStartPeriodicMsg`
+  - `PassThruStopPeriodicMsg`
+  - `PassThruSetProgrammingVoltage`
 
-使用 `test_client.py` 测试连接:
-```
-python test_client.py --host localhost --port 9001
-```
+For cache behavior, authentication, and tunnel-quality monitoring around these calls, read `../../agent_docs/ops/vci_proxy_and_tunnel.md`.

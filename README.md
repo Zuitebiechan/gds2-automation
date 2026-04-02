@@ -1,67 +1,51 @@
-# Diagnostic Platform RPA — Cloud Remote Vehicle Diagnostics
+# Diagnostic Platform RPA
 
-Remote vehicle diagnostics platform with:
+Cloud remote vehicle diagnostics platform with:
 
-- **Cloud OEM diagnostic software + Java Agent / automation**
-- **VCI Proxy tunnel** for cloud↔local hardware bridging
-- **Shared backend contract layer** for multi-software expansion
-- **Local tray client UX** for mechanics
+- a capability-first backend contract layer
+- a cloud-side diagnostics API and worker runtime
+- a local VCI proxy tunnel and tray client
+- a GDS2 implementation as the first production backend
 
-GDS2 is the first fully implemented backend. The repository is now structured for additional OEM software backends through `diagnostic_platform/` + `backends/`.
+This repository is no longer a GDS2-only codebase. GDS2 is the first backend, but the platform now separates:
 
----
+- platform-neutral contracts and runtime code in `diagnostic_platform/`
+- OEM/backend-specific implementations in `backends/`
+- GDS2-specific automation and orchestration in `src/`
+- local proxy, tray client, and tunnel code in `vci_proxy/`
 
-## Architecture at a Glance
+## Documentation
 
-1. Cloud runs OEM diagnostic software, backend APIs, and RPA automation
-2. Local machine runs the VCI proxy client and diagnostics tray UI
-3. Tunnel bridges cloud J2534 calls to local VCI hardware
-4. Shared contracts standardize backend behavior across OEM tools
+The authoritative documentation set lives in `agent_docs/`.
 
-Key cloud ports:
+- Documentation index: `agent_docs/README.md`
+- Project overview: `agent_docs/core/project_overview.md`
+- Project structure: `agent_docs/core/project_structure.md`
+- Code structure: `agent_docs/core/code_structure.md`
+- Platform architecture: `agent_docs/core/platform_architecture.md`
+- Backend architecture: `agent_docs/core/backend_architecture.md`
+- API design: `agent_docs/core/api_design.md`
+- Runtime flows: `agent_docs/core/runtime_flows.md`
+- Deployment and operations: `agent_docs/ops/deployment_and_operations.md`
+- VCI proxy and tunnel: `agent_docs/ops/vci_proxy_and_tunnel.md`
+- Testing and quality: `agent_docs/core/testing_and_quality.md`
+- Reports index: `agent_docs/reports/README.md`
 
-- `9000` — reverse VCI listener
-- `9001` — local proxy listener (virtual DLL side)
-- `8080` – Flask API (`/api/diagnose/*`, `/api/navigate/*`, `/api/session/*`)
+For benchmark artifacts and ad-hoc local measurements, use `reports/network_benchmarks/`. That directory is not part of the authoritative documentation set.
 
-Public/product-facing flows now converge on `/api/session/*`.
-`/api/diagnose/*` and `/api/navigate/*` remain available as lower-level capability/debug surfaces.
+## Current Scope
 
----
+- Supported production backend: `gds2`
+- Supported public API surfaces:
+  - `/api/session/*`
+  - `/api/diagnose/*`
+  - `/api/navigate/*`
+- Current worker model:
+  - `1 worker process = 1 active business session = 1 active backend bundle`
 
-## Platform Layers
+## Quick Start
 
-| Layer | Location | Purpose |
-|---|---|---|
-| **VCI Proxy Tunnel** | `vci_proxy/` | Bridge cloud diagnostic software to local VCI hardware |
-| **Platform Core** | `diagnostic_platform/` | `DiagnosticBackend`, `BackendRegistry`, standard schemas, SSE helpers |
-| **Backend Facades** | `backends/`, `backends/gds2/` | Per-software adapters behind the shared backend contract |
-| **RPA Automation** | `src/`, `src/gds2_orchestration/` | GDS2-specific navigation, orchestration, streaming, recovery, AI diagnosis |
-| **API + Client UX** | `app.py`, `server/app.py`, `server/api/*.py`, `vci_proxy/*.py` | Thin Flask compatibility entry point plus mechanic-facing HTTP and local UX |
-
----
-
-## Current Product Flow
-
-In the local Diagnostics window:
-
-1. **Start Diagnostics**
-2. Select **Module** and click **Select**
-3. Select **Data Category**
-4. Click **AI Diagnose** — collects 30s data, runs AI analysis, streams the verdict
-5. Optionally use **Read DTCs** or **Start Stream**
-
-This keeps GDS2 on the Data Display page where DTC and live-data operations are valid.
-
-Recommended API layering:
-
-- `session` — stable business facade for session, selection, DTC, live data, AI, and session-scoped navigation
-- `diagnose` — lower-level diagnostics capability layer
-- `navigate` — lower-level guided navigation/debug layer
-
----
-
-## Setup
+### Cloud/server environment
 
 ```bash
 python -m venv venv
@@ -69,157 +53,68 @@ venv\Scripts\activate
 pip install -r requirements-cloud.txt
 ```
 
-For full Windows development on one machine, also install the client/runtime extras:
+### Local/client environment
 
 ```bash
+python -m venv venv
+venv\Scripts\activate
 pip install -r requirements-client.txt
 ```
 
----
+## Running the Cloud Side
 
-## Cloud Runtime
-
-Start each service in a separate terminal:
+Start each component in its own terminal:
 
 ```bash
-# Terminal A: VCI Proxy server
+# Terminal A: reverse tunnel listener
 python -m vci_proxy.reverse_server
 
-# Terminal B: Flask API entry point
+# Terminal B: Flask API
 python app.py --port 8080
 
-# Terminal C: Start GDS2 with Java Agent (manual/project-specific)
-# Keep agent writing to ~/gds2-data/latest.json
+# Terminal C: OEM diagnostics software runtime
+# For GDS2, keep the Java Agent writing to ~/gds2-data/latest.json
 ```
 
-Quick checks:
+Default ports:
 
-```bash
-curl http://127.0.0.1:8080/test
-netstat -ano | findstr :8080
-netstat -ano | findstr :9000
-netstat -ano | findstr :9001
-```
+- `9000`: reverse VCI listener
+- `9001`: local proxy listener (virtual DLL side)
+- `8080`: Flask API
 
----
+## Running the Local Side
 
-## Local Runtime
-
-### Development mode
+Development mode:
 
 ```bash
 python -m vci_proxy.client_gui
 ```
 
-### Build exe
+Build the Windows client:
 
 ```bash
 pyinstaller --clean --noconfirm pyinstaller_client.spec
 ```
 
-Run:
+## Key Runtime Paths
 
-```bash
-dist\VCI_Proxy_Client\VCI_Proxy_Client.exe
-```
+- API entrypoint: `app.py`
+- Flask bootstrap: `server/app.py`
+- Backend registry bootstrap: `diagnostic_platform/backend_registry.py`
+- Local client config: `%APPDATA%\VCI_Proxy\config.json`
+- Tunnel-quality snapshot: `%PROGRAMDATA%\VCI_Proxy\tunnel_quality.json`
+- GDS2 Java Agent output: `~/gds2-data/latest.json`
 
-> Do not run executables from `build/`; only run from `dist/...` output.
+## Compatibility Notes
 
----
+- `backend_name` is the canonical backend field in session responses.
+- `workflow` is retained only as a deprecated alias for `backend_name`.
+- The platform now resolves brands to backends through the backend registry. The GUI should provide vehicle identity inputs such as brand/model/VIN, not backend-specific routing decisions.
 
-## Config Persistence
+## Where To Read Next
 
-Client config file:
-
-`%APPDATA%\VCI_Proxy\config.json`
-
-If host/port are already saved, next launch auto-connects.
-
-Reset first-run behavior:
-
-```powershell
-Remove-Item "$env:APPDATA\VCI_Proxy\config.json" -Force
-```
-
----
-
-## Supported API Surfaces
-
-Only these APIs are supported:
-
-### Diagnostics API
-
-| Endpoint | Method | Description |
-|---|---|---|
-| `/api/diagnose/start` | POST | Auto-start and connect to `VCI Proxy (Remote)`, returns modules + context |
-| `/api/diagnose/select_module` | POST | Select module and return data categories |
-| `/api/diagnose/dtcs` | GET | Read DTCs from current Data Display context |
-| `/api/diagnose/live_data/start` | POST | Start live stream collector |
-| `/api/diagnose/live_data/events` | GET | SSE stream |
-| `/api/diagnose/live_data/stop` | POST | Stop stream and navigate back |
-| `/api/diagnose/ai_diagnose` | POST | Start 30s collection + AI analysis |
-| `/api/diagnose/ai_diagnose/events` | GET | SSE progress + streamed verdict |
-| `/api/diagnose/ai_diagnose/retry` | POST | Retry AI call with cached payload |
-
-### Navigate API
-
-| Endpoint | Method | Description |
-|---|---|---|
-| `/api/navigate/start` | POST | Start deterministic navigation session |
-| `/api/navigate/events` | GET | SSE stream: progress / decision_required / done / error |
-| `/api/navigate/decision` | POST | Submit paused HITL choice |
-| `/api/navigate/status` | GET | Query navigation session status |
-| `/api/navigate/abort` | POST | Abort running navigation session |
-
-### Session API
-
-| Endpoint | Method | Description |
-|---|---|---|
-| `/api/session/start` | POST | Start session and select backend context |
-| `/api/session/start_diagnostics` | POST | Start GDS2 diagnostics for a running session |
-| `/api/session/execute` | POST | Execute one guarded backend action |
-| `/api/session/events` | GET | SSE stream for session lifecycle and decisions |
-| `/api/session/decision` | POST | Resolve a pending decision gate |
-| `/api/session/select_module` | POST | Session-aware module selection |
-| `/api/session/select_data_category` | POST | Session-aware category selection |
-| `/api/session/abort` | POST | Abort the current session safely |
-| `/api/session/status` | GET | Query current session state |
-
-`/api/session/*` responses use `backend_name` as the primary backend field.
-`workflow` remains a deprecated alias for `backend_name` during the compatibility window.
-
-## Troubleshooting
-
-### 1) `502 Bad Gateway` from diagnostics endpoints
-
-Usually Flask is not running or not reachable. Verify `:8080` listener and `/test`.
-
-### 2) PyInstaller WinError 5 (`PermissionError` under dist)
-
-The old exe is still running and locking files.
-
-```powershell
-taskkill /IM VCI_Proxy_Client.exe /F
-python -m PyInstaller --clean --noconfirm --distpath dist_fix --workpath build_fix pyinstaller_client.spec
-```
-
-### 3) Pillow `_imaging` import errors
-
-Use a clean rebuild in the active venv and ensure the installed Pillow wheel matches the Python ABI.
-
-### 4) Diagnostics tray click no response
-
-Use the latest client build; errors are surfaced with explicit dialogs instead of silent failure.
-
----
-
-## Documentation Index
-- `agent_docs/cloud_infrastructure.md` — AWS VM lifecycle and worker provisioning direction
-- `agent_docs/aws_local_zones_deployment.md` — North America AWS Local Zones deployment plan for the current single-worker architecture
-
-- `CLAUDE.md` — concise operational guide
-- `agent_docs/architecture.md` — end-to-end architecture and platform layering
-- `agent_docs/vci_proxy.md` — tunnel/protocol/cache details
-- `agent_docs/rpa_automation.md` — GDS2 automation/runtime/API details
-- `agent_docs/roadmap.md` — delivery status and migration progress
-- `agent_docs/gds2_navigation_prototype_archive.md` — archived notes from the removed graph-based navigation prototype
+- For repository layout and ownership boundaries, read `agent_docs/core/project_structure.md`.
+- For code package responsibilities, read `agent_docs/core/code_structure.md`.
+- For end-to-end architecture, read `agent_docs/core/platform_architecture.md`.
+- For API contracts and route semantics, read `agent_docs/core/api_design.md`.
+- For operational setup, deployment, and config paths, read `agent_docs/ops/deployment_and_operations.md`.

@@ -79,11 +79,32 @@ def test_session_runtime_uses_backend_name_not_session_workflow_property():
 def test_public_session_docs_mark_workflow_as_deprecated_alias():
     session_api = (ROOT / "server" / "api" / "session.py").read_text(encoding="utf-8")
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    api_architecture = (ROOT / "agent_docs" / "api_architecture.md").read_text(encoding="utf-8")
+    api_design = (ROOT / "agent_docs" / "core" / "api_design.md").read_text(encoding="utf-8")
 
     assert '"workflow": "gds2",        # deprecated alias' in session_api
     assert "deprecated alias for `backend_name`" in readme
-    assert "deprecated alias of `backend_name`" in api_architecture
+    assert "deprecated alias of `backend_name`" in api_design
+
+
+def test_authoritative_agent_docs_set_exists():
+    expected_files = [
+        ROOT / "agent_docs" / "README.md",
+        ROOT / "agent_docs" / "core" / "project_overview.md",
+        ROOT / "agent_docs" / "core" / "project_structure.md",
+        ROOT / "agent_docs" / "core" / "code_structure.md",
+        ROOT / "agent_docs" / "core" / "platform_architecture.md",
+        ROOT / "agent_docs" / "core" / "backend_architecture.md",
+        ROOT / "agent_docs" / "core" / "api_design.md",
+        ROOT / "agent_docs" / "core" / "runtime_flows.md",
+        ROOT / "agent_docs" / "core" / "testing_and_quality.md",
+        ROOT / "agent_docs" / "ops" / "deployment_and_operations.md",
+        ROOT / "agent_docs" / "ops" / "vci_proxy_and_tunnel.md",
+        ROOT / "agent_docs" / "archive" / "README.md",
+        ROOT / "agent_docs" / "reports" / "README.md",
+    ]
+
+    for path in expected_files:
+        assert path.exists(), f"Missing authoritative doc: {path}"
 
 
 def test_session_dependencies_module_exposes_runtime_accessors():

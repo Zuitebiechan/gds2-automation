@@ -94,6 +94,8 @@ data/gds2_knowledge.lance/
 !README.md
 !**/README.md
 !**/SKILL.md
+!AGENTS.md
+!agent_docs/**/*.md
 *.pdf
 
 # Local agent workspace
@@ -102,3 +104,4 @@ data/gds2_knowledge.lance/
 # Local benchmark artifacts
 .sisyphus/
 bench_*.jsonl
+reports/network_benchmarks/
