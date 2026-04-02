@@ -173,7 +173,7 @@ def session_start_diagnostics():
         payload = run_start_diagnostics(
             _runtime(),
             orchestrator=get_orchestrator(),
-            backend=_get_backend(),
+            backend=_get_backend(session_id),
             session_id=session_id,
         )
         if payload.get("result"):
@@ -236,7 +236,7 @@ def session_execute():
         try:
             outcome = execute_backend_action(
                 session_id,
-                backend=_get_backend(),
+                backend=_get_backend(session_id),
                 action_name=action_name,
                 action_args=data.get("args") or {},
                 timeout_sec=float(data.get("timeout_sec", 30.0)),
@@ -322,7 +322,7 @@ def session_events():
         return _sse_response(
             iter_session_events(
                 orchestrator=get_orchestrator(),
-                backend=_get_backend(),
+                backend=_get_backend(session_id, required=False),
                 session_id=session_id,
             )
         )
@@ -363,12 +363,12 @@ def session_decision():
             submit_session_decision(
                 _runtime(),
                 orchestrator=get_orchestrator(),
-                backend=_get_backend(),
+                backend=_get_backend(session_id, required=False),
                 session_id=session_id,
                 decision_id=decision_id,
                 option_id=option_id,
                 get_data_viewer=_get_data_viewer,
-                get_backend=_get_backend,
+                get_backend=lambda: _get_backend(session_id),
             )
         )
 
@@ -413,7 +413,7 @@ def session_select_module():
                 _runtime(),
                 session,
                 module=module,
-                backend=_get_backend(),
+                backend=_get_backend(session_id),
                 get_data_viewer=_get_data_viewer,
                 get_executor=get_executor,
                 get_adapter=get_adapter,
@@ -487,7 +487,7 @@ def session_select_data_category():
                 _runtime(),
                 session,
                 data_category=data_category,
-                backend=_get_backend(),
+                backend=_get_backend(session_id),
                 get_data_viewer=_get_data_viewer,
                 get_executor=get_executor,
                 get_adapter=get_adapter,
@@ -700,7 +700,7 @@ def session_status():
             build_session_status_payload(
                 _runtime(),
                 orchestrator=get_orchestrator(),
-                backend=_get_backend(),
+                backend=_get_backend(session_id, required=False),
                 session_id=session_id,
             )
         )

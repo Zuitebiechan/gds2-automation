@@ -486,6 +486,84 @@ def test_session_api_runs_fake_backend_core_chain_and_gates_extensions(monkeypat
         set_backend_registry(original_registry)
 
 
+def test_session_api_allows_backend_decision_flow_before_backend_binding(monkeypatch):
+    BackendCapability = _require_attr(contracts_module, "BackendCapability")
+    registry_module = _require_module("diagnostic_platform.backend_registry")
+    get_backend_registry = _require_attr(registry_module, "get_backend_registry")
+    set_backend_registry = _require_attr(registry_module, "set_backend_registry")
+
+    original_registry = get_backend_registry()
+    fake_registry = contracts_module.BackendRegistry()
+    fake_registry.register(
+        FakeCoreBackend(
+            name="fake-alpha",
+            display_name="Fake Alpha",
+            brands=["sharedbrand"],
+            default_brands=[],
+            capabilities=[BackendCapability.CORE_SESSION],
+        )
+    )
+    fake_registry.register(
+        FakeCoreBackend(
+            name="fake-beta",
+            display_name="Fake Beta",
+            brands=["sharedbrand"],
+            default_brands=[],
+            capabilities=[
+                BackendCapability.CORE_SESSION,
+                BackendCapability.READ_DTCS,
+            ],
+        )
+    )
+
+    try:
+        set_backend_registry(fake_registry)
+        monkeypatch.setattr(
+            worker_runtime_module,
+            "_WORKER_RUNTIME",
+            worker_runtime_module.WorkerRuntime(),
+        )
+
+        session_api, fake_request = _import_session_api(monkeypatch)
+        monkeypatch.setattr(session_api, "_sse_response", lambda stream: stream)
+
+        fake_request.json = {"brand": "sharedbrand", "model": "Demo"}
+        start_payload, start_status = _unwrap_response(session_api.session_start())
+        assert start_status == 200
+        assert start_payload["status"] == "awaiting_decision"
+        assert start_payload["backend_name"] is None
+
+        session_id = start_payload["session_id"]
+        decision = start_payload["decision"]
+
+        fake_request.args = {"session_id": session_id}
+        event_stream = session_api.session_events()
+        assert next(event_stream).startswith("event: connected\n")
+        assert "event: decision_required\n" in next(event_stream)
+        event_stream.close()
+
+        fake_request.args = {"session_id": session_id}
+        status_payload, status_code = _unwrap_response(session_api.session_status())
+        assert status_code == 200
+        assert status_payload["status"] == "awaiting_decision"
+        assert status_payload["backend_name"] is None
+        assert status_payload["backend_state_summary"] is None
+
+        fake_request.json = {
+            "session_id": session_id,
+            "decision_id": decision["decision_id"],
+            "option_id": "backend:fake-beta",
+        }
+        decision_payload, decision_status = _unwrap_response(session_api.session_decision())
+        assert decision_status == 200
+        assert decision_payload["success"] is True
+        assert decision_payload["status"] == "running"
+        assert decision_payload["backend_name"] == "fake-beta"
+        assert "read_dtcs" in (decision_payload.get("capabilities") or [])
+    finally:
+        set_backend_registry(original_registry)
+
+
 def test_session_live_data_uses_backend_owned_streaming_extensions(monkeypatch):
     BackendCapability = _require_attr(contracts_module, "BackendCapability")
     backend = FakeTelemetryBackend(

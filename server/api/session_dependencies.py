@@ -44,14 +44,28 @@ def _get_bound_session():
     return session
 
 
-def _resolve_active_backend_descriptor():
-    session = _get_bound_session()
+def _get_session(session_id: str | None = None):
+    if session_id:
+        session = _runtime().orchestrator.get_session(session_id)
+        _runtime().bind_business_session(session.session_id)
+        return session
+    return _get_bound_session()
+
+
+def _resolve_active_backend_descriptor(
+    session_id: str | None = None,
+    *,
+    required: bool = True,
+):
+    session = _get_session(session_id)
     if session is None:
         raise RuntimeError("No active session bound to the worker")
 
     backend_name = (getattr(session, "backend_name", None) or "").strip()
     if not backend_name or backend_name == "manual":
-        raise RuntimeError("Active session does not have a runnable backend")
+        if required:
+            raise RuntimeError("Active session does not have a runnable backend")
+        return session, None
 
     return session, get_backend_registry().get_descriptor(backend_name)
 
@@ -61,8 +75,17 @@ def get_data_viewer() -> Any:
     return _runtime().get_data_viewer(get_backend)
 
 
-def get_backend() -> Any:
-    session, descriptor = _resolve_active_backend_descriptor()
+def get_backend(
+    session_id: str | None = None,
+    *,
+    required: bool = True,
+) -> Any | None:
+    session, descriptor = _resolve_active_backend_descriptor(
+        session_id,
+        required=required,
+    )
+    if descriptor is None:
+        return None
     bundle = _runtime().ensure_backend_bundle(
         session.session_id,
         descriptor=descriptor,
