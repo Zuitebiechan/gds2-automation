@@ -403,28 +403,33 @@ def clear_dtcs(
 
     operation = runtime.start_operation(session.session_id, "clear_dtcs")
     try:
-        context = resolve_session_vehicle_context(session, data, backend=backend)
         state = backend.get_state()
         try:
             current_page = backend.detect_current_page()
         except (UnsupportedCapabilityError, NotImplementedError):
             current_page = getattr(state, "current_page", "")
 
-        module_name = context.get("module", "")
-        data_category = context.get("data_category", "")
+        explicit_module = str(data.get("module") or "").strip()
+        explicit_data_category = str(data.get("data_category") or "").strip()
+        explicit_context_requested = bool(explicit_module or explicit_data_category)
 
-        if module_name and getattr(state, "current_module", "") != module_name:
-            backend.select_module(module_name)
-            set_session_selection(session, module=module_name)
-            state = backend.get_state()
-            try:
-                current_page = backend.detect_current_page()
-            except (UnsupportedCapabilityError, NotImplementedError):
-                current_page = getattr(state, "current_page", "")
+        if explicit_context_requested:
+            context = resolve_session_vehicle_context(session, data, backend=backend)
+            module_name = context.get("module", "")
+            data_category = context.get("data_category", "")
 
-        if data_category and getattr(state, "current_data_category", "") != data_category:
-            backend.select_data_category(data_category)
-            set_session_selection(session, data_category=data_category)
+            if module_name and getattr(state, "current_module", "") != module_name:
+                backend.select_module(module_name)
+                set_session_selection(session, module=module_name)
+                state = backend.get_state()
+                try:
+                    current_page = backend.detect_current_page()
+                except (UnsupportedCapabilityError, NotImplementedError):
+                    current_page = getattr(state, "current_page", "")
+
+            if data_category and getattr(state, "current_data_category", "") != data_category:
+                backend.select_data_category(data_category)
+                set_session_selection(session, data_category=data_category)
 
         clear_result = backend.clear_dtcs()
         try:

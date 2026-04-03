@@ -1,3 +1,4 @@
+import types
 from unittest.mock import MagicMock
 
 import pytest
@@ -5,6 +6,7 @@ import pytest
 import src.gds2_orchestration.session_orchestrator as session_orchestrator_module
 import diagnostic_platform.runtime.worker_runtime as worker_runtime_module
 from diagnostic_platform.runtime.navigation_runtime import NavSession, NavSessionStatus
+from diagnostic_platform.runtime.session_actions import clear_dtcs
 from diagnostic_platform.runtime.session_decisions import build_branch_gate, submit_session_decision
 from diagnostic_platform.runtime.session_lifecycle import (
     abort_business_session,
@@ -147,6 +149,40 @@ def test_submit_session_decision_resumes_branch_selection_and_updates_business_s
     assert session.selected_module == "ECM-B"
     assert session.selected_data_category == ""
     viewer.select_module.assert_called_once_with("ECM-B")
+
+
+def test_clear_dtcs_uses_current_context_without_hidden_reselection(monkeypatch):
+    runtime, _, session, _ = _start_gds2_session(monkeypatch)
+    session.selected_module = "[K20] Engine Control Module"
+    session.selected_data_category = "Engine Data"
+
+    backend = MagicMock()
+    backend.get_state.return_value = types.SimpleNamespace(
+        current_page="data_display",
+        current_module="",
+        current_data_category="",
+    )
+    backend.detect_current_page.return_value = "data_display"
+    backend.clear_dtcs.return_value = types.SimpleNamespace(
+        success=True,
+        cleared_count=2,
+        message="Clear DTCs completed",
+    )
+
+    payload = clear_dtcs(
+        runtime,
+        session,
+        {"session_id": session.session_id},
+        backend=backend,
+        emit_progress=lambda _message: None,
+    )
+
+    assert payload["success"] is True
+    assert payload["cleared_count"] == 2
+    assert payload["page_context"] == "data_display"
+    backend.select_module.assert_not_called()
+    backend.select_data_category.assert_not_called()
+    backend.clear_dtcs.assert_called_once_with()
 
 
 def test_abort_business_session_clears_worker_bindings(monkeypatch):
