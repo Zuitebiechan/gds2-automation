@@ -49,6 +49,7 @@ class DiagnosticsWindow:
         self._ai_sse_running = False
         self._ai_sse_thread: Optional[threading.Thread] = None
         self._ai_sse_response: Optional[requests.Response] = None
+        self._ai_start_pending = False
         self._vin = ""
         self._cached_payload_id = ""
         self._auto_ai_start_scheduled = False
@@ -62,6 +63,9 @@ class DiagnosticsWindow:
         self._session_category_confirmed = False
         self._current_page = ""
         self._session_status_refresh_inflight = False
+        self._session_live_data_active = False
+        self._session_ai_active = False
+        self._session_navigation_active = False
 
         self._navigate_session_id: Optional[str] = None
         self._navigate_sse_running = False
@@ -694,13 +698,22 @@ class DiagnosticsWindow:
         has_module = bool(self._selected_module.get().strip())
         has_category = bool(self._selected_data_category.get().strip())
         session_mode = bool(self._session_id)
+        session_busy = (
+            self._stream_active
+            or self._ai_sse_running
+            or self._ai_start_pending
+            or self._auto_ai_start_scheduled
+            or self._session_live_data_active
+            or self._session_ai_active
+            or self._session_navigation_active
+        )
 
-        can_select_module = session_mode and has_module and not self._stream_active
+        can_select_module = session_mode and has_module and not session_busy
         self._select_module_button.configure(
             state=tk.NORMAL if can_select_module else tk.DISABLED
         )
 
-        can_select_category = has_category and session_mode and not self._stream_active
+        can_select_category = has_category and session_mode and not session_busy
         self._select_data_category_button.configure(
             state=tk.NORMAL if can_select_category else tk.DISABLED
         )
@@ -709,7 +722,7 @@ class DiagnosticsWindow:
             has_module
             and has_category
             and (not session_mode or self._session_category_confirmed)
-            and not self._stream_active
+            and not session_busy
         )
 
         self._read_dtc_button.configure(
@@ -989,6 +1002,8 @@ class DiagnosticsWindow:
         self._read_dtc_button.configure(state=tk.DISABLED)
         self._ai_retry_button.grid_remove()
         self._auto_ai_start_scheduled = False
+        self._ai_start_pending = True
+        self._refresh_action_buttons()
         
         self._ai_status_text.set("Starting AI Diagnosis...")
         self._set_ai_result_text("")
@@ -1018,6 +1033,8 @@ class DiagnosticsWindow:
         self._start_stream_button.configure(state=tk.DISABLED)
         self._read_dtc_button.configure(state=tk.DISABLED)
         self._ai_retry_button.grid_remove()
+        self._ai_start_pending = True
+        self._refresh_action_buttons()
         
         self._ai_status_text.set("Retrying AI Diagnosis...")
         self._set_ai_result_text("")
@@ -1110,8 +1127,6 @@ class DiagnosticsWindow:
             "/api/session/clear_dtcs",
             json_data={
                 "session_id": self._session_id,
-                "module": self._selected_module.get().strip(),
-                "data_category": self._selected_data_category.get().strip(),
             },
             callback_event="clear_dtcs_result",
         )
@@ -1486,6 +1501,9 @@ class DiagnosticsWindow:
         self._session_status_refresh_inflight = False
         if not payload.get("success"):
             return
+        self._session_live_data_active = bool(payload.get("live_data_active"))
+        self._session_ai_active = bool(payload.get("active_ai_session_id"))
+        self._session_navigation_active = bool(payload.get("active_navigation_session_id"))
         self._set_current_page(self._extract_current_page(payload))
         self._refresh_action_buttons()
 
@@ -1700,9 +1718,11 @@ class DiagnosticsWindow:
         self._ai_result_text.see(tk.END)
 
     def _handle_ai_start_result(self, payload: dict[str, Any]) -> None:
+        self._ai_start_pending = False
         if payload.get("success"):
             session_id = payload.get("session_id")
             if session_id:
+                self._session_ai_active = True
                 self._ai_status_text.set("AI Diagnosis started. Waiting for events...")
                 self._append_agent_message("agent", "AI Diagnostics 已启动，正在采集 30 秒数据并准备分析。")
                 self._start_ai_sse_thread(session_id)
@@ -1720,6 +1740,7 @@ class DiagnosticsWindow:
             self._ai_diagnose_button.configure(state=tk.NORMAL)
             self._start_stream_button.configure(state=tk.NORMAL)
             self._read_dtc_button.configure(state=tk.NORMAL)
+        self._refresh_action_buttons()
 
     def _handle_ai_progress(self, payload: dict[str, Any]) -> None:
         message = payload.get("message", "Processing...")
@@ -1855,6 +1876,7 @@ class DiagnosticsWindow:
         )
 
     def _handle_ai_error(self, payload: dict[str, Any]) -> None:
+        self._ai_start_pending = False
         error_msg = payload.get("error", "Unknown error")
         self._ai_status_text.set(f"Error: {error_msg}")
         self._append_ai_result_text(f"\n\n[Error: {error_msg}]")
@@ -1865,12 +1887,16 @@ class DiagnosticsWindow:
         
         if is_retryable and self._cached_payload_id:
             self._ai_retry_button.grid()
+        self._refresh_action_buttons()
 
     def _handle_ai_done(self, payload: dict[str, Any]) -> None:
         self._stop_ai_sse_thread()
+        self._ai_start_pending = False
+        self._session_ai_active = False
         self._ai_diagnose_button.configure(state=tk.NORMAL)
         self._start_stream_button.configure(state=tk.NORMAL)
         self._read_dtc_button.configure(state=tk.NORMAL)
+        self._refresh_action_buttons()
 
     def _start_ai_sse_thread(self, session_id: str) -> None:
         self._stop_ai_sse_thread()

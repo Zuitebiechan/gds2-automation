@@ -34,6 +34,12 @@ def _build_window(*, current_page: str = "") -> DiagnosticsWindow:
     window._selected_data_category = _Var("Diagnostic Data Display")
     window._session_id = "session-123"
     window._stream_active = False
+    window._ai_sse_running = False
+    window._ai_start_pending = False
+    window._auto_ai_start_scheduled = False
+    window._session_live_data_active = False
+    window._session_ai_active = False
+    window._session_navigation_active = False
     window._session_category_confirmed = True
     window._current_page = current_page
     window._session_status_refresh_inflight = False
@@ -79,6 +85,9 @@ def test_handle_session_status_result_updates_current_page_and_button_state() ->
     window._handle_session_status_result(
         {
             "success": True,
+            "active_ai_session_id": "",
+            "active_navigation_session_id": "",
+            "live_data_active": False,
             "backend_state_summary": {
                 "current_page": "data_display",
             },
@@ -104,10 +113,36 @@ def test_on_clear_dtcs_clicked_posts_session_clear_request() -> None:
             {
                 "json_data": {
                     "session_id": "session-123",
-                    "module": "ECM",
-                    "data_category": "Diagnostic Data Display",
                 },
                 "callback_event": "clear_dtcs_result",
             },
         )
     ]
+
+
+def test_refresh_action_buttons_disables_clear_dtcs_while_ai_pending() -> None:
+    window = _build_window(current_page="data_display")
+    window._ai_start_pending = True
+
+    window._refresh_action_buttons()
+
+    assert window._clear_dtc_button.state == tk.DISABLED
+
+
+def test_handle_session_status_result_disables_clear_dtcs_while_session_ai_active() -> None:
+    window = _build_window(current_page="")
+
+    window._handle_session_status_result(
+        {
+            "success": True,
+            "active_ai_session_id": "ai-123",
+            "active_navigation_session_id": "",
+            "live_data_active": False,
+            "backend_state_summary": {
+                "current_page": "data_display",
+            },
+        }
+    )
+
+    assert window._current_page == "data_display"
+    assert window._clear_dtc_button.state == tk.DISABLED
