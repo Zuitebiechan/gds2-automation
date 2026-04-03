@@ -98,6 +98,7 @@ Current routes:
 - `GET /api/session/ai_diagnose/events`
 - `POST /api/session/ai_diagnose/retry`
 - `POST /api/session/dtcs`
+- `POST /api/session/clear_dtcs`
 - `POST /api/session/live_data/start`
 - `GET /api/session/live_data/events`
 - `POST /api/session/live_data/stop`
@@ -116,6 +117,7 @@ Current routes:
 - `/decision` is shared by backend-selection, network-override, and branch-resolution gates
 - `/execute` is capability-gated by `GENERIC_ACTIONS`
 - session AI/live/navigation subroutes are all capability-gated
+- session clear-DTC is capability-gated by `CLEAR_DTCS`
 - `/status` returns session state plus backend summary and network snapshot details when available
 
 ## `/api/diagnose/*`
@@ -126,6 +128,7 @@ Current routes:
 
 - `POST /api/diagnose/start`
 - `GET /api/diagnose/dtcs`
+- `POST /api/diagnose/clear_dtcs`
 - `POST /api/diagnose/select_module`
 - `POST /api/diagnose/live_data/start`
 - `GET /api/diagnose/live_data/events`

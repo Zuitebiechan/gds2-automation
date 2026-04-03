@@ -506,6 +506,11 @@ def test_session_api_runs_fake_backend_core_chain_and_gates_extensions(monkeypat
         assert dtc_status == 200
         assert dtc_payload["result"]["dtc_count"] == 1
 
+        fake_request.json = {"session_id": session_id}
+        clear_payload, clear_status = _unwrap_response(session_api.session_clear_dtcs())
+        assert clear_status == 501
+        assert "Clear DTC" in clear_payload["error"]
+
         fake_request.json = {"session_id": session_id, "goal": "Go to Data Display"}
         navigate_payload, navigate_status = _unwrap_response(session_api.session_navigate_start())
         assert navigate_status == 501

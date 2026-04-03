@@ -44,8 +44,9 @@ class DataViewerWorkflow:
             self.controller.set_cancel_checker(cancel_checker)
 
     def _check_cancel(self) -> None:
-        if self._cancel_checker is not None:
-            self._cancel_checker()
+        cancel_checker = getattr(self, "_cancel_checker", None)
+        if cancel_checker is not None:
+            cancel_checker()
 
     def _sleep(self, seconds: float, poll_interval: float = 0.1) -> None:
         deadline = time.time() + max(0.0, seconds)
@@ -791,6 +792,87 @@ class DataViewerWorkflow:
             "page_context": snapshot.page_context,
         }
 
+    def clear_dtcs(self, on_status: StatusCallback = None) -> dict:
+        """Clear DTCs from the current Data Display context using the Java Agent."""
+        def status(msg):
+            logger.info(msg)
+            if on_status:
+                on_status(msg)
+
+        current = self.controller.detect_current_page()
+        if current != GDS2Page.DATA_DISPLAY:
+            raise RuntimeError(
+                "Not at Data Display page. Select module and data category first."
+            )
+
+        snapshot = self.read_all_dtcs()
+        pre_clear_count = int(snapshot.get("dtc_count") or 0)
+        if pre_clear_count <= 0:
+            status("No DTCs detected. Nothing to clear.")
+            return {
+                "success": True,
+                "cleared_count": 0,
+                "message": "No DTCs detected; nothing to clear",
+                "page_context": current.value,
+            }
+
+        button_states = self._get_button_states()
+        if not button_states.get("Clear DTCs", False):
+            raise RuntimeError("Clear DTCs button is not visible on the current Data Display page.")
+
+        status("Opening Clear DTCs...")
+        self._click_agent_button("Clear DTCs")
+
+        dialog_page = self._wait_for_clear_dtcs_page(timeout_sec=10.0)
+        if dialog_page == GDS2Page.CLEAR_DTCS_SELECTION:
+            status("Selecting all modules for DTC clear...")
+            if not self._wait_for_button_state("Add All", enabled=True, timeout_sec=5.0):
+                raise RuntimeError("Add All button did not become enabled on Clear DTCs page.")
+            self._click_agent_button("Add All")
+            if not self._wait_for_button_state("OK", enabled=True, timeout_sec=5.0):
+                raise RuntimeError("OK button did not become enabled after selecting modules.")
+            self._sleep(0.8)
+            status("Confirming module selection...")
+            self._click_agent_button("OK")
+            dialog_deadline = time.time() + 15.0
+            dialog_page = GDS2Page.CLEAR_DTCS_SELECTION
+            while time.time() < dialog_deadline:
+                dialog_page = self._wait_for_clear_dtcs_page(
+                    timeout_sec=2.0,
+                    allow_data_display=True,
+                )
+                if dialog_page != GDS2Page.CLEAR_DTCS_SELECTION:
+                    break
+                self._sleep(0.5)
+            if dialog_page == GDS2Page.CLEAR_DTCS_SELECTION:
+                raise RuntimeError("Timed out waiting for final Clear DTCs confirmation page.")
+
+        if dialog_page == GDS2Page.CLEAR_DTCS_CONFIRMATION:
+            if not self._wait_for_button_state("OK", enabled=True, timeout_sec=5.0):
+                raise RuntimeError("Confirmation OK button did not become enabled.")
+            self._sleep(1.0)
+            status("Submitting Clear DTCs command...")
+            self._click_agent_button("OK")
+        elif dialog_page == GDS2Page.DATA_DISPLAY:
+            status("Clear DTCs completed")
+            return {
+                "success": True,
+                "cleared_count": pre_clear_count,
+                "message": "Clear DTCs completed",
+                "page_context": GDS2Page.DATA_DISPLAY.value,
+            }
+
+        final_page = self._wait_for_data_display_restore(timeout_sec=30.0)
+        post_clear_count = self._read_dtc_count_with_fallback(default=pre_clear_count)
+        cleared_count = max(0, pre_clear_count - post_clear_count)
+        status("Clear DTCs completed")
+        return {
+            "success": True,
+            "cleared_count": cleared_count,
+            "message": "Clear DTCs completed",
+            "page_context": final_page.value,
+        }
+
     def get_state(self) -> dict:
         """Return current viewer state."""
         return {
@@ -951,6 +1033,146 @@ class DataViewerWorkflow:
         logger.warning(f"Timeout waiting for button '{button_text}' after {elapsed:.1f}s")
 
         return False
+
+    def _get_button_states(self) -> Dict[str, bool]:
+        """Return visible button texts mapped to enabled state."""
+        buttons = self.controller.nav.get_buttons()
+        button_states: Dict[str, bool] = {}
+        for btn in buttons or []:
+            name = str(btn.get('text') or '').strip()
+            if not name:
+                continue
+            button_states[name] = bool(btn.get('enabled', True))
+        return button_states
+
+    def _wait_for_button_state(
+        self,
+        button_text: str,
+        *,
+        enabled: Optional[bool] = None,
+        timeout_sec: float = 10.0,
+        poll_interval: float = 0.2,
+    ) -> bool:
+        """Wait for one visible button to appear with the expected enabled state."""
+        deadline = time.time() + max(0.0, timeout_sec)
+        while time.time() < deadline:
+            self._check_cancel()
+            button_states = self._get_button_states()
+            if button_text in button_states:
+                if enabled is None or button_states[button_text] is enabled:
+                    return True
+            self._sleep(poll_interval)
+        return False
+
+    def _click_agent_button(self, button_text: str) -> None:
+        """Click one Java-Agent button without assuming a page transition."""
+        self._check_cancel()
+        result = self.controller.nav.click_button(button_text)
+        if not result.get('success'):
+            raise RuntimeError(f"Failed to click '{button_text}': {result.get('message')}")
+        self._sleep(0.2)
+
+    def _detect_current_page_fast(self) -> GDS2Page:
+        """Detect the current page without retry when the controller supports it."""
+        try:
+            return self.controller.detect_current_page(retries=0)
+        except TypeError:
+            return self.controller.detect_current_page()
+
+    def _classify_clear_dtcs_page_from_buttons(
+        self,
+        button_states: Dict[str, bool],
+        *,
+        allow_data_display: bool = False,
+    ) -> Optional[GDS2Page]:
+        """Best-effort Clear-DTC page classification from visible buttons."""
+        button_names = set(button_states.keys())
+        if any(
+            name in button_names
+            for name in ("Add All", "Add", "Remove", "Remove All")
+        ):
+            return GDS2Page.CLEAR_DTCS_SELECTION
+        if (
+            "OK" in button_names
+            and (
+                "Cancel" in button_names
+                or any(
+                    name in button_names
+                    for name in ("Clear Records", "Save and Clear", "Yes", "No")
+                )
+            )
+        ):
+            return GDS2Page.CLEAR_DTCS_CONFIRMATION
+        if allow_data_display and button_states.get("Clear DTCs", False):
+            return GDS2Page.DATA_DISPLAY
+        return None
+
+    def _wait_for_clear_dtcs_page(
+        self,
+        *,
+        timeout_sec: float = 10.0,
+        allow_data_display: bool = False,
+    ) -> GDS2Page:
+        """Wait for the next Clear-DTC page using explicit page enums first."""
+        deadline = time.time() + max(0.0, timeout_sec)
+        last_page = GDS2Page.UNKNOWN
+        last_buttons: list[str] = []
+        while time.time() < deadline:
+            self._check_cancel()
+            page = self._detect_current_page_fast()
+            button_states = self._get_button_states()
+            last_page = page
+            last_buttons = list(button_states.keys())
+
+            if page in {
+                GDS2Page.CLEAR_DTCS_SELECTION,
+                GDS2Page.CLEAR_DTCS_CONFIRMATION,
+            }:
+                return page
+            if allow_data_display and page == GDS2Page.DATA_DISPLAY:
+                return page
+
+            fallback_page = self._classify_clear_dtcs_page_from_buttons(
+                button_states,
+                allow_data_display=allow_data_display,
+            )
+            if fallback_page is not None:
+                return fallback_page
+            self._sleep(0.2)
+        raise RuntimeError(
+            "Timed out waiting for Clear DTCs page. "
+            f"Last page={last_page.value}; buttons={last_buttons}"
+        )
+
+    def _wait_for_data_display_restore(self, timeout_sec: float = 30.0) -> GDS2Page:
+        """Wait for Clear DTCs flow to return to the Data Display page."""
+        deadline = time.time() + max(0.0, timeout_sec)
+        last_page = GDS2Page.UNKNOWN
+        last_buttons: list[str] = []
+        while time.time() < deadline:
+            self._check_cancel()
+            page = self._detect_current_page_fast()
+            button_states = self._get_button_states()
+            last_page = page
+            last_buttons = list(button_states.keys())
+            if button_states.get("Clear DTCs", False):
+                if "Create Report" in button_states:
+                    return GDS2Page.DATA_DISPLAY
+                if page == GDS2Page.DATA_DISPLAY:
+                    return page
+            self._sleep(0.5)
+        raise RuntimeError(
+            "Timed out waiting to return to Data Display after Clear DTCs. "
+            f"Last page={last_page.value}; buttons={last_buttons}"
+        )
+
+    def _read_dtc_count_with_fallback(self, *, default: int) -> int:
+        """Read the latest DTC count after a clear operation, falling back when needed."""
+        try:
+            snapshot = self.read_all_dtcs()
+            return int(snapshot.get("dtc_count") or 0)
+        except Exception:
+            return default
 
     def _navigate_to_main_menu(self, status):
         """

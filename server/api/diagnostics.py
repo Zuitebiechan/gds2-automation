@@ -10,6 +10,7 @@ from diagnostic_platform.backend_registry import get_backend_registry
 from diagnostic_platform.contracts import BackendCapability, UnsupportedCapabilityError
 from diagnostic_platform.runtime.diagnostics_runtime import (
     build_diagnostics_start_payload,
+    clear_diagnostic_dtcs,
     read_diagnostic_dtcs,
     retry_public_ai_diagnosis,
     select_diagnostic_module,
@@ -217,6 +218,36 @@ def diagnose_dtcs():
     except Exception as e:
         logger.exception("diagnose_dtcs failed")
         return jsonify({"success": False, "error": str(e), "dtcs": []}), 500
+
+
+@diagnostics_bp.route('/clear_dtcs', methods=['POST'])
+def diagnose_clear_dtcs():
+    """Clear DTCs directly from the diagnostics backend."""
+    data = request.json or {}
+
+    try:
+        backend = _get_backend(_resolve_backend_name(data))
+        _ensure_backend_capability(backend, BackendCapability.CLEAR_DTCS)
+        payload = clear_diagnostic_dtcs(
+            backend=backend,
+            module_name=str(data.get('module') or '').strip(),
+            data_category=str(data.get('data_category') or '').strip(),
+        )
+        logger.info(
+            "DIAG clear_dtcs cleared=%s page=%s",
+            payload["cleared_count"],
+            payload["page_context"],
+        )
+        return jsonify(payload)
+
+    except UnsupportedCapabilityError as e:
+        return jsonify({"success": False, "error": str(e)}), 501
+    except RuntimeError as e:
+        logger.info(f"diagnose_clear_dtcs invalid state: {e}")
+        return jsonify({"success": False, "error": str(e)}), 400
+    except Exception as e:
+        logger.exception("diagnose_clear_dtcs failed")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @diagnostics_bp.route('/select_module', methods=['POST'])

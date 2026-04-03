@@ -31,6 +31,8 @@ class GDS2Page(Enum):
     DATA_LIST = "data_list"
     SUB_DATA_LIST = "sub_data_list"         # Sub-categories for some data
     DATA_DISPLAY = "data_display"
+    CLEAR_DTCS_SELECTION = "clear_dtcs_selection"
+    CLEAR_DTCS_CONFIRMATION = "clear_dtcs_confirmation"
     LOADING = "loading"
     J2534_DISCONNECT = "j2534_disconnect"
 
@@ -185,6 +187,26 @@ class NavigationController:
         # IMPORTANT: Data Display alone is not enough to classify as MODULE_SUBMENU.
         return has_display_marker and has_required_marker
 
+    @staticmethod
+    def _is_clear_dtcs_selection_state(
+        button_texts: set[str],
+        items: Optional[List[str]],
+    ) -> bool:
+        """Detect the first Clear DTCs page where modules are selected."""
+        selection_markers = {"Add All", "Add", "Remove", "Remove All"}
+        guard_markers = {"Cancel", "Back", "Add Bookmark", "OK"}
+        return bool(selection_markers & button_texts) and bool(guard_markers & button_texts)
+
+    @staticmethod
+    def _is_clear_dtcs_confirmation_state(button_texts: set[str]) -> bool:
+        """Detect the final Clear DTCs confirmation page."""
+        confirmation_markers = {"Clear Records", "Save and Clear", "Yes", "No"}
+        return (
+            "OK" in button_texts
+            and "Cancel" in button_texts
+            and bool(confirmation_markers & button_texts)
+        )
+
     # =========================================================================
     # Page Detection
     # =========================================================================
@@ -291,6 +313,8 @@ class NavigationController:
                 'data_list': GDS2Page.DATA_LIST,
                 'sub_data_list': GDS2Page.SUB_DATA_LIST,
                 'data_display': GDS2Page.DATA_DISPLAY,
+                'clear_dtcs_selection': GDS2Page.CLEAR_DTCS_SELECTION,
+                'clear_dtcs_confirmation': GDS2Page.CLEAR_DTCS_CONFIRMATION,
                 'loading': GDS2Page.LOADING,
                 'j2534_disconnect': GDS2Page.J2534_DISCONNECT,
             }
@@ -336,7 +360,15 @@ class NavigationController:
             if "Create Report" in button_texts:
                 return GDS2Page.DATA_DISPLAY
 
-            # 1a. Transitional loading page: no list content and either no actionable
+            # 1a. First Clear DTCs page: module selection dialog.
+            if self._is_clear_dtcs_selection_state(button_texts, items):
+                return GDS2Page.CLEAR_DTCS_SELECTION
+
+            # 1b. Final Clear DTCs page: confirmation dialog.
+            if self._is_clear_dtcs_confirmation_state(button_texts):
+                return GDS2Page.CLEAR_DTCS_CONFIRMATION
+
+            # 1c. Transitional loading page: no list content and either no actionable
             # buttons or stale deep-page buttons while GDS2 is repainting.
             if not items:
                 if not button_texts:
@@ -344,7 +376,7 @@ class NavigationController:
                 if "Enter" in button_texts and ("Back" in button_texts or "Vehicle Menu" in button_texts):
                     return GDS2Page.LOADING
 
-            # 1b. Lost communication page variants: always has Back.
+            # 1d. Lost communication page variants: always has Back.
             #     IMPORTANT: during vehicle_selection -> diagnostics_menu transition,
             #     GDS2 can briefly expose toolbar-only buttons with empty lists.
             #     Treat ambiguous Back-only states as LOADING unless we have
@@ -641,6 +673,8 @@ class NavigationController:
                 GDS2Page.DATA_LIST: 4,
                 GDS2Page.SUB_DATA_LIST: 5,
                 GDS2Page.DATA_DISPLAY: 5,  # Same depth as SUB_DATA_LIST
+                GDS2Page.CLEAR_DTCS_SELECTION: 6,
+                GDS2Page.CLEAR_DTCS_CONFIRMATION: 6,
             }
 
             current = self.detect_current_page()

@@ -7,6 +7,7 @@ from typing import Any
 
 from diagnostic_platform.contracts import BackendCapability, UnsupportedCapabilityError
 from diagnostic_platform.runtime.session_actions import (
+    clear_dtcs,
     ensure_session_capability,
     read_dtcs,
     start_live_data,
@@ -64,6 +65,48 @@ def read_session_dtcs(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
         return {"success": False, "error": str(exc)}, 400
     except Exception as exc:
         logger.exception("session_dtcs failed")
+        return {"success": False, "error": str(exc)}, 500
+
+
+def clear_session_dtcs(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    session_id = (data.get("session_id") or "").strip()
+
+    if not session_id:
+        return {"success": False, "error": "session_id required"}, 400
+
+    try:
+        orch = get_orchestrator()
+        session = orch.get_session(session_id)
+        ensure_session_capability(session, BackendCapability.CLEAR_DTCS)
+        result = clear_dtcs(
+            _runtime(),
+            session,
+            data,
+            backend=get_backend(),
+            emit_progress=lambda message: orch.emit_progress(session_id, message),
+        )
+        logger.info(
+            "SESSION %s clear_dtcs cleared=%s page=%s",
+            session_id,
+            result["cleared_count"],
+            result["page_context"],
+        )
+        return {
+            "success": True,
+            "session_id": session_id,
+            "result": result,
+        }, 200
+
+    except KeyError as exc:
+        return {"success": False, "error": str(exc)}, 404
+    except UnsupportedCapabilityError as exc:
+        return {"success": False, "error": str(exc)}, 501
+    except RuntimeError as exc:
+        return {"success": False, "error": str(exc)}, 409
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}, 400
+    except Exception as exc:
+        logger.exception("session_clear_dtcs failed")
         return {"success": False, "error": str(exc)}, 500
 
 

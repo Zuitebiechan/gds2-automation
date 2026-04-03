@@ -349,7 +349,7 @@ def read_dtcs(
     module_name = context.get("module", "")
     data_category = context.get("data_category", "")
 
-    if module_name and not getattr(state, "current_module", ""):
+    if module_name and getattr(state, "current_module", "") != module_name:
         backend.select_module(module_name)
         set_session_selection(session, module=module_name)
         state = backend.get_state()
@@ -358,7 +358,7 @@ def read_dtcs(
         except (UnsupportedCapabilityError, NotImplementedError):
             current_page = getattr(state, "current_page", "")
 
-    if data_category and not getattr(state, "current_data_category", ""):
+    if data_category and getattr(state, "current_data_category", "") != data_category:
         backend.select_data_category(data_category)
         set_session_selection(session, data_category=data_category)
 
@@ -383,6 +383,67 @@ def read_dtcs(
         "dtc_count": len(dtcs),
         "page_context": page_context,
     }
+
+
+def clear_dtcs(
+    runtime: WorkerRuntime,
+    session: Any,
+    data: dict[str, Any],
+    *,
+    backend: Any,
+    emit_progress: Callable[[str], None],
+) -> dict[str, Any]:
+    """Clear DTCs for one running backend-neutral session."""
+    if live_data_active(runtime, session.session_id):
+        raise RuntimeError("Cannot clear DTCs while live data streaming is active")
+    if navigation_session_id(runtime, session.session_id):
+        raise RuntimeError("Cannot clear DTCs while navigation is active")
+    if ai_session_id(runtime, session.session_id):
+        raise RuntimeError("Cannot clear DTCs while AI diagnosis is active")
+
+    operation = runtime.start_operation(session.session_id, "clear_dtcs")
+    try:
+        context = resolve_session_vehicle_context(session, data, backend=backend)
+        state = backend.get_state()
+        try:
+            current_page = backend.detect_current_page()
+        except (UnsupportedCapabilityError, NotImplementedError):
+            current_page = getattr(state, "current_page", "")
+
+        module_name = context.get("module", "")
+        data_category = context.get("data_category", "")
+
+        if module_name and getattr(state, "current_module", "") != module_name:
+            backend.select_module(module_name)
+            set_session_selection(session, module=module_name)
+            state = backend.get_state()
+            try:
+                current_page = backend.detect_current_page()
+            except (UnsupportedCapabilityError, NotImplementedError):
+                current_page = getattr(state, "current_page", "")
+
+        if data_category and getattr(state, "current_data_category", "") != data_category:
+            backend.select_data_category(data_category)
+            set_session_selection(session, data_category=data_category)
+
+        clear_result = backend.clear_dtcs()
+        try:
+            page_context = backend.detect_current_page()
+        except (UnsupportedCapabilityError, NotImplementedError):
+            page_context = getattr(backend.get_state(), "current_page", current_page)
+
+        emit_progress(
+            "Clear DTCs completed "
+            f"({int(getattr(clear_result, 'cleared_count', 0) or 0)} codes)"
+        )
+        return {
+            "success": bool(getattr(clear_result, "success", True)),
+            "cleared_count": int(getattr(clear_result, "cleared_count", 0) or 0),
+            "message": str(getattr(clear_result, "message", "") or "Clear DTCs completed"),
+            "page_context": page_context,
+        }
+    finally:
+        runtime.finish_operation(operation)
 
 
 def select_module_action(

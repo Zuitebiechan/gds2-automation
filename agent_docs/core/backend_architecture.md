@@ -164,6 +164,7 @@ Advertised GDS2 capabilities today:
 - `AI_DATA_COLLECTION`
 - `NAVIGATION`
 - `GENERIC_ACTIONS`
+- `CLEAR_DTCS`
 
 ## Current GDS2 Legacy Island
 
@@ -186,6 +187,7 @@ Examples:
 - session AI diagnose flows require `AI_DATA_COLLECTION`
 - session navigation flows require `NAVIGATION`
 - session execute flows require `GENERIC_ACTIONS`
+- session and diagnostics clear-DTC flows require `CLEAR_DTCS`
 
 Unsupported capability requests are surfaced as deterministic failures, typically `501 Not Implemented`.
 

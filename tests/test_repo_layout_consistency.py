@@ -153,6 +153,7 @@ def test_session_domain_handler_modules_exist():
     assert hasattr(live_data_module, "stream_live_data_events")
     assert hasattr(live_data_module, "stop_live_data_session")
     assert hasattr(live_data_module, "read_session_dtcs")
+    assert hasattr(live_data_module, "clear_session_dtcs")
     assert hasattr(navigation_module, "start_navigation_session_for_business")
     assert hasattr(navigation_module, "stream_navigation_events")
     assert hasattr(navigation_module, "submit_navigation_decision_for_business")

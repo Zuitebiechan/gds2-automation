@@ -108,12 +108,12 @@ def read_diagnostic_dtcs(
     state = backend.get_state()
     current_page = getattr(state, "current_page", "")
 
-    if module_name and not state.current_module:
+    if module_name and getattr(state, "current_module", "") != module_name:
         backend.select_module(module_name)
         state = backend.get_state()
         current_page = getattr(state, "current_page", current_page)
 
-    if data_category and not getattr(state, "current_data_category", ""):
+    if data_category and getattr(state, "current_data_category", "") != data_category:
         backend.select_data_category(data_category)
         state = backend.get_state()
         current_page = getattr(state, "current_page", current_page)
@@ -134,6 +134,36 @@ def read_diagnostic_dtcs(
             for dtc in dtcs
         ],
         "dtc_count": len(dtcs),
+        "page_context": page_context,
+    }
+
+
+def clear_diagnostic_dtcs(
+    *,
+    backend: Any,
+    module_name: str,
+    data_category: str,
+) -> dict[str, Any]:
+    """Clear DTCs for the direct diagnostics API."""
+    state = backend.get_state()
+    current_page = getattr(state, "current_page", "")
+
+    if module_name and getattr(state, "current_module", "") != module_name:
+        backend.select_module(module_name)
+        state = backend.get_state()
+        current_page = getattr(state, "current_page", current_page)
+
+    if data_category and getattr(state, "current_data_category", "") != data_category:
+        backend.select_data_category(data_category)
+        state = backend.get_state()
+        current_page = getattr(state, "current_page", current_page)
+
+    clear_result = backend.clear_dtcs()
+    page_context = getattr(backend.get_state(), "current_page", current_page)
+    return {
+        "success": bool(getattr(clear_result, "success", True)),
+        "cleared_count": int(getattr(clear_result, "cleared_count", 0) or 0),
+        "message": str(getattr(clear_result, "message", "") or "Clear DTCs completed"),
         "page_context": page_context,
     }
 

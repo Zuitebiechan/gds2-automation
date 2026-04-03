@@ -115,6 +115,7 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
             BackendCapability.AI_DATA_COLLECTION,
             BackendCapability.NAVIGATION,
             BackendCapability.GENERIC_ACTIONS,
+            BackendCapability.CLEAR_DTCS,
         ]
 
     @property
@@ -503,8 +504,31 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
         )
 
     def clear_dtcs(self) -> ClearResult:
-        """Clear DTCs is not implemented for GDS2 yet."""
-        raise NotImplementedError("GDS2 clear DTC not yet implemented.")
+        """Clear DTCs through the existing Data Display workflow."""
+        if self._active_collector is not None and self._active_collector.is_running:
+            raise RuntimeError("Cannot clear GDS2 DTCs while live data streaming is active")
+
+        try:
+            outcome = self._get_workflow().clear_dtcs()
+            if isinstance(outcome, ClearResult):
+                if not outcome.success:
+                    raise RuntimeError(outcome.message or "GDS2 clear DTCs failed")
+                return outcome
+
+            if isinstance(outcome, dict):
+                success = bool(outcome.get("success", True))
+                message = str(outcome.get("message") or "Clear DTCs completed")
+                if not success:
+                    raise RuntimeError(message)
+                return ClearResult(
+                    success=True,
+                    cleared_count=int(outcome.get("cleared_count") or 0),
+                    message=message,
+                )
+
+            raise RuntimeError("GDS2 clear DTCs returned an unsupported result")
+        except Exception as exc:  # pragma: no cover - runtime integration wrapper
+            raise RuntimeError(f"Failed to clear GDS2 DTCs: {exc}") from exc
 
     def get_state(self) -> BackendState:
         """Build platform BackendState from the workflow and navigation controller."""

@@ -1,11 +1,11 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from diagnostic_platform.contracts import BackendRegistry, BackendState
+from diagnostic_platform.contracts import BackendCapability, BackendRegistry, BackendState
 
 from backends.gds2.backend import GDS2DiagnosticBackend
 from backends.gds2.controller_runtime import GDS2ControllerRuntime
-from src.navigation import GDS2Page
+from src.navigation import GDS2Page, NavigationController
 from src.streaming.agent_data_collector import AgentSnapshot, DTCInfo
 
 
@@ -101,6 +101,29 @@ def test_backend_get_state_delegates_to_runtime_status():
     assert state.current_data_category == "Engine Data"
     assert state.extra["connection_epoch"] == "epoch-1"
     runtime.status.assert_called_once_with()
+
+
+def test_gds2_backend_clear_dtcs_delegates_to_workflow():
+    runtime = MagicMock()
+    runtime.get_workflow.return_value = MagicMock(
+        clear_dtcs=MagicMock(
+            return_value={
+                "success": True,
+                "cleared_count": 5,
+                "message": "Clear DTCs completed",
+                "page_context": "data_display",
+            }
+        )
+    )
+    backend = GDS2DiagnosticBackend(runtime=runtime)
+
+    result = backend.clear_dtcs()
+
+    assert BackendCapability.CLEAR_DTCS in backend.capabilities
+    assert result.success is True
+    assert result.cleared_count == 5
+    assert result.message == "Clear DTCs completed"
+    runtime.get_workflow.return_value.clear_dtcs.assert_called_once_with()
 
 
 def test_gds2_backend_brand_aliases_route_without_manual_decision():
@@ -218,3 +241,88 @@ def test_gds2_backend_collect_ai_payload_returns_platform_payload(monkeypatch):
     assert payload.vehicle_context.vin == "VIN123"
     assert payload.dtcs[0].code == "P0001"
     assert [point.parameter for point in payload.live_data] == ["RPM", "Coolant Temp"]
+
+
+def test_navigation_controller_maps_clear_dtcs_agent_page_ids() -> None:
+    class _AgentNav:
+        def __init__(self, page_id: str) -> None:
+            self.page_id = page_id
+
+        def get_page_id(self):
+            return {"page_id": self.page_id, "confidence": "high"}
+
+        def get_buttons(self):
+            return [{"text": "OK", "enabled": True}]
+
+        def get_list_items(self, list_index: int = 0):
+            return []
+
+    selection = NavigationController(nav=_AgentNav("clear_dtcs_selection"))
+    confirmation = NavigationController(nav=_AgentNav("clear_dtcs_confirmation"))
+
+    assert selection.detect_current_page(retries=0) == GDS2Page.CLEAR_DTCS_SELECTION
+    assert confirmation.detect_current_page(retries=0) == GDS2Page.CLEAR_DTCS_CONFIRMATION
+
+
+def test_navigation_controller_detects_clear_dtcs_pages_via_heuristic_fallback() -> None:
+    class _HeuristicNav:
+        def __init__(self, buttons, items) -> None:
+            self._buttons = buttons
+            self._items = items
+
+        def get_page_id(self):
+            return None
+
+        def get_buttons(self):
+            return self._buttons
+
+        def get_list_items(self, list_index: int = 0):
+            return list(self._items)
+
+    selection = NavigationController(
+        nav=_HeuristicNav(
+            buttons=[
+                {"text": "Add All", "enabled": True},
+                {"text": "Add", "enabled": True},
+                {"text": "Cancel", "enabled": True},
+                {"text": "Back", "enabled": True},
+            ],
+            items=["Engine Control Module"],
+        )
+    )
+    confirmation = NavigationController(
+        nav=_HeuristicNav(
+            buttons=[
+                {"text": "OK", "enabled": True},
+                {"text": "Cancel", "enabled": True},
+                {"text": "Clear Records", "enabled": True},
+                {"text": "Back", "enabled": True},
+            ],
+            items=[],
+        )
+    )
+
+    assert selection.detect_current_page(retries=0) == GDS2Page.CLEAR_DTCS_SELECTION
+    assert confirmation.detect_current_page(retries=0) == GDS2Page.CLEAR_DTCS_CONFIRMATION
+
+
+def test_navigation_controller_detects_clear_dtcs_selection_without_list_items() -> None:
+    class _HeuristicNav:
+        def get_page_id(self):
+            return None
+
+        def get_buttons(self):
+            return [
+                {"text": "Add All", "enabled": True},
+                {"text": "Add", "enabled": True},
+                {"text": "Cancel", "enabled": True},
+                {"text": "Add Bookmark", "enabled": True},
+                {"text": "Back", "enabled": True},
+            ]
+
+        def get_list_items(self, list_index: int = 0):
+            return []
+
+    controller = NavigationController(nav=_HeuristicNav())
+
+    assert controller.detect_current_page(retries=0) == GDS2Page.CLEAR_DTCS_SELECTION

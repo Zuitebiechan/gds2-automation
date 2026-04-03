@@ -17,10 +17,12 @@ from diagnostic_platform.contracts import (
     BackendCapability,
     BackendRegistry,
     BackendState,
+    ClearResult,
     DTC,
     DiagnosticBackend,
 )
 from diagnostic_platform.runtime.session_actions import (
+    clear_dtcs as clear_session_dtcs,
     read_dtcs,
     select_data_category_action,
     select_module_action,
@@ -113,7 +115,11 @@ class FakeCoreBackend(DiagnosticBackend):
         raise NotImplementedError
 
     def clear_dtcs(self):
-        raise NotImplementedError
+        return ClearResult(
+            success=True,
+            cleared_count=1,
+            message="Cleared by fake core backend",
+        )
 
     def get_state(self) -> BackendState:
         return BackendState(
@@ -283,6 +289,44 @@ def test_core_backend_flow_runs_without_gds2_specific_runtime():
     assert category_payload["success"] is True
     assert dtc_payload["dtc_count"] == 1
     assert progress_messages[-1].startswith("Read DTCs completed")
+
+
+def test_core_backend_clear_dtcs_flow_runs_without_gds2_specific_runtime():
+    runtime = WorkerRuntime()
+    session = Session(
+        session_id="session-1",
+        context=SessionContext(brand="alpha"),
+        status=SessionStatus.RUNNING,
+    )
+    session.backend_name = "fake-alpha"
+    session.capabilities = [
+        BackendCapability.CORE_SESSION.value,
+        BackendCapability.READ_DTCS.value,
+        BackendCapability.CLEAR_DTCS.value,
+    ]
+    backend = _backend(
+        "fake-alpha",
+        brands=["alpha"],
+        capabilities=[
+            BackendCapability.CORE_SESSION,
+            BackendCapability.READ_DTCS,
+            BackendCapability.CLEAR_DTCS,
+        ],
+    )
+    progress_messages: list[str] = []
+
+    payload = clear_session_dtcs(
+        runtime,
+        session,
+        {"session_id": session.session_id},
+        backend=backend,
+        emit_progress=progress_messages.append,
+    )
+
+    assert payload["success"] is True
+    assert payload["cleared_count"] == 1
+    assert payload["message"] == "Cleared by fake core backend"
+    assert progress_messages[-1].startswith("Clear DTCs completed")
 
 
 def test_navigation_handler_returns_501_when_backend_lacks_navigation(monkeypatch):

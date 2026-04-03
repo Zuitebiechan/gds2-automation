@@ -54,7 +54,9 @@ def test_server_app_factory_registers_supported_blueprints(monkeypatch):
 
     assert {"diagnostics", "session", "navigate"} <= set(app.blueprints)
     assert "/api/diagnose/start" in routes
+    assert "/api/diagnose/clear_dtcs" in routes
     assert "/api/session/start" in routes
+    assert "/api/session/clear_dtcs" in routes
     assert "/api/navigate/start" in routes
 
 

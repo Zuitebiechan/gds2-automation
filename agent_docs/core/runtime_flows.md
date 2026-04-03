@@ -214,6 +214,35 @@ Entry:
 
 This performs a similar operation directly against the backend outside the business-session model.
 
+## Clear-DTC Flow
+
+### Session-bound
+
+Entry:
+
+- `POST /api/session/clear_dtcs`
+
+Sequence:
+
+1. Ensure session supports `CLEAR_DTCS`.
+2. Reject the operation if live-data, navigation, or AI execution is still active for the session.
+3. Resolve module/data-category context from request, session selection, or backend state.
+4. Acquire a worker-exclusive `clear_dtcs` operation lock.
+5. Call backend clear-DTC behavior.
+6. Return normalized clear result payload with `cleared_count`, `message`, and final page context.
+
+### Direct diagnostics
+
+Entry:
+
+- `POST /api/diagnose/clear_dtcs`
+
+Behavior:
+
+- resolve module/data-category context when supplied
+- call backend clear-DTC behavior directly
+- return normalized clear result payload
+
 ## Live-Data Flow
 
 ### Session-bound start

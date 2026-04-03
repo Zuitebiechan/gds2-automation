@@ -48,6 +48,8 @@ public class PageIdentifier {
     public static final String PAGE_DATA_LIST = "data_list";
     public static final String PAGE_SUB_DATA_LIST = "sub_data_list";
     public static final String PAGE_DATA_DISPLAY = "data_display";
+    public static final String PAGE_CLEAR_DTCS_SELECTION = "clear_dtcs_selection";
+    public static final String PAGE_CLEAR_DTCS_CONFIRMATION = "clear_dtcs_confirmation";
     public static final String PAGE_LOADING = "loading";
     public static final String PAGE_J2534_DISCONNECT = "j2534_disconnect";
 
@@ -168,37 +170,65 @@ public class PageIdentifier {
         String confidence;
         String evidence;
 
-        // Rule 1: Window title contains "Data Display"
-        if (windowTitle != null && windowTitle.contains("Data Display")) {
+        // Rule 1: First Clear DTCs page (module selection)
+        if ((buttonTexts.contains("Add All")
+                || buttonTexts.contains("Add")
+                || buttonTexts.contains("Remove")
+                || buttonTexts.contains("Remove All"))
+                && (buttonTexts.contains("Cancel")
+                    || buttonTexts.contains("Back")
+                    || buttonTexts.contains("Add Bookmark")
+                    || buttonTexts.contains("OK"))) {
+            pageId = PAGE_CLEAR_DTCS_SELECTION;
+            confidence = "high";
+            evidence = "clear-dtcs selection button cluster present";
+        }
+        // Rule 2: Final Clear DTCs confirmation page
+        else if (
+                containsAny(labelTexts, Arrays.asList("DTC Clear"))
+                || (buttonTexts.contains("OK")
+                    && buttonTexts.contains("Cancel")
+                    && (buttonTexts.contains("Clear Records")
+                        || buttonTexts.contains("Save and Clear")
+                        || buttonTexts.contains("Yes")
+                        || buttonTexts.contains("No")))) {
+            pageId = PAGE_CLEAR_DTCS_CONFIRMATION;
+            confidence = containsAny(labelTexts, Arrays.asList("DTC Clear")) ? "high" : "medium";
+            evidence = containsAny(labelTexts, Arrays.asList("DTC Clear"))
+                    ? "label contains 'DTC Clear'"
+                    : "clear-dtcs confirmation button cluster present";
+        }
+        // Rule 3: Window title contains "Data Display"
+        else if (windowTitle != null && windowTitle.contains("Data Display")) {
             pageId = PAGE_DATA_DISPLAY;
             confidence = "high";
             evidence = "window_title contains 'Data Display'";
         }
-        // Rule 2: "Create Report" button visible -> DATA_DISPLAY
+        // Rule 4: "Create Report" button visible -> DATA_DISPLAY
         else if (buttonTexts.contains("Create Report")) {
             pageId = PAGE_DATA_DISPLAY;
             confidence = "high";
             evidence = "button 'Create Report' present";
         }
-        // Rule 3: Window title contains "DTC"
+        // Rule 5: Window title contains "DTC"
         else if (windowTitle != null && (windowTitle.contains("DTC") || windowTitle.contains("Diagnostic Trouble"))) {
             pageId = PAGE_DATA_DISPLAY;
             confidence = "high";
             evidence = "window_title contains DTC indicator";
         }
-        // Rule 4: "Diagnostics" + "Update" buttons -> MAIN_MENU
+        // Rule 6: "Diagnostics" + "Update" buttons -> MAIN_MENU
         else if (buttonTexts.contains("Diagnostics") && buttonTexts.contains("Update")) {
             pageId = PAGE_MAIN_MENU;
             confidence = "high";
             evidence = "buttons 'Diagnostics' + 'Update' present";
         }
-        // Rule 5: Transitional loading states (no list content yet)
+        // Rule 7: Transitional loading states (no list content yet)
         else if (listItems.isEmpty() && buttonTexts.isEmpty()) {
             pageId = PAGE_LOADING;
             confidence = "high";
             evidence = "no buttons and no list items (transition/loading)";
         }
-        // Rule 6: Transitional loading (stale deep-page toolbar + Enter)
+        // Rule 8: Transitional loading (stale deep-page toolbar + Enter)
         else if (listItems.isEmpty()
                 && buttonTexts.contains("Enter")
                 && (buttonTexts.contains("Back") || buttonTexts.contains("Vehicle Menu"))) {
@@ -206,7 +236,7 @@ public class PageIdentifier {
             confidence = "high";
             evidence = "Enter + deep-page toolbar buttons with empty list (transition/loading)";
         }
-        // Rule 7: Ambiguous toolbar-only deep page should default to LOADING,
+        // Rule 9: Ambiguous toolbar-only deep page should default to LOADING,
         // not disconnect, to avoid false positives during screen repaint.
         else if (listItems.isEmpty()
                 && buttonTexts.contains("Back")
@@ -222,7 +252,7 @@ public class PageIdentifier {
             confidence = "medium";
             evidence = "toolbar-only deep page with empty list (likely transient loading)";
         }
-        // Rule 8: Lost communication page (J2534 disconnect)
+        // Rule 10: Lost communication page (J2534 disconnect)
         else if (listItems.isEmpty()
                 && buttonTexts.contains("Back")
                 && !buttonTexts.contains("Enter")
@@ -238,31 +268,31 @@ public class PageIdentifier {
                     ? "Back + OK with empty list and no navigation markers"
                     : "disconnect keywords detected in labels with Back + empty list";
         }
-        // Rule 9: List contains "Data Display" item -> MODULE_SUBMENU
+        // Rule 11: List contains "Data Display" item -> MODULE_SUBMENU
         else if (containsItem(listItems, "Data Display")) {
             pageId = PAGE_MODULE_SUBMENU;
             confidence = "high";
             evidence = "list contains 'Data Display' item";
         }
-        // Rule 10: List contains "Module Diagnostics" -> DIAGNOSTICS_MENU
+        // Rule 12: List contains "Module Diagnostics" -> DIAGNOSTICS_MENU
         else if (containsItem(listItems, "Module Diagnostics")) {
             pageId = PAGE_DIAGNOSTICS_MENU;
             confidence = "high";
             evidence = "list contains 'Module Diagnostics' item";
         }
-        // Rule 11: List items contain brackets like [K20] -> MODULE_LIST
+        // Rule 13: List items contain brackets like [K20] -> MODULE_LIST
         else if (hasModulePattern(listItems)) {
             pageId = PAGE_MODULE_LIST;
             confidence = "high";
             evidence = "list items contain module code patterns [...]";
         }
-        // Rule 12: Has list items + Back button (but no markers above) -> DATA_LIST
+        // Rule 14: Has list items + Back button (but no markers above) -> DATA_LIST
         else if (!listItems.isEmpty() && buttonTexts.contains("Back")) {
             pageId = PAGE_DATA_LIST;
             confidence = "medium";
             evidence = "has list items + Back button, no specific markers";
         }
-        // Rule 13: "Enter" button, no list items, and specific button pattern -> VEHICLE_SELECTION
+        // Rule 15: "Enter" button, no list items, and specific button pattern -> VEHICLE_SELECTION
         //   Vehicle Selection has: Enter visible, possibly Back/Disconnect/Select Device
         //   Diagnostics Menu also has Enter, but it has list items (checked above)
         else if (buttonTexts.contains("Enter") && listItems.isEmpty()) {
@@ -285,7 +315,7 @@ public class PageIdentifier {
                 evidence = "Enter button present but ambiguous context";
             }
         }
-        // Rule 14: "Disconnect" or "Select Device" without Enter -> still VEHICLE_SELECTION
+        // Rule 16: "Disconnect" or "Select Device" without Enter -> still VEHICLE_SELECTION
         else if (buttonTexts.contains("Disconnect") || buttonTexts.contains("Select Device")) {
             pageId = PAGE_VEHICLE_SELECTION;
             confidence = "high";

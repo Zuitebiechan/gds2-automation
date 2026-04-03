@@ -26,6 +26,7 @@ class DiagnosticsWindow:
     """Vehicle diagnostics UI for cloud API-driven workflows."""
 
     POLL_INTERVAL_MS = 100
+    SESSION_STATUS_POLL_INTERVAL_MS = 1500
 
     def __init__(self, api_base_url: str):
         self._api_base = api_base_url.rstrip("/")
@@ -59,6 +60,8 @@ class DiagnosticsWindow:
         self._session_sse_response: Optional[requests.Response] = None
         self._session_decision_window: Optional[tk.Toplevel] = None
         self._session_category_confirmed = False
+        self._current_page = ""
+        self._session_status_refresh_inflight = False
 
         self._navigate_session_id: Optional[str] = None
         self._navigate_sse_running = False
@@ -91,6 +94,7 @@ class DiagnosticsWindow:
         self._build_layout()
 
         self._root.after(self.POLL_INTERVAL_MS, self._poll_queue)
+        self._root.after(self.SESSION_STATUS_POLL_INTERVAL_MS, self._poll_session_status)
 
     # ------------------------------------------------------------------
     # Window lifecycle
@@ -419,13 +423,21 @@ class DiagnosticsWindow:
         )
         self._read_dtc_button.grid(row=0, column=1, sticky="w", padx=(0, 8))
 
+        self._clear_dtc_button = ttk.Button(
+            secondary_controls,
+            text="Clear DTCs",
+            command=self._on_clear_dtcs_clicked,
+            state=tk.DISABLED,
+        )
+        self._clear_dtc_button.grid(row=0, column=2, sticky="w", padx=(0, 8))
+
         self._start_stream_button = ttk.Button(
             secondary_controls,
             text="▶ Start Stream",
             command=self._on_start_stream_clicked,
             state=tk.DISABLED,
         )
-        self._start_stream_button.grid(row=0, column=2, sticky="w", padx=(0, 8))
+        self._start_stream_button.grid(row=0, column=3, sticky="w", padx=(0, 8))
         self._start_stream_button.grid_remove()
 
         self._stop_stream_button = ttk.Button(
@@ -434,7 +446,7 @@ class DiagnosticsWindow:
             command=self._on_stop_stream_clicked,
             state=tk.DISABLED,
         )
-        self._stop_stream_button.grid(row=0, column=3, sticky="w")
+        self._stop_stream_button.grid(row=0, column=4, sticky="w")
         self._stop_stream_button.grid_remove()
 
         # Row 4+: live table
@@ -551,6 +563,8 @@ class DiagnosticsWindow:
             self._handle_start_result(data)
         elif event == "dtcs_result":
             self._handle_dtcs_result(data)
+        elif event == "clear_dtcs_result":
+            self._handle_clear_dtcs_result(data)
         elif event == "module_result":
             self._handle_select_module_result(data)
         elif event == "session_select_module_result":
@@ -585,6 +599,8 @@ class DiagnosticsWindow:
             self._handle_session_connect_device_result(data)
         elif event == "session_connected":
             self._session_status_var.set("Connected. Waiting for events...")
+        elif event == "session_status_result":
+            self._handle_session_status_result(data)
         elif event == "session_progress":
             self._handle_session_progress(data)
         elif event == "session_decision_required":
@@ -628,6 +644,50 @@ class DiagnosticsWindow:
     def _set_session_hint(self, message: str) -> None:
         self._session_hint_var.set(message)
 
+    def _set_current_page(self, page: Any) -> None:
+        normalized = str(page or "").strip().lower()
+        self._current_page = normalized
+
+    def _extract_current_page(self, payload: dict[str, Any]) -> str:
+        backend_summary = payload.get("backend_state_summary")
+        if isinstance(backend_summary, dict):
+            current_page = backend_summary.get("current_page")
+            if current_page:
+                return str(current_page).strip().lower()
+
+        current_page = payload.get("current_page")
+        if current_page:
+            return str(current_page).strip().lower()
+
+        result = payload.get("result")
+        if isinstance(result, dict):
+            page_context = result.get("page_context")
+            if isinstance(page_context, str):
+                return page_context.strip().lower()
+
+        return ""
+
+    def _request_session_status_refresh(self) -> None:
+        if not self._session_id or self._session_status_refresh_inflight:
+            return
+        self._session_status_refresh_inflight = True
+        self._api_call(
+            "GET",
+            "/api/session/status",
+            query_params={"session_id": self._session_id},
+            callback_event="session_status_result",
+        )
+
+    def _poll_session_status(self) -> None:
+        if self._is_destroying:
+            return
+        if self._session_id:
+            self._request_session_status_refresh()
+        try:
+            self._root.after(self.SESSION_STATUS_POLL_INTERVAL_MS, self._poll_session_status)
+        except tk.TclError:
+            pass
+
     def _refresh_action_buttons(self) -> None:
         """Refresh module/category/diagnostic action buttons from current state."""
         has_module = bool(self._selected_module.get().strip())
@@ -653,6 +713,10 @@ class DiagnosticsWindow:
 
         self._read_dtc_button.configure(
             state=tk.NORMAL if can_run_actions else tk.DISABLED
+        )
+        can_clear_dtcs = can_run_actions and session_mode and self._current_page == "data_display"
+        self._clear_dtc_button.configure(
+            state=tk.NORMAL if can_clear_dtcs else tk.DISABLED
         )
         # Legacy controls hidden in agentic-only mode.
         self._start_stream_button.configure(state=tk.DISABLED)
@@ -1009,6 +1073,48 @@ class DiagnosticsWindow:
             callback_event="dtcs_result",
         )
 
+    def _on_clear_dtcs_clicked(self) -> None:
+        category = self._selected_data_category.get().strip()
+
+        if not category:
+            messagebox.showwarning("Data Category Required", "Please select a data category first.")
+            return
+
+        if not self._session_id:
+            messagebox.showwarning("Session Required", "Please click Start Session first.")
+            self._set_session_hint("Please start a session first, then retry Clear DTCs.")
+            return
+
+        if not self._session_category_confirmed:
+            messagebox.showwarning(
+                "Category Not Confirmed",
+                "Please submit Data Category first (Select), then run Clear DTCs.",
+            )
+            self._set_session_hint("Please confirm Data Category first, then retry Clear DTCs.")
+            return
+
+        if self._current_page != "data_display":
+            messagebox.showwarning(
+                "Data Display Required",
+                "Clear DTCs is only available when GDS2 is on the Data Display page.",
+            )
+            self._set_session_hint("Wait until GDS2 returns to Data Display, then retry Clear DTCs.")
+            return
+
+        self._clear_dtc_button.configure(state=tk.DISABLED)
+        self._set_status_text("Clearing fault codes...")
+        self._append_agent_message("user", "Execute Clear DTCs")
+        self._api_call(
+            "POST",
+            "/api/session/clear_dtcs",
+            json_data={
+                "session_id": self._session_id,
+                "module": self._selected_module.get().strip(),
+                "data_category": self._selected_data_category.get().strip(),
+            },
+            callback_event="clear_dtcs_result",
+        )
+
     def _on_select_module_clicked(self) -> None:
         module = self._selected_module.get().strip()
         if not module:
@@ -1348,6 +1454,39 @@ class DiagnosticsWindow:
         self._dtc_count_text.set(f"Found {count} fault code(s)")
         self._set_status_text("Fault code read completed.")
         self._append_agent_message("agent", f"Read DTCs 完成，共 {count} 条。")
+
+    def _handle_clear_dtcs_result(self, payload: dict[str, Any]) -> None:
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            result = payload
+
+        page_context = self._extract_current_page(payload)
+        if page_context:
+            self._set_current_page(page_context)
+
+        self._refresh_action_buttons()
+        self._request_session_status_refresh()
+
+        action_success = bool(payload.get("success")) and bool(result.get("success", True))
+        if not action_success:
+            self._set_server_connected(False)
+            error_text = result.get("message") or self._error_message(payload, "Request failed.")
+            self._set_status_text(f"Failed to clear DTCs: {error_text}")
+            self._append_agent_message("agent", "Clear DTCs 失败，请确认当前页面仍在 Data Display。")
+            return
+
+        self._set_server_connected(True)
+        cleared_count = int(result.get("cleared_count", 0) or 0)
+        message = result.get("message") or "Clear DTCs completed."
+        self._set_status_text(message)
+        self._append_agent_message("agent", f"Clear DTCs 完成，共清除 {cleared_count} 条。")
+
+    def _handle_session_status_result(self, payload: dict[str, Any]) -> None:
+        self._session_status_refresh_inflight = False
+        if not payload.get("success"):
+            return
+        self._set_current_page(self._extract_current_page(payload))
+        self._refresh_action_buttons()
 
     def _handle_select_module_result(self, payload: dict[str, Any]) -> None:
         if payload.get("success"):
@@ -1960,6 +2099,7 @@ class DiagnosticsWindow:
         self._session_start_button.configure(state=tk.DISABLED)
         self._session_abort_button.configure(state=tk.NORMAL)
         self._session_category_confirmed = False
+        self._set_current_page("")
         self._set_agent_prompt(None, "", [])
         self._refresh_action_buttons()
         self._session_status_var.set(
@@ -1990,6 +2130,7 @@ class DiagnosticsWindow:
         # Start SSE listener
         if self._session_id:
             self._start_session_sse_thread(self._session_id)
+            self._request_session_status_refresh()
 
     def _handle_session_progress(self, payload: dict[str, Any]) -> None:
         message = payload.get("message", "Processing...")
@@ -2054,6 +2195,8 @@ class DiagnosticsWindow:
         self._start_button.configure(state=tk.DISABLED)
         self._select_data_category_button.configure(state=tk.DISABLED)
         self._session_category_confirmed = False
+        self._set_current_page("")
+        self._session_status_refresh_inflight = False
         self._session_id = None
         self._set_agent_prompt(None, "", [])
         self._refresh_action_buttons()
@@ -2208,6 +2351,9 @@ class DiagnosticsWindow:
 
         self._session_status_var.set(message)
         self._append_agent_message("agent", message)
+        if page:
+            self._set_current_page(page)
+            self._refresh_action_buttons()
 
         if error:
             self._append_agent_message("agent", f"Warning: {error}")
@@ -2252,6 +2398,7 @@ class DiagnosticsWindow:
             return
 
         self._set_server_connected(True)
+        self._set_current_page(final_page)
         self._set_status_text(f"Navigation complete. Page: {final_page}, {steps} steps.")
         self._append_agent_message(
             "agent",
@@ -2288,6 +2435,7 @@ class DiagnosticsWindow:
     def _handle_navigate_error(self, payload: dict[str, Any]) -> None:
         self._stop_navigate_sse_thread()
         error = payload.get("error", "Unknown error")
+        self._request_session_status_refresh()
         self._set_status_text(f"Navigation error: {error}")
         self._session_status_var.set(f"Navigation error: {error}")
         self._append_agent_message("agent", f"导航错误：{error}")

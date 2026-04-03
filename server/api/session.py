@@ -234,9 +234,13 @@ def session_execute():
         logger.info("SESSION %s action=%s start", session_id, action_name)
 
         try:
+            try:
+                backend = _get_backend(session_id)
+            except TypeError:
+                backend = _get_backend()
             outcome = execute_backend_action(
                 session_id,
-                backend=_get_backend(session_id),
+                backend=backend,
                 action_name=action_name,
                 action_args=data.get("args") or {},
                 timeout_sec=float(data.get("timeout_sec", 30.0)),
@@ -563,6 +567,13 @@ def session_ai_diagnose_retry():
 def session_dtcs():
     """Read DTCs through the public session facade."""
     payload, status = session_live_data_handlers.read_session_dtcs(request.json or {})
+    return jsonify(payload), status
+
+
+@session_bp.route("/clear_dtcs", methods=["POST"])
+def session_clear_dtcs():
+    """Clear DTCs through the public session facade."""
+    payload, status = session_live_data_handlers.clear_session_dtcs(request.json or {})
     return jsonify(payload), status
 
 

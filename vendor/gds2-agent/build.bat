@@ -14,7 +14,7 @@ REM
 REM To deploy:
 REM   copy build\gds2-agent.jar C:\tools\gds2-agent\gds2-agent.jar
 
-setlocal
+setlocal EnableDelayedExpansion
 
 set SCRIPT_DIR=%~dp0
 set SRC_DIR=%SCRIPT_DIR%src\main\java
@@ -27,7 +27,8 @@ set ORIGINAL_JAR=C:\tools\gds2-agent\gds2-agent.jar
 
 REM JavaFX modules path (GDS2 ships its own JRE with JavaFX)
 REM Adjust if needed for your environment
-set GDS2_HOME=C:\GM\GDS2\GDS2
+set "GDS2_HOME=C:\GM\GDS2\GDS2"
+set "GDS2_HOME_X86=C:\Program Files (x86)\GDS 2"
 
 echo === Building GDS2 Agent ===
 echo Source: %SRC_DIR%
@@ -39,21 +40,41 @@ if exist "%CLASSES_DIR%" rmdir /s /q "%CLASSES_DIR%"
 mkdir "%CLASSES_DIR%"
 
 REM Find JavaFX jars for compilation
-set JAVAFX_JARS=
-if exist "%GDS2_HOME%\jre\lib" (
+set "JAVAFX_JAR="
+if exist "%GDS2_HOME_X86%\jre6\lib\ext\jfxrt.jar" (
+    echo Using GDS2 x86 JRE6 for JavaFX classes
+    set "JAVAFX_JAR=%GDS2_HOME_X86%\jre6\lib\ext\jfxrt.jar"
+)
+if not defined JAVAFX_JAR if exist "%GDS2_HOME%\jre\lib\jfxrt.jar" (
     echo Using GDS2 JRE for JavaFX classes
-    for %%f in ("%GDS2_HOME%\jre\lib\jfxrt.jar") do set JAVAFX_JARS=%%f
+    set "JAVAFX_JAR=%GDS2_HOME%\jre\lib\jfxrt.jar"
+)
+
+if not defined JAVAFX_JAR (
+    echo.
+    echo Could not locate jfxrt.jar for compilation.
+    echo Checked:
+    echo   !GDS2_HOME_X86!\jre6\lib\ext\jfxrt.jar
+    echo   !GDS2_HOME!\jre\lib\jfxrt.jar
+    echo.
+    exit /b 1
 )
 
 REM Build classpath
-set CP=%ORIGINAL_JAR%
-if defined JAVAFX_JARS set CP=%CP%;%JAVAFX_JARS%
+set "CP=%ORIGINAL_JAR%"
+if defined JAVAFX_JAR set "CP=%CP%;%JAVAFX_JAR%"
 
 echo Classpath: %CP%
 echo.
 
-REM Compile only the new/modified files
-echo Compiling...
+REM Extract original JAR classes (we need all existing classes)
+echo Extracting original JAR...
+pushd "%CLASSES_DIR%"
+jar xf "%ORIGINAL_JAR%"
+popd
+
+REM Compile only the new/modified files so they overwrite extracted classes
+echo Compiling patched classes...
 javac -cp "%CP%" ^
       -d "%CLASSES_DIR%" ^
       -source 8 -target 8 ^
@@ -69,19 +90,10 @@ if errorlevel 1 (
 echo Compilation successful.
 echo.
 
-REM Extract original JAR classes (we need all existing classes)
-echo Extracting original JAR...
-pushd "%CLASSES_DIR%"
-jar xf "%ORIGINAL_JAR%"
-popd
-
-REM Overwrite with our compiled classes (CommandMonitor + PageIdentifier)
-echo Merging new classes...
-REM (Already in CLASSES_DIR from compilation step above)
-
 REM Build new JAR with manifest
 echo Building JAR...
 if not exist "%BUILD_DIR%" mkdir "%BUILD_DIR%"
+if exist "%JAR_FILE%" del /f /q "%JAR_FILE%"
 
 REM Copy manifest from original
 jar cf "%JAR_FILE%" -C "%CLASSES_DIR%" .

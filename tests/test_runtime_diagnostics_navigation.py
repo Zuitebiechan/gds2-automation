@@ -9,6 +9,7 @@ import diagnostic_platform.runtime.worker_runtime as worker_runtime_module
 from src.workflows.data_viewer import DataViewerWorkflow
 from src.navigation import NavigationController, NavigationResult
 from diagnostic_platform.runtime.diagnostics_runtime import (
+    clear_diagnostic_dtcs,
     start_live_data_stream,
     stop_live_data_stream,
 )
@@ -68,6 +69,58 @@ def test_live_data_stream_reuses_scope_and_stops_cleanly(monkeypatch):
 
     assert stop_payload == {"success": True, "message": "Live data stopped"}
     assert backend.stopped == 1
+
+
+def test_clear_diagnostic_dtcs_selects_context_and_delegates_to_backend():
+    class GenericClearBackend:
+        def __init__(self):
+            self.selected_modules = []
+            self.selected_categories = []
+            self.clear_calls = 0
+            self.current_module = None
+            self.current_data_category = None
+
+        def get_state(self):
+            current_page = "data_display" if self.current_data_category else "module_list"
+            return types.SimpleNamespace(
+                current_page=current_page,
+                current_module=self.current_module,
+                current_data_category=self.current_data_category,
+            )
+
+        def select_module(self, module):
+            self.selected_modules.append(module)
+            self.current_module = module
+
+        def select_data_category(self, data_category):
+            self.selected_categories.append(data_category)
+            self.current_data_category = data_category
+
+        def clear_dtcs(self):
+            self.clear_calls += 1
+            return types.SimpleNamespace(
+                success=True,
+                cleared_count=3,
+                message="Cleared by generic backend",
+            )
+
+    backend = GenericClearBackend()
+
+    payload = clear_diagnostic_dtcs(
+        backend=backend,
+        module_name="ECM",
+        data_category="DTCs",
+    )
+
+    assert payload == {
+        "success": True,
+        "cleared_count": 3,
+        "message": "Cleared by generic backend",
+        "page_context": "data_display",
+    }
+    assert backend.selected_modules == ["ECM"]
+    assert backend.selected_categories == ["DTCs"]
+    assert backend.clear_calls == 1
 
 
 def test_navigation_runtime_start_registers_session_and_accepts_decision(monkeypatch):

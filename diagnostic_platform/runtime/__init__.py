@@ -27,6 +27,7 @@ from .session_actions import (
     abort_active_live_data,
     abort_navigation,
     apply_navigation_event,
+    clear_dtcs,
     execute_gds2_action,
     ensure_running_gds2_session,
     handle_ai_stream_terminal_event,
@@ -70,6 +71,7 @@ from .session_preflight import (
 )
 from .diagnostics_runtime import (
     build_diagnostics_start_payload,
+    clear_diagnostic_dtcs,
     read_diagnostic_dtcs,
     retry_public_ai_diagnosis,
     select_diagnostic_module,
@@ -118,6 +120,7 @@ __all__ = [
     "abort_active_live_data",
     "abort_navigation",
     "apply_navigation_event",
+    "clear_dtcs",
     "execute_gds2_action",
     "ensure_running_gds2_session",
     "handle_ai_stream_terminal_event",
@@ -153,6 +156,7 @@ __all__ = [
     "set_network_override",
     "utc_now_iso",
     "build_diagnostics_start_payload",
+    "clear_diagnostic_dtcs",
     "read_diagnostic_dtcs",
     "retry_public_ai_diagnosis",
     "select_diagnostic_module",

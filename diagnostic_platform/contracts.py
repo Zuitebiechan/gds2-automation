@@ -115,7 +115,19 @@ class UnsupportedCapabilityError(RuntimeError):
     def __init__(self, capability: BackendCapability, backend_name: str):
         self.capability = capability
         self.backend_name = backend_name
-        capability_label = capability.value.replace("_", " ").capitalize()
+        capability_labels = {
+            BackendCapability.CORE_SESSION: "Core session",
+            BackendCapability.READ_DTCS: "Read DTCs",
+            BackendCapability.LIVE_DATA: "Live data",
+            BackendCapability.AI_DATA_COLLECTION: "AI data collection",
+            BackendCapability.NAVIGATION: "Navigation",
+            BackendCapability.GENERIC_ACTIONS: "Generic actions",
+            BackendCapability.CLEAR_DTCS: "Clear DTCs",
+        }
+        capability_label = capability_labels.get(
+            capability,
+            capability.value.replace("_", " ").capitalize(),
+        )
         super().__init__(
             f"Backend '{backend_name}' does not support {capability_label}"
         )
