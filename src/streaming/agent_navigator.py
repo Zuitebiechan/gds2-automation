@@ -25,6 +25,7 @@ import os
 import time
 import uuid
 import logging
+import threading
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
@@ -37,6 +38,8 @@ class AgentNavigator:
 
     Commands are sent via JSON file and results are read from result file.
     """
+
+    _command_roundtrip_lock = threading.Lock()
 
     def __init__(self, data_dir: Optional[Path] = None, timeout_sec: float = 10.0):
         if data_dir is None:
@@ -278,44 +281,38 @@ class AgentNavigator:
             TimeoutError: If no result within timeout
             RuntimeError: If command processing fails
         """
-        # Generate unique command ID
-        cmd_id = str(uuid.uuid4())[:8]
+        with self._command_roundtrip_lock:
+            cmd_id = str(uuid.uuid4())[:8]
+            command = {
+                "id": cmd_id,
+                "action": action,
+                "params": params
+            }
 
-        # Write command
-        command = {
-            "id": cmd_id,
-            "action": action,
-            "params": params
-        }
+            logger.debug(f"Sending command: {command}")
 
-        logger.debug(f"Sending command: {command}")
+            self._data_dir.mkdir(parents=True, exist_ok=True)
 
-        # Ensure data dir exists
-        self._data_dir.mkdir(parents=True, exist_ok=True)
+            tmp_file = self._command_file.with_suffix('.tmp')
+            with open(tmp_file, 'w', encoding='utf-8') as f:
+                json.dump(command, f)
+            os.replace(str(tmp_file), str(self._command_file))
 
-        # Write command file atomically (write to temp, then rename)
-        # to prevent the Java Agent from reading a partially-written file.
-        tmp_file = self._command_file.with_suffix('.tmp')
-        with open(tmp_file, 'w', encoding='utf-8') as f:
-            json.dump(command, f)
-        os.replace(str(tmp_file), str(self._command_file))
+            start_time = time.time()
+            while time.time() - start_time < self._timeout_sec:
+                if self._result_file.exists():
+                    try:
+                        with open(self._result_file, 'r', encoding='utf-8') as f:
+                            result = json.load(f)
 
-        # Wait for result
-        start_time = time.time()
-        while time.time() - start_time < self._timeout_sec:
-            if self._result_file.exists():
-                try:
-                    with open(self._result_file, 'r', encoding='utf-8') as f:
-                        result = json.load(f)
+                        if result.get('id') == cmd_id:
+                            logger.debug(f"Received result: {result}")
+                            return result
 
-                    if result.get('id') == cmd_id:
-                        logger.debug(f"Received result: {result}")
-                        return result
+                    except (json.JSONDecodeError, PermissionError, OSError):
+                        pass
 
-                except (json.JSONDecodeError, PermissionError, OSError):
-                    pass  # File still being written or locked
-
-            time.sleep(0.05)  # Poll every 50ms
+                time.sleep(0.05)
 
         raise TimeoutError(f"No response from Agent within {self._timeout_sec}s")
 
