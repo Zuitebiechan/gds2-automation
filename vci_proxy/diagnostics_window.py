@@ -209,7 +209,7 @@ class DiagnosticsWindow:
     def _build_start_section(self, parent: ttk.Frame) -> None:
         frame = ttk.Frame(parent, style="Card.TFrame", padding=(0, 0, 0, 12))
         frame.grid(row=1, column=0, sticky="ew")
-        frame.columnconfigure(2, weight=1)
+        frame.columnconfigure(3, weight=1)
 
         self._start_button = ttk.Button(
             frame,
@@ -229,8 +229,17 @@ class DiagnosticsWindow:
         )
         self._ai_diagnose_button.grid(row=0, column=1, sticky="w", padx=(0, 16))
 
+        self._clear_dtc_button = ttk.Button(
+            frame,
+            text="🧹 Clear DTCs",
+            style="Big.TButton",
+            command=self._on_clear_dtcs_clicked,
+            state=tk.DISABLED,
+        )
+        self._clear_dtc_button.grid(row=0, column=2, sticky="w", padx=(0, 16))
+
         self._status_label = ttk.Label(frame, textvariable=self._status_message, style="Status.TLabel")
-        self._status_label.grid(row=0, column=2, sticky="w")
+        self._status_label.grid(row=0, column=3, sticky="w")
 
     def _build_session_section(self, parent: ttk.Frame) -> None:
         frame = ttk.LabelFrame(parent, text="Session Diagnostics (New)", padding=(12, 6))
@@ -423,21 +432,13 @@ class DiagnosticsWindow:
         )
         self._read_dtc_button.grid(row=0, column=1, sticky="w", padx=(0, 8))
 
-        self._clear_dtc_button = ttk.Button(
-            secondary_controls,
-            text="Clear DTCs",
-            command=self._on_clear_dtcs_clicked,
-            state=tk.DISABLED,
-        )
-        self._clear_dtc_button.grid(row=0, column=2, sticky="w", padx=(0, 8))
-
         self._start_stream_button = ttk.Button(
             secondary_controls,
             text="▶ Start Stream",
             command=self._on_start_stream_clicked,
             state=tk.DISABLED,
         )
-        self._start_stream_button.grid(row=0, column=3, sticky="w", padx=(0, 8))
+        self._start_stream_button.grid(row=0, column=2, sticky="w", padx=(0, 8))
         self._start_stream_button.grid_remove()
 
         self._stop_stream_button = ttk.Button(
@@ -446,7 +447,7 @@ class DiagnosticsWindow:
             command=self._on_stop_stream_clicked,
             state=tk.DISABLED,
         )
-        self._stop_stream_button.grid(row=0, column=4, sticky="w")
+        self._stop_stream_button.grid(row=0, column=3, sticky="w")
         self._stop_stream_button.grid_remove()
 
         # Row 4+: live table
