@@ -118,6 +118,7 @@ Current routes:
 - `/execute` is capability-gated by `GENERIC_ACTIONS`
 - session AI/live/navigation subroutes are all capability-gated
 - session clear-DTC is capability-gated by `CLEAR_DTCS`
+- session clear-DTC is intended to run from the current `Data Display` page; explicit module/category input is optional and only needed when the caller wants forced context reconciliation
 - `/status` returns session state plus backend summary and network snapshot details when available
 
 ## `/api/diagnose/*`
