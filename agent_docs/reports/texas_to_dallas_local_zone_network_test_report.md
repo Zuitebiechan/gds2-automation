@@ -1,52 +1,57 @@
 # Texas 到 Dallas Local Zone 网络测试报告
 
-**最后更新**: 2026-04-01  
-**测试地点**: Aubrey, TX 76227 附近电脑  
-**测试目标**: AWS Dallas Local Zone EC2  
-**目标公网 IP**: `18.88.12.108`
+## 文档角色
+
+| 字段 | 内容 |
+| --- | --- |
+| 类型 | 支持性报告 / 实测网络报告 |
+| 当前性 | 非权威架构文档；若与 `agent_docs/core/platform_architecture.md`、`agent_docs/ops/vci_proxy_and_tunnel.md` 或当前代码冲突，以后者为准 |
+| 关注问题 | Texas 现场电脑到 AWS Dallas Local Zone 的基础网络质量是否足够好，值得继续部署项目做真实验证 |
+| 测试日期 | 2026-04-01 |
 
 ## 一句话结论
 
-本次实测结果表明：
+Texas 测试电脑到 Dallas Local Zone 的基础网络质量非常好：延迟低、波动小、短时测试几乎无丢包，因此从部署选址角度看，Dallas Local Zone 非常值得继续推进。
 
-> **Texas 测试电脑到 Dallas Local Zone 云服务器的基础网络质量非常好，延迟低、波动小、短时测试几乎无丢包；从部署选址角度看，Dallas Local Zone 是一个很值得继续推进的方案。**
+## 测试背景
 
-## 这次测试想回答什么问题
+这次测试还没有接入真实硬件，也还没有部署完整的 `GDS2 + reverse_server + Flask` 业务链路。
 
-这次还没有部署完整项目，也没有接入真实硬件，所以当前测试不是为了证明完整业务链路已经跑通，而是先回答一个更基础的问题：
+因此它回答的问题不是：
 
-> **Texas 现场电脑到 Dallas Local Zone 云服务器，这条网络链路本身好不好？**
+- 完整业务链路是否已经验证通过
 
-如果底层网络已经很好，那么后续再验证 `reverse_server`、`Flask`、`GDS2`、硬件接入，才有意义。
+而是更基础的：
 
-## 测试范围与限制
+> Texas 现场电脑到 Dallas Local Zone 云主机，这条基础网络链路本身是否优秀，值得继续做项目级验证？
 
-本次测试已经覆盖：
+## 测试对象
 
-- `ping` 基础网络时延
-- `tcping` 端口级 TCP 建连时延
-- HTTP 请求级别的实际响应时间
-- `tracert` / `pathping` 路由路径观察
+| 项目 | 值 |
+| --- | --- |
+| 测试地点 | Aubrey, TX 76227 附近电脑 |
+| 测试目标 | AWS Dallas Local Zone EC2 |
+| 目标公网 IP | `18.88.12.108` |
 
-本次测试尚未覆盖：
+## 测试范围
 
-- 未接入真实硬件
-- 云端未部署完整 `GDS2 + reverse_server + Flask`
-- 尚未得到项目运行时真实 `network_ms`
+本次已覆盖：
 
-因此，这份报告的结论是：
+- `ping`
+- `tcping`
+- HTTP 请求级响应时间
+- `tracert`
+- `pathping`
 
-> **基础网络优秀，具备继续部署验证的价值。**
+本次未覆盖：
 
-而不是：
+- 真实硬件接入
+- 完整 `GDS2 + reverse_server + Flask` 运行链路
+- 真实运行时 `network_ms`
 
-> **完整业务链路已经全部验证完成。**
+## 核心结果
 
-## 核心测试结果
-
-### 1. 短时基础网络表现优秀
-
-从 Texas 电脑到 Dallas Local Zone EC2 的短时测试结果如下：
+### 1. 基础网络时延很低
 
 | 测试项 | 最小值 | 平均值 | 最大值 | 丢包/失败 |
 | --- | ---: | ---: | ---: | ---: |
@@ -56,121 +61,105 @@
 | `tcping 9000` | `7.738ms` | `9.610ms` | `15.859ms` | `0%` |
 | `tcping 8081` | `7.221ms` | `10.213ms` | `16.613ms` | `0%` |
 
-这说明几件事：
+这说明：
 
-- Texas 到 Dallas Local Zone 的物理距离和网络路径都比较理想
-- 不只是 `ping` 好看，真实 TCP 建连也很快
-- 3389、8080、9000、8081 这几个端口表现接近，说明不是某一个端口偶然快，而是整体网络都不错
+- Texas 到 Dallas Local Zone 的公网基础路径很理想
+- 不只是 ICMP，真实 TCP 建连也很快
+- 多个端口表现接近，说明不是单个端口偶然好看，而是整体链路质量较高
 
-### 2. HTTP 层测试结果也很好
+### 2. HTTP 层表现也很好
 
-为了更接近未来 Flask 服务的真实使用方式，又补测了 `8081` 端口上的 HTTP 请求，连续请求 20 次，结果全部成功。
+补充测试了 `8081` 端口上的 HTTP 请求，连续请求 20 次，结果全部成功。
 
-关键结果如下：
+关键数值：
 
-- 首次请求: `160.55ms`
-- 20 次整体平均: `34.65ms`
-- 去掉首次冷启动后的稳态平均: `28.02ms`
-- 稳态大多数请求落在: `25ms ~ 31ms`
+- 首次请求：`160.55ms`
+- 20 次整体平均：`34.65ms`
+- 去掉首次冷启动后的稳态平均：`28.02ms`
+- 大多数稳态请求落在：`25ms ~ 31ms`
 
-这组结果的意义比单纯 `tcping` 更强，因为：
+这说明如果未来云端运行的是类似 Flask 这样的 HTTP 服务，那么在当前网络条件下，稳态请求大概率能维持在约 `30ms` 左右，这是很不错的水平。
 
-- `tcping` 只测到 TCP 连接是否能建立
-- HTTP 测试已经包含了更接近真实应用请求的过程
+### 3. 路由观察没有发现明显异常
 
-因此可以认为：
+`tracert` 与 `pathping` 的中间结果中，虽然存在公网常见的中间跳不响应或限速现象，但结合：
 
-> **如果未来云端部署的是类似 Flask 这样的 HTTP 服务，那么在当前网络条件下，稳态请求耗时大约落在 30ms 左右，是一个相当不错的水平。**
+- `ping`
+- `tcping`
+- HTTP 稳态响应
 
-需要注意的是，第一次 `160.55ms` 很像是首次连接、服务预热或系统初始化带来的冷启动成本，不代表后续稳态表现。
+更合理的判断是：
 
-## 路由路径观察
+> 实际可用路径整体健康，没有看到明显的绕路或终点侧高延迟异常。
 
-### `tracert` 结果
+## 对当前项目的意义
 
-`tracert` 显示：
+### 1. Dallas Local Zone 很值得继续做项目级验证
 
-- 前几跳很快，约 `1ms ~ 8ms`
-- 最终目标主机返回约 `6ms ~ 7ms`
-- 中间若干跳超时
+从这次结果看，Dallas Local Zone 至少在“基础网络选址”这一层面是成立的。
 
-这在公网环境里非常常见，通常是中间设备屏蔽或限速 ICMP 响应，不代表真实业务流量一定有问题。
+这意味着：
 
-### `pathping` 结果
+- 后续若业务体验不理想，首先应该排查应用层、GDS2、硬件链路或 tunnel 实现
+- 不应优先把问题归因到 Texas 到 Dallas 的公网基础时延
 
-`pathping` 显示：
+### 2. 真实 `network_ms` 大概率也会落在较优区间
 
-- 前几跳 `0% loss`
-- 后续部分中间跳点隐藏或不响应
+虽然这次还没测到真实业务级 `network_ms`，但结合：
 
-这类结果也不要过度解读。原因是很多公网节点本来就不愿意回复 `pathping` 这类探测报文，所以它更适合做参考，不适合直接作为“链路质量差”的证据。
-
-综合 `tracert`、`pathping` 和实际 `ping/tcping/http` 数据，更合理的判断是：
-
-> **实际可用网络路径整体是健康的，没有看到明显的路由绕行或终点侧异常高延迟。**
-
-## 这些结果对项目意味着什么
-
-### 1. Dallas Local Zone 作为部署点是靠谱的
-
-从当前实测看，Texas 现场电脑到 Dallas Local Zone 的基础时延大约在 `7ms ~ 10ms`，这已经是非常理想的范围。
-
-对我们这个项目来说，这意味着：
-
-- 选址本身没有明显问题
-- 云端离 Texas 测试点足够近
-- 后续如果业务体验不理想，优先排查对象应当是应用层和硬件链路，而不是先怀疑基础公网网络
-
-### 2. 未来真实 `network_ms` 很可能也会比较好
-
-项目真正更关心的是 `network_ms`，而不是单纯 `ping`。
-
-可以简单理解为：
-
-> `network_ms = duration_ms - hw_ms`
-
-也就是说，它想衡量的是一次真实业务请求里，扣掉硬件处理时间后，网络和链路传输大致占了多少时间。
-
-目前虽然还没有真实硬件，也没有完整部署项目，但结合：
-
-- 本次 `ping / tcping / HTTP` 的实测结果
-- 之前的 lag 报告和历史 benchmark 经验
+- 当前 `ping / tcping / HTTP` 结果
+- 既有 benchmark 经验与分级阈值
 
 可以先做一个保守估计：
 
 - 未来真实业务下，`network_ms` 平均值大概率会落在 `15ms ~ 25ms`
-- `p95` 很可能在 `25ms ~ 35ms`
+- `p95` 很可能落在 `25ms ~ 35ms`
 
-这和我们当前运行时分级阈值相比是比较乐观的：
+而当前运行时分级阈值是：
 
-- `good`: `p95 <= 80ms`
-- `warn`: `80ms < p95 <= 150ms`
-- `block`: `p95 > 150ms`
+- `good`：`p95 <= 80ms`
+- `warn`：`80ms < p95 <= 150ms`
+- `block`：`p95 > 150ms`
 
-也就是说，从当前证据看：
+因此 Dallas Local Zone 很有希望稳定落在 `good` 档。
 
-> **Dallas Local Zone 很有希望落在 `good` 档。**
+## 建议的下一步
 
-## 当前最值得老板关注的结论
+建议按下面顺序推进：
 
-如果要用管理层容易理解的话来总结，这次测试可以这样说：
-
-> **我们已经从 Texas 目标电脑实测到 Dallas Local Zone 云服务器，基础网络延迟大约只有 7 到 10 毫秒，短时端口测试全部稳定，HTTP 层测试稳态也在约 28 毫秒左右。整体来看，Dallas Local Zone 作为云端部署点是一个非常值得继续推进的方案。**
-
-## 下一步建议
-
-建议按下面顺序继续验证：
-
-1. 在云端部署可持续运行的正式测试服务
-2. 部署 `reverse_server` 和 Flask 服务，验证真实应用端口表现
+1. 在云端部署一个可持续运行的正式测试环境
+2. 部署 `reverse_server` 与 Flask 服务
 3. 接入 Texas 现场真实硬件后，实测项目级 `network_ms`
-4. 最后再验证完整 `GDS2 + reverse_server + Flask` 业务链路
+4. 最后验证完整 `GDS2 + reverse_server + Flask` 业务链路
 
 这样推进的好处是：
 
-- 可以先把“网络问题”和“服务问题”分开
-- 可以先把“服务问题”和“硬件问题”分开
-- 能更快定位真正的性能瓶颈到底在哪一层
-# Report Notice
+- 可以先把“公网网络问题”和“应用服务问题”拆开
+- 再把“应用服务问题”和“硬件链路问题”拆开
+- 更容易定位最终瓶颈
 
-This file is a supporting report, not the authoritative source of current architecture or API behavior. For current design docs, start with `agent_docs/README.md`.
+## 与当前项目的关系
+
+这份报告只回答“Texas 到 Dallas Local Zone 的基础网络是否优秀”。
+
+它**不拥有**以下内容：
+
+- 当前 Local Zone 部署建议：见 `agent_docs/reports/aws_local_zones_deployment.md`
+- `network_ms` 指标定义与运行时 gating：见 `agent_docs/reports/network_ms.md`
+- 当前项目架构：见 `agent_docs/core/platform_architecture.md`
+- tunnel / proxy 子系统：见 `agent_docs/ops/vci_proxy_and_tunnel.md`
+
+## 局限
+
+- 这不是完整业务链路报告
+- 这不是硬件接入后的实测报告
+- 这不是对所有北美地区的泛化结论
+- 这次结论主要适用于“Texas 测试点到 Dallas Local Zone”这条路径
+
+## 相关文档
+
+- `agent_docs/README.md`
+- `agent_docs/reports/aws_local_zones_deployment.md`
+- `agent_docs/reports/network_ms.md`
+- `agent_docs/core/platform_architecture.md`
+- `agent_docs/ops/vci_proxy_and_tunnel.md`

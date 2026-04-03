@@ -107,6 +107,29 @@ def test_authoritative_agent_docs_set_exists():
         assert path.exists(), f"Missing authoritative doc: {path}"
 
 
+def test_reports_docs_use_common_template_sections():
+    report_files = [
+        ROOT / "agent_docs" / "reports" / "aws_local_zones_deployment.md",
+        ROOT / "agent_docs" / "reports" / "network_ms.md",
+        ROOT / "agent_docs" / "reports" / "texas_to_dallas_local_zone_network_test_report.md",
+    ]
+
+    required_sections = [
+        "## 文档角色",
+        "## 一句话结论",
+        "## 与当前项目的关系",
+        "## 相关文档",
+    ]
+
+    for path in report_files:
+        text = path.read_text(encoding="utf-8")
+        for section in required_sections:
+            assert section in text, f"{path} should include report section {section}"
+
+    report_index = (ROOT / "agent_docs" / "reports" / "README.md").read_text(encoding="utf-8")
+    assert "## 统一模板" in report_index
+
+
 def test_session_dependencies_module_exposes_runtime_accessors():
     module = importlib.import_module("server.api.session_dependencies")
 
