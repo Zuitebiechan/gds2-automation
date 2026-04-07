@@ -29,12 +29,16 @@ The current top-level regression suites are:
 - `test_server_layout.py`: Flask/server layout and blueprint wiring
 - `test_repo_layout_consistency.py`: repository structure and documentation consistency guards
 - `test_data_viewer_workflow.py`: GDS2 workflow behavior
+- `test_read_data_display_agent.py`: read-data workflow wrapper success and error propagation
 - `test_interactive_workflow.py`: step-by-step navigation workflow behavior and report parsing
 - `test_agent_data_collector.py`: Java Agent data collection behavior
+- `test_diagnostic_buffer.py`: sliding-window sampling, delta payload export, and raw-payload caching safety
 - `test_agent_navigator.py`: agent command serialization and result handoff behavior
 - `test_diagnostics_window.py`: diagnostics window button-state and session-status UI logic
 - `test_client_gui.py`: tray-app config persistence, status updates, and diagnostics launch wiring
 - `test_llm_client.py`: diagnostic prompt assembly, streaming fallback, and verdict parsing
+- `test_ai_engine.py`: AI payload conversion, cache TTL, confidence capping, and SSE session flow
+- `test_vehicle_mapping.py`: persisted vehicle/module/category mapping and discovery helpers
 - `test_reverse_client.py`: reverse client registration, dispatch, and prewarm behavior
 - `test_reverse_server.py`: reverse server authentication, cache helpers, and tunnel probe behavior
 - `test_j2534_driver.py`: J2534 struct conversion, registry discovery, and DLL path selection
@@ -50,7 +54,7 @@ python -m pytest tests\test_backend_capability_architecture.py tests\test_backen
 Run the focused GDS2 workflow and agent-side regressions:
 
 ```bash
-python -m pytest tests\test_gds2_controller_runtime.py tests\test_data_viewer_workflow.py tests\test_interactive_workflow.py tests\test_agent_data_collector.py tests\test_agent_navigator.py tests\test_diagnostics_window.py tests\test_client_gui.py tests\test_llm_client.py -q
+python -m pytest tests\test_gds2_controller_runtime.py tests\test_data_viewer_workflow.py tests\test_read_data_display_agent.py tests\test_interactive_workflow.py tests\test_agent_data_collector.py tests\test_diagnostic_buffer.py tests\test_agent_navigator.py tests\test_diagnostics_window.py tests\test_client_gui.py tests\test_llm_client.py tests\test_ai_engine.py tests\test_vehicle_mapping.py -q
 ```
 
 Run repository/documentation consistency checks:

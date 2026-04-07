@@ -313,12 +313,12 @@ class DiagnosticBuffer:
         Export buffer as raw cached payload (for retry without re-collecting).
         Includes everything needed to reconstruct the LLM prompt.
         """
-        with self._lock:
-            return {
-                'delta_payload': self.get_delta_payload(),
-                'cached_at': datetime.now().isoformat(),
-                'snapshot_count': self._snapshot_count,
-            }
+        delta_payload = self.get_delta_payload()
+        return {
+            'delta_payload': delta_payload,
+            'cached_at': datetime.now().isoformat(),
+            'snapshot_count': delta_payload.get('snapshot_count', 0),
+        }
 
     def clear(self) -> None:
         """Reset the buffer."""
