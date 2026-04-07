@@ -2,7 +2,27 @@ name: Python application
 
 on:
   push:
+    paths:
+      - "**/*.py"
+      - "tests/**"
+      - "requirements-cloud.txt"
+      - "requirements-client.txt"
+      - "README.md"
+      - "AGENTS.md"
+      - "agent_docs/**"
+      - "vci_proxy/virtual_dll/README.md"
+      - ".github/workflows/**"
   pull_request:
+    paths:
+      - "**/*.py"
+      - "tests/**"
+      - "requirements-cloud.txt"
+      - "requirements-client.txt"
+      - "README.md"
+      - "AGENTS.md"
+      - "agent_docs/**"
+      - "vci_proxy/virtual_dll/README.md"
+      - ".github/workflows/**"
   workflow_dispatch:
 
 permissions:
