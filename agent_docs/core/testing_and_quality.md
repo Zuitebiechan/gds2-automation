@@ -35,12 +35,17 @@ This document does not restate the full architecture. For design context, read `
 | `tests/test_agent_navigator.py` | agent command serialization and result handoff behavior |
 | `tests/test_diagnostics_window.py` | diagnostics window button-state and session-status UI logic |
 | `tests/test_client_gui.py` | tray-app config persistence, status updates, and diagnostics launch wiring |
+| `tests/test_device_explorer.py` | Windows Device Explorer selection and convenience flow behavior |
 | `tests/test_llm_client.py` | diagnostic prompt assembly, streaming fallback, and verdict parsing |
 | `tests/test_ai_engine.py` | AI payload conversion, cache TTL handling, confidence capping, and SSE session flow |
 | `tests/test_vehicle_mapping.py` | persisted vehicle/module/category mapping and discovery helpers |
 | `tests/test_vci_proxy_auth_config.py` | PSK auth helpers and proxy config mapping |
 | `tests/test_vci_proxy_caches.py` | `ReadMsgs`/filter/ioctl cache behavior and invalidation |
+| `tests/test_vci_proxy_cache_vbatt.py` | legacy VBATT cache TTL and invalidation behavior |
 | `tests/test_vci_proxy_protocol.py` | proxy protocol header and encode/decode regressions |
+| `tests/test_session_streams.py` | business-session SSE iteration, keepalive behavior, and terminal cleanup |
+| `tests/test_session_api_handlers.py` | session AI/live-data/navigation handler status mapping and SSE binding |
+| `tests/test_gds2_orchestration_core.py` | constrained planner, policy guard, and deterministic executor logic |
 | `tests/test_reverse_client.py` | reverse client registration, dispatch, and prewarm behavior |
 | `tests/test_reverse_server.py` | reverse server authentication, cache helpers, and tunnel probe behavior |
 | `tests/test_j2534_driver.py` | J2534 struct conversion, registry discovery, and DLL path selection |
@@ -52,7 +57,7 @@ This document does not restate the full architecture. For design context, read `
 Run focused architecture/runtime tests first:
 
 ```bash
-python -m pytest tests\test_backend_capability_architecture.py tests\test_backend_capability_refactor.py tests\test_runtime_session_layers.py tests\test_runtime_diagnostics_navigation.py -q
+python -m pytest tests\test_backend_capability_architecture.py tests\test_backend_capability_refactor.py tests\test_runtime_session_layers.py tests\test_runtime_diagnostics_navigation.py tests\test_session_streams.py tests\test_session_api_handlers.py tests\test_gds2_orchestration_core.py -q
 ```
 
 ### If you change `backends/gds2/` or `src/`
@@ -60,7 +65,7 @@ python -m pytest tests\test_backend_capability_architecture.py tests\test_backen
 Run the focused GDS2/runtime regressions:
 
 ```bash
-python -m pytest tests\test_gds2_controller_runtime.py tests\test_data_viewer_workflow.py tests\test_read_data_display_agent.py tests\test_interactive_workflow.py tests\test_agent_data_collector.py tests\test_diagnostic_buffer.py tests\test_agent_navigator.py tests\test_diagnostics_window.py tests\test_llm_client.py tests\test_ai_engine.py tests\test_vehicle_mapping.py -q
+python -m pytest tests\test_gds2_controller_runtime.py tests\test_data_viewer_workflow.py tests\test_read_data_display_agent.py tests\test_interactive_workflow.py tests\test_agent_data_collector.py tests\test_diagnostic_buffer.py tests\test_agent_navigator.py tests\test_diagnostics_window.py tests\test_device_explorer.py tests\test_llm_client.py tests\test_ai_engine.py tests\test_vehicle_mapping.py -q
 ```
 
 ### If you change `vci_proxy/`
@@ -68,7 +73,7 @@ python -m pytest tests\test_gds2_controller_runtime.py tests\test_data_viewer_wo
 Run the client/proxy-facing regressions:
 
 ```bash
-python -m pytest tests\test_tunnel_quality.py tests\test_proxy_benchmark.py tests\test_vci_proxy_auth_config.py tests\test_vci_proxy_caches.py tests\test_vci_proxy_protocol.py tests\test_reverse_client.py tests\test_reverse_server.py tests\test_j2534_driver.py tests\test_agent_navigator.py tests\test_diagnostics_window.py tests\test_client_gui.py -q
+python -m pytest tests\test_tunnel_quality.py tests\test_proxy_benchmark.py tests\test_vci_proxy_auth_config.py tests\test_vci_proxy_caches.py tests\test_vci_proxy_cache_vbatt.py tests\test_vci_proxy_protocol.py tests\test_reverse_client.py tests\test_reverse_server.py tests\test_j2534_driver.py tests\test_agent_navigator.py tests\test_diagnostics_window.py tests\test_client_gui.py -q
 ```
 
 ### If you change `server/`

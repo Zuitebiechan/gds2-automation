@@ -187,12 +187,12 @@ def stop_live_data_session(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
     try:
         orch = get_orchestrator()
         session = orch.get_session(session_id)
-        ensure_session_capability(session, BackendCapability.LIVE_DATA)
         if session.status != SessionStatus.RUNNING:
             return {
                 "success": False,
                 "error": f"Session not running (status={session.status.value})",
             }, 409
+        ensure_session_capability(session, BackendCapability.LIVE_DATA)
         payload = stop_live_data(
             _runtime(),
             session,
