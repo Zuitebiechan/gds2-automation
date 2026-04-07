@@ -18,7 +18,7 @@ class ReadMsgsCacheConfig:
 @dataclass(frozen=True)
 class AuthConfig:
     """PSK authentication via HMAC-SHA256."""
-    enabled: bool = False
+    enabled: bool = True
     token: Optional[str] = None
     auth_timeout_s: int = 10
 
@@ -59,8 +59,9 @@ class ProxyConfig:
         Accepts flat keys like auth_token, no_read_cache, read_cache_ttl, etc.
         """
         auth_token = kwargs.get("auth_token")
+        auth_enabled = kwargs.get("auth_enabled", True)
         auth = AuthConfig(
-            enabled=bool(auth_token),
+            enabled=bool(auth_enabled),
             token=auth_token,
             auth_timeout_s=kwargs.get("auth_timeout_s", 10),
         )

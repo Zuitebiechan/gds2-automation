@@ -93,7 +93,7 @@ The wire protocol is defined in `vci_proxy/protocol.py`.
 
 At connection time:
 
-- if auth is enabled, the client sends `AUTH_REQ`
+- auth is enabled by default, and the client sends `AUTH_REQ`
 - otherwise the legacy two-phase heartbeat registration is used
 
 ## Authentication
@@ -102,9 +102,12 @@ Auth helpers live in `vci_proxy/auth.py`.
 
 Current design:
 
-- pre-shared-key auth
+- pre-shared-key auth enabled by default
 - HMAC-SHA256 over the current timestamp
-- replay protection through allowed timestamp drift
+- replay protection through allowed timestamp drift plus one-time rejection of
+  repeated auth requests seen inside the drift window
+- the local reverse client fails fast when auth is enabled but no token is
+  configured, instead of attempting an unauthenticated tunnel
 
 Important rule:
 

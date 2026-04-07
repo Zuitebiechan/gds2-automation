@@ -21,7 +21,7 @@ from .config import ProxyConfig
 from .cache_read_msgs import ReadMsgsCache
 from .cache_filter_dedup import FilterDeduplicationCache
 from .cache_ioctl import IoctlCache
-from .auth import verify_signature
+from .auth import MAX_DRIFT_S, verify_signature
 from .benchmark import (
     JsonlBenchmarkWriter,
     decode_benchmark_response,
@@ -66,6 +66,7 @@ class ReverseProxyServer:
         self._connection_epoch: str | None = None
         self._tunnel_quality = TunnelQualityTracker()
         self._last_quality_signature: tuple | None = None
+        self._seen_auth_signatures: dict[tuple[int, bytes], int] = {}
 
         # P1-1: ReadMsgs BUFFER_EMPTY cache
         self._read_cache = ReadMsgsCache(self.config.read_msgs_cache)
@@ -166,6 +167,12 @@ class ReverseProxyServer:
         body = await reader.readexactly(body_len) if body_len > 0 else b''
 
         if msg_type == MsgType.AUTH_REQ:
+            if self.config.auth.enabled and not self.config.auth.token:
+                logger.error("Auth enabled but no server token is configured")
+                rsp = ProtocolEncoder.encode_auth_rsp(False, "server auth token not configured", sequence)
+                writer.write(rsp)
+                await writer.drain()
+                return False
             if not self.config.auth.enabled:
                 # Auth not required, but client sent AUTH_REQ -- accept it
                 logger.info("Auth not required, accepting AUTH_REQ")
@@ -178,6 +185,9 @@ class ReverseProxyServer:
             success, reason = verify_signature(
                 self.config.auth.token, timestamp, signature
             )
+            if success and self._is_replayed_auth(signature, timestamp):
+                success = False
+                reason = "replay detected"
             rsp = ProtocolEncoder.encode_auth_rsp(success, reason, sequence)
             writer.write(rsp)
             await writer.drain()
@@ -240,6 +250,20 @@ class ReverseProxyServer:
             return True
 
         logger.warning(f"Unexpected first message type during auth: {msg_type:#x}")
+        return False
+
+    def _is_replayed_auth(self, signature: bytes, timestamp: int) -> bool:
+        now = int(time.time())
+        stale_before = now - MAX_DRIFT_S
+        self._seen_auth_signatures = {
+            key: seen_at
+            for key, seen_at in self._seen_auth_signatures.items()
+            if seen_at >= stale_before
+        }
+        cache_key = (timestamp, signature)
+        if cache_key in self._seen_auth_signatures:
+            return True
+        self._seen_auth_signatures[cache_key] = now
         return False
 
     async def _handle_vci_connection(self, reader: asyncio.StreamReader,

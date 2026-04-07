@@ -130,6 +130,7 @@ class WorkerRuntime:
     agent_lock: Any = field(default_factory=threading.Lock, repr=False)
     agent_event_hub: ScopedEventHub = field(default_factory=ScopedEventHub, repr=False)
     navigation_sessions: dict[str, Any] = field(default_factory=dict)
+    navigation_cleanup_timers: dict[str, Any] = field(default_factory=dict, repr=False)
     navigation_sessions_lock: Any = field(default_factory=threading.Lock, repr=False)
     active_operation: WorkerOperation | None = field(default=None, repr=False)
     state_lock: Any = field(default_factory=threading.RLock, repr=False)
@@ -296,6 +297,26 @@ class WorkerRuntime:
     def set_navigation_session(self, session_id: str, session: Any) -> None:
         with self.navigation_sessions_lock:
             self.navigation_sessions[session_id] = session
+
+    def remove_navigation_session(self, session_id: str) -> None:
+        with self.navigation_sessions_lock:
+            self.navigation_sessions.pop(session_id, None)
+            self.navigation_cleanup_timers.pop(session_id, None)
+
+    def schedule_navigation_session_cleanup(
+        self,
+        session_id: str,
+        *,
+        delay_sec: float = 30.0,
+    ) -> None:
+        with self.navigation_sessions_lock:
+            existing = self.navigation_cleanup_timers.pop(session_id, None)
+            if existing is not None:
+                existing.cancel()
+            timer = threading.Timer(delay_sec, self.remove_navigation_session, args=(session_id,))
+            timer.daemon = True
+            self.navigation_cleanup_timers[session_id] = timer
+        timer.start()
 
     def bind_business_session(self, session_id: str) -> None:
         with self.state_lock:

@@ -195,6 +195,33 @@ def test_abort_navigation_session_sets_cancel_event():
     assert session.cancel_event.is_set() is True
 
 
+def test_abort_navigation_session_schedules_cleanup(monkeypatch):
+    runtime = WorkerRuntime()
+    session = NavSession(session_id="nav-1", goal="Navigate to Data Display")
+    runtime.set_navigation_session(session.session_id, session)
+
+    class ImmediateTimer:
+        def __init__(self, interval, callback, args=None, kwargs=None):
+            self.interval = interval
+            self.callback = callback
+            self.args = args or ()
+            self.kwargs = kwargs or {}
+            self.daemon = False
+
+        def start(self):
+            self.callback(*self.args, **self.kwargs)
+
+        def cancel(self):
+            return None
+
+    monkeypatch.setattr(worker_runtime_module.threading, "Timer", ImmediateTimer)
+
+    abort_navigation_session(runtime, session.session_id)
+
+    with pytest.raises(KeyError):
+        runtime.get_navigation_session(session.session_id)
+
+
 def test_run_graph_thread_delegates_to_local_navigation_runner(monkeypatch):
     observed = {}
     session = NavSession(session_id="nav-1", goal="Navigate to Data Display")
@@ -217,6 +244,28 @@ def test_run_graph_thread_delegates_to_local_navigation_runner(monkeypatch):
     navigation_runtime._run_graph_thread(session)
 
     assert observed["session"] is session
+
+
+def test_run_graph_thread_schedules_cleanup_after_completion(monkeypatch):
+    scheduled: list[str] = []
+    session = NavSession(session_id="nav-1", goal="Navigate to Data Display")
+    session.cleanup_callback = lambda session_id: scheduled.append(session_id)
+
+    monkeypatch.setattr(
+        navigation_runtime,
+        "_run_navigation_session",
+        lambda nav_session: {
+            "current_page": "data_display",
+            "navigation_history": [{"action": "completed"}],
+            "error": None,
+        },
+        raising=False,
+    )
+
+    navigation_runtime._run_graph_thread(session)
+
+    assert session.status == NavSessionStatus.COMPLETED
+    assert scheduled == ["nav-1"]
 
 
 def test_run_navigation_session_emits_decision_required_events_and_completes():

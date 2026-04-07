@@ -71,7 +71,7 @@ def test_proxy_config_defaults_are_enabled_and_frozen() -> None:
     config = ProxyConfig()
 
     assert config.read_msgs_cache == ReadMsgsCacheConfig(enabled=True, ttl_ms=150)
-    assert config.auth == AuthConfig(enabled=False, token=None, auth_timeout_s=10)
+    assert config.auth == AuthConfig(enabled=True, token=None, auth_timeout_s=10)
     assert config.ioctl_cache == IoctlCacheConfig(enabled=True, ttl_s=5)
 
     with pytest.raises(FrozenInstanceError):

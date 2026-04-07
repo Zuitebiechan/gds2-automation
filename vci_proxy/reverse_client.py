@@ -1,44 +1,45 @@
-"""
-VCI Proxy 反向连接模式
+"""Reverse-tunnel client for the local VCI proxy."""
 
-本地主动连接到阿里云，建立隧道，让云端可以使用本地的 J2534 设备。
+from __future__ import annotations
 
-架构:
-  本地 VCI Proxy ──主动连接──▶ 阿里云:9000
-                                   ↑
-                              云端程序连接这里
-"""
-
-import asyncio
-import socket
-import struct
-import time
-import logging
 import argparse
+import asyncio
+import concurrent.futures
+import logging
 import os
-from typing import Optional, Callable
+import socket
+import time
+from typing import Callable, Optional
 
-from vci_proxy.protocol import MAGIC, HEADER_SIZE, MsgType, MSG_NAMES, Message, ProtocolEncoder, ProtocolDecoder
-from vci_proxy.j2534_driver import J2534Driver
-from vci_proxy.config import ProxyConfig
-from vci_proxy.cache_ioctl import IoctlCache
 from vci_proxy.auth import compute_signature
 from vci_proxy.benchmark import attach_timing_trailer
+from vci_proxy.cache_ioctl import IoctlCache
+from vci_proxy.config import ProxyConfig
+from vci_proxy.j2534_driver import J2534Driver
+from vci_proxy.protocol import (
+    HEADER_SIZE,
+    MAGIC,
+    Message,
+    MsgType,
+    ProtocolDecoder,
+    ProtocolEncoder,
+)
 
-# NOTE: logging.basicConfig is intentionally NOT called here.
-# When used as a library (imported by client_gui.py), the GUI's main()
-# configures logging with both console + file handlers.
-# When run standalone (__main__), main() below calls basicConfig.
+
 logger = logging.getLogger(__name__)
 
 
 class ReverseProxyClient:
-    """反向代理客户端 - 主动连接到云服务器"""
+    """Local-side reverse tunnel client that executes J2534 requests."""
 
-    def __init__(self, server_host: str, server_port: int,
-                 dll_path: Optional[str] = None,
-                 config: Optional[ProxyConfig] = None,
-                 on_status_change: Optional[Callable[[str, str], None]] = None):
+    def __init__(
+        self,
+        server_host: str,
+        server_port: int,
+        dll_path: Optional[str] = None,
+        config: Optional[ProxyConfig] = None,
+        on_status_change: Optional[Callable[[str, str], None]] = None,
+    ):
         self.server_host = server_host
         self.server_port = server_port
         self.dll_path = dll_path
@@ -46,324 +47,370 @@ class ReverseProxyClient:
         self.driver: Optional[J2534Driver] = None
         self.running = False
         self._on_status_change = on_status_change
-        # Pre-warm: cached PassThruOpen result
         self._prewarm_device_id: Optional[int] = None
         self._prewarm_ret: Optional[int] = None
         self._prewarm_task: Optional[asyncio.Task] = None
-        # P2-2: VBATT cache
+        self._ioctl_cache = IoctlCache(self.config.ioctl_cache)
+        self._active_writer: Optional[asyncio.StreamWriter] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._backoff_sleep_task: Optional[asyncio.Task] = None
 
-    def _notify_status(self, status: str, detail: str = ""):
-        """Notify GUI of status changes. status: 'connected'|'connecting'|'disconnected'|'error'"""
+    def _notify_status(self, status: str, detail: str = "") -> None:
         if self._on_status_change:
             try:
                 self._on_status_change(status, detail)
             except Exception:
-                pass
-        self._ioctl_cache = IoctlCache(self.config.ioctl_cache)
+                logger.debug("status callback failed", exc_info=True)
 
     def _ensure_driver(self) -> bool:
-        """确保驱动已加载"""
         if self.driver is None:
             try:
                 self.driver = J2534Driver(self.dll_path)
-                logger.info(f"J2534 驱动已加载: {self.driver.dll_path}")
+                logger.info("J2534 driver loaded: %s", self.driver.dll_path)
                 return True
-            except Exception as e:
-                logger.error(f"加载 J2534 驱动失败: {e}")
-                self._notify_status('error', f'Failed to load J2534 driver: {e}')
+            except Exception as exc:
+                logger.error("Failed to load J2534 driver: %s", exc)
+                self._notify_status("error", f"Failed to load J2534 driver: {exc}")
                 return False
         return True
 
-    async def connect_and_serve(self):
-        """连接到服务器并处理请求（无限重试，指数退避）"""
-        if not self._ensure_driver():
-            self._notify_status('error', 'J2534 driver not available')
+    async def _close_writer(self) -> None:
+        writer = self._active_writer
+        if writer is None:
             return
 
+        self._active_writer = None
+        try:
+            writer.close()
+        except Exception:
+            return
+
+        wait_closed = getattr(writer, "wait_closed", None)
+        if wait_closed is None:
+            return
+
+        try:
+            await wait_closed()
+        except Exception:
+            pass
+
+    async def _cancel_prewarm_task(self) -> None:
+        prewarm_task = self._prewarm_task
+        self._prewarm_task = None
+        if prewarm_task is None:
+            return
+
+        try:
+            prewarm_task.cancel()
+        except Exception:
+            return
+
+        if isinstance(prewarm_task, asyncio.Future):
+            try:
+                await prewarm_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+
+    async def shutdown(self) -> None:
+        """Gracefully stop background work and close the active tunnel."""
+        self.running = False
+
+        backoff_sleep_task = self._backoff_sleep_task
+        self._backoff_sleep_task = None
+        if backoff_sleep_task is not None:
+            backoff_sleep_task.cancel()
+
+        await self._cancel_prewarm_task()
+        await self._close_writer()
+
+        self._prewarm_device_id = None
+        self._prewarm_ret = None
+        self._ioctl_cache.invalidate()
+
+    async def connect_and_serve(self) -> None:
+        """Connect to the reverse server and serve requests until stopped."""
+        if not self._ensure_driver():
+            self._notify_status("error", "J2534 driver not available")
+            return
+        if self.config.auth.enabled and not self.config.auth.token:
+            self._notify_status("error", "Authentication token required")
+            return
+
+        self._loop = asyncio.get_running_loop()
         self.running = True
         backoff_seconds = 5.0
         max_backoff = 60.0
 
-        while self.running:
-            try:
-                self._notify_status('connecting', f'{self.server_host}:{self.server_port}')
-                logger.info(f"正在连接到 {self.server_host}:{self.server_port}...")
+        try:
+            while self.running:
+                try:
+                    self._notify_status("connecting", f"{self.server_host}:{self.server_port}")
+                    logger.info("Connecting to %s:%s", self.server_host, self.server_port)
 
-                reader, writer = await asyncio.open_connection(
-                    self.server_host, self.server_port
-                )
+                    reader, writer = await asyncio.open_connection(
+                        self.server_host,
+                        self.server_port,
+                    )
+                    self._active_writer = writer
 
-                # Set TCP keepalive to prevent NAT timeout
-                sock = writer.get_extra_info('socket')
-                if sock is not None:
-                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                    if hasattr(socket, 'TCP_KEEPIDLE'):
-                        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 20)
-                    if hasattr(socket, 'TCP_KEEPINTVL'):
-                        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
-                    if hasattr(socket, 'TCP_KEEPCNT'):
-                        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+                    sock = writer.get_extra_info("socket")
+                    if sock is not None:
+                        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                        if hasattr(socket, "TCP_KEEPIDLE"):
+                            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 20)
+                        if hasattr(socket, "TCP_KEEPINTVL"):
+                            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
+                        if hasattr(socket, "TCP_KEEPCNT"):
+                            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
 
-                logger.info("已连接到云服务器!")
-                self._notify_status('connected', f'{self.server_host}:{self.server_port}')
-                backoff_seconds = 5.0  # 连接成功，重置退避
+                    logger.info("Connected to reverse server")
+                    self._notify_status("connected", f"{self.server_host}:{self.server_port}")
+                    backoff_seconds = 5.0
 
-                # 发送注册/认证消息
-                if not await self._send_registration(reader, writer):
-                    logger.warning("Authentication failed, reconnecting...")
-                    writer.close()
+                    if await self._send_registration(reader, writer):
+                        self._prewarm_task = asyncio.create_task(self._prewarm_open())
+                        await self._handle_requests(reader, writer)
+                    else:
+                        logger.warning("Authentication failed, reconnecting")
+
+                except ConnectionRefusedError:
+                    self._notify_status(
+                        "disconnected",
+                        f"Connection refused, retrying in {backoff_seconds:.0f}s",
+                    )
+                    logger.warning(
+                        "Connection refused, retrying in %.0fs",
+                        backoff_seconds,
+                    )
+                except Exception as exc:
                     if self.running:
-                        await asyncio.sleep(backoff_seconds)
-                        backoff_seconds = min(backoff_seconds * 2, max_backoff)
-                    continue
+                        self._notify_status(
+                            "disconnected",
+                            f"Error: {exc}, retrying in {backoff_seconds:.0f}s",
+                        )
+                    logger.error(
+                        "Connection error: %s, retrying in %.0fs",
+                        exc,
+                        backoff_seconds,
+                    )
+                finally:
+                    await self._cancel_prewarm_task()
+                    await self._close_writer()
+                    self._prewarm_device_id = None
+                    self._prewarm_ret = None
+                    self._ioctl_cache.invalidate()
 
-                # Pre-warm: fire PassThruOpen as background task (don't await)
-                # so _handle_requests can start immediately and read messages.
-                # SM2 takes ~23s; if GDS2 OPEN_REQ arrives before pre-warm
-                # completes, _handle_open will wait for the running pre-warm.
-                self._prewarm_task = asyncio.ensure_future(self._prewarm_open())
+                if self.running:
+                    self._backoff_sleep_task = asyncio.create_task(
+                        asyncio.sleep(backoff_seconds)
+                    )
+                    try:
+                        await self._backoff_sleep_task
+                    except asyncio.CancelledError:
+                        pass
+                    finally:
+                        self._backoff_sleep_task = None
+                    backoff_seconds = min(backoff_seconds * 2, max_backoff)
+        finally:
+            await self.shutdown()
+            self._loop = None
+            logger.info("Client stopped")
 
-                # 处理请求循环
-                await self._handle_requests(reader, writer)
-
-            except ConnectionRefusedError:
-                self._notify_status('disconnected', f'Connection refused, retrying in {backoff_seconds:.0f}s')
-                logger.warning(f"连接被拒绝，{backoff_seconds:.0f}秒后重试...")
-            except Exception as e:
-                self._notify_status('disconnected', f'Error: {e}, retrying in {backoff_seconds:.0f}s')
-                logger.error(f"连接错误: {e}，{backoff_seconds:.0f}秒后重试...")
-
-            # Invalidate caches on disconnect
-            self._ioctl_cache.invalidate()
-
-            if self.running:
-                await asyncio.sleep(backoff_seconds)
-                backoff_seconds = min(backoff_seconds * 2, max_backoff)
-
-        logger.info("已停止")
-
-    async def _send_registration(self, reader: asyncio.StreamReader,
-                                 writer: asyncio.StreamWriter) -> bool:
-        """Send registration/authentication message.
-
-        If auth is enabled, sends AUTH_REQ and waits for AUTH_RSP.
-        Otherwise sends legacy heartbeat.
-
-        Returns True if registration succeeded, False otherwise.
-        """
+    async def _send_registration(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> bool:
+        """Register with the server using auth or the legacy heartbeat path."""
         if self.config.auth.enabled and self.config.auth.token:
             timestamp = int(time.time())
             signature = compute_signature(self.config.auth.token, timestamp)
             msg = ProtocolEncoder.encode_auth_req(timestamp, signature, 0)
             writer.write(msg)
             await writer.drain()
-            logger.info("已发送认证请求")
+            logger.info("Sent auth request")
 
-            # Wait for AUTH_RSP
             try:
                 header = await asyncio.wait_for(
                     reader.readexactly(HEADER_SIZE),
                     timeout=self.config.auth.auth_timeout_s,
                 )
-                magic, length, msg_type, sequence = Message.decode_header(header)
+                magic, length, msg_type, _sequence = Message.decode_header(header)
                 if magic != MAGIC:
-                    logger.error(f"Invalid magic in auth response: {magic:#x}")
+                    logger.error("Invalid magic in auth response: %#x", magic)
                     return False
 
                 body_len = length - HEADER_SIZE
-                body = await reader.readexactly(body_len) if body_len > 0 else b''
+                body = await reader.readexactly(body_len) if body_len > 0 else b""
 
                 if msg_type == MsgType.AUTH_RSP:
                     success, message = ProtocolDecoder.decode_auth_rsp(body)
                     if success:
-                        logger.info(f"认证成功: {message}")
-                        return True
+                        logger.info("Authentication succeeded: %s", message)
                     else:
-                        logger.error(f"认证失败: {message}")
-                        return False
-                elif msg_type == MsgType.HEARTBEAT_ACK:
-                    # Server doesn't support auth, accepted as legacy
-                    logger.info("Server accepted auth as heartbeat (legacy mode)")
-                    return True
-                else:
-                    logger.warning(f"Unexpected auth response type: {msg_type:#x}")
-                    return False
+                        logger.error("Authentication failed: %s", message)
+                    return success
 
+                if msg_type == MsgType.HEARTBEAT_ACK:
+                    logger.info("Server accepted auth as legacy heartbeat")
+                    return True
+
+                logger.warning("Unexpected auth response type: %#x", msg_type)
+                return False
             except asyncio.TimeoutError:
                 logger.error("Auth response timeout")
                 return False
-        else:
-            # Two-phase heartbeat handshake:
-            #   1. Send HEARTBEAT
-            #   2. Wait for HEARTBEAT_ACK from server
-            #   3. Send a second HEARTBEAT to confirm
-            # This prevents port scanners from being accepted as VCI clients.
-            msg = ProtocolEncoder.encode_heartbeat(0)
-            writer.write(msg)
-            await writer.drain()
-            logger.info("已发送注册心跳 (phase 1)")
 
-            # Wait for ACK
-            try:
-                header = await asyncio.wait_for(
-                    reader.readexactly(HEADER_SIZE), timeout=5.0
-                )
-                magic, length, msg_type, sequence = Message.decode_header(header)
-                body_len = length - HEADER_SIZE
-                if body_len > 0:
-                    await reader.readexactly(body_len)  # drain body
+        msg = ProtocolEncoder.encode_heartbeat(0)
+        writer.write(msg)
+        await writer.drain()
+        logger.info("Sent registration heartbeat (phase 1)")
 
-                if magic != MAGIC:
-                    logger.error(f"Invalid magic in registration ACK: {magic:#x}")
-                    return False
-                if msg_type not in (MsgType.HEARTBEAT_ACK, MsgType.HEARTBEAT):
-                    logger.warning(f"Unexpected registration response: {msg_type:#x}")
-                    return False
-            except asyncio.TimeoutError:
-                logger.error("Registration ACK timeout")
+        try:
+            header = await asyncio.wait_for(reader.readexactly(HEADER_SIZE), timeout=5.0)
+            magic, length, msg_type, _sequence = Message.decode_header(header)
+            body_len = length - HEADER_SIZE
+            if body_len > 0:
+                await reader.readexactly(body_len)
+
+            if magic != MAGIC:
+                logger.error("Invalid magic in registration ack: %#x", magic)
                 return False
+            if msg_type not in (MsgType.HEARTBEAT_ACK, MsgType.HEARTBEAT):
+                logger.warning("Unexpected registration response: %#x", msg_type)
+                return False
+        except asyncio.TimeoutError:
+            logger.error("Registration ack timeout")
+            return False
 
-            # Send confirmation heartbeat (phase 2)
-            msg2 = ProtocolEncoder.encode_heartbeat(1)
-            writer.write(msg2)
-            await writer.drain()
-            logger.info("已发送确认心跳 (phase 2) — 注册完成")
-            return True
+        msg2 = ProtocolEncoder.encode_heartbeat(1)
+        writer.write(msg2)
+        await writer.drain()
+        logger.info("Sent registration heartbeat (phase 2)")
+        return True
 
-    async def _handle_requests(self, reader: asyncio.StreamReader,
-                               writer: asyncio.StreamWriter):
-        """处理来自服务器的请求"""
+    async def _handle_requests(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
         while self.running:
             try:
-                # 读取消息头
-                header = await asyncio.wait_for(
-                    reader.readexactly(HEADER_SIZE),
-                    timeout=25.0  # Reduced from 60s to prevent NAT timeout
-                )
-
+                header = await asyncio.wait_for(reader.readexactly(HEADER_SIZE), timeout=25.0)
                 magic, length, msg_type, sequence = Message.decode_header(header)
 
                 if magic != MAGIC:
-                    logger.warning(f"无效的 Magic: {magic:#x}")
+                    logger.warning("Invalid magic: %#x", magic)
                     break
 
-                # 读取消息体
                 body_len = length - HEADER_SIZE
-                body = await reader.readexactly(body_len) if body_len > 0 else b''
+                body = await reader.readexactly(body_len) if body_len > 0 else b""
 
-                # 处理请求 — measure J2534 execution time
                 t0 = time.monotonic()
                 response = await self._handle_message(msg_type, body, sequence)
                 hw_ms = (time.monotonic() - t0) * 1000
 
                 if response:
-                    # Attach timing trailer so the server can separate
-                    # hardware execution time from network transit time.
                     response = attach_timing_trailer(response, hw_ms)
                     writer.write(response)
                     await writer.drain()
 
             except asyncio.TimeoutError:
-                # 发送心跳保活
-                msg = ProtocolEncoder.encode_heartbeat(0)
-                writer.write(msg)
+                writer.write(ProtocolEncoder.encode_heartbeat(0))
                 await writer.drain()
             except asyncio.IncompleteReadError:
-                logger.info("服务器断开连接")
+                logger.info("Server disconnected")
                 break
-            except Exception as e:
-                logger.error(f"处理请求错误: {e}")
+            except Exception as exc:
+                logger.error("Request handling error: %s", exc)
                 break
 
-    # --- Individual message handlers ---
-
-    async def _prewarm_open(self):
-        """Pre-warm PassThruOpen in background thread.
-
-        SM2's smj2534.dll takes ~23s for PassThruOpen. By calling it
-        proactively after connecting to the cloud server, the device
-        handle is ready when GDS2's OPEN_REQ arrives.
-        """
+    async def _prewarm_open(self) -> None:
         if self.driver is None:
             return
-        logger.info("Pre-warm: calling PassThruOpen in background...")
+
+        logger.info("Pre-warm: calling PassThruOpen in background")
         loop = asyncio.get_running_loop()
         try:
-            ret, device_id = await loop.run_in_executor(
-                None, self.driver.open, None
-            )
-            if ret == 0:  # STATUS_NOERROR
+            ret, device_id = await loop.run_in_executor(None, self.driver.open, None)
+            if ret == 0:
                 self._prewarm_device_id = device_id
                 self._prewarm_ret = ret
-                logger.info(f"Pre-warm: PassThruOpen OK, device_id={device_id}")
+                logger.info("Pre-warm: PassThruOpen OK, device_id=%s", device_id)
             else:
-                logger.warning(f"Pre-warm: PassThruOpen failed, ret={ret}")
+                logger.warning("Pre-warm: PassThruOpen failed, ret=%s", ret)
                 self._prewarm_device_id = None
                 self._prewarm_ret = None
-        except Exception as e:
-            logger.error(f"Pre-warm: PassThruOpen error: {e}")
+        except Exception as exc:
+            logger.error("Pre-warm: PassThruOpen error: %s", exc)
             self._prewarm_device_id = None
             self._prewarm_ret = None
 
     async def _handle_open(self, body: bytes, sequence: int) -> bytes:
         device_name = ProtocolDecoder.decode_open_req(body)
-        logger.info(f">> PassThruOpen({device_name})")
+        logger.info(">> PassThruOpen(%s)", device_name)
 
-        # If pre-warm is still running, wait for it to complete
         if self._prewarm_task is not None and not self._prewarm_task.done():
-            logger.info("OPEN_REQ arrived while pre-warm in progress, waiting...")
+            logger.info("OPEN_REQ arrived while pre-warm was in progress")
             try:
                 await self._prewarm_task
             except Exception:
-                pass  # errors already logged in _prewarm_open
+                pass
 
-        # Use pre-warmed handle if available
         if self._prewarm_device_id is not None and self._prewarm_ret == 0:
             device_id = self._prewarm_device_id
             ret = self._prewarm_ret
-            self._prewarm_device_id = None  # consume it
+            self._prewarm_device_id = None
             self._prewarm_ret = None
             self._prewarm_task = None
-            logger.info(f"<< PassThruOpen -> ret={ret}, id={device_id} [PRE-WARMED]")
+            logger.info("<< PassThruOpen -> ret=%s, id=%s [pre-warmed]", ret, device_id)
             return ProtocolEncoder.encode_open_rsp(ret, device_id, sequence)
 
-        # Fallback: call PassThruOpen normally
         loop = asyncio.get_running_loop()
-        ret, device_id = await loop.run_in_executor(
-            None, self.driver.open, device_name
-        )
-        logger.info(f"<< PassThruOpen -> ret={ret}, id={device_id}")
+        ret, device_id = await loop.run_in_executor(None, self.driver.open, device_name)
+        logger.info("<< PassThruOpen -> ret=%s, id=%s", ret, device_id)
         return ProtocolEncoder.encode_open_rsp(ret, device_id, sequence)
 
     async def _handle_close(self, body: bytes, sequence: int) -> bytes:
         device_id = ProtocolDecoder.decode_close_req(body)
-        logger.info(f">> PassThruClose({device_id})")
+        logger.info(">> PassThruClose(%s)", device_id)
         loop = asyncio.get_running_loop()
         ret = await loop.run_in_executor(None, self.driver.close, device_id)
-        logger.info(f"<< PassThruClose -> ret={ret}")
+        logger.info("<< PassThruClose -> ret=%s", ret)
         self._ioctl_cache.invalidate()
-        # Invalidate pre-warm cache on close
         self._prewarm_device_id = None
         self._prewarm_ret = None
         return ProtocolEncoder.encode_close_rsp(ret, sequence)
 
     async def _handle_connect(self, body: bytes, sequence: int) -> bytes:
         device_id, protocol_id, flags, baudrate = ProtocolDecoder.decode_connect_req(body)
-        logger.info(f">> PassThruConnect(dev={device_id}, proto={protocol_id}, baud={baudrate})")
+        logger.info(
+            ">> PassThruConnect(dev=%s, proto=%s, baud=%s)",
+            device_id,
+            protocol_id,
+            baudrate,
+        )
         loop = asyncio.get_running_loop()
         ret, channel_id = await loop.run_in_executor(
-            None, self.driver.connect, device_id, protocol_id, flags, baudrate
+            None,
+            self.driver.connect,
+            device_id,
+            protocol_id,
+            flags,
+            baudrate,
         )
-        logger.info(f"<< PassThruConnect -> ret={ret}, ch={channel_id}")
+        logger.info("<< PassThruConnect -> ret=%s, ch=%s", ret, channel_id)
         return ProtocolEncoder.encode_connect_rsp(ret, channel_id, sequence)
 
     async def _handle_disconnect(self, body: bytes, sequence: int) -> bytes:
         channel_id = ProtocolDecoder.decode_disconnect_req(body)
-        logger.info(f">> PassThruDisconnect({channel_id})")
+        logger.info(">> PassThruDisconnect(%s)", channel_id)
         loop = asyncio.get_running_loop()
         ret = await loop.run_in_executor(None, self.driver.disconnect, channel_id)
-        logger.info(f"<< PassThruDisconnect -> ret={ret}")
+        logger.info("<< PassThruDisconnect -> ret=%s", ret)
         self._ioctl_cache.invalidate()
         return ProtocolEncoder.encode_disconnect_rsp(ret, sequence)
 
@@ -371,52 +418,71 @@ class ReverseProxyClient:
         channel_id, num_msgs, timeout = ProtocolDecoder.decode_read_msgs_req(body)
         loop = asyncio.get_running_loop()
         ret, messages = await loop.run_in_executor(
-            None, self.driver.read_msgs, channel_id, num_msgs, timeout
+            None,
+            self.driver.read_msgs,
+            channel_id,
+            num_msgs,
+            timeout,
         )
-        if ret != 0x10:  # Skip BUFFER_EMPTY noise
-            logger.info(f"<< ReadMsgs(ch={channel_id}) -> ret={ret}, n={len(messages)}")
+        if ret != 0x10:
+            logger.info("<< ReadMsgs(ch=%s) -> ret=%s, n=%s", channel_id, ret, len(messages))
         return ProtocolEncoder.encode_read_msgs_rsp(ret, messages, sequence)
 
     async def _handle_write_msgs(self, body: bytes, sequence: int) -> bytes:
         channel_id, messages, timeout = ProtocolDecoder.decode_write_msgs_req(body)
-        logger.info(f">> WriteMsgs(ch={channel_id}, n={len(messages)}, t={timeout})")
+        logger.info(">> WriteMsgs(ch=%s, n=%s, t=%s)", channel_id, len(messages), timeout)
         loop = asyncio.get_running_loop()
         ret, num_written = await loop.run_in_executor(
-            None, self.driver.write_msgs, channel_id, messages, timeout
+            None,
+            self.driver.write_msgs,
+            channel_id,
+            messages,
+            timeout,
         )
-        logger.info(f"<< WriteMsgs -> ret={ret}, written={num_written}")
+        logger.info("<< WriteMsgs -> ret=%s, written=%s", ret, num_written)
         return ProtocolEncoder.encode_write_msgs_rsp(ret, num_written, sequence)
 
     async def _handle_read_version(self, body: bytes, sequence: int) -> bytes:
         device_id = ProtocolDecoder.decode_read_version_req(body)
-        logger.info(f">> PassThruReadVersion({device_id})")
+        logger.info(">> PassThruReadVersion(%s)", device_id)
         loop = asyncio.get_running_loop()
         ret, fw, dll, api = await loop.run_in_executor(
-            None, self.driver.read_version, device_id
+            None,
+            self.driver.read_version,
+            device_id,
         )
-        logger.info(f"<< ReadVersion -> ret={ret}")
+        logger.info("<< ReadVersion -> ret=%s", ret)
         return ProtocolEncoder.encode_read_version_rsp(ret, fw, dll, api, sequence)
 
     async def _handle_start_filter(self, body: bytes, sequence: int) -> bytes:
-        channel_id, filter_type, mask_msg, pattern_msg, flow_msg = \
+        channel_id, filter_type, mask_msg, pattern_msg, flow_msg = (
             ProtocolDecoder.decode_start_filter_req(body)
-        logger.info(f">> StartMsgFilter(ch={channel_id}, type={filter_type})")
+        )
+        logger.info(">> StartMsgFilter(ch=%s, type=%s)", channel_id, filter_type)
         loop = asyncio.get_running_loop()
         ret, filter_id = await loop.run_in_executor(
-            None, self.driver.start_msg_filter,
-            channel_id, filter_type, mask_msg, pattern_msg, flow_msg
+            None,
+            self.driver.start_msg_filter,
+            channel_id,
+            filter_type,
+            mask_msg,
+            pattern_msg,
+            flow_msg,
         )
-        logger.info(f"<< StartMsgFilter -> ret={ret}, fid={filter_id}")
+        logger.info("<< StartMsgFilter -> ret=%s, fid=%s", ret, filter_id)
         return ProtocolEncoder.encode_start_filter_rsp(ret, filter_id, sequence)
 
     async def _handle_stop_filter(self, body: bytes, sequence: int) -> bytes:
         channel_id, filter_id = ProtocolDecoder.decode_stop_filter_req(body)
-        logger.info(f">> StopMsgFilter(ch={channel_id}, filter={filter_id})")
+        logger.info(">> StopMsgFilter(ch=%s, filter=%s)", channel_id, filter_id)
         loop = asyncio.get_running_loop()
         ret = await loop.run_in_executor(
-            None, self.driver.stop_msg_filter, channel_id, filter_id
+            None,
+            self.driver.stop_msg_filter,
+            channel_id,
+            filter_id,
         )
-        logger.info(f"<< StopMsgFilter -> ret={ret}")
+        logger.info("<< StopMsgFilter -> ret=%s", ret)
         return ProtocolEncoder.encode_stop_filter_rsp(ret, sequence)
 
     async def _handle_ioctl(self, body: bytes, sequence: int) -> bytes:
@@ -425,20 +491,22 @@ class ReverseProxyClient:
         cached = self._ioctl_cache.try_get_cached(channel_id, ioctl_id)
         if cached is not None:
             ret, output_data = cached
-            logger.debug(f"<< Ioctl(0x{ioctl_id:02x}) -> [CACHED] ret={ret}")
+            logger.debug("<< Ioctl(%#x) -> [cached] ret=%s", ioctl_id, ret)
             return ProtocolEncoder.encode_ioctl_rsp(ret, output_data, sequence)
 
-        logger.info(f">> PassThruIoctl(ch={channel_id}, ioctl=0x{ioctl_id:02x})")
+        logger.info(">> PassThruIoctl(ch=%s, ioctl=%#x)", channel_id, ioctl_id)
         loop = asyncio.get_running_loop()
         ret, output_data = await loop.run_in_executor(
-            None, self.driver.ioctl, channel_id, ioctl_id, input_data
+            None,
+            self.driver.ioctl,
+            channel_id,
+            ioctl_id,
+            input_data,
         )
-        logger.info(f"<< Ioctl(0x{ioctl_id:02x}) -> ret={ret}")
-
+        logger.info("<< Ioctl(%#x) -> ret=%s", ioctl_id, ret)
         self._ioctl_cache.record_result(channel_id, ioctl_id, ret, output_data)
         return ProtocolEncoder.encode_ioctl_rsp(ret, output_data, sequence)
 
-    # Dispatch table: msg_type -> handler method
     _DISPATCH = {
         MsgType.OPEN_REQ: _handle_open,
         MsgType.CLOSE_REQ: _handle_close,
@@ -452,9 +520,12 @@ class ReverseProxyClient:
         MsgType.IOCTL_REQ: _handle_ioctl,
     }
 
-    async def _handle_message(self, msg_type: int, body: bytes,
-                             sequence: int) -> Optional[bytes]:
-        """Dispatch message to the appropriate handler."""
+    async def _handle_message(
+        self,
+        msg_type: int,
+        body: bytes,
+        sequence: int,
+    ) -> Optional[bytes]:
         if msg_type == MsgType.PING_REQ:
             return ProtocolEncoder.encode_ping_rsp(sequence)
         if msg_type == MsgType.HEARTBEAT:
@@ -464,36 +535,65 @@ class ReverseProxyClient:
 
         handler = self._DISPATCH.get(msg_type)
         if handler is None:
-            logger.warning(f"未知消息类型: {msg_type:#x}")
+            logger.warning("Unknown message type: %#x", msg_type)
             return None
         return await handler(self, body, sequence)
 
-    def stop(self):
-        """停止客户端"""
+    def stop(self) -> concurrent.futures.Future[None]:
+        """Request a graceful shutdown and return a future for completion."""
+        loop = self._loop
+        if loop is not None and loop.is_running():
+            return asyncio.run_coroutine_threadsafe(self.shutdown(), loop)
+
         self.running = False
+        future: concurrent.futures.Future[None] = concurrent.futures.Future()
+        future.set_result(None)
+        return future
 
 
-def main():
+def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s',
-        datefmt='%H:%M:%S'
+        format="%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s",
+        datefmt="%H:%M:%S",
     )
-    parser = argparse.ArgumentParser(description='VCI Proxy 反向连接客户端')
-    parser.add_argument('--host', default=os.environ.get('VCI_PROXY_HOST', '127.0.0.1'),
-                       help='云服务器地址 (或设置 VCI_PROXY_HOST 环境变量)')
-    parser.add_argument('--port', '-p', type=int, default=9000, help='云服务器端口')
-    parser.add_argument('--dll', default=None, help='J2534 DLL 路径')
-    parser.add_argument('--auth-token', type=str, default=None,
-                       help='PSK authentication token')
-    parser.add_argument('--no-vbatt-cache', action='store_true',
-                       help='Disable READ_VBATT response cache (legacy)')
-    parser.add_argument('--vbatt-ttl', type=int, default=5,
-                       help='VBATT cache TTL in seconds (默认: 5)')
-    parser.add_argument('--no-ioctl-cache', action='store_true',
-                       help='Disable generalized read-only IOCTL cache')
-    parser.add_argument('--ioctl-ttl', type=int, default=5,
-                       help='IOCTL cache TTL in seconds (默认: 5)')
+    parser = argparse.ArgumentParser(description="VCI Proxy reverse client")
+    parser.add_argument(
+        "--host",
+        default=os.environ.get("VCI_PROXY_HOST", "127.0.0.1"),
+        help="Reverse server host (or VCI_PROXY_HOST)",
+    )
+    parser.add_argument(
+        "--port",
+        "-p",
+        type=int,
+        default=9000,
+        help="Reverse server port",
+    )
+    parser.add_argument("--dll", default=None, help="J2534 DLL path")
+    parser.add_argument("--auth-token", type=str, default=None, help="PSK auth token")
+    parser.add_argument(
+        "--no-vbatt-cache",
+        action="store_true",
+        help="Disable READ_VBATT response cache (legacy)",
+    )
+    parser.add_argument(
+        "--vbatt-ttl",
+        type=int,
+        default=5,
+        help="VBATT cache TTL in seconds",
+    )
+    parser.add_argument(
+        "--no-ioctl-cache",
+        action="store_true",
+        help="Disable generalized read-only IOCTL cache",
+    )
+    parser.add_argument(
+        "--ioctl-ttl",
+        type=int,
+        default=5,
+        help="IOCTL cache TTL in seconds",
+    )
     args = parser.parse_args()
 
     config = ProxyConfig.from_args(
@@ -505,13 +605,15 @@ def main():
     )
 
     print("=" * 50)
-    print("VCI Proxy 反向连接模式")
+    print("VCI Proxy Reverse Client")
     print("=" * 50)
-    print(f"目标服务器: {args.host}:{args.port}")
+    print(f"Target server: {args.host}:{args.port}")
     print(f"Auth: {'enabled' if config.auth.enabled else 'disabled'}")
-    print(f"IOCTL cache: {'enabled' if config.ioctl_cache.enabled else 'disabled'}"
-          f" (TTL={config.ioctl_cache.ttl_s}s)")
-    print("按 Ctrl+C 停止")
+    print(
+        f"IOCTL cache: {'enabled' if config.ioctl_cache.enabled else 'disabled'} "
+        f"(TTL={config.ioctl_cache.ttl_s}s)"
+    )
+    print("Press Ctrl+C to stop")
     print("=" * 50)
     print()
 
@@ -520,9 +622,9 @@ def main():
     try:
         asyncio.run(client.connect_and_serve())
     except KeyboardInterrupt:
-        print("\n正在停止...")
+        print("\nStopping...")
         client.stop()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

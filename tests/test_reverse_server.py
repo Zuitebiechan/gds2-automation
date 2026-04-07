@@ -66,6 +66,31 @@ def test_authenticate_vci_rejects_legacy_heartbeat_when_auth_is_required() -> No
     assert writer.writes == []
 
 
+def test_authenticate_vci_rejects_replayed_auth_request(monkeypatch) -> None:
+    server = ReverseProxyServer(config=ProxyConfig.from_args(auth_token="secret"))
+    writer_a = _FakeWriter()
+    writer_b = _FakeWriter()
+    message = ProtocolEncoder.encode_auth_req(123, b"x" * 32, sequence=7)
+
+    monkeypatch.setattr(
+        "vci_proxy.reverse_server.verify_signature",
+        lambda token, timestamp, signature: (True, "ok"),
+    )
+
+    accepted_first = asyncio.run(server._authenticate_vci(_FakeReader(message), writer_a))
+    accepted_second = asyncio.run(server._authenticate_vci(_FakeReader(message), writer_b))
+
+    assert accepted_first is True
+    assert accepted_second is False
+    assert len(writer_b.writes) == 1
+    _magic, length, msg_type, sequence = Message.decode_header(writer_b.writes[0][:HEADER_SIZE])
+    assert msg_type == MsgType.AUTH_RSP
+    assert sequence == 7
+    success, reason = ProtocolDecoder.decode_auth_rsp(writer_b.writes[0][HEADER_SIZE:length])
+    assert success is False
+    assert "replay" in reason
+
+
 def test_try_serve_cached_returns_cached_ioctl_response() -> None:
     server = ReverseProxyServer()
     server._ioctl_cache = types.SimpleNamespace(try_get_cached=lambda channel_id, ioctl_id: (0, b"\x01\x02"))

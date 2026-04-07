@@ -50,6 +50,7 @@ class NavSession:
     pending_decision_id: str | None = None
     pending_items: list[Any] = field(default_factory=list)
     error: str | None = None
+    cleanup_callback: Any = field(default=None, repr=False)
     cancel_event: Any = field(default_factory=threading.Event, repr=False)
 
     def cancel(self) -> None:
@@ -73,6 +74,7 @@ def start_navigation_session(
     normalized_goal = (goal or "Navigate to Data Display").strip()
     session_id = uuid.uuid4().hex[:16]
     session = NavSession(session_id=session_id, goal=normalized_goal)
+    session.cleanup_callback = runtime.schedule_navigation_session_cleanup
 
     thread = threading.Thread(
         target=_run_graph_thread,
@@ -147,6 +149,10 @@ def abort_navigation_session(runtime: WorkerRuntime, session_id: str) -> dict[st
         pass
 
     logger.info("NAV session=%s aborted", session_id)
+    if callable(session.cleanup_callback):
+        session.cleanup_callback(session_id)
+    else:
+        runtime.schedule_navigation_session_cleanup(session_id)
     return {
         "success": True,
         "session_id": session_id,
@@ -597,3 +603,10 @@ def _run_graph_thread(session: NavSession) -> None:
             session.event_queue.put({"type": "error", "error": str(exc)})
         except Exception:
             pass
+    finally:
+        if session.status in (
+            NavSessionStatus.COMPLETED,
+            NavSessionStatus.FAILED,
+            NavSessionStatus.ABORTED,
+        ) and callable(session.cleanup_callback):
+            session.cleanup_callback(session.session_id)

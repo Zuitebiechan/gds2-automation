@@ -18,6 +18,7 @@ NOTE on session management layers:
 import json
 import logging
 import queue
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -30,6 +31,7 @@ from diagnostic_platform.contracts import BackendDescriptor
 logger = logging.getLogger(__name__)
 
 BACKEND_DECISION_KINDS = {"backend"}
+_TERMINAL_SESSION_RETENTION_SEC = 30.0
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -64,6 +66,12 @@ class SessionEventType(str, Enum):
     NETWORK_QUALITY_CHANGED = "network_quality_changed"
     ERROR = "error"
     DONE = "done"
+
+
+_TERMINAL_EVENT_TYPES = {
+    SessionEventType.ERROR,
+    SessionEventType.DONE,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -293,10 +301,18 @@ class SessionOrchestrator:
     transitions consumed by the API layer.
     """
 
-    def __init__(self, registry_provider: Callable[[], Any] | None = None) -> None:
+    def __init__(
+        self,
+        registry_provider: Callable[[], Any] | None = None,
+        *,
+        terminal_retention_sec: float = _TERMINAL_SESSION_RETENTION_SEC,
+    ) -> None:
         self._sessions: Dict[str, Session] = {}
         self._queues: Dict[str, queue.Queue] = {}
         self._registry_provider = registry_provider or get_backend_registry
+        self._terminal_retention_sec = max(0.0, float(terminal_retention_sec))
+        self._cleanup_timers: Dict[str, threading.Timer] = {}
+        self._lock = threading.RLock()
 
     def _registry(self):
         return self._registry_provider()
@@ -304,6 +320,10 @@ class SessionOrchestrator:
     # -- helpers -------------------------------------------------------------
 
     def _get_session(self, session_id: str) -> Session:
+        with self._lock:
+            return self._get_session_unlocked(session_id)
+
+    def _get_session_unlocked(self, session_id: str) -> Session:
         session = self._sessions.get(session_id)
         if session is None:
             raise KeyError(f"Session {session_id} not found")
@@ -311,19 +331,43 @@ class SessionOrchestrator:
 
     def _emit(self, session_id: str, event_type: SessionEventType,
               data: Dict[str, Any]) -> None:
-        q = self._queues.get(session_id)
+        with self._lock:
+            q = self._queues.get(session_id)
         if q is None:
             return
         msg = sse_event(event_type.value, data)
         try:
             q.put_nowait(msg)
         except queue.Full:
+            if event_type in _TERMINAL_EVENT_TYPES:
+                self._enqueue_terminal_event(q, msg, session_id)
+                return
             logger.warning("Event queue full for session %s, dropping event", session_id)
+
+    @staticmethod
+    def _enqueue_terminal_event(q: queue.Queue, message: str, session_id: str) -> None:
+        while True:
+            try:
+                q.put_nowait(message)
+                return
+            except queue.Full:
+                try:
+                    q.get_nowait()
+                except queue.Empty:
+                    logger.warning(
+                        "Event queue cleanup raced empty for terminal event in session %s",
+                        session_id,
+                    )
+                    return
 
     def _touch(self, session: Session) -> None:
         session.updated_at = time.time()
 
     def _find_active_session(self) -> Optional[Session]:
+        with self._lock:
+            return self._find_active_session_unlocked()
+
+    def _find_active_session_unlocked(self) -> Optional[Session]:
         terminal = {
             SessionStatus.COMPLETED,
             SessionStatus.FAILED,
@@ -333,6 +377,26 @@ class SessionOrchestrator:
             if session.status not in terminal:
                 return session
         return None
+
+    def _cleanup_session_state(self, session_id: str) -> None:
+        with self._lock:
+            self._sessions.pop(session_id, None)
+            self._queues.pop(session_id, None)
+            self._cleanup_timers.pop(session_id, None)
+
+    def _schedule_terminal_cleanup(self, session_id: str) -> None:
+        with self._lock:
+            existing = self._cleanup_timers.pop(session_id, None)
+            if existing is not None:
+                existing.cancel()
+            timer = threading.Timer(
+                self._terminal_retention_sec,
+                self._cleanup_session_state,
+                args=(session_id,),
+            )
+            timer.daemon = True
+            self._cleanup_timers[session_id] = timer
+        timer.start()
 
     # -- public API ----------------------------------------------------------
 
@@ -344,59 +408,60 @@ class SessionOrchestrator:
         ``awaiting_decision`` with a ``decision_required`` event asking
         the user to select a backend.
         """
-        active_session = self._find_active_session()
-        if active_session is not None:
-            raise RuntimeError(
-                "Another session is already active "
-                f"(session_id={active_session.session_id}, status={active_session.status.value})"
-            )
+        with self._lock:
+            active_session = self._find_active_session_unlocked()
+            if active_session is not None:
+                raise RuntimeError(
+                    "Another session is already active "
+                    f"(session_id={active_session.session_id}, status={active_session.status.value})"
+                )
 
-        session_id = uuid.uuid4().hex[:16]
-        session = Session(session_id=session_id, context=context)
-        self._sessions[session_id] = session
-        self._queues[session_id] = queue.Queue(maxsize=500)
+            session_id = uuid.uuid4().hex[:16]
+            session = Session(session_id=session_id, context=context)
+            self._sessions[session_id] = session
+            self._queues[session_id] = queue.Queue(maxsize=500)
 
-        preferred_backend_name = (
-            context.backend_name
-            or str(context.extra.get("backend_name") or "").strip()
-        )
-        routed_backend_name = (
-            preferred_backend_name
-            or route_backend(context.brand)
-        )
-        resolution = self._registry().resolve_brand(
-            context.brand,
-            preferred_backend_name=routed_backend_name or None,
-        )
-        descriptors = list(resolution.candidates)
+            preferred_backend_name = (
+                context.backend_name
+                or str(context.extra.get("backend_name") or "").strip()
+            )
+            routed_backend_name = (
+                preferred_backend_name
+                or route_backend(context.brand)
+            )
+            resolution = self._registry().resolve_brand(
+                context.brand,
+                preferred_backend_name=routed_backend_name or None,
+            )
+            descriptors = list(resolution.candidates)
 
-        if resolution.selected_backend_name is not None:
-            descriptor = resolution.selected_descriptor or self._registry().get_descriptor(
-                resolution.selected_backend_name
-            )
-            session.backend_name = descriptor.backend_name
-            session.capabilities = _descriptor_capabilities(descriptor)
-            session.status = SessionStatus.RUNNING
-            self._touch(session)
-            self._emit(session_id, SessionEventType.PROGRESS, {
-                "message": f"Routed to {descriptor.backend_name} backend",
-                "workflow": session.backend_name,
-                "backend_name": session.backend_name,
-                "capabilities": session.capabilities,
-                "session_id": session_id,
-            })
-        else:
-            decision = _build_backend_decision(
-                brand=context.brand,
-                descriptors=descriptors,
-            )
-            session.pending_decision = decision
-            session.status = SessionStatus.AWAITING_DECISION
-            self._touch(session)
-            self._emit(session_id, SessionEventType.DECISION_REQUIRED, {
-                "session_id": session_id,
-                "decision": decision.to_dict(),
-            })
+            if resolution.selected_backend_name is not None:
+                descriptor = resolution.selected_descriptor or self._registry().get_descriptor(
+                    resolution.selected_backend_name
+                )
+                session.backend_name = descriptor.backend_name
+                session.capabilities = _descriptor_capabilities(descriptor)
+                session.status = SessionStatus.RUNNING
+                self._touch(session)
+                self._emit(session_id, SessionEventType.PROGRESS, {
+                    "message": f"Routed to {descriptor.backend_name} backend",
+                    "workflow": session.backend_name,
+                    "backend_name": session.backend_name,
+                    "capabilities": session.capabilities,
+                    "session_id": session_id,
+                })
+            else:
+                decision = _build_backend_decision(
+                    brand=context.brand,
+                    descriptors=descriptors,
+                )
+                session.pending_decision = decision
+                session.status = SessionStatus.AWAITING_DECISION
+                self._touch(session)
+                self._emit(session_id, SessionEventType.DECISION_REQUIRED, {
+                    "session_id": session_id,
+                    "decision": decision.to_dict(),
+                })
 
         return session
 
@@ -410,7 +475,8 @@ class SessionOrchestrator:
 
     def get_event_queue(self, session_id: str) -> Optional[queue.Queue]:
         """Return the SSE event queue for *session_id*, or ``None``."""
-        return self._queues.get(session_id)
+        with self._lock:
+            return self._queues.get(session_id)
 
     def submit_decision(self, session_id: str, decision_id: str,
                         option_id: str, source: str = "user") -> Session:
@@ -422,102 +488,103 @@ class SessionOrchestrator:
         On success transitions the session back to ``running`` and
         emits ``decision_resolved`` + ``progress``.
         """
-        session = self._get_session(session_id)
+        with self._lock:
+            session = self._get_session_unlocked(session_id)
 
-        if session.status != SessionStatus.AWAITING_DECISION:
-            raise ValueError(
-                f"Session {session_id} is not awaiting a decision "
-                f"(status={session.status.value})"
-            )
+            if session.status != SessionStatus.AWAITING_DECISION:
+                raise ValueError(
+                    f"Session {session_id} is not awaiting a decision "
+                    f"(status={session.status.value})"
+                )
 
-        gate = session.pending_decision
-        if gate is None or gate.decision_id != decision_id:
-            raise ValueError(
-                f"Decision ID mismatch: expected "
-                f"{gate.decision_id if gate else 'None'}, got {decision_id}"
-            )
+            gate = session.pending_decision
+            if gate is None or gate.decision_id != decision_id:
+                raise ValueError(
+                    f"Decision ID mismatch: expected "
+                    f"{gate.decision_id if gate else 'None'}, got {decision_id}"
+                )
 
-        valid_ids = {o.option_id for o in gate.options}
-        if option_id not in valid_ids:
-            raise ValueError(
-                f"Invalid option_id '{option_id}'. "
-                f"Valid options: {sorted(valid_ids)}"
-            )
+            valid_ids = {o.option_id for o in gate.options}
+            if option_id not in valid_ids:
+                raise ValueError(
+                    f"Invalid option_id '{option_id}'. "
+                    f"Valid options: {sorted(valid_ids)}"
+                )
 
-        # Resolve
-        resolution = {
-            "decision_id": decision_id,
-            "option_id": option_id,
-            "resolved_at": time.time(),
-            "source": source,
-        }
-        session.resolved_decisions.append(resolution)
+            resolution = {
+                "decision_id": decision_id,
+                "option_id": option_id,
+                "resolved_at": time.time(),
+                "source": source,
+            }
+            session.resolved_decisions.append(resolution)
 
-        is_backend_gate = gate.kind in BACKEND_DECISION_KINDS
-        if is_backend_gate:
-            if option_id == "manual":
-                session.backend_name = "manual"
-                session.capabilities = []
-            elif option_id.startswith("backend:"):
-                backend_name = option_id.split(":", 1)[1]
-                descriptor = self._registry().get_descriptor(backend_name)
-                session.backend_name = descriptor.backend_name
-                session.capabilities = _descriptor_capabilities(descriptor)
-            else:
-                session.backend_name = option_id
-                try:
-                    descriptor = self._registry().get_descriptor(option_id)
-                    session.capabilities = _descriptor_capabilities(descriptor)
-                except KeyError:
+            is_backend_gate = gate.kind in BACKEND_DECISION_KINDS
+            if is_backend_gate:
+                if option_id == "manual":
+                    session.backend_name = "manual"
                     session.capabilities = []
+                elif option_id.startswith("backend:"):
+                    backend_name = option_id.split(":", 1)[1]
+                    descriptor = self._registry().get_descriptor(backend_name)
+                    session.backend_name = descriptor.backend_name
+                    session.capabilities = _descriptor_capabilities(descriptor)
+                else:
+                    session.backend_name = option_id
+                    try:
+                        descriptor = self._registry().get_descriptor(option_id)
+                        session.capabilities = _descriptor_capabilities(descriptor)
+                    except KeyError:
+                        session.capabilities = []
 
-        session.pending_decision = None
-        session.status = SessionStatus.RUNNING
-        self._touch(session)
+            session.pending_decision = None
+            session.status = SessionStatus.RUNNING
+            self._touch(session)
 
-        self._emit(session_id, SessionEventType.DECISION_RESOLVED, {
-            "session_id": session_id,
-            "decision_id": decision_id,
-            "option_id": option_id,
-            "source": source,
-        })
-        self._emit(session_id, SessionEventType.PROGRESS, {
-            "session_id": session_id,
-            "message": (
-                f"Backend set to {session.backend_name}"
-                if is_backend_gate
-                else f"Decision '{option_id}' applied"
-            ),
-            "workflow": session.backend_name,
-            "backend_name": session.backend_name,
-            "capabilities": session.capabilities,
-        })
+            self._emit(session_id, SessionEventType.DECISION_RESOLVED, {
+                "session_id": session_id,
+                "decision_id": decision_id,
+                "option_id": option_id,
+                "source": source,
+            })
+            self._emit(session_id, SessionEventType.PROGRESS, {
+                "session_id": session_id,
+                "message": (
+                    f"Backend set to {session.backend_name}"
+                    if is_backend_gate
+                    else f"Decision '{option_id}' applied"
+                ),
+                "workflow": session.backend_name,
+                "backend_name": session.backend_name,
+                "capabilities": session.capabilities,
+            })
 
         return session
 
 
     def check_decision_timeout(self, session_id: str) -> bool:
         """Auto-resolve expired pending decisions with deterministic fallback."""
-        session = self._get_session(session_id)
-        if session.status != SessionStatus.AWAITING_DECISION:
-            return False
+        with self._lock:
+            session = self._get_session_unlocked(session_id)
+            if session.status != SessionStatus.AWAITING_DECISION:
+                return False
 
-        gate = session.pending_decision
-        if gate is None:
-            return False
+            gate = session.pending_decision
+            if gate is None:
+                return False
 
-        if not gate.is_expired():
-            return False
+            if not gate.is_expired():
+                return False
 
-        fallback = gate.fallback_option_id or gate.options[0].option_id
-        self._emit(session_id, SessionEventType.DECISION_TIMEOUT, {
-            "session_id": session_id,
-            "decision_id": gate.decision_id,
-            "fallback_option": fallback,
-            "message": "Decision timed out. Applying fallback option.",
-        })
-        self.submit_decision(session_id, gate.decision_id, fallback, source="timeout")
-        return True
+            fallback = gate.fallback_option_id or gate.options[0].option_id
+            self._emit(session_id, SessionEventType.DECISION_TIMEOUT, {
+                "session_id": session_id,
+                "decision_id": gate.decision_id,
+                "fallback_option": fallback,
+                "message": "Decision timed out. Applying fallback option.",
+            })
+            self.submit_decision(session_id, gate.decision_id, fallback, source="timeout")
+            return True
 
     def abort_session(self, session_id: str, reason: str = "") -> Session:
         """Abort a session regardless of current status.
@@ -525,82 +592,90 @@ class SessionOrchestrator:
         Emits a ``done`` event with ``aborted=True`` so SSE consumers
         know to close the stream.
         """
-        session = self._get_session(session_id)
-        terminal = {SessionStatus.COMPLETED, SessionStatus.FAILED, SessionStatus.ABORTED}
-        if session.status in terminal:
-            raise ValueError(
-                f"Session {session_id} already in terminal state "
-                f"({session.status.value})"
-            )
+        with self._lock:
+            session = self._get_session_unlocked(session_id)
+            terminal = {SessionStatus.COMPLETED, SessionStatus.FAILED, SessionStatus.ABORTED}
+            if session.status in terminal:
+                raise ValueError(
+                    f"Session {session_id} already in terminal state "
+                    f"({session.status.value})"
+                )
 
-        session.status = SessionStatus.ABORTED
-        session.error = reason or "Aborted by user"
-        session.pending_decision = None
-        session.network_override = None
-        self._touch(session)
+            session.status = SessionStatus.ABORTED
+            session.error = reason or "Aborted by user"
+            session.pending_decision = None
+            session.network_override = None
+            self._touch(session)
 
-        self._emit(session_id, SessionEventType.DONE, {
-            "session_id": session_id,
-            "aborted": True,
-            "reason": session.error,
-        })
+            self._emit(session_id, SessionEventType.DONE, {
+                "session_id": session_id,
+                "aborted": True,
+                "reason": session.error,
+            })
+        self._schedule_terminal_cleanup(session_id)
 
         return session
 
     def complete_session(self, session_id: str,
                          result: Optional[Dict[str, Any]] = None) -> Session:
         """Mark session as completed and emit ``done``."""
-        session = self._get_session(session_id)
-        session.status = SessionStatus.COMPLETED
-        session.network_override = None
-        self._touch(session)
-        self._emit(session_id, SessionEventType.DONE, {
-            "session_id": session_id,
-            "result": result or {},
-        })
+        with self._lock:
+            session = self._get_session_unlocked(session_id)
+            session.status = SessionStatus.COMPLETED
+            session.network_override = None
+            self._touch(session)
+            self._emit(session_id, SessionEventType.DONE, {
+                "session_id": session_id,
+                "result": result or {},
+            })
+        self._schedule_terminal_cleanup(session_id)
         return session
 
     def fail_session(self, session_id: str, error: str) -> Session:
         """Mark session as failed and emit ``error`` + ``done``."""
-        session = self._get_session(session_id)
-        session.status = SessionStatus.FAILED
-        session.error = error
-        session.network_override = None
-        self._touch(session)
-        self._emit(session_id, SessionEventType.ERROR, {
-            "session_id": session_id,
-            "error": error,
-        })
-        self._emit(session_id, SessionEventType.DONE, {
-            "session_id": session_id,
-            "error": error,
-        })
+        with self._lock:
+            session = self._get_session_unlocked(session_id)
+            session.status = SessionStatus.FAILED
+            session.error = error
+            session.network_override = None
+            self._touch(session)
+            self._emit(session_id, SessionEventType.ERROR, {
+                "session_id": session_id,
+                "error": error,
+            })
+            self._emit(session_id, SessionEventType.DONE, {
+                "session_id": session_id,
+                "error": error,
+            })
+        self._schedule_terminal_cleanup(session_id)
         return session
 
     def emit_progress(self, session_id: str, message: str,
                       extra: Optional[Dict[str, Any]] = None) -> None:
         """Emit an ad-hoc progress event (e.g. from executor callbacks)."""
-        _ = self._get_session(session_id)  # validate existence
-        data: Dict[str, Any] = {"session_id": session_id, "message": message}
-        if extra:
-            data.update(extra)
-        self._emit(session_id, SessionEventType.PROGRESS, data)
+        with self._lock:
+            _ = self._get_session_unlocked(session_id)
+            data: Dict[str, Any] = {"session_id": session_id, "message": message}
+            if extra:
+                data.update(extra)
+            self._emit(session_id, SessionEventType.PROGRESS, data)
 
     def raise_decision(self, session_id: str, gate: DecisionGate) -> Session:
         """Push a new decision gate mid-session.
 
         Transitions session to ``awaiting_decision``.
         """
-        session = self._get_session(session_id)
-        if session.status != SessionStatus.RUNNING:
-            raise ValueError(
-                f"Cannot raise decision in status {session.status.value}"
-            )
-        session.pending_decision = gate
-        session.status = SessionStatus.AWAITING_DECISION
-        self._touch(session)
-        self._emit(session_id, SessionEventType.DECISION_REQUIRED, {
-            "session_id": session_id,
-            "decision": gate.to_dict(),
-        })
+        with self._lock:
+            session = self._get_session_unlocked(session_id)
+            if session.status != SessionStatus.RUNNING:
+                raise ValueError(
+                    f"Cannot raise decision in status {session.status.value}"
+                )
+            session.pending_decision = gate
+            session.status = SessionStatus.AWAITING_DECISION
+            self._touch(session)
+            self._emit(session_id, SessionEventType.DECISION_REQUIRED, {
+                "session_id": session_id,
+                "decision": gate.to_dict(),
+            })
         return session

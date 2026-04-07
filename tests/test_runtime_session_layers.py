@@ -1,3 +1,5 @@
+import threading
+import time
 import types
 from unittest.mock import MagicMock
 
@@ -246,6 +248,93 @@ def test_abort_business_session_cancels_active_worker_operation(monkeypatch):
 
     with pytest.raises(worker_runtime_module.OperationCancelledError):
         operation.check_cancelled()
+
+
+def test_start_business_session_serializes_concurrent_starts(monkeypatch):
+    orchestrator = SessionOrchestrator()
+    monkeypatch.setattr(session_orchestrator_module, "route_backend", lambda brand: "gds2")
+
+    real_uuid4 = session_orchestrator_module.uuid.uuid4
+    start_gate = threading.Event()
+    created_sessions: list[str] = []
+    failures: list[str] = []
+
+    def slow_uuid4():
+        start_gate.wait(timeout=1.0)
+        time.sleep(0.05)
+        return real_uuid4()
+
+    monkeypatch.setattr(session_orchestrator_module.uuid, "uuid4", slow_uuid4)
+
+    def worker() -> None:
+        try:
+            session = orchestrator.start_session(
+                SessionContext(brand="Chevrolet", model="Malibu", vin="VIN123"),
+            )
+            created_sessions.append(session.session_id)
+        except RuntimeError as exc:
+            failures.append(str(exc))
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    start_gate.set()
+    for thread in threads:
+        thread.join(timeout=1.0)
+
+    assert len(created_sessions) == 1
+    assert len(failures) == 1
+    assert "already active" in failures[0]
+
+
+def test_complete_session_keeps_terminal_event_when_queue_is_full(monkeypatch):
+    _, orchestrator, session, _ = _start_gds2_session(monkeypatch)
+    event_queue = orchestrator.get_event_queue(session.session_id)
+    assert event_queue is not None
+
+    for index in range(499):
+        orchestrator.emit_progress(session.session_id, f"progress-{index}")
+
+    assert event_queue.qsize() == 500
+
+    orchestrator.complete_session(session.session_id)
+
+    drained = []
+    while not event_queue.empty():
+        drained.append(event_queue.get_nowait())
+
+    assert any(message.startswith("event: done\n") for message in drained)
+
+
+def test_terminal_session_cleanup_evicts_session_state(monkeypatch):
+    _, orchestrator, session, _ = _start_gds2_session(monkeypatch)
+
+    class ImmediateTimer:
+        def __init__(self, interval, callback, args=None, kwargs=None):
+            self.interval = interval
+            self.callback = callback
+            self.args = args or ()
+            self.kwargs = kwargs or {}
+            self.daemon = False
+
+        def start(self):
+            self.callback(*self.args, **self.kwargs)
+
+        def cancel(self):
+            return None
+
+    monkeypatch.setattr(
+        session_orchestrator_module,
+        "threading",
+        types.SimpleNamespace(Timer=ImmediateTimer),
+        raising=False,
+    )
+
+    orchestrator.complete_session(session.session_id)
+
+    with pytest.raises(KeyError):
+        orchestrator.get_session(session.session_id)
+    assert orchestrator.get_event_queue(session.session_id) is None
 
 
 def test_run_start_diagnostics_rejects_when_worker_is_busy(monkeypatch):

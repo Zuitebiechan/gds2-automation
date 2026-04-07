@@ -67,7 +67,7 @@ Start each component in its own terminal:
 
 ```bash
 # Terminal A: reverse tunnel listener
-python -m vci_proxy.reverse_server
+python -m vci_proxy.reverse_server --auth-token <shared-token>
 
 # Terminal B: Flask API
 python app.py --port 8080
@@ -89,6 +89,9 @@ Development mode:
 ```bash
 python -m vci_proxy.client_gui
 ```
+
+The local tray client now expects an auth token to be configured before it will
+start the reverse tunnel. Use the same shared token on both sides.
 
 Build the Windows client:
 

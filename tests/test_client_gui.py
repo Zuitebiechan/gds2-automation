@@ -151,6 +151,25 @@ def test_start_client_builds_reverse_proxy_client_and_starts_thread(monkeypatch,
     assert app._client_thread.started is True
 
 
+def test_stop_client_waits_for_graceful_shutdown(monkeypatch, tmp_path) -> None:
+    client_gui = _import_client_gui(monkeypatch, tmp_path)
+    observed: dict[str, object] = {}
+
+    class _FakeFuture:
+        def result(self, timeout=None):
+            observed["timeout"] = timeout
+            return None
+
+    app = client_gui.VCIProxyTrayApp()
+    app._client = types.SimpleNamespace(stop=lambda: _FakeFuture())
+    app._loop = types.SimpleNamespace(call_soon_threadsafe=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("loop.stop should not be called")))
+
+    app._stop_client()
+
+    assert observed["timeout"] == 5
+    assert app._status == "idle"
+
+
 def test_on_diagnostics_without_host_shows_error(monkeypatch, tmp_path) -> None:
     client_gui = _import_client_gui(monkeypatch, tmp_path)
     app = client_gui.VCIProxyTrayApp()

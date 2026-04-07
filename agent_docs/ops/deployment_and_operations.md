@@ -50,7 +50,7 @@ pip install -r requirements-client.txt
 Run these in separate terminals:
 
 ```bash
-python -m vci_proxy.reverse_server
+python -m vci_proxy.reverse_server --auth-token <shared-token>
 python app.py --port 8080
 ```
 
@@ -65,6 +65,9 @@ Development mode:
 ```bash
 python -m vci_proxy.client_gui
 ```
+
+The reverse tunnel now defaults to PSK auth enabled. Configure the same shared
+token on the reverse server and in the local tray client before connecting.
 
 ### Windows client build
 

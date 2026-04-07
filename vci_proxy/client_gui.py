@@ -362,10 +362,22 @@ class VCIProxyTrayApp:
 
     def _stop_client(self):
         """Stop the reverse proxy client."""
+        stop_future = None
         if self._client:
-            self._client.stop()
-        if self._loop:
-            self._loop.call_soon_threadsafe(self._loop.stop)
+            stop_future = self._client.stop()
+        if stop_future is not None:
+            try:
+                stop_future.result(timeout=5)
+            except Exception as exc:
+                logger.warning("Timed out waiting for reverse client shutdown: %s", exc)
+        if self._client_thread and self._client_thread.is_alive():
+            self._client_thread.join(timeout=5)
+            if not self._client_thread.is_alive():
+                self._client_thread = None
+        else:
+            self._client_thread = None
+        self._client = None
+        self._loop = None
         self._on_status_change("idle", "")
 
     def _restart_client(self):

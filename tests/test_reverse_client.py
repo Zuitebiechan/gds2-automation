@@ -11,12 +11,20 @@ from vci_proxy.reverse_client import ReverseProxyClient
 class _FakeWriter:
     def __init__(self) -> None:
         self.writes: list[bytes] = []
+        self.closed = False
+        self.wait_closed_called = False
 
     def write(self, data: bytes) -> None:
         self.writes.append(data)
 
     async def drain(self) -> None:
         return None
+
+    def close(self) -> None:
+        self.closed = True
+
+    async def wait_closed(self) -> None:
+        self.wait_closed_called = True
 
 
 class _FakeReader:
@@ -80,6 +88,82 @@ def test_send_registration_legacy_mode_performs_two_phase_heartbeat() -> None:
     assert first[3] == 0
     assert second[2] == MsgType.HEARTBEAT
     assert second[3] == 1
+
+
+def test_connect_and_serve_reports_error_when_auth_token_is_missing(monkeypatch) -> None:
+    observed: list[tuple[str, str]] = []
+    client = ReverseProxyClient("example.com", 9000, config=ProxyConfig())
+    client._on_status_change = lambda status, detail: observed.append((status, detail))
+
+    monkeypatch.setattr(client, "_ensure_driver", lambda: True)
+    monkeypatch.setattr(
+        "vci_proxy.reverse_client.asyncio.open_connection",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("open_connection should not run")),
+    )
+
+    asyncio.run(client.connect_and_serve())
+
+    assert observed[-1] == ("error", "Authentication token required")
+
+
+def test_shutdown_closes_active_writer_and_cancels_prewarm_task() -> None:
+    class _FakeTask:
+        def __init__(self) -> None:
+            self.cancelled = False
+
+        def cancel(self) -> None:
+            self.cancelled = True
+
+    client = ReverseProxyClient("example.com", 9000, config=ProxyConfig.from_args(auth_token="secret"))
+    client.running = True
+    client._ioctl_cache = types.SimpleNamespace(invalidate=lambda: None)
+    client._active_writer = _FakeWriter()
+    client._prewarm_task = _FakeTask()
+
+    asyncio.run(client.shutdown())
+
+    assert client.running is False
+    assert client._active_writer is None
+    assert client._prewarm_task is None
+
+
+def test_stop_schedules_shutdown_on_running_loop(monkeypatch) -> None:
+    client = ReverseProxyClient("example.com", 9000, config=ProxyConfig.from_args(auth_token="secret"))
+    scheduled: dict[str, object] = {}
+    sentinel_future = object()
+
+    class _FakeLoop:
+        def is_running(self) -> bool:
+            return True
+
+    def _fake_run_coroutine_threadsafe(coro, loop):
+        scheduled["loop"] = loop
+        scheduled["coro_name"] = coro.cr_code.co_name
+        coro.close()
+        return sentinel_future
+
+    client._loop = _FakeLoop()
+    monkeypatch.setattr(
+        "vci_proxy.reverse_client.asyncio.run_coroutine_threadsafe",
+        _fake_run_coroutine_threadsafe,
+    )
+
+    result = client.stop()
+
+    assert result is sentinel_future
+    assert scheduled == {
+        "loop": client._loop,
+        "coro_name": "shutdown",
+    }
+
+
+def test_stop_returns_completed_future_without_running_loop() -> None:
+    client = ReverseProxyClient("example.com", 9000, config=ProxyConfig.from_args(auth_token="secret"))
+
+    future = client.stop()
+
+    assert future.done() is True
+    assert future.result() is None
 
 
 def test_handle_open_prefers_prewarmed_device_id() -> None:
