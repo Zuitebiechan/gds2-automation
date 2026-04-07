@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from pathlib import Path
+
+import pytest
 
 from src.streaming.agent_navigator import AgentNavigator
 
@@ -81,3 +84,36 @@ def test_agent_navigator_serializes_concurrent_commands(tmp_path: Path) -> None:
     assert len(results) == 2
     assert all(result and result[0]["title"].startswith("Window-") for result in results)
     assert len({result[0]["title"] for result in results}) == 2
+
+
+def test_agent_navigator_retries_transient_command_file_replace_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    nav = AgentNavigator(data_dir=tmp_path, timeout_sec=0.5)
+    nav._result_file.write_text(
+        json.dumps(
+            {
+                "id": "fixed-id",
+                "success": True,
+                "data": {"windows": [{"title": "Window-fixed"}]},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    attempts = {"count": 0}
+    real_replace = os.replace
+
+    def flaky_replace(src: str, dst: str) -> None:
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise PermissionError("command file locked")
+        real_replace(src, dst)
+
+    monkeypatch.setattr("src.streaming.agent_navigator.uuid.uuid4", lambda: "fixed-id-uuid")
+    monkeypatch.setattr("src.streaming.agent_navigator.os.replace", flaky_replace)
+
+    result = nav.get_window_info()
+
+    assert result == [{"title": "Window-fixed"}]
+    assert attempts["count"] >= 2

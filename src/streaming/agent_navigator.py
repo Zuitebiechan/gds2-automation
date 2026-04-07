@@ -40,6 +40,8 @@ class AgentNavigator:
     """
 
     _command_roundtrip_lock = threading.Lock()
+    _command_replace_retries = 5
+    _command_replace_retry_delay_s = 0.02
 
     def __init__(self, data_dir: Optional[Path] = None, timeout_sec: float = 10.0):
         if data_dir is None:
@@ -296,7 +298,14 @@ class AgentNavigator:
             tmp_file = self._command_file.with_suffix('.tmp')
             with open(tmp_file, 'w', encoding='utf-8') as f:
                 json.dump(command, f)
-            os.replace(str(tmp_file), str(self._command_file))
+            for attempt in range(self._command_replace_retries):
+                try:
+                    os.replace(str(tmp_file), str(self._command_file))
+                    break
+                except PermissionError:
+                    if attempt + 1 >= self._command_replace_retries:
+                        raise
+                    time.sleep(self._command_replace_retry_delay_s)
 
             start_time = time.time()
             while time.time() - start_time < self._timeout_sec:
