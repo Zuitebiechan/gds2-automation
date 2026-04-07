@@ -244,6 +244,10 @@ class ConfigDialog:
             if not host:
                 messagebox.showwarning("Missing Field", "Server address is required.")
                 return
+            auth_token = token_var.get().strip()
+            if not auth_token:
+                messagebox.showwarning("Missing Field", "Auth token is required.")
+                return
             try:
                 port = int(port_var.get().strip())
             except ValueError:
@@ -259,7 +263,7 @@ class ConfigDialog:
                 "host": host,
                 "port": port,
                 "api_port": api_port,
-                "auth_token": token_var.get().strip(),
+                "auth_token": auth_token,
                 "dll_path": _resolve_dll_path(),
             }
             root.destroy()
@@ -274,13 +278,22 @@ class ConfigDialog:
         # Column weights
         frame.columnconfigure(1, weight=1)
 
-        # Focus
-        host_entry.focus_set()
-
         # Bind Enter key
         root.bind("<Return>", lambda e: on_connect())
         root.bind("<Escape>", lambda e: on_cancel())
+        root.protocol("WM_DELETE_WINDOW", on_cancel)
 
+        def _activate_dialog():
+            try:
+                root.lift()
+                root.focus_force()
+                root.grab_set()
+                host_entry.focus_set()
+                host_entry.icursor(tk.END)
+            except tk.TclError:
+                pass
+
+        root.after(0, _activate_dialog)
         root.mainloop()
         return self._result
 
@@ -322,11 +335,18 @@ class VCIProxyTrayApp:
         self._tray.icon = icon_img
         self._tray.title = tooltip
 
+    def _has_required_config(self) -> bool:
+        """Return True when the minimum tunnel settings are configured."""
+        return bool(self._config.get("host") and self._config.get("auth_token"))
+
     # --- Client lifecycle ---
 
     def _start_client(self):
         """Start the reverse proxy client in a background thread."""
         if self._client_thread and self._client_thread.is_alive():
+            return
+        if not self._has_required_config():
+            self._on_status_change("idle", "Settings required")
             return
 
         cfg = self._config
@@ -398,7 +418,7 @@ class VCIProxyTrayApp:
             self._config = result
             save_config(self._config)
             self._start_client()
-        elif self._config.get("host"):
+        elif self._has_required_config():
             # User cancelled but had previous config — restart with old config
             self._start_client()
 
@@ -473,8 +493,8 @@ class VCIProxyTrayApp:
 
     def run(self):
         """Main entry point — show config dialog if needed, then start tray."""
-        # If no host configured, show settings dialog first
-        if not self._config.get("host"):
+        # If required settings are missing, show settings dialog first.
+        if not self._has_required_config():
             dialog = ConfigDialog(self._config)
             result = dialog.show()
             if not result:

@@ -170,6 +170,74 @@ def test_stop_client_waits_for_graceful_shutdown(monkeypatch, tmp_path) -> None:
     assert app._status == "idle"
 
 
+def test_on_settings_cancel_does_not_restart_client_when_auth_token_is_missing(monkeypatch, tmp_path) -> None:
+    client_gui = _import_client_gui(monkeypatch, tmp_path)
+    observed: dict[str, object] = {}
+
+    class _FakeDialog:
+        def __init__(self, config):
+            observed["dialog_config"] = dict(config)
+
+        def show(self):
+            return None
+
+    app = client_gui.VCIProxyTrayApp()
+    app._config = {
+        "host": "diag.example",
+        "port": 9000,
+        "api_port": 8080,
+        "auth_token": "",
+        "dll_path": "",
+    }
+    app._stop_client = lambda: observed.setdefault("stopped", True)
+    app._start_client = lambda: observed.setdefault("started", True)
+    monkeypatch.setattr(client_gui, "ConfigDialog", _FakeDialog)
+
+    app._on_settings()
+
+    assert observed["stopped"] is True
+    assert observed["dialog_config"]["auth_token"] == ""
+    assert "started" not in observed
+
+
+def test_run_prompts_for_settings_when_auth_token_is_missing(monkeypatch, tmp_path) -> None:
+    client_gui = _import_client_gui(monkeypatch, tmp_path)
+    observed: dict[str, object] = {}
+
+    class _FakeDialog:
+        def __init__(self, config):
+            observed["dialog_config"] = dict(config)
+
+        def show(self):
+            return {
+                "host": "diag.example",
+                "port": 9000,
+                "api_port": 8080,
+                "auth_token": "secret",
+                "dll_path": "",
+            }
+
+    app = client_gui.VCIProxyTrayApp()
+    app._config = {
+        "host": "diag.example",
+        "port": 9000,
+        "api_port": 8080,
+        "auth_token": "",
+        "dll_path": "",
+    }
+    monkeypatch.setattr(client_gui, "ConfigDialog", _FakeDialog)
+    monkeypatch.setattr(client_gui, "save_config", lambda cfg: observed.setdefault("saved", dict(cfg)))
+    monkeypatch.setattr(app, "_start_client", lambda: observed.setdefault("started", True))
+
+    app.run()
+
+    assert observed["dialog_config"]["auth_token"] == ""
+    assert observed["saved"]["auth_token"] == "secret"
+    assert observed["started"] is True
+    assert app._tray is not None
+    assert app._tray.ran is True
+
+
 def test_on_diagnostics_without_host_shows_error(monkeypatch, tmp_path) -> None:
     client_gui = _import_client_gui(monkeypatch, tmp_path)
     app = client_gui.VCIProxyTrayApp()
