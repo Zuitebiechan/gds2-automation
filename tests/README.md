@@ -39,6 +39,9 @@ The current top-level regression suites are:
 - `test_llm_client.py`: diagnostic prompt assembly, streaming fallback, and verdict parsing
 - `test_ai_engine.py`: AI payload conversion, cache TTL, confidence capping, and SSE session flow
 - `test_vehicle_mapping.py`: persisted vehicle/module/category mapping and discovery helpers
+- `test_vci_proxy_auth_config.py`: PSK auth helpers and proxy config mapping
+- `test_vci_proxy_caches.py`: `ReadMsgs`/filter/ioctl cache behavior and invalidation
+- `test_vci_proxy_protocol.py`: proxy protocol header and encode/decode regressions
 - `test_reverse_client.py`: reverse client registration, dispatch, and prewarm behavior
 - `test_reverse_server.py`: reverse server authentication, cache helpers, and tunnel probe behavior
 - `test_j2534_driver.py`: J2534 struct conversion, registry discovery, and DLL path selection
@@ -66,7 +69,7 @@ python -m pytest tests\test_server_layout.py tests\test_repo_layout_consistency.
 Run the proxy and driver boundary regressions:
 
 ```bash
-python -m pytest tests\test_tunnel_quality.py tests\test_proxy_benchmark.py tests\test_reverse_client.py tests\test_reverse_server.py tests\test_j2534_driver.py tests\test_agent_navigator.py tests\test_diagnostics_window.py tests\test_client_gui.py -q
+python -m pytest tests\test_tunnel_quality.py tests\test_proxy_benchmark.py tests\test_vci_proxy_auth_config.py tests\test_vci_proxy_caches.py tests\test_vci_proxy_protocol.py tests\test_reverse_client.py tests\test_reverse_server.py tests\test_j2534_driver.py tests\test_agent_navigator.py tests\test_diagnostics_window.py tests\test_client_gui.py -q
 ```
 
 Run the full tracked test suite:
