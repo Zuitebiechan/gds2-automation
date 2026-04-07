@@ -29,6 +29,8 @@ This document does not restate the full architecture. For design context, read `
 | `tests/test_repo_layout_consistency.py` | repository/documentation consistency and stale-technology guards |
 | `tests/test_data_viewer_workflow.py` | GDS2 workflow behavior |
 | `tests/test_agent_data_collector.py` | Java agent data collection behavior |
+| `tests/test_agent_navigator.py` | agent command serialization and result handoff behavior |
+| `tests/test_diagnostics_window.py` | diagnostics window button-state and session-status UI logic |
 
 ## What To Validate By Change Type
 
@@ -45,7 +47,7 @@ python -m pytest tests\test_backend_capability_architecture.py tests\test_backen
 Run the focused GDS2/runtime regressions:
 
 ```bash
-python -m pytest tests\test_gds2_controller_runtime.py tests\test_data_viewer_workflow.py tests\test_agent_data_collector.py -q
+python -m pytest tests\test_gds2_controller_runtime.py tests\test_data_viewer_workflow.py tests\test_agent_data_collector.py tests\test_agent_navigator.py tests\test_diagnostics_window.py -q
 ```
 
 ### If you change `server/`

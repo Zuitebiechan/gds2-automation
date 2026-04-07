@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   test:
-    name: Stable Python regressions
+    name: Full Python test suite
     runs-on: windows-latest
     timeout-minutes: 15
 
@@ -31,15 +31,5 @@ jobs:
           pip install -r requirements-cloud.txt
           pip install pytest
 
-      - name: Run stable regression suite
-        run: >
-          python -m pytest
-          tests/test_server_layout.py
-          tests/test_backend_capability_architecture.py
-          tests/test_backend_capability_refactor.py
-          tests/test_runtime_session_layers.py
-          tests/test_runtime_diagnostics_navigation.py
-          tests/test_tunnel_quality.py
-          tests/test_proxy_benchmark.py
-          tests/test_repo_layout_consistency.py
-          -q
+      - name: Run full tracked test suite
+        run: python -m pytest tests -q

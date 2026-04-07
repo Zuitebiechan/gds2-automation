@@ -30,6 +30,8 @@ The current top-level regression suites are:
 - `test_repo_layout_consistency.py`: repository structure and documentation consistency guards
 - `test_data_viewer_workflow.py`: GDS2 workflow behavior
 - `test_agent_data_collector.py`: Java Agent data collection behavior
+- `test_agent_navigator.py`: agent command serialization and result handoff behavior
+- `test_diagnostics_window.py`: diagnostics window button-state and session-status UI logic
 
 ## Common Commands
 
@@ -37,6 +39,12 @@ Run the focused architecture/runtime regression set:
 
 ```bash
 python -m pytest tests\test_backend_capability_architecture.py tests\test_backend_capability_refactor.py tests\test_runtime_session_layers.py tests\test_runtime_diagnostics_navigation.py tests\test_gds2_controller_runtime.py -q
+```
+
+Run the focused GDS2 workflow and agent-side regressions:
+
+```bash
+python -m pytest tests\test_gds2_controller_runtime.py tests\test_data_viewer_workflow.py tests\test_agent_data_collector.py tests\test_agent_navigator.py tests\test_diagnostics_window.py -q
 ```
 
 Run repository/documentation consistency checks:
