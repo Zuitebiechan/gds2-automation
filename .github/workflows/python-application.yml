@@ -23,12 +23,15 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: requirements-cloud.txt
+          cache-dependency-path: |
+            requirements-cloud.txt
+            requirements-client.txt
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-cloud.txt
+          pip install -r requirements-client.txt
           pip install pytest
 
       - name: Run full tracked test suite
