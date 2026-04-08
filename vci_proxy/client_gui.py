@@ -312,6 +312,7 @@ class VCIProxyTrayApp:
         self._tray: Optional[Any] = None
         self._client: Optional[ReverseProxyClient] = None
         self._client_thread: Optional[threading.Thread] = None
+        self._settings_dialog_thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
     # --- Status management ---
@@ -409,18 +410,32 @@ class VCIProxyTrayApp:
 
     # --- Tray menu actions ---
 
+    def _run_settings_dialog(self) -> None:
+        """Open settings dialog outside the tray callback thread."""
+        self._stop_client()
+        try:
+            dialog = ConfigDialog(self._config)
+            result = dialog.show()
+            if result:
+                self._config = result
+                save_config(self._config)
+                self._start_client()
+            elif self._has_required_config():
+                # User cancelled but had previous config — restart with old config
+                self._start_client()
+        finally:
+            self._settings_dialog_thread = None
+
     def _on_settings(self, icon=None, item=None):
         """Open settings dialog."""
-        self._stop_client()
-        dialog = ConfigDialog(self._config)
-        result = dialog.show()
-        if result:
-            self._config = result
-            save_config(self._config)
-            self._start_client()
-        elif self._has_required_config():
-            # User cancelled but had previous config — restart with old config
-            self._start_client()
+        if self._settings_dialog_thread and self._settings_dialog_thread.is_alive():
+            return
+        self._settings_dialog_thread = threading.Thread(
+            target=self._run_settings_dialog,
+            daemon=True,
+            name="vci-proxy-settings",
+        )
+        self._settings_dialog_thread.start()
 
     def _on_diagnostics(self, icon=None, item=None):
         """Open the diagnostics window."""

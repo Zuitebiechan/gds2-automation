@@ -170,6 +170,57 @@ def test_stop_client_waits_for_graceful_shutdown(monkeypatch, tmp_path) -> None:
     assert app._status == "idle"
 
 
+def test_on_settings_dispatches_dialog_work_to_background_thread(monkeypatch, tmp_path) -> None:
+    client_gui = _import_client_gui(monkeypatch, tmp_path)
+    observed: dict[str, object] = {}
+
+    class _FakeDialog:
+        def __init__(self, config):
+            observed["dialog_config"] = dict(config)
+
+        def show(self):
+            observed["show_called"] = True
+            return None
+
+    class _FakeThread:
+        instances: list["_FakeThread"] = []
+
+        def __init__(self, target=None, daemon=None, name=None):
+            self.target = target
+            self.daemon = daemon
+            self.name = name
+            self.started = False
+            self.__class__.instances.append(self)
+
+        def start(self):
+            self.started = True
+
+        def is_alive(self):
+            return self.started
+
+    app = client_gui.VCIProxyTrayApp()
+    app._config = {
+        "host": "diag.example",
+        "port": 9000,
+        "api_port": 8080,
+        "auth_token": "secret",
+        "dll_path": "",
+    }
+    app._stop_client = lambda: observed.setdefault("stopped", True)
+    app._start_client = lambda: observed.setdefault("started", True)
+    monkeypatch.setattr(client_gui, "ConfigDialog", _FakeDialog)
+    monkeypatch.setattr(client_gui.threading, "Thread", _FakeThread)
+
+    app._on_settings()
+
+    assert len(_FakeThread.instances) == 1
+    assert _FakeThread.instances[0].started is True
+    assert _FakeThread.instances[0].name == "vci-proxy-settings"
+    assert "stopped" not in observed
+    assert "dialog_config" not in observed
+    assert "show_called" not in observed
+
+
 def test_on_settings_cancel_does_not_restart_client_when_auth_token_is_missing(monkeypatch, tmp_path) -> None:
     client_gui = _import_client_gui(monkeypatch, tmp_path)
     observed: dict[str, object] = {}
@@ -180,6 +231,21 @@ def test_on_settings_cancel_does_not_restart_client_when_auth_token_is_missing(m
 
         def show(self):
             return None
+
+    class _ImmediateThread:
+        def __init__(self, target=None, daemon=None, name=None):
+            self.target = target
+            self.daemon = daemon
+            self.name = name
+            self.started = False
+
+        def start(self):
+            self.started = True
+            if self.target is not None:
+                self.target()
+
+        def is_alive(self):
+            return False
 
     app = client_gui.VCIProxyTrayApp()
     app._config = {
@@ -192,6 +258,7 @@ def test_on_settings_cancel_does_not_restart_client_when_auth_token_is_missing(m
     app._stop_client = lambda: observed.setdefault("stopped", True)
     app._start_client = lambda: observed.setdefault("started", True)
     monkeypatch.setattr(client_gui, "ConfigDialog", _FakeDialog)
+    monkeypatch.setattr(client_gui.threading, "Thread", _ImmediateThread)
 
     app._on_settings()
 
