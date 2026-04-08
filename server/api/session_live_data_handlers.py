@@ -9,6 +9,7 @@ from diagnostic_platform.contracts import BackendCapability, UnsupportedCapabili
 from diagnostic_platform.runtime.session_actions import (
     clear_dtcs,
     ensure_session_capability,
+    handle_live_data_stream_terminal_event,
     read_dtcs,
     start_live_data,
     stop_live_data,
@@ -125,7 +126,7 @@ def start_live_data_session(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
             _runtime(),
             session,
             data,
-            interval_ms,
+            interval_ms=interval_ms,
             backend=get_backend(),
             stream_scope=session_agent_stream_scope(session_id),
             emit_progress=lambda message: orch.emit_progress(session_id, message),
@@ -174,6 +175,11 @@ def stream_live_data_events(session_id: str, *, sse_response):
         iter_scoped_agent_events(
             scope=session_agent_stream_scope(session_id),
             session_id=session_id,
+            on_message=lambda message: handle_live_data_stream_terminal_event(
+                _runtime(),
+                session,
+                message,
+            ),
         )
     )
 

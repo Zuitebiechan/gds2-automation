@@ -205,6 +205,18 @@ def handle_ai_stream_terminal_event(runtime: WorkerRuntime, session: Any, messag
     return False
 
 
+def handle_live_data_stream_terminal_event(
+    runtime: WorkerRuntime,
+    session: Any,
+    message: str,
+) -> bool:
+    """Clear live-data activity when one terminal SSE event is observed."""
+    if message.startswith("event: done\n") or message.startswith("event: error\n"):
+        set_live_data_active(runtime, session, False)
+        return True
+    return False
+
+
 def start_navigation(
     runtime: WorkerRuntime,
     session: Any,
@@ -412,6 +424,11 @@ def clear_dtcs(
         explicit_module = str(data.get("module") or "").strip()
         explicit_data_category = str(data.get("data_category") or "").strip()
         explicit_context_requested = bool(explicit_module or explicit_data_category)
+        remembered_module = str(getattr(session, "selected_module", "") or "").strip()
+        remembered_data_category = str(
+            getattr(session, "selected_data_category", "") or ""
+        ).strip()
+        remembered_context_available = bool(remembered_module or remembered_data_category)
 
         if explicit_context_requested:
             context = resolve_session_vehicle_context(session, data, backend=backend)
@@ -428,6 +445,23 @@ def clear_dtcs(
                     current_page = getattr(state, "current_page", "")
 
             if data_category and getattr(state, "current_data_category", "") != data_category:
+                backend.select_data_category(data_category)
+                set_session_selection(session, data_category=data_category)
+        elif current_page != "data_display" and remembered_context_available:
+            context = resolve_session_vehicle_context(session, data, backend=backend)
+            module_name = context.get("module", "")
+            data_category = context.get("data_category", "")
+
+            if module_name and current_page not in ("data_list", "data_display", "sub_data_list"):
+                backend.select_module(module_name)
+                set_session_selection(session, module=module_name)
+                state = backend.get_state()
+                try:
+                    current_page = backend.detect_current_page()
+                except (UnsupportedCapabilityError, NotImplementedError):
+                    current_page = getattr(state, "current_page", "")
+
+            if data_category and current_page != "data_display":
                 backend.select_data_category(data_category)
                 set_session_selection(session, data_category=data_category)
 

@@ -73,6 +73,27 @@ def test_iter_engine_events_emits_keepalive_then_stops_on_done_event() -> None:
     ]
 
 
+def test_iter_engine_events_runs_terminal_callback_before_yielding_terminal_message() -> None:
+    state = {"cleared": False}
+    stream = iter_engine_events(
+        session_id="session-1",
+        event_queue=_SequencedQueue(
+            [
+                'event: error\ndata: {"error": "boom"}\n\n',
+            ]
+        ),
+        on_message=lambda message: state.__setitem__("cleared", True)
+        or message.startswith("event: error\n"),
+    )
+
+    assert next(stream) == 'event: connected\ndata: {"session_id": "session-1"}\n\n'
+
+    terminal_message = next(stream)
+
+    assert terminal_message == 'event: error\ndata: {"error": "boom"}\n\n'
+    assert state["cleared"] is True
+
+
 def test_iter_session_events_filters_stale_decisions_and_emits_network_change(monkeypatch) -> None:
     session = types.SimpleNamespace(status=SessionStatus.RUNNING)
     event_queue = _SequencedQueue(

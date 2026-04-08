@@ -24,6 +24,8 @@ The current top-level regression suites are:
 - `test_runtime_session_layers.py`: worker/session bindings, status payloads, decisions, abort semantics
 - `test_runtime_diagnostics_navigation.py`: diagnostics and navigation runtime behavior
 - `test_gds2_controller_runtime.py`: GDS2 backend/controller runtime and alias routing behavior
+- `test_simulated_system_flow.py`: simulated GDS2 runtime coverage for reaching `Data Display`, collecting AI payloads, and clearing DTCs without real hardware
+- `test_simulated_session_api_flow.py`: session API handler coverage for simulated navigation, read DTCs, live-data streaming, AI diagnosis startup/SSE binding, and Clear DTCs flow without real VCI or GDS2
 - `test_tunnel_quality.py`: tunnel quality snapshot normalization and grading
 - `test_proxy_benchmark.py`: proxy benchmark event/report behavior
 - `test_server_layout.py`: Flask/server layout and blueprint wiring
@@ -49,6 +51,7 @@ The current top-level regression suites are:
 - `test_gds2_orchestration_core.py`: constrained planner, policy guard, and deterministic executor logic
 - `test_reverse_client.py`: reverse client registration, dispatch, and prewarm behavior
 - `test_reverse_server.py`: reverse server authentication, cache helpers, and tunnel probe behavior
+- `test_reverse_tunnel_integration.py`: local loopback integration coverage for reverse client/server registration, ping/open/read-version/connect/write/disconnect round-trips, plus proxied cache/dedup invalidation behavior for `READ_MSGS`/`START_FILTER`/`IOCTL` without real hardware
 - `test_j2534_driver.py`: J2534 struct conversion, registry discovery, and DLL path selection
 
 ## Common Commands
@@ -56,7 +59,13 @@ The current top-level regression suites are:
 Run the focused architecture/runtime regression set:
 
 ```bash
-python -m pytest tests\test_backend_capability_architecture.py tests\test_backend_capability_refactor.py tests\test_runtime_session_layers.py tests\test_runtime_diagnostics_navigation.py tests\test_session_streams.py tests\test_session_api_handlers.py tests\test_gds2_orchestration_core.py tests\test_gds2_controller_runtime.py -q
+python -m pytest tests\test_backend_capability_architecture.py tests\test_backend_capability_refactor.py tests\test_runtime_session_layers.py tests\test_runtime_diagnostics_navigation.py tests\test_session_streams.py tests\test_session_api_handlers.py tests\test_simulated_system_flow.py tests\test_simulated_session_api_flow.py tests\test_gds2_orchestration_core.py tests\test_gds2_controller_runtime.py -q
+```
+
+Run the simulated no-hardware system-flow coverage:
+
+```bash
+python -m pytest tests\test_simulated_system_flow.py tests\test_simulated_session_api_flow.py -q
 ```
 
 Run the focused GDS2 workflow and agent-side regressions:
@@ -74,7 +83,7 @@ python -m pytest tests\test_server_layout.py tests\test_repo_layout_consistency.
 Run the proxy and driver boundary regressions:
 
 ```bash
-python -m pytest tests\test_tunnel_quality.py tests\test_proxy_benchmark.py tests\test_vci_proxy_auth_config.py tests\test_vci_proxy_caches.py tests\test_vci_proxy_cache_vbatt.py tests\test_vci_proxy_protocol.py tests\test_reverse_client.py tests\test_reverse_server.py tests\test_j2534_driver.py tests\test_agent_navigator.py tests\test_diagnostics_window.py tests\test_client_gui.py -q
+python -m pytest tests\test_tunnel_quality.py tests\test_proxy_benchmark.py tests\test_vci_proxy_auth_config.py tests\test_vci_proxy_caches.py tests\test_vci_proxy_cache_vbatt.py tests\test_vci_proxy_protocol.py tests\test_reverse_client.py tests\test_reverse_server.py tests\test_reverse_tunnel_integration.py tests\test_j2534_driver.py tests\test_agent_navigator.py tests\test_diagnostics_window.py tests\test_client_gui.py -q
 ```
 
 Run the full tracked test suite:
@@ -94,10 +103,19 @@ python -m pytest tests -q
 
 Most current tests are mocked or isolated runtime regressions.
 
+The simulated system tests are the middle layer between unit-style regressions and live smoke validation.
+They should exercise real session/runtime/backend logic with injected simulated controllers, workflows, and AI collectors, while avoiding hard dependencies on:
+
+- a real VCI
+- `reverse_client` / `reverse_server`
+- cloud-hosted GDS2 startup
+- UI automation just to reach `Data Display`
+
 If you add live or hardware-dependent tests:
 
 - gate them clearly
 - keep them opt-in
+- consider a dedicated marker such as `live_hardware`
 - do not make the default suite depend on a running GDS2 instance or attached hardware
 
 ## Related Docs

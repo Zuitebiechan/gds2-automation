@@ -243,6 +243,121 @@ def test_gds2_backend_collect_ai_payload_returns_platform_payload(monkeypatch):
     assert [point.parameter for point in payload.live_data] == ["RPM", "Coolant Temp"]
 
 
+def test_gds2_backend_data_display_guard_waits_through_loading_page() -> None:
+    runtime = MagicMock()
+    controller = MagicMock()
+    controller.detect_current_page.return_value = GDS2Page.LOADING
+    runtime.get_controller.return_value = controller
+    runtime.get_workflow.return_value = MagicMock()
+    backend = GDS2DiagnosticBackend(runtime=runtime)
+
+    guard = backend.build_data_display_guard(
+        data_category="Engine Data",
+        mode="stream",
+        check_interval=0.0,
+    )
+
+    assert guard() == {
+        "ok": True,
+        "mode": "stream",
+        "message": "Waiting for GDS2 loading page to finish...",
+    }
+
+
+def test_gds2_backend_data_display_guard_recovers_stream_after_disconnect() -> None:
+    runtime = MagicMock()
+    controller = MagicMock()
+    controller.detect_current_page.return_value = GDS2Page.J2534_DISCONNECT
+    controller.recover_data_display_connection.return_value = SimpleNamespace(
+        success=True,
+        page=GDS2Page.DATA_DISPLAY,
+        context={"recovery_method": "in_place"},
+    )
+    workflow = MagicMock()
+    workflow.controller = controller
+    runtime.get_controller.return_value = controller
+    runtime.get_workflow.return_value = workflow
+    backend = GDS2DiagnosticBackend(runtime=runtime)
+
+    guard = backend.build_data_display_guard(
+        data_category="Engine Data",
+        mode="stream",
+        check_interval=0.0,
+    )
+
+    assert guard() == {
+        "ok": True,
+        "mode": "stream",
+        "recovered": True,
+        "recovery_method": "in_place",
+        "restart_collection": False,
+        "message": "Recovered Data Display after J2534 disconnect.",
+    }
+
+
+def test_gds2_backend_data_display_guard_requests_ai_restart_after_backtrack_recovery() -> None:
+    runtime = MagicMock()
+    controller = MagicMock()
+    controller.detect_current_page.return_value = GDS2Page.J2534_DISCONNECT
+    controller.recover_data_display_connection.return_value = SimpleNamespace(
+        success=True,
+        page=GDS2Page.DATA_DISPLAY,
+        context={"recovery_method": "backtrack"},
+    )
+    workflow = MagicMock()
+    workflow.controller = controller
+    runtime.get_controller.return_value = controller
+    runtime.get_workflow.return_value = workflow
+    backend = GDS2DiagnosticBackend(runtime=runtime)
+
+    guard = backend.build_data_display_guard(
+        data_category="Engine Data",
+        mode="ai_collect",
+        check_interval=0.0,
+    )
+
+    assert guard() == {
+        "ok": True,
+        "mode": "ai_collect",
+        "recovered": True,
+        "recovery_method": "backtrack",
+        "restart_collection": True,
+        "message": "Recovered Data Display after reconnect; restarting AI collection window.",
+    }
+
+
+def test_gds2_backend_data_display_guard_fails_ai_collection_when_recovery_fails() -> None:
+    runtime = MagicMock()
+    controller = MagicMock()
+    controller.detect_current_page.return_value = GDS2Page.J2534_DISCONNECT
+    controller.recover_data_display_connection.return_value = SimpleNamespace(
+        success=False,
+        page=GDS2Page.J2534_DISCONNECT,
+        context={},
+    )
+    workflow = MagicMock()
+    workflow.controller = controller
+    runtime.get_controller.return_value = controller
+    runtime.get_workflow.return_value = workflow
+    backend = GDS2DiagnosticBackend(runtime=runtime)
+
+    guard = backend.build_data_display_guard(
+        data_category="Engine Data",
+        mode="ai_collect",
+        check_interval=0.0,
+    )
+
+    assert guard() == {
+        "ok": False,
+        "mode": "ai_collect",
+        "error": (
+            "Lost communication with J2534 during AI collection and could not "
+            "restore Data Display in-place. Please reconnect and restart AI "
+            "Diagnostics."
+        ),
+    }
+
+
 def test_navigation_controller_maps_clear_dtcs_agent_page_ids() -> None:
     class _AgentNav:
         def __init__(self, page_id: str) -> None:

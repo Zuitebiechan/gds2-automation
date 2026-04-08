@@ -36,9 +36,12 @@ def iter_engine_events(
     while True:
         try:
             message = event_queue.get(timeout=60)
+            handled_terminal = False
+            if on_message is not None:
+                handled_terminal = on_message(message)
             yield message
             if on_message is not None:
-                if on_message(message):
+                if handled_terminal:
                     break
                 continue
             if message.startswith("event: done\n") or message.startswith("event: error\n"):
@@ -142,6 +145,7 @@ def iter_scoped_agent_events(
     session_id: str,
     connected_message: str = "Connected to stream",
     timeout_sec: int = 30,
+    on_message: Callable[[str], bool] | None = None,
 ) -> Iterator[str]:
     """Yield SSE messages for one scoped agent stream."""
     from diagnostic_platform.sse import subscribe_agent_stream, unsubscribe_agent_stream
@@ -155,7 +159,14 @@ def iter_scoped_agent_events(
         while True:
             try:
                 message = client_queue.get(timeout=timeout_sec)
+                handled_terminal = False
+                if on_message is not None:
+                    handled_terminal = on_message(message)
                 yield message
+                if on_message is not None:
+                    if handled_terminal:
+                        break
+                    continue
             except queue.Empty:
                 yield ": keepalive\n\n"
     except GeneratorExit:
