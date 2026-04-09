@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import queue
 import time
@@ -10,6 +9,11 @@ from collections.abc import Callable
 from typing import Any
 
 from diagnostic_platform.runtime.worker_runtime import get_worker_runtime
+from diagnostic_platform.safe_utils import (
+    display_text as _display_text,
+    json_dumps_safe as _json_sse_data,
+    mapping_or_empty as _mapping_or_empty,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +34,9 @@ def _event_hub():
 
 
 def _format_sse_message(event_type: str, data: dict[str, Any]) -> str:
-    return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+    normalized_event_type = _display_text(event_type, default="message") or "message"
+    normalized_data = _mapping_or_empty(data)
+    return f"event: {normalized_event_type}\ndata: {_json_sse_data(normalized_data)}\n\n"
 
 
 def subscribe_agent_stream(scope: str, *, maxsize: int = 200) -> queue.Queue:

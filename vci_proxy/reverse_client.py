@@ -8,6 +8,7 @@ import concurrent.futures
 import logging
 import os
 import socket
+import ssl
 import time
 from typing import Callable, Optional
 
@@ -24,6 +25,7 @@ from vci_proxy.protocol import (
     ProtocolDecoder,
     ProtocolEncoder,
 )
+from vci_proxy.tls_utils import harden_tls_context
 
 
 logger = logging.getLogger(__name__)
@@ -54,6 +56,22 @@ class ReverseProxyClient:
         self._active_writer: Optional[asyncio.StreamWriter] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._backoff_sleep_task: Optional[asyncio.Task] = None
+
+    def _build_tls_connection_options(self) -> tuple[ssl.SSLContext | None, str | None]:
+        """Build optional TLS connection settings for the reverse tunnel."""
+        if not self.config.tls.enabled:
+            return None, None
+
+        ssl_context = ssl.create_default_context(
+            ssl.Purpose.SERVER_AUTH,
+            cafile=self.config.tls.ca_file,
+        )
+        harden_tls_context(ssl_context)
+        server_hostname = (
+            self.config.tls.server_name
+            or self.server_host
+        )
+        return ssl_context, server_hostname
 
     def _notify_status(self, status: str, detail: str = "") -> None:
         if self._on_status_change:
@@ -148,10 +166,13 @@ class ReverseProxyClient:
                 try:
                     self._notify_status("connecting", f"{self.server_host}:{self.server_port}")
                     logger.info("Connecting to %s:%s", self.server_host, self.server_port)
+                    ssl_context, server_hostname = self._build_tls_connection_options()
 
                     reader, writer = await asyncio.open_connection(
                         self.server_host,
                         self.server_port,
+                        ssl=ssl_context,
+                        server_hostname=server_hostname,
                     )
                     self._active_writer = writer
 
@@ -167,6 +188,8 @@ class ReverseProxyClient:
                             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
 
                     logger.info("Connected to reverse server")
+                    if ssl_context is not None:
+                        logger.info("Reverse tunnel TLS enabled")
                     self._notify_status("connected", f"{self.server_host}:{self.server_port}")
                     backoff_seconds = 5.0
 
@@ -573,6 +596,21 @@ def main() -> None:
     parser.add_argument("--dll", default=None, help="J2534 DLL path")
     parser.add_argument("--auth-token", type=str, default=None, help="PSK auth token")
     parser.add_argument(
+        "--tls",
+        action="store_true",
+        help="Enable TLS for the reverse tunnel connection",
+    )
+    parser.add_argument(
+        "--tls-ca",
+        default=None,
+        help="CA bundle for validating the reverse server certificate",
+    )
+    parser.add_argument(
+        "--tls-server-name",
+        default=None,
+        help="Override TLS server name for certificate validation",
+    )
+    parser.add_argument(
         "--no-vbatt-cache",
         action="store_true",
         help="Disable READ_VBATT response cache (legacy)",
@@ -598,6 +636,9 @@ def main() -> None:
 
     config = ProxyConfig.from_args(
         auth_token=args.auth_token,
+        tls_enabled=args.tls,
+        tls_ca_file=args.tls_ca,
+        tls_server_name=args.tls_server_name,
         no_vbatt_cache=args.no_vbatt_cache,
         vbatt_ttl=args.vbatt_ttl,
         no_ioctl_cache=args.no_ioctl_cache,
@@ -609,6 +650,7 @@ def main() -> None:
     print("=" * 50)
     print(f"Target server: {args.host}:{args.port}")
     print(f"Auth: {'enabled' if config.auth.enabled else 'disabled'}")
+    print(f"TLS: {'enabled' if config.tls.enabled else 'disabled'}")
     print(
         f"IOCTL cache: {'enabled' if config.ioctl_cache.enabled else 'disabled'} "
         f"(TTL={config.ioctl_cache.ttl_s}s)"

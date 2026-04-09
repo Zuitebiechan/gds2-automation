@@ -85,17 +85,45 @@ def stop_live_data_stream(runtime: WorkerRuntime, *, backend: Any) -> dict[str, 
 
 def build_diagnostics_start_payload(*, backend: Any) -> dict[str, Any]:
     """Start diagnostics and return the ready payload."""
-    backend.start()
+    start_payload = backend.start() or {}
     state = backend.get_state()
-    modules = backend.get_modules()
-    return {
+    payload = {
         "success": True,
-        "modules": modules,
-        "vin": state.extra.get("vin"),
-        "device": state.extra.get("device"),
         "backend_name": getattr(backend, "name", None),
         "capabilities": backend.descriptor.capability_values(),
     }
+
+    if isinstance(start_payload, dict):
+        devices = start_payload.get("devices")
+        if isinstance(devices, list) and devices:
+            payload.update(
+                {
+                    "devices": devices,
+                    "at_device_explorer": bool(start_payload.get("at_device_explorer")),
+                    "device_connected": bool(start_payload.get("device_connected")),
+                }
+            )
+            return payload
+
+        modules = start_payload.get("modules")
+        if isinstance(modules, list) and modules:
+            payload.update(
+                {
+                    "modules": modules,
+                    "vin": start_payload.get("vin") or state.extra.get("vin"),
+                    "device": start_payload.get("device") or state.extra.get("device"),
+                }
+            )
+            return payload
+
+    payload.update(
+        {
+            "modules": backend.get_modules(),
+            "vin": state.extra.get("vin"),
+            "device": state.extra.get("device"),
+        }
+    )
+    return payload
 
 
 def read_diagnostic_dtcs(

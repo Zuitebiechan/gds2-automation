@@ -18,6 +18,7 @@ from diagnostic_platform.runtime.session_actions import (
 )
 from diagnostic_platform.runtime.session_streams import iter_ai_events
 
+from server.api.http_utils import internal_error_payload
 from server.api.session_dependencies import (
     _runtime,
     get_ai_engine,
@@ -28,20 +29,41 @@ from server.api.session_dependencies import (
 logger = logging.getLogger(__name__)
 
 
+def _read_text_field(
+    data: dict[str, Any],
+    field: str,
+    *,
+    default: str = "",
+) -> str:
+    value = data.get(field, default)
+    if value is None:
+        value = default
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be a string")
+    return value.strip()
+
+
+def _normalize_vehicle_context_data(data: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(data)
+    for field in ("vin", "module", "data_category"):
+        normalized[field] = _read_text_field(data, field)
+    return normalized
+
+
 def start_ai_diagnose(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
-    session_id = (data.get("session_id") or "").strip()
-
-    if not session_id:
-        return {"success": False, "error": "session_id required"}, 400
-
     try:
+        session_id = _read_text_field(data, "session_id")
+        if not session_id:
+            return {"success": False, "error": "session_id required"}, 400
+
         orch = get_orchestrator()
         session = orch.get_session(session_id)
         ensure_session_capability(session, BackendCapability.AI_DATA_COLLECTION)
+        normalized_data = _normalize_vehicle_context_data(data)
 
         vehicle_context = resolve_session_vehicle_context(
             session,
-            data,
+            normalized_data,
             backend=get_backend(),
         )
         vehicle_context["brand"] = session.context.brand
@@ -91,7 +113,7 @@ def start_ai_diagnose(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
         return {"success": False, "error": str(exc)}, 400
     except Exception as exc:
         logger.exception("session_ai_diagnose failed")
-        return {"success": False, "error": str(exc)}, 500
+        return internal_error_payload(), 500
 
 
 def stream_ai_diagnose_events(session_id: str, *, sse_response):
@@ -130,26 +152,27 @@ def stream_ai_diagnose_events(session_id: str, *, sse_response):
         return {"success": False, "error": str(exc)}, 501
     except Exception as exc:
         logger.exception("session_ai_diagnose_events failed")
-        return {"success": False, "error": str(exc)}, 500
+        return internal_error_payload(), 500
 
 
 def retry_ai_diagnose(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
-    session_id = (data.get("session_id") or "").strip()
-    cached_payload_id = (data.get("cached_payload_id") or "").strip()
-
-    if not session_id:
-        return {"success": False, "error": "session_id required"}, 400
-    if not cached_payload_id:
-        return {"success": False, "error": "cached_payload_id required"}, 400
-
     try:
+        session_id = _read_text_field(data, "session_id")
+        cached_payload_id = _read_text_field(data, "cached_payload_id")
+
+        if not session_id:
+            return {"success": False, "error": "session_id required"}, 400
+        if not cached_payload_id:
+            return {"success": False, "error": "cached_payload_id required"}, 400
+
         orch = get_orchestrator()
         session = orch.get_session(session_id)
         ensure_session_capability(session, BackendCapability.AI_DATA_COLLECTION)
+        normalized_data = _normalize_vehicle_context_data(data)
 
         vehicle_context = resolve_session_vehicle_context(
             session,
-            data,
+            normalized_data,
             backend=get_backend(),
         )
         engine = get_ai_engine()
@@ -184,4 +207,4 @@ def retry_ai_diagnose(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
         return {"success": False, "error": str(exc)}, 400
     except Exception as exc:
         logger.exception("session_ai_diagnose_retry failed")
-        return {"success": False, "error": str(exc)}, 500
+        return internal_error_payload(), 500

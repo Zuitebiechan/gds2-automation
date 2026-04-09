@@ -65,6 +65,9 @@ def test_load_config_merges_saved_values_with_defaults(monkeypatch, tmp_path) ->
         "api_port": 9090,
         "auth_token": "",
         "dll_path": "",
+        "tls_enabled": False,
+        "tls_ca_file": "",
+        "tls_server_name": "",
     }
 
 
@@ -76,6 +79,9 @@ def test_save_config_persists_json(monkeypatch, tmp_path) -> None:
         "api_port": 8081,
         "auth_token": "secret",
         "dll_path": "C:/drivers/demo.dll",
+        "tls_enabled": True,
+        "tls_ca_file": "C:/certs/ca.pem",
+        "tls_server_name": "diag.example",
     }
 
     client_gui.save_config(config)
@@ -130,7 +136,7 @@ def test_start_client_builds_reverse_proxy_client_and_starts_thread(monkeypatch,
 
     monkeypatch.setattr(client_gui, "ReverseProxyClient", _FakeClient)
     monkeypatch.setattr(client_gui.threading, "Thread", _FakeThread)
-    monkeypatch.setattr(client_gui.ProxyConfig, "from_args", lambda auth_token=None: {"auth_token": auth_token})
+    monkeypatch.setattr(client_gui.ProxyConfig, "from_args", lambda **kwargs: kwargs)
 
     app = client_gui.VCIProxyTrayApp()
     app._config = {
@@ -139,6 +145,9 @@ def test_start_client_builds_reverse_proxy_client_and_starts_thread(monkeypatch,
         "api_port": 8080,
         "auth_token": "secret",
         "dll_path": "C:/drivers/demo.dll",
+        "tls_enabled": True,
+        "tls_ca_file": "C:/certs/ca.pem",
+        "tls_server_name": "diag.example",
     }
 
     app._start_client()
@@ -146,7 +155,12 @@ def test_start_client_builds_reverse_proxy_client_and_starts_thread(monkeypatch,
     assert observed["server_host"] == "diag.example"
     assert observed["server_port"] == 9000
     assert observed["dll_path"] == "C:/drivers/demo.dll"
-    assert observed["config"] == {"auth_token": "secret"}
+    assert observed["config"] == {
+        "auth_token": "secret",
+        "tls_enabled": True,
+        "tls_ca_file": "C:/certs/ca.pem",
+        "tls_server_name": "diag.example",
+    }
     assert callable(observed["on_status_change"])
     assert app._client_thread.started is True
 
@@ -267,6 +281,48 @@ def test_on_settings_cancel_does_not_restart_client_when_auth_token_is_missing(m
     assert "started" not in observed
 
 
+def test_run_settings_dialog_preserves_existing_tls_config(monkeypatch, tmp_path) -> None:
+    client_gui = _import_client_gui(monkeypatch, tmp_path)
+    observed: dict[str, object] = {}
+
+    class _FakeDialog:
+        def __init__(self, config):
+            observed["dialog_config"] = dict(config)
+
+        def show(self):
+            return {
+                "host": "diag.example",
+                "port": 9000,
+                "api_port": 8080,
+                "auth_token": "secret",
+                "dll_path": "",
+            }
+
+    app = client_gui.VCIProxyTrayApp()
+    app._config = {
+        "host": "diag.example",
+        "port": 9000,
+        "api_port": 8080,
+        "auth_token": "secret",
+        "dll_path": "",
+        "tls_enabled": True,
+        "tls_ca_file": "C:/certs/ca.pem",
+        "tls_server_name": "diag.example",
+    }
+    monkeypatch.setattr(client_gui, "ConfigDialog", _FakeDialog)
+    monkeypatch.setattr(client_gui, "save_config", lambda cfg: observed.setdefault("saved", dict(cfg)))
+    monkeypatch.setattr(app, "_start_client", lambda: observed.setdefault("started", True))
+    monkeypatch.setattr(app, "_stop_client", lambda: observed.setdefault("stopped", True))
+
+    app._run_settings_dialog()
+
+    assert observed["stopped"] is True
+    assert observed["saved"]["tls_enabled"] is True
+    assert observed["saved"]["tls_ca_file"] == "C:/certs/ca.pem"
+    assert observed["saved"]["tls_server_name"] == "diag.example"
+    assert observed["started"] is True
+
+
 def test_run_prompts_for_settings_when_auth_token_is_missing(monkeypatch, tmp_path) -> None:
     client_gui = _import_client_gui(monkeypatch, tmp_path)
     observed: dict[str, object] = {}
@@ -291,6 +347,9 @@ def test_run_prompts_for_settings_when_auth_token_is_missing(monkeypatch, tmp_pa
         "api_port": 8080,
         "auth_token": "",
         "dll_path": "",
+        "tls_enabled": True,
+        "tls_ca_file": "C:/certs/ca.pem",
+        "tls_server_name": "diag.example",
     }
     monkeypatch.setattr(client_gui, "ConfigDialog", _FakeDialog)
     monkeypatch.setattr(client_gui, "save_config", lambda cfg: observed.setdefault("saved", dict(cfg)))
@@ -300,6 +359,9 @@ def test_run_prompts_for_settings_when_auth_token_is_missing(monkeypatch, tmp_pa
 
     assert observed["dialog_config"]["auth_token"] == ""
     assert observed["saved"]["auth_token"] == "secret"
+    assert observed["saved"]["tls_enabled"] is True
+    assert observed["saved"]["tls_ca_file"] == "C:/certs/ca.pem"
+    assert observed["saved"]["tls_server_name"] == "diag.example"
     assert observed["started"] is True
     assert app._tray is not None
     assert app._tray.ran is True

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import ssl
 import types
 
 from vci_proxy.config import ProxyConfig
@@ -25,6 +26,9 @@ class _FakeWriter:
 
     async def wait_closed(self) -> None:
         self.wait_closed_called = True
+
+    def get_extra_info(self, _name, default=None):
+        return default
 
 
 class _FakeReader:
@@ -73,6 +77,54 @@ def test_send_registration_auth_mode_accepts_auth_response(monkeypatch) -> None:
     assert signature == b"s" * 32
 
 
+def test_proxy_config_from_args_populates_tls_settings() -> None:
+    config = ProxyConfig.from_args(
+        auth_token="shared-secret",
+        tls_enabled=True,
+        tls_ca_file="C:/certs/ca.pem",
+        tls_server_name="diag.example",
+    )
+
+    assert config.tls.enabled is True
+    assert config.tls.ca_file == "C:/certs/ca.pem"
+    assert config.tls.server_name == "diag.example"
+
+
+def test_build_tls_connection_options_uses_client_ca_and_server_name(monkeypatch) -> None:
+    created: dict[str, object] = {}
+
+    class _FakeContext:
+        minimum_version = None
+
+    def _fake_create_default_context(purpose, cafile=None):
+        created["purpose"] = purpose
+        created["cafile"] = cafile
+        return _FakeContext()
+
+    monkeypatch.setattr("vci_proxy.reverse_client.ssl.create_default_context", _fake_create_default_context)
+
+    client = ReverseProxyClient(
+        "diag.example",
+        9000,
+        config=ProxyConfig.from_args(
+            auth_token="shared-secret",
+            tls_enabled=True,
+            tls_ca_file="C:/certs/ca.pem",
+            tls_server_name="diag.example",
+        ),
+    )
+
+    ssl_context, server_hostname = client._build_tls_connection_options()
+
+    assert isinstance(ssl_context, _FakeContext)
+    assert server_hostname == "diag.example"
+    assert created == {
+        "purpose": ssl.Purpose.SERVER_AUTH,
+        "cafile": "C:/certs/ca.pem",
+    }
+    assert ssl_context.minimum_version == ssl.TLSVersion.TLSv1_2
+
+
 def test_send_registration_legacy_mode_performs_two_phase_heartbeat() -> None:
     client = ReverseProxyClient("example.com", 9000, config=ProxyConfig())
     reader = _FakeReader(ProtocolEncoder.encode_heartbeat_ack(sequence=99))
@@ -104,6 +156,51 @@ def test_connect_and_serve_reports_error_when_auth_token_is_missing(monkeypatch)
     asyncio.run(client.connect_and_serve())
 
     assert observed[-1] == ("error", "Authentication token required")
+
+
+def test_connect_and_serve_passes_tls_context_to_open_connection(monkeypatch) -> None:
+    observed: dict[str, object] = {}
+    fake_writer = _FakeWriter()
+
+    async def _fake_open_connection(host, port, **kwargs):
+        observed["host"] = host
+        observed["port"] = port
+        observed["ssl"] = kwargs.get("ssl")
+        observed["server_hostname"] = kwargs.get("server_hostname")
+        return _FakeReader(), fake_writer
+
+    async def _fake_send_registration(reader, writer):
+        assert writer is fake_writer
+        client.running = False
+        return False
+
+    client = ReverseProxyClient(
+        "diag.example",
+        9000,
+        config=ProxyConfig.from_args(
+            auth_token="shared-secret",
+            tls_enabled=True,
+            tls_server_name="diag.example",
+        ),
+    )
+
+    monkeypatch.setattr(client, "_ensure_driver", lambda: True)
+    monkeypatch.setattr(client, "_send_registration", _fake_send_registration)
+    monkeypatch.setattr(
+        client,
+        "_build_tls_connection_options",
+        lambda: ("tls-context", "diag.example"),
+    )
+    monkeypatch.setattr("vci_proxy.reverse_client.asyncio.open_connection", _fake_open_connection)
+
+    asyncio.run(client.connect_and_serve())
+
+    assert observed == {
+        "host": "diag.example",
+        "port": 9000,
+        "ssl": "tls-context",
+        "server_hostname": "diag.example",
+    }
 
 
 def test_shutdown_closes_active_writer_and_cancels_prewarm_task() -> None:

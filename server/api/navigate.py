@@ -25,10 +25,24 @@ from diagnostic_platform.runtime.navigation_runtime import (
     submit_navigation_decision as submit_runtime_navigation_decision,
 )
 from diagnostic_platform.runtime.worker_runtime import get_worker_runtime
+from server.api.http_utils import (
+    RequestPayloadError,
+    read_text_mapping_field,
+    require_json_object,
+)
 
 logger = logging.getLogger(__name__)
 
 navigate_bp = Blueprint("navigate", __name__, url_prefix="/api/navigate")
+
+
+def _read_text_field(
+    data: dict[str, Any],
+    field: str,
+    *,
+    default: str = "",
+) -> str:
+    return read_text_mapping_field(data, field, default=default)
 
 
 def _runtime():
@@ -88,8 +102,13 @@ def abort_navigation_session(session_id: str) -> dict[str, Any]:
 @navigate_bp.route("/start", methods=["POST"])
 def navigate_start():
     """Start a new deterministic navigation session."""
-    data = request.json or {}
-    goal = (data.get("goal") or "Navigate to Data Display").strip()
+    try:
+        data = require_json_object(request)
+        goal = _read_text_field(data, "goal", default="Navigate to Data Display")
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
 
     session = start_navigation_session(goal)
 
@@ -107,7 +126,10 @@ def navigate_start():
 @navigate_bp.route("/events")
 def navigate_events():
     """SSE event stream for a navigation session."""
-    session_id = (request.args.get("session_id") or "").strip()
+    try:
+        session_id = read_text_mapping_field(request.args, "session_id")
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
     if not session_id:
         return jsonify({"success": False, "error": "session_id required"}), 400
 
@@ -126,10 +148,15 @@ def navigate_events():
 @navigate_bp.route("/decision", methods=["POST"])
 def navigate_decision():
     """Submit a user decision for a paused navigation session."""
-    data = request.json or {}
-    session_id = (data.get("session_id") or "").strip()
-    decision_id = (data.get("decision_id") or "").strip()
-    selected_item = (data.get("selected_item") or "").strip()
+    try:
+        data = require_json_object(request)
+        session_id = _read_text_field(data, "session_id")
+        decision_id = _read_text_field(data, "decision_id")
+        selected_item = _read_text_field(data, "selected_item")
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
 
     if not session_id:
         return jsonify({"success": False, "error": "session_id required"}), 400
@@ -159,7 +186,10 @@ def navigate_decision():
 @navigate_bp.route("/status")
 def navigate_status():
     """Query current navigation session status."""
-    session_id = (request.args.get("session_id") or "").strip()
+    try:
+        session_id = read_text_mapping_field(request.args, "session_id")
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
     if not session_id:
         return jsonify({"success": False, "error": "session_id required"}), 400
 
@@ -178,8 +208,13 @@ def navigate_status():
 @navigate_bp.route("/abort", methods=["POST"])
 def navigate_abort():
     """Abort a running or paused navigation session."""
-    data = request.json or {}
-    session_id = (data.get("session_id") or "").strip()
+    try:
+        data = require_json_object(request)
+        session_id = _read_text_field(data, "session_id")
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
 
     if not session_id:
         return jsonify({"success": False, "error": "session_id required"}), 400

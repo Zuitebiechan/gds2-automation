@@ -13,8 +13,16 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
+from diagnostic_platform.safe_utils import (
+    display_text as _display_text,
+    json_dumps_safe as _json_sse_data,
+    mapping_or_empty as _mapping_or_empty,
+    status_value as _status_value,
+    strip_optional_text as _strip_optional_text,
+)
+
+from .errors import OperationCancelledError
 from .worker_runtime import WorkerRuntime
-from .worker_runtime import OperationCancelledError
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +79,7 @@ def start_navigation_session(
     goal: str = "Navigate to Data Display",
 ) -> NavSession:
     """Create and start one internal navigation session."""
-    normalized_goal = (goal or "Navigate to Data Display").strip()
+    normalized_goal = _strip_optional_text(goal) or "Navigate to Data Display"
     session_id = uuid.uuid4().hex[:16]
     session = NavSession(session_id=session_id, goal=normalized_goal)
     session.cleanup_callback = runtime.schedule_navigation_session_cleanup
@@ -99,10 +107,11 @@ def submit_navigation_decision(
 ) -> dict[str, Any]:
     """Resume one paused navigation session with a selected item."""
     session = get_navigation_session(runtime, session_id)
+    session_status = _status_value(session.status)
 
-    if session.status != NavSessionStatus.AWAITING_DECISION:
+    if session_status != NavSessionStatus.AWAITING_DECISION.value:
         raise ValueError(
-            f"Session is not awaiting a decision (status={session.status.value})"
+            f"Session is not awaiting a decision (status={session_status})"
         )
 
     if decision_id and session.pending_decision_id and decision_id != session.pending_decision_id:
@@ -126,13 +135,14 @@ def submit_navigation_decision(
 def abort_navigation_session(runtime: WorkerRuntime, session_id: str) -> dict[str, Any]:
     """Abort one running or paused navigation session."""
     session = get_navigation_session(runtime, session_id)
+    session_status = _status_value(session.status)
 
-    if session.status in (
-        NavSessionStatus.COMPLETED,
-        NavSessionStatus.FAILED,
-        NavSessionStatus.ABORTED,
+    if session_status in (
+        NavSessionStatus.COMPLETED.value,
+        NavSessionStatus.FAILED.value,
+        NavSessionStatus.ABORTED.value,
     ):
-        raise ValueError(f"Session already terminated (status={session.status.value})")
+        raise ValueError(f"Session already terminated (status={session_status})")
 
     session.status = NavSessionStatus.ABORTED
     session.error = "Aborted by user"
@@ -156,7 +166,7 @@ def abort_navigation_session(runtime: WorkerRuntime, session_id: str) -> dict[st
     return {
         "success": True,
         "session_id": session_id,
-        "status": session.status.value,
+        "status": _status_value(session.status),
     }
 
 
@@ -165,7 +175,7 @@ def build_navigation_status_payload(session_id: str, session: NavSession) -> dic
     payload: dict[str, Any] = {
         "success": True,
         "session_id": session_id,
-        "status": session.status.value,
+        "status": _status_value(session.status),
         "goal": session.goal,
         "current_page": session.current_page,
     }
@@ -181,7 +191,7 @@ def build_navigation_status_payload(session_id: str, session: NavSession) -> dic
 
 def iter_navigation_session_events(session_id: str, session: NavSession) -> Iterator[str]:
     """Yield SSE events for one direct navigation session."""
-    yield f"event: connected\ndata: {json.dumps({'session_id': session_id})}\n\n"
+    yield f"event: connected\ndata: {_json_sse_data({'session_id': session_id})}\n\n"
 
     while True:
         try:
@@ -191,23 +201,24 @@ def iter_navigation_session_events(session_id: str, session: NavSession) -> Iter
             if session.thread and not session.thread.is_alive():
                 while not session.event_queue.empty():
                     try:
-                        event = session.event_queue.get_nowait()
+                        event = _mapping_or_empty(session.event_queue.get_nowait())
                         event_type = event.get("type", "progress")
-                        yield f"event: {event_type}\ndata: {json.dumps(event)}\n\n"
+                        yield f"event: {event_type}\ndata: {_json_sse_data(event)}\n\n"
                     except queue.Empty:
                         break
-                if session.status in (
-                    NavSessionStatus.COMPLETED,
-                    NavSessionStatus.FAILED,
-                    NavSessionStatus.ABORTED,
+                if _status_value(session.status) in (
+                    NavSessionStatus.COMPLETED.value,
+                    NavSessionStatus.FAILED.value,
+                    NavSessionStatus.ABORTED.value,
                 ):
                     yield (
                         "event: done\n"
-                        f"data: {json.dumps({'type': 'done', 'status': session.status.value, 'error': session.error})}\n\n"
+                        f"data: {_json_sse_data({'type': 'done', 'status': _status_value(session.status), 'error': session.error})}\n\n"
                     )
                     return
             continue
 
+        event = _mapping_or_empty(event)
         event_type = event.get("type", "progress")
         if event_type == "progress":
             session.current_page = event.get("page", session.current_page)
@@ -216,7 +227,7 @@ def iter_navigation_session_events(session_id: str, session: NavSession) -> Iter
             session.pending_decision_id = event.get("decision_id")
             session.pending_items = event.get("items", [])
 
-        yield f"event: {event_type}\ndata: {json.dumps(event)}\n\n"
+        yield f"event: {event_type}\ndata: {_json_sse_data(event)}\n\n"
         if event_type in ("done", "error"):
             return
 
@@ -234,13 +245,16 @@ def _create_navigation_controller() -> "NavigationController":
 
 
 def _emit_progress(session: NavSession, *, page: str, action: str, node: str | None = None) -> None:
+    normalized_page = _display_text(page, default="unknown") or "unknown"
+    normalized_action = _display_text(action, default="progress") or "progress"
+    normalized_node = _display_text(node, default=normalized_page) or normalized_page
     try:
         session.event_queue.put(
             {
                 "type": "progress",
-                "node": node or page,
-                "page": page,
-                "action": action,
+                "node": normalized_node,
+                "page": normalized_page,
+                "action": normalized_action,
             }
         )
     except Exception:
@@ -326,19 +340,21 @@ def _resolve_data_display_item(controller: Any) -> str:
 
 
 def _await_navigation_decision(session: NavSession, *, page: str, items: list[Any]) -> str:
-    if not items:
+    normalized_items = [_display_text(item) for item in items]
+    normalized_items = [item for item in normalized_items if item]
+    if not normalized_items:
         raise RuntimeError(f"No selectable items available on page '{page}'")
 
     decision_id = uuid.uuid4().hex[:12]
     event = {
         "type": "decision_required",
         "decision_id": decision_id,
-        "page": page,
-        "items": list(items),
+        "page": _display_text(page, default="unknown") or "unknown",
+        "items": normalized_items,
     }
     session.status = NavSessionStatus.AWAITING_DECISION
     session.pending_decision_id = decision_id
-    session.pending_items = list(items)
+    session.pending_items = list(normalized_items)
     session.event_queue.put(event)
 
     while True:
@@ -348,7 +364,7 @@ def _await_navigation_decision(session: NavSession, *, page: str, items: list[An
         except queue.Empty:
             continue
 
-        selected_item = str((payload or {}).get("selected_item") or "").strip()
+        selected_item = _strip_optional_text(_mapping_or_empty(payload).get("selected_item"))
         if not selected_item:
             if session.cancel_event.is_set():
                 raise OperationCancelledError(f"Navigation session {session.session_id} cancelled")
@@ -358,6 +374,264 @@ def _await_navigation_decision(session: NavSession, *, page: str, items: list[An
         session.pending_decision_id = None
         session.pending_items = []
         return selected_item
+
+
+def _append_navigation_history(
+    navigation_history: list[dict[str, Any]],
+    *,
+    page: str,
+    action: str,
+    success: bool = True,
+    to_page: str | None = None,
+    selected_item: str | None = None,
+) -> None:
+    entry: dict[str, Any] = {
+        "page": page,
+        "action": action,
+        "success": success,
+    }
+    if to_page is not None:
+        entry["to_page"] = to_page
+    if selected_item is not None:
+        entry["selected_item"] = selected_item
+    navigation_history.append(entry)
+
+
+def _complete_navigation(
+    session: NavSession,
+    *,
+    current_page: str,
+    navigation_history: list[dict[str, Any]],
+    selections: dict[str, str],
+) -> dict[str, Any]:
+    final = {
+        "goal": session.goal,
+        "current_page": current_page,
+        "navigation_history": navigation_history,
+        "selections": dict(selections),
+        "error": None,
+    }
+    session.event_queue.put(
+        {
+            "type": "done",
+            "final_page": current_page,
+            "steps": len(navigation_history),
+            "selections": dict(selections),
+            "error": None,
+        }
+    )
+    return final
+
+
+def _run_loading_step(
+    session: NavSession,
+    *,
+    current_page: str,
+    navigation_history: list[dict[str, Any]],
+) -> None:
+    _emit_progress(session, page=current_page, action="wait_for_loading")
+    _append_navigation_history(
+        navigation_history,
+        page=current_page,
+        action="wait_for_loading",
+    )
+    _wait_with_cancellation(session, _LOADING_POLL_INTERVAL_SEC)
+
+
+def _run_click_step(
+    session: NavSession,
+    *,
+    current_page: str,
+    action: str,
+    operation_label: str,
+    action_runner: Any,
+    navigation_history: list[dict[str, Any]],
+    selected_item: str | None = None,
+) -> str:
+    _emit_progress(session, page=current_page, action=action)
+    next_page = _require_success(action_runner(), operation_label)
+    _append_navigation_history(
+        navigation_history,
+        page=current_page,
+        action=action,
+        to_page=next_page,
+        selected_item=selected_item,
+    )
+    return next_page
+
+
+def _run_selection_step(
+    session: NavSession,
+    *,
+    controller: Any,
+    current_page: str,
+    action: str,
+    selection_key: str,
+    context_key: str,
+    operation_label: str,
+    action_runner: Any,
+    navigation_history: list[dict[str, Any]],
+    selections: dict[str, str],
+) -> str:
+    selected_item = _await_navigation_decision(
+        session,
+        page=current_page,
+        items=_read_page_items(controller),
+    )
+    selections[selection_key] = selected_item
+    _emit_progress(session, page=current_page, action=action)
+    result = action_runner(selected_item)
+    next_page = _require_success(result, operation_label.format(selected_item=selected_item))
+    context = _navigation_result_context(result)
+    if context.get(context_key):
+        selections[selection_key] = str(context[context_key])
+    _append_navigation_history(
+        navigation_history,
+        page=current_page,
+        action=action,
+        selected_item=selected_item,
+        to_page=next_page,
+    )
+    return next_page
+
+
+def _select_sub_category(controller: Any, selected_item: str) -> Any:
+    """Select one sub-category using the best available controller method."""
+    if hasattr(controller, "select_sub_category"):
+        return controller.select_sub_category(selected_item)
+    return controller.select_list_item(selected_item)
+
+
+def _recover_data_display_connection(controller: Any, *, data_category: str | None = None) -> Any:
+    """Recover one Data Display connection after a J2534 disconnect."""
+    if not hasattr(controller, "recover_data_display_connection"):
+        raise RuntimeError("Navigation controller cannot recover J2534 disconnects")
+    return controller.recover_data_display_connection(data_category=data_category)
+
+
+def _open_data_display(
+    session: NavSession,
+    *,
+    controller: Any,
+    current_page: str,
+    navigation_history: list[dict[str, Any]],
+) -> str:
+    """Open the Data Display entry from the module submenu."""
+    data_display_item = _resolve_data_display_item(controller)
+    return _run_click_step(
+        session,
+        current_page=current_page,
+        action="select_data_display",
+        operation_label=f"select '{data_display_item}'",
+        action_runner=lambda: controller.select_list_item(data_display_item),
+        navigation_history=navigation_history,
+        selected_item=data_display_item,
+    )
+
+
+def _run_navigation_page(
+    session: NavSession,
+    *,
+    controller: Any,
+    current_page: str,
+    navigation_history: list[dict[str, Any]],
+    selections: dict[str, str],
+) -> dict[str, Any] | str | None:
+    handlers: dict[str, Any] = {
+        "data_display": lambda: _complete_navigation(
+            session,
+            current_page=current_page,
+            navigation_history=navigation_history,
+            selections=selections,
+        ),
+        "loading": lambda: _run_loading_step(
+            session,
+            current_page=current_page,
+            navigation_history=navigation_history,
+        ),
+        "main_menu": lambda: _run_click_step(
+            session,
+            current_page=current_page,
+            action="click_diagnostics",
+            operation_label="click Diagnostics",
+            action_runner=lambda: controller.click_button("Diagnostics"),
+            navigation_history=navigation_history,
+        ),
+        "vehicle_selection": lambda: _run_click_step(
+            session,
+            current_page=current_page,
+            action="click_enter",
+            operation_label="click Enter",
+            action_runner=controller.click_enter,
+            navigation_history=navigation_history,
+        ),
+        "diagnostics_menu": lambda: _run_click_step(
+            session,
+            current_page=current_page,
+            action="select_module_diagnostics",
+            operation_label="select Module Diagnostics",
+            action_runner=lambda: controller.select_list_item("Module Diagnostics"),
+            navigation_history=navigation_history,
+        ),
+        "module_list": lambda: _run_selection_step(
+            session,
+            controller=controller,
+            current_page=current_page,
+            action="select_module",
+            selection_key="module",
+            context_key="module",
+            operation_label="select module '{selected_item}'",
+            action_runner=controller.select_list_item,
+            navigation_history=navigation_history,
+            selections=selections,
+        ),
+        "module_submenu": lambda: _open_data_display(
+            session,
+            controller=controller,
+            current_page=current_page,
+            navigation_history=navigation_history,
+        ),
+        "data_list": lambda: _run_selection_step(
+            session,
+            controller=controller,
+            current_page=current_page,
+            action="select_data_category",
+            selection_key="data_category",
+            context_key="data_category",
+            operation_label="select data category '{selected_item}'",
+            action_runner=controller.select_list_item,
+            navigation_history=navigation_history,
+            selections=selections,
+        ),
+        "sub_data_list": lambda: _run_selection_step(
+            session,
+            controller=controller,
+            current_page=current_page,
+            action="select_sub_category",
+            selection_key="sub_category",
+            context_key="sub_category",
+            operation_label="select sub-category '{selected_item}'",
+            action_runner=lambda selected_item: _select_sub_category(controller, selected_item),
+            navigation_history=navigation_history,
+            selections=selections,
+        ),
+        "j2534_disconnect": lambda: _run_click_step(
+            session,
+            current_page=current_page,
+            action="recover_connection",
+            operation_label="recover Data Display connection",
+            action_runner=lambda: _recover_data_display_connection(
+                controller,
+                data_category=selections.get("data_category"),
+            ),
+            navigation_history=navigation_history,
+        ),
+    }
+
+    handler = handlers.get(current_page)
+    if handler is None:
+        raise RuntimeError(f"Unsupported navigation page: {current_page}")
+    return handler()
 
 
 def _run_navigation_session(
@@ -376,197 +650,17 @@ def _run_navigation_session(
         session.check_cancelled()
         current_page = _page_value(controller.detect_current_page())
         session.current_page = current_page
-
-        if current_page == "data_display":
-            final = {
-                "goal": session.goal,
-                "current_page": current_page,
-                "navigation_history": navigation_history,
-                "selections": dict(selections),
-                "error": None,
-            }
-            session.event_queue.put(
-                {
-                    "type": "done",
-                    "final_page": current_page,
-                    "steps": len(navigation_history),
-                    "selections": dict(selections),
-                    "error": None,
-                }
-            )
-            return final
-
-        if current_page == "loading":
-            _emit_progress(session, page=current_page, action="wait_for_loading")
-            navigation_history.append({"page": current_page, "action": "wait_for_loading", "success": True})
-            _wait_with_cancellation(session, _LOADING_POLL_INTERVAL_SEC)
-            continue
-
-        if current_page == "main_menu":
-            _emit_progress(session, page=current_page, action="click_diagnostics")
-            next_page = _require_success(controller.click_button("Diagnostics"), "click Diagnostics")
-            navigation_history.append(
-                {
-                    "page": current_page,
-                    "action": "click_diagnostics",
-                    "to_page": next_page,
-                    "success": True,
-                }
-            )
-            session.current_page = next_page
-            continue
-
-        if current_page == "vehicle_selection":
-            _emit_progress(session, page=current_page, action="click_enter")
-            next_page = _require_success(controller.click_enter(), "click Enter")
-            navigation_history.append(
-                {
-                    "page": current_page,
-                    "action": "click_enter",
-                    "to_page": next_page,
-                    "success": True,
-                }
-            )
-            session.current_page = next_page
-            continue
-
-        if current_page == "diagnostics_menu":
-            _emit_progress(session, page=current_page, action="select_module_diagnostics")
-            next_page = _require_success(
-                controller.select_list_item("Module Diagnostics"),
-                "select Module Diagnostics",
-            )
-            navigation_history.append(
-                {
-                    "page": current_page,
-                    "action": "select_module_diagnostics",
-                    "to_page": next_page,
-                    "success": True,
-                }
-            )
-            session.current_page = next_page
-            continue
-
-        if current_page == "module_list":
-            items = _read_page_items(controller)
-            selected_module = _await_navigation_decision(
-                session,
-                page=current_page,
-                items=items,
-            )
-            selections["module"] = selected_module
-            _emit_progress(session, page=current_page, action="select_module")
-            result = controller.select_list_item(selected_module)
-            next_page = _require_success(result, f"select module '{selected_module}'")
-            context = _navigation_result_context(result)
-            if context.get("module"):
-                selections["module"] = str(context["module"])
-            navigation_history.append(
-                {
-                    "page": current_page,
-                    "action": "select_module",
-                    "selected_item": selected_module,
-                    "to_page": next_page,
-                    "success": True,
-                }
-            )
-            session.current_page = next_page
-            continue
-
-        if current_page == "module_submenu":
-            data_display_item = _resolve_data_display_item(controller)
-            _emit_progress(session, page=current_page, action="select_data_display")
-            next_page = _require_success(
-                controller.select_list_item(data_display_item),
-                f"select '{data_display_item}'",
-            )
-            navigation_history.append(
-                {
-                    "page": current_page,
-                    "action": "select_data_display",
-                    "selected_item": data_display_item,
-                    "to_page": next_page,
-                    "success": True,
-                }
-            )
-            session.current_page = next_page
-            continue
-
-        if current_page == "data_list":
-            items = _read_page_items(controller)
-            selected_category = _await_navigation_decision(
-                session,
-                page=current_page,
-                items=items,
-            )
-            selections["data_category"] = selected_category
-            _emit_progress(session, page=current_page, action="select_data_category")
-            result = controller.select_list_item(selected_category)
-            next_page = _require_success(result, f"select data category '{selected_category}'")
-            context = _navigation_result_context(result)
-            if context.get("data_category"):
-                selections["data_category"] = str(context["data_category"])
-            navigation_history.append(
-                {
-                    "page": current_page,
-                    "action": "select_data_category",
-                    "selected_item": selected_category,
-                    "to_page": next_page,
-                    "success": True,
-                }
-            )
-            session.current_page = next_page
-            continue
-
-        if current_page == "sub_data_list":
-            items = _read_page_items(controller)
-            selected_sub_category = _await_navigation_decision(
-                session,
-                page=current_page,
-                items=items,
-            )
-            selections["sub_category"] = selected_sub_category
-            _emit_progress(session, page=current_page, action="select_sub_category")
-            if hasattr(controller, "select_sub_category"):
-                result = controller.select_sub_category(selected_sub_category)
-            else:
-                result = controller.select_list_item(selected_sub_category)
-            next_page = _require_success(result, f"select sub-category '{selected_sub_category}'")
-            context = _navigation_result_context(result)
-            if context.get("sub_category"):
-                selections["sub_category"] = str(context["sub_category"])
-            navigation_history.append(
-                {
-                    "page": current_page,
-                    "action": "select_sub_category",
-                    "selected_item": selected_sub_category,
-                    "to_page": next_page,
-                    "success": True,
-                }
-            )
-            session.current_page = next_page
-            continue
-
-        if current_page == "j2534_disconnect":
-            _emit_progress(session, page=current_page, action="recover_connection")
-            if not hasattr(controller, "recover_data_display_connection"):
-                raise RuntimeError("Navigation controller cannot recover J2534 disconnects")
-            recovery = controller.recover_data_display_connection(
-                data_category=selections.get("data_category")
-            )
-            next_page = _require_success(recovery, "recover Data Display connection")
-            navigation_history.append(
-                {
-                    "page": current_page,
-                    "action": "recover_connection",
-                    "to_page": next_page,
-                    "success": True,
-                }
-            )
-            session.current_page = next_page
-            continue
-
-        raise RuntimeError(f"Unsupported navigation page: {current_page}")
+        page_result = _run_navigation_page(
+            session,
+            controller=controller,
+            current_page=current_page,
+            navigation_history=navigation_history,
+            selections=selections,
+        )
+        if isinstance(page_result, dict):
+            return page_result
+        if isinstance(page_result, str):
+            session.current_page = page_result
 
     raise RuntimeError("Navigation exceeded max steps before reaching Data Display")
 

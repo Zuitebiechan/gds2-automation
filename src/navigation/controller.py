@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Any
 
-from diagnostic_platform.runtime.worker_runtime import OperationCancelledError
+from diagnostic_platform.runtime.errors import OperationCancelledError
 
 logger = logging.getLogger(__name__)
 
@@ -870,6 +870,128 @@ class NavigationController:
             self._sleep(1)
         return []
 
+    @staticmethod
+    def _find_matching_list_item(
+        target_text: str,
+        items: List[str],
+    ) -> tuple[Optional[int], Optional[str]]:
+        """Return the first list entry that loosely matches the requested text."""
+        for index, item in enumerate(items):
+            if target_text in item or item in target_text:
+                return index, item
+        return None, None
+
+    def _wait_for_transition_or_detect(
+        self,
+        from_page: GDS2Page,
+        *,
+        timeout: float,
+        timeout_message: str,
+        detect_retries: Optional[int] = None,
+        retry_delay: float = 1.5,
+    ) -> GDS2Page:
+        """Wait for a transition, then fall back to page detection if it times out."""
+        try:
+            return self.wait_for_page_transition(from_page, timeout=timeout)
+        except TimeoutError:
+            logger.warning(timeout_message)
+            if detect_retries is None:
+                return self.detect_current_page()
+            return self.detect_current_page(retries=detect_retries, retry_delay=retry_delay)
+
+    def _select_list_index(
+        self,
+        *,
+        list_index: int,
+        target_index: int,
+        double_click: bool,
+        error_prefix: str,
+        selected_item: Optional[str] = None,
+    ) -> Optional[NavigationResult]:
+        """Select a known list index and return a NavigationResult on failure."""
+        self._check_cancel()
+        result = self.nav.select_list_item(list_index, target_index, double_click=double_click)
+        if result.get('success'):
+            return None
+
+        return NavigationResult(
+            success=False,
+            page=self._current_page,
+            error=f"{error_prefix}: {result.get('message')}",
+            selected=selected_item,
+            context=self._context.copy(),
+        )
+
+    def _record_page_transition(self, new_page: GDS2Page) -> None:
+        """Persist page history before updating the cached page."""
+        self._history.append(self._current_page)
+        self._current_page = new_page
+
+    def _refresh_unknown_page_after_warning(
+        self,
+        page: GDS2Page,
+        *,
+        detect_retries: int = 2,
+        retry_delay: float = 1.5,
+    ) -> GDS2Page:
+        """Dismiss warnings and re-detect only when page detection is inconclusive."""
+        self.dismiss_warning_dialog()
+        if page == GDS2Page.UNKNOWN:
+            return self.detect_current_page(retries=detect_retries, retry_delay=retry_delay)
+        return page
+
+    def _run_enter_transition(self, timeout_message: str) -> GDS2Page:
+        """Execute one Enter transition attempt from Vehicle Selection."""
+        new_page = self._wait_for_transition_or_detect(
+            GDS2Page.VEHICLE_SELECTION,
+            timeout=30,
+            timeout_message=timeout_message,
+            detect_retries=2,
+            retry_delay=1.5,
+        )
+        return self._refresh_unknown_page_after_warning(
+            new_page,
+            detect_retries=2,
+            retry_delay=1.5,
+        )
+
+    def _retry_enter_from_vehicle_selection(self, page: GDS2Page) -> GDS2Page:
+        """Retry Enter if GDS2 remains on Vehicle Selection after the first click."""
+        if page != GDS2Page.VEHICLE_SELECTION:
+            return page
+
+        logger.info("NAV vehicle_selection retrying Enter")
+        self._check_cancel()
+        self.nav.click_button("Enter")
+        return self._run_enter_transition("Page still did not transition after Enter retry")
+
+    def _return_to_diagnostics_menu(self, page: GDS2Page) -> GDS2Page:
+        """Undo GDS2 auto-skip when Enter lands directly on Module List."""
+        if page != GDS2Page.MODULE_LIST:
+            return page
+
+        logger.info("NAV module_list auto-skip detected; returning to diagnostics_menu")
+        self._check_cancel()
+        back_result = self.nav.click_button("Back")
+        if back_result.get('success'):
+            return self._wait_for_transition_or_detect(
+                GDS2Page.MODULE_LIST,
+                timeout=15,
+                timeout_message="Page did not transition after auto-skip Back click",
+                detect_retries=2,
+                retry_delay=1.0,
+            )
+        return page
+
+    @staticmethod
+    def _page_has_list_choices(page: GDS2Page) -> bool:
+        """Return whether the current page should expose list choices."""
+        return page in (
+            GDS2Page.DIAGNOSTICS_MENU,
+            GDS2Page.MODULE_LIST,
+            GDS2Page.DATA_LIST,
+        )
+
     # =========================================================================
     # Selection Methods
     # =========================================================================
@@ -903,15 +1025,7 @@ class NavigationController:
                     context=self._context.copy(),
                 )
 
-            # Find matching item
-            target_index = None
-            matched_item = None
-            for i, item in enumerate(items):
-                if item_text in item or item in item_text:
-                    target_index = i
-                    matched_item = item
-                    break
-
+            target_index, matched_item = self._find_matching_list_item(item_text, items)
             if target_index is None:
                 return NavigationResult(
                     success=False,
@@ -921,24 +1035,22 @@ class NavigationController:
                     context=self._context.copy(),
                 )
 
-            self._check_cancel()
-            result = self.nav.select_list_item(list_index, target_index, double_click=double_click)
-            if not result.get('success'):
-                return NavigationResult(
-                    success=False,
-                    page=self._current_page,
-                    error=f"Failed to select item: {result.get('message')}",
-                    selected=matched_item,
-                    context=self._context.copy(),
-                )
+            selection_error = self._select_list_index(
+                list_index=list_index,
+                target_index=target_index,
+                double_click=double_click,
+                error_prefix="Failed to select item",
+                selected_item=matched_item,
+            )
+            if selection_error is not None:
+                return selection_error
 
-            # Wait for page transition instead of blind sleep
             old_page = self._current_page
-            try:
-                new_page = self.wait_for_page_transition(old_page, timeout=15)
-            except TimeoutError:
-                logger.warning("Page did not transition after list item selection")
-                new_page = self.detect_current_page()
+            new_page = self._wait_for_transition_or_detect(
+                old_page,
+                timeout=15,
+                timeout_message="Page did not transition after list item selection",
+            )
 
             # Update history
             self._history.append(old_page)
@@ -971,19 +1083,142 @@ class NavigationController:
                     context=self._context.copy(),
                 )
 
-            # Wait for page transition instead of blind sleep
             old_page = self._current_page
-            try:
-                new_page = self.wait_for_page_transition(old_page, timeout=15)
-            except TimeoutError:
-                logger.warning(f"Page did not transition after clicking '{button_text}'")
-                new_page = self.detect_current_page()
+            new_page = self._wait_for_transition_or_detect(
+                old_page,
+                timeout=15,
+                timeout_message=f"Page did not transition after clicking '{button_text}'",
+            )
 
             return NavigationResult(
                 success=True,
                 page=new_page,
                 context=self._context.copy(),
             )
+
+    def _resolve_recovery_start_page(self) -> tuple[GDS2Page, Optional[str]]:
+        """Resolve the current recovery page, waiting out transient loading when needed."""
+        current = self.detect_current_page(retries=0)
+        if current != GDS2Page.LOADING:
+            return current, None
+
+        current = self._wait_for_transition_or_detect(
+            GDS2Page.LOADING,
+            timeout=10.0,
+            timeout_message="Loading page did not settle during reconnect recovery",
+            detect_retries=0,
+        )
+        if current == GDS2Page.DATA_DISPLAY:
+            return current, "loading_wait"
+        return current, None
+
+    def _attempt_soft_ok_recovery(
+        self,
+        *,
+        soft_retry_attempts: int,
+        ok_timeout: float,
+        retry_delays: Optional[list[float]],
+    ) -> Optional[NavigationResult]:
+        """Try to leave the disconnect page in place by pressing OK."""
+        button_states = self.get_available_buttons()
+        has_ok = button_states.get("OK", False)
+        if not has_ok:
+            logger.info("NAV recovery j2534_disconnect using backtrack (OK unavailable)")
+            return None
+
+        delays = retry_delays or [0.0, 1.5, 3.0]
+        for attempt in range(min(soft_retry_attempts, len(delays))):
+            delay = delays[attempt]
+            if delay > 0:
+                self._sleep(delay)
+
+            result = self.nav.click_button("OK")
+            if not result.get('success'):
+                logger.warning("Failed to click OK on J2534 disconnect page: %s", result.get('message'))
+
+            new_page = self._wait_for_transition_or_detect(
+                GDS2Page.J2534_DISCONNECT,
+                timeout=ok_timeout,
+                timeout_message="Page did not transition after J2534 reconnect attempt",
+                detect_retries=0,
+            )
+            if new_page == GDS2Page.DATA_DISPLAY:
+                self._current_page = GDS2Page.DATA_DISPLAY
+                return NavigationResult(
+                    success=True,
+                    page=GDS2Page.DATA_DISPLAY,
+                    context={**self._context.copy(), "recovery_method": "soft_ok"},
+                )
+
+            button_states = self.get_available_buttons()
+            has_ok = button_states.get("OK", False)
+            if not has_ok:
+                logger.info("NAV recovery j2534_disconnect switching to backtrack")
+                break
+
+        return None
+
+    def _resume_recovery_sub_category(self, reenter: NavigationResult) -> NavigationResult:
+        """Resume a remembered sub-category when reconnect lands on a sub list."""
+        if reenter.page != GDS2Page.SUB_DATA_LIST:
+            return reenter
+
+        target_sub_category = self._context.get("sub_category")
+        if not target_sub_category:
+            return NavigationResult(
+                success=False,
+                page=GDS2Page.SUB_DATA_LIST,
+                error="Reconnect reached sub-category list but no prior sub-category was stored.",
+                context=self._context.copy(),
+            )
+        return self.select_sub_category(target_sub_category)
+
+    def _recover_data_display_by_backtrack(
+        self,
+        *,
+        target_category: str,
+        backtrack_attempts: int,
+    ) -> NavigationResult:
+        """Backtrack to Data List, then re-enter the remembered data category."""
+        last_failure: Optional[NavigationResult] = None
+        for _ in range(max(1, backtrack_attempts)):
+            back_result = self.go_back()
+            if not back_result.success or back_result.page != GDS2Page.DATA_LIST:
+                return NavigationResult(
+                    success=False,
+                    page=back_result.page,
+                    error=back_result.error or "Failed to return to Data List after disconnect.",
+                    context=self._context.copy(),
+                )
+
+            reenter = self.select_data_category(target_category)
+            if not reenter.success:
+                return reenter
+
+            reenter = self._resume_recovery_sub_category(reenter)
+            if reenter.success and reenter.page == GDS2Page.DATA_DISPLAY:
+                reenter.context["recovery_method"] = "backtrack"
+                return reenter
+
+            if reenter.page != GDS2Page.J2534_DISCONNECT:
+                return NavigationResult(
+                    success=False,
+                    page=reenter.page,
+                    error=reenter.error or "Failed to restore Data Display after reconnect backtrack.",
+                    context=self._context.copy(),
+                )
+
+            last_failure = reenter
+
+        return NavigationResult(
+            success=False,
+            page=last_failure.page if last_failure else GDS2Page.J2534_DISCONNECT,
+            error=(
+                last_failure.error if last_failure and last_failure.error
+                else "Failed to restore Data Display after reconnect backtrack."
+            ),
+            context=self._context.copy(),
+        )
 
     def recover_data_display_connection(
         self,
@@ -1003,21 +1238,12 @@ class NavigationController:
         3. Return failure if recovery cannot safely restore Data Display.
         """
         with self._lock:
-            current = self.detect_current_page(retries=0)
+            current, loading_recovery_method = self._resolve_recovery_start_page()
             if current == GDS2Page.DATA_DISPLAY:
-                return NavigationResult(True, GDS2Page.DATA_DISPLAY, context=self._context.copy())
-
-            if current == GDS2Page.LOADING:
-                try:
-                    current = self.wait_for_page_transition(GDS2Page.LOADING, timeout=10.0)
-                except TimeoutError:
-                    current = self.detect_current_page(retries=0)
-                if current == GDS2Page.DATA_DISPLAY:
-                    return NavigationResult(
-                        success=True,
-                        page=GDS2Page.DATA_DISPLAY,
-                        context={**self._context.copy(), "recovery_method": "loading_wait"},
-                    )
+                context = self._context.copy()
+                if loading_recovery_method is not None:
+                    context["recovery_method"] = loading_recovery_method
+                return NavigationResult(True, GDS2Page.DATA_DISPLAY, context=context)
 
             if current != GDS2Page.J2534_DISCONNECT:
                 return NavigationResult(
@@ -1027,43 +1253,13 @@ class NavigationController:
                     context=self._context.copy(),
                 )
 
-            button_states = self.get_available_buttons()
-            has_ok = button_states.get("OK", False)
-
-            if has_ok:
-                delays = retry_delays or [0.0, 1.5, 3.0]
-                for attempt in range(min(soft_retry_attempts, len(delays))):
-                    delay = delays[attempt]
-                    if delay > 0:
-                        self._sleep(delay)
-
-                    result = self.nav.click_button("OK")
-                    if not result.get('success'):
-                        logger.warning("Failed to click OK on J2534 disconnect page: %s", result.get('message'))
-
-                    try:
-                        new_page = self.wait_for_page_transition(GDS2Page.J2534_DISCONNECT, timeout=ok_timeout)
-                    except TimeoutError:
-                        new_page = self.detect_current_page(retries=0)
-
-                    if new_page == GDS2Page.DATA_DISPLAY:
-                        self._current_page = GDS2Page.DATA_DISPLAY
-                        return NavigationResult(
-                            success=True,
-                            page=GDS2Page.DATA_DISPLAY,
-                            context={**self._context.copy(), "recovery_method": "soft_ok"},
-                        )
-
-                    # Re-sample visible buttons after each failed OK attempt.
-                    # Some disconnect pages visually lose the OK action once GDS2
-                    # determines the connection cannot be resumed in place.
-                    button_states = self.get_available_buttons()
-                    has_ok = button_states.get("OK", False)
-                    if not has_ok:
-                        logger.info("NAV recovery j2534_disconnect switching to backtrack")
-                        break
-            else:
-                logger.info("NAV recovery j2534_disconnect using backtrack (OK unavailable)")
+            soft_recovery = self._attempt_soft_ok_recovery(
+                soft_retry_attempts=soft_retry_attempts,
+                ok_timeout=ok_timeout,
+                retry_delays=retry_delays,
+            )
+            if soft_recovery is not None:
+                return soft_recovery
 
             if not allow_backtrack:
                 return NavigationResult(
@@ -1082,54 +1278,9 @@ class NavigationController:
                     context=self._context.copy(),
                 )
 
-            last_failure: Optional[NavigationResult] = None
-            for _ in range(max(1, backtrack_attempts)):
-                back_result = self.go_back()
-                if not back_result.success or back_result.page != GDS2Page.DATA_LIST:
-                    return NavigationResult(
-                        success=False,
-                        page=back_result.page,
-                        error=back_result.error or "Failed to return to Data List after disconnect.",
-                        context=self._context.copy(),
-                    )
-
-                reenter = self.select_data_category(target_category)
-                if not reenter.success:
-                    return reenter
-
-                if reenter.page == GDS2Page.SUB_DATA_LIST:
-                    target_sub_category = self._context.get("sub_category")
-                    if not target_sub_category:
-                        return NavigationResult(
-                            success=False,
-                            page=GDS2Page.SUB_DATA_LIST,
-                            error="Reconnect reached sub-category list but no prior sub-category was stored.",
-                            context=self._context.copy(),
-                        )
-                    reenter = self.select_sub_category(target_sub_category)
-
-                if reenter.success and reenter.page == GDS2Page.DATA_DISPLAY:
-                    reenter.context["recovery_method"] = "backtrack"
-                    return reenter
-
-                if reenter.page != GDS2Page.J2534_DISCONNECT:
-                    return NavigationResult(
-                        success=False,
-                        page=reenter.page,
-                        error=reenter.error or "Failed to restore Data Display after reconnect backtrack.",
-                        context=self._context.copy(),
-                    )
-
-                last_failure = reenter
-
-            return NavigationResult(
-                success=False,
-                page=last_failure.page if last_failure else GDS2Page.J2534_DISCONNECT,
-                error=(
-                    last_failure.error if last_failure and last_failure.error
-                    else "Failed to restore Data Display after reconnect backtrack."
-                ),
-                context=self._context.copy(),
+            return self._recover_data_display_by_backtrack(
+                target_category=target_category,
+                backtrack_attempts=backtrack_attempts,
             )
 
     def dismiss_warning_dialog(self) -> bool:
@@ -1460,55 +1611,11 @@ class NavigationController:
                         context=self._context.copy(),
                     )
 
-                # Wait for page transition from Vehicle Selection instead of blind sleep
-                try:
-                    new_page = self.wait_for_page_transition(
-                        GDS2Page.VEHICLE_SELECTION, timeout=30
-                    )
-                except TimeoutError:
-                    logger.warning("Page did not transition after Enter click")
-                    new_page = self.detect_current_page(retries=2, retry_delay=1.5)
+                new_page = self._run_enter_transition("Page did not transition after Enter click")
+                new_page = self._retry_enter_from_vehicle_selection(new_page)
+                new_page = self._return_to_diagnostics_menu(new_page)
 
-                # Dismiss any warning dialogs
-                self.dismiss_warning_dialog()
-
-                # Re-detect page after dismissing dialog (dialog may have obscured detection)
-                if new_page == GDS2Page.UNKNOWN:
-                    new_page = self.detect_current_page(retries=2, retry_delay=1.5)
-                # If still at Vehicle Selection after first attempt, retry
-                if new_page == GDS2Page.VEHICLE_SELECTION:
-                    logger.info("NAV vehicle_selection retrying Enter")
-                    self._check_cancel()
-                    self.nav.click_button("Enter")
-                    try:
-                        new_page = self.wait_for_page_transition(
-                            GDS2Page.VEHICLE_SELECTION, timeout=30
-                        )
-                    except TimeoutError:
-                        logger.warning("Page still did not transition after Enter retry")
-                        new_page = self.detect_current_page(retries=2, retry_delay=1.5)
-                    self.dismiss_warning_dialog()
-                    if new_page == GDS2Page.UNKNOWN:
-                        new_page = self.detect_current_page(retries=2, retry_delay=1.5)
-
-                # If GDS2 auto-navigated to Module List (skipping Diagnostics Menu),
-                # click Back to return to Diagnostics Menu so user can choose
-                if new_page == GDS2Page.MODULE_LIST:
-                    logger.info("NAV module_list auto-skip detected; returning to diagnostics_menu")
-                    self._check_cancel()
-                    back_result = self.nav.click_button("Back")
-                    if back_result.get('success'):
-                        try:
-                            new_page = self.wait_for_page_transition(
-                                GDS2Page.MODULE_LIST, timeout=15
-                            )
-                        except TimeoutError:
-                            new_page = self.detect_current_page(retries=2, retry_delay=1.0)
-
-                # Get choices for the new page
-                choices = None
-                if new_page in (GDS2Page.DIAGNOSTICS_MENU, GDS2Page.MODULE_LIST, GDS2Page.DATA_LIST):
-                    choices = self.get_list_items()
+                choices = self.get_list_items() if self._page_has_list_choices(new_page) else None
 
                 return NavigationResult(
                     success=True,
@@ -1587,15 +1694,7 @@ class NavigationController:
                     context=self._context.copy(),
                 )
 
-            # Find matching item
-            target_index = None
-            matched_item = None
-            for i, item in enumerate(items):
-                if data_category in item or item in data_category:
-                    target_index = i
-                    matched_item = item
-                    break
-
+            target_index, matched_item = self._find_matching_list_item(data_category, items)
             if target_index is None:
                 return NavigationResult(
                     success=False,
@@ -1605,28 +1704,24 @@ class NavigationController:
                     context=self._context.copy(),
                 )
 
-            # Select the item
-            self._check_cancel()
-            result = self.nav.select_list_item(0, target_index, double_click=True)
-            if not result.get('success'):
-                return NavigationResult(
-                    success=False,
-                    page=self._current_page,
-                    error=f"Failed to select data category: {result.get('message')}",
-                    context=self._context.copy(),
-                )
+            selection_error = self._select_list_index(
+                list_index=0,
+                target_index=target_index,
+                double_click=True,
+                error_prefix="Failed to select data category",
+            )
+            if selection_error is not None:
+                return selection_error
 
-            # Wait for page transition instead of blind sleep
             old_page = self._current_page
-            try:
-                new_page = self.wait_for_page_transition(old_page, timeout=20)
-            except TimeoutError:
-                logger.warning("Page did not transition after data category selection")
-                new_page = self.detect_current_page()
+            new_page = self._wait_for_transition_or_detect(
+                old_page,
+                timeout=20,
+                timeout_message="Page did not transition after data category selection",
+            )
 
             if new_page == GDS2Page.DATA_DISPLAY:
-                self._history.append(self._current_page)
-                self._current_page = GDS2Page.DATA_DISPLAY
+                self._record_page_transition(GDS2Page.DATA_DISPLAY)
                 self._context["data_category"] = matched_item
                 self._context["sub_category"] = None
                 return NavigationResult(
@@ -1639,8 +1734,7 @@ class NavigationController:
             # Check for sub-categories (list items but no Create Report)
             sub_items = self.nav.get_list_items(0)
             if sub_items:
-                self._history.append(self._current_page)
-                self._current_page = GDS2Page.SUB_DATA_LIST
+                self._record_page_transition(GDS2Page.SUB_DATA_LIST)
                 self._context["data_category"] = matched_item
                 self._context["sub_category"] = None
                 return NavigationResult(
@@ -1652,7 +1746,7 @@ class NavigationController:
                 )
 
             # Fallback
-            self._history.append(self._current_page)
+            self._record_page_transition(new_page)
             self._context["data_category"] = matched_item
             self._context["sub_category"] = None
             return NavigationResult(
@@ -1683,15 +1777,7 @@ class NavigationController:
                     context=self._context.copy(),
                 )
 
-            # Find matching item
-            target_index = None
-            matched_item = None
-            for i, item in enumerate(items):
-                if sub_category in item or item in sub_category:
-                    target_index = i
-                    matched_item = item
-                    break
-
+            target_index, matched_item = self._find_matching_list_item(sub_category, items)
             if target_index is None:
                 return NavigationResult(
                     success=False,
@@ -1701,25 +1787,22 @@ class NavigationController:
                     context=self._context.copy(),
                 )
 
-            self._check_cancel()
-            result = self.nav.select_list_item(0, target_index, double_click=True)
-            if not result.get('success'):
-                return NavigationResult(
-                    success=False,
-                    page=self._current_page,
-                    error=f"Failed to select sub-category: {result.get('message')}",
-                    context=self._context.copy(),
-                )
+            selection_error = self._select_list_index(
+                list_index=0,
+                target_index=target_index,
+                double_click=True,
+                error_prefix="Failed to select sub-category",
+            )
+            if selection_error is not None:
+                return selection_error
 
-            # Wait for page transition instead of blind sleep
             old_page = self._current_page
-            try:
-                new_page = self.wait_for_page_transition(old_page, timeout=20)
-            except TimeoutError:
-                logger.warning("Page did not transition after sub-category selection")
-                new_page = self.detect_current_page()
-            self._history.append(self._current_page)
-            self._current_page = new_page
+            new_page = self._wait_for_transition_or_detect(
+                old_page,
+                timeout=20,
+                timeout_message="Page did not transition after sub-category selection",
+            )
+            self._record_page_transition(new_page)
             self._context["sub_category"] = matched_item
 
             return NavigationResult(

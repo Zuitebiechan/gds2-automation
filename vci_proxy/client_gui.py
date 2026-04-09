@@ -45,7 +45,15 @@ DEFAULT_CONFIG = {
     "api_port": 8080,
     "auth_token": "",
     "dll_path": "",
+    "tls_enabled": False,
+    "tls_ca_file": "",
+    "tls_server_name": "",
 }
+
+
+def normalize_config(config: dict | None) -> dict:
+    """Merge partial config values with defaults for forward compatibility."""
+    return {**DEFAULT_CONFIG, **(config or {})}
 
 
 def load_config() -> dict:
@@ -54,18 +62,17 @@ def load_config() -> dict:
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 saved = json.load(f)
-            # Merge with defaults for forward-compatibility
-            return {**DEFAULT_CONFIG, **saved}
+            return normalize_config(saved)
         except (json.JSONDecodeError, OSError):
             pass
-    return dict(DEFAULT_CONFIG)
+    return normalize_config(None)
 
 
 def save_config(cfg: dict) -> None:
     """Save config to %APPDATA%/VCI_Proxy/config.json."""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=2)
+        json.dump(normalize_config(cfg), f, indent=2)
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +118,7 @@ class ConfigDialog:
     """Simple tkinter dialog for server connection settings."""
 
     def __init__(self, config: dict, on_save=None):
-        self._config = config
+        self._config = normalize_config(config)
         self._on_save = on_save
         self._result: Optional[dict] = None
 
@@ -353,6 +360,9 @@ class VCIProxyTrayApp:
         cfg = self._config
         proxy_config = ProxyConfig.from_args(
             auth_token=cfg.get("auth_token") or None,
+            tls_enabled=bool(cfg.get("tls_enabled")),
+            tls_ca_file=cfg.get("tls_ca_file") or None,
+            tls_server_name=cfg.get("tls_server_name") or None,
         )
 
         self._client = ReverseProxyClient(
@@ -417,7 +427,7 @@ class VCIProxyTrayApp:
             dialog = ConfigDialog(self._config)
             result = dialog.show()
             if result:
-                self._config = result
+                self._config = normalize_config({**self._config, **result})
                 save_config(self._config)
                 self._start_client()
             elif self._has_required_config():
@@ -515,7 +525,7 @@ class VCIProxyTrayApp:
             if not result:
                 # User cancelled first-run dialog — exit
                 return
-            self._config = result
+            self._config = normalize_config({**self._config, **result})
             save_config(self._config)
 
         # Create tray icon

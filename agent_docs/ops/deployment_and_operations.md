@@ -54,6 +54,26 @@ python -m vci_proxy.reverse_server --auth-token <shared-token>
 python app.py --port 8080
 ```
 
+Security defaults:
+
+- `python app.py` binds to `127.0.0.1` by default. Add `--public` only when the API must be reachable remotely.
+- Set `DIAGNOSTIC_API_TOKEN` to require `Authorization: Bearer <token>` or `X-API-Token: <token>` on `/api/*`.
+- CORS is disabled by default. Enable it with `--cors` or `DIAGNOSTIC_API_ENABLE_CORS=1`, and prefer `DIAGNOSTIC_API_CORS_ORIGINS` to scope allowed origins.
+- The reverse tunnel defaults to PSK authentication enabled. Use the same `--auth-token` on the cloud reverse server and the local client.
+
+For internet-facing or otherwise untrusted networks, enable TLS on the reverse tunnel:
+
+```bash
+python -m vci_proxy.reverse_server ^
+  --auth-token <shared-token> ^
+  --tls ^
+  --tls-cert <server-cert.pem> ^
+  --tls-key <server-key.pem>
+```
+
+Add `--tls-ca <client-ca.pem> --tls-require-client-cert` if you want the reverse
+server to require mutually authenticated client certificates.
+
 Also keep the OEM runtime available:
 
 - for GDS2, the Java agent should be writing to `~/gds2-data/latest.json`
@@ -68,6 +88,20 @@ python -m vci_proxy.client_gui
 
 The reverse tunnel now defaults to PSK auth enabled. Configure the same shared
 token on the reverse server and in the local tray client before connecting.
+
+For CLI-driven local clients, the equivalent TLS flags are:
+
+```bash
+python -m vci_proxy.reverse_client ^
+  --host <server-host> ^
+  --auth-token <shared-token> ^
+  --tls ^
+  --tls-ca <server-ca.pem> ^
+  --tls-server-name <server-dns-name>
+```
+
+The tray client persists TLS trust settings in `%APPDATA%\VCI_Proxy\config.json`
+using `tls_enabled`, `tls_ca_file`, and `tls_server_name`.
 
 ### Windows client build
 
@@ -99,6 +133,8 @@ Current default ports:
 Current secret-handling rule:
 
 - ZhipuAI API keys belong in `%APPDATA%\VCI_Proxy\config.json`
+- reverse-tunnel PSK tokens and `DIAGNOSTIC_API_TOKEN` should be injected through local config or environment variables, not committed into source
+- TLS private keys and private CA bundles should be stored outside the repository and provisioned per environment
 - do not commit API keys or other secrets into source
 
 ## GDS2 Operational Facts
@@ -120,6 +156,7 @@ These facts matter operationally:
 
 - Flask creation
 - CORS enablement
+- optional API token enforcement for `/api/*`
 - blueprint registration
 - log setup
 - host/port handling
@@ -129,6 +166,7 @@ These facts matter operationally:
 ### Reverse tunnel server
 
 `vci_proxy/reverse_server.py` should be running before the local reverse client attempts to connect.
+It terminates the reverse client listener on port `9000`, optionally with TLS and client-certificate enforcement.
 
 ### Local tray client
 
@@ -138,6 +176,7 @@ These facts matter operationally:
 - reverse-client lifecycle
 - J2534 driver selection
 - local config persistence
+- persisted reverse-tunnel trust settings
 
 ## Packaging Notes
 

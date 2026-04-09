@@ -8,9 +8,13 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from src.gds2_orchestration.session_orchestrator import DecisionGate, DecisionOption, SessionStatus
-
 from diagnostic_platform.contracts import BackendCapability
+from diagnostic_platform.session_models import (
+    DecisionGate,
+    DecisionOption,
+    SessionStatus,
+)
+from diagnostic_platform.safe_utils import mapping_or_empty as _mapping_or_empty
 
 from .session_backends import ensure_session_capability
 from .session_state import (
@@ -19,10 +23,16 @@ from .session_state import (
     set_live_data_active,
     set_session_selection,
 )
+from .errors import OperationCancelledError
 from .worker_runtime import WorkerRuntime
-from .worker_runtime import OperationCancelledError
 
 logger = logging.getLogger(__name__)
+
+
+def _state_extra_mapping(state: Any) -> dict[str, Any]:
+    """Return backend state.extra when it is a mapping, otherwise an empty mapping."""
+    extra = getattr(state, "extra", {})
+    return extra if isinstance(extra, dict) else {}
 
 
 def utc_now_iso() -> str:
@@ -32,9 +42,12 @@ def utc_now_iso() -> str:
 def network_quality_summary(snapshot: dict[str, Any] | None) -> str:
     if not isinstance(snapshot, dict):
         return "grade=unknown status=unknown epoch=None p95=n/a reason=none"
-    metrics = snapshot.get("network_ms") or {}
+    metrics = _mapping_or_empty(snapshot.get("network_ms"))
     p95 = metrics.get("p95")
-    p95_text = "n/a" if p95 is None else f"{float(p95):.1f}ms"
+    try:
+        p95_text = "n/a" if p95 is None else f"{float(p95):.1f}ms"
+    except (TypeError, ValueError):
+        p95_text = "n/a"
     return (
         f"grade={snapshot.get('grade')} status={snapshot.get('status')} "
         f"epoch={snapshot.get('connection_epoch')} p95={p95_text} "
@@ -98,8 +111,9 @@ def get_session_network_snapshot(*, orchestrator: Any, backend: Any, session_id:
             "connection_epoch": None,
         }
 
-    snapshot = preflight() or {}
-    network_quality = snapshot.get("network_quality")
+    snapshot = _mapping_or_empty(preflight())
+    raw_network_quality = snapshot.get("network_quality")
+    network_quality = raw_network_quality if isinstance(raw_network_quality, dict) else None
     connection_epoch = snapshot.get("connection_epoch")
     effective_override = get_effective_network_override(session, connection_epoch)
     raw_override = getattr(session, "network_override", None)
@@ -155,7 +169,7 @@ def build_network_quality_gate(network_quality: dict[str, Any] | None) -> Decisi
 
 
 def network_signature(payload: dict[str, Any]) -> tuple[Any, ...]:
-    quality = payload.get("network_quality") or {}
+    quality = _mapping_or_empty(payload.get("network_quality"))
     return (
         quality.get("grade"),
         quality.get("status"),
@@ -176,6 +190,132 @@ def reset_backend_startup_state(backend: Any, *, session_id: str, reason: str) -
         logger.info("SESSION %s startup state reset after %s", session_id, reason)
     except Exception:
         logger.exception("SESSION %s startup reset failed after %s", session_id, reason)
+
+
+def _session_response_payload(session: Any) -> dict[str, Any]:
+    """Build one common session API payload envelope."""
+    return {
+        "success": True,
+        "session_id": session.session_id,
+        "status": session.status.value,
+        "backend_name": session.backend_name,
+        "capabilities": list(getattr(session, "capabilities", []) or []),
+        "workflow": session.backend_name,
+    }
+
+
+def _call_backend_start(start_method: Any, *, operation: Any) -> dict[str, Any]:
+    """Start one backend with cooperative-cancel support when accepted."""
+    try:
+        result = start_method(cancel_checker=operation.check_cancelled) or {}
+    except TypeError:
+        result = start_method() or {}
+    return result if isinstance(result, dict) else {}
+
+
+def _build_device_selection_result(start_payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Return one device-selection payload when startup stops at device explorer."""
+    devices = start_payload.get("devices")
+    if not isinstance(devices, list) or not devices:
+        return None
+    return {
+        "devices": devices,
+        "at_device_explorer": bool(start_payload.get("at_device_explorer")),
+        "device_connected": bool(start_payload.get("device_connected")),
+    }
+
+
+def _build_module_selection_result(
+    backend: Any,
+    *,
+    operation: Any,
+    start_payload: dict[str, Any],
+    state_extra: dict[str, Any],
+) -> dict[str, Any]:
+    """Return one module-selection payload after backend startup completes."""
+    modules = start_payload.get("modules")
+    if not isinstance(modules, list) or not modules:
+        modules = backend.get_modules()
+    operation.check_cancelled()
+    return {
+        "modules": modules,
+        "vin": start_payload.get("vin") or state_extra.get("vin"),
+        "device": start_payload.get("device") or state_extra.get("device"),
+    }
+
+
+def _build_start_diagnostics_result(
+    backend: Any,
+    *,
+    operation: Any,
+    start_payload: dict[str, Any],
+    state_extra: dict[str, Any],
+) -> dict[str, Any]:
+    """Build one normalized diagnostics-start result payload."""
+    device_result = _build_device_selection_result(start_payload)
+    if device_result is not None:
+        return device_result
+    return _build_module_selection_result(
+        backend,
+        operation=operation,
+        start_payload=start_payload,
+        state_extra=state_extra,
+    )
+
+
+def _reset_session_runtime_state(runtime: WorkerRuntime, session: Any) -> None:
+    """Clear subordinate runtime bindings after backend startup."""
+    set_session_selection(session, module="", data_category="")
+    clear_navigation_binding(runtime, session)
+    clear_ai_binding(runtime, session)
+    set_live_data_active(runtime, session, False)
+
+
+def _decision_required_start_payload(
+    session: Any,
+    *,
+    gate: DecisionGate,
+    network_snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    payload = _session_response_payload(session)
+    payload.update(
+        {
+            "decision_required": True,
+            "decision": gate.to_dict(),
+        }
+    )
+    payload.update(network_snapshot)
+    return payload
+
+
+def _started_diagnostics_payload(
+    session: Any,
+    *,
+    result: dict[str, Any],
+    network_snapshot: dict[str, Any],
+    resumed: bool,
+) -> dict[str, Any]:
+    payload = _session_response_payload(session)
+    payload["result"] = result
+    payload.update(network_snapshot)
+    if resumed:
+        payload["resumed"] = True
+        payload["resume_action"] = "start_diagnostics"
+    return payload
+
+
+def _read_backend_start_context(
+    backend: Any,
+    *,
+    operation: Any,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    start_method = getattr(backend, "start")
+    start_payload = _call_backend_start(start_method, operation=operation)
+    operation.check_cancelled()
+    state = backend.get_state()
+    state_extra = _state_extra_mapping(state)
+    operation.check_cancelled()
+    return start_payload, state_extra
 
 
 def run_start_diagnostics(
@@ -218,17 +358,11 @@ def run_start_diagnostics(
             gate.kind,
             network_quality_summary(network_quality),
         )
-        return {
-            "success": True,
-            "session_id": session_id,
-            "status": session.status.value,
-            "backend_name": session.backend_name,
-            "capabilities": list(getattr(session, "capabilities", []) or []),
-            "workflow": session.backend_name,
-            "decision_required": True,
-            "decision": gate.to_dict(),
-            **network_snapshot,
-        }
+        return _decision_required_start_payload(
+            session,
+            gate=gate,
+            network_snapshot=network_snapshot,
+        )
 
     operation = runtime.start_operation(session_id, "start_diagnostics")
     try:
@@ -236,63 +370,38 @@ def run_start_diagnostics(
             session_id,
             f"Starting {session.backend_name or 'diagnostic'} backend...",
         )
-        start_method = getattr(backend, "start")
-        try:
-            start_result = start_method(cancel_checker=operation.check_cancelled) or {}
-        except TypeError:
-            start_result = start_method() or {}
-        operation.check_cancelled()
-        state = backend.get_state()
-        modules = start_result.get("modules") if isinstance(start_result, dict) else None
-        if not isinstance(modules, list) or not modules:
-            modules = backend.get_modules()
-        operation.check_cancelled()
-        result = {
-            "modules": modules,
-            "vin": (
-                start_result.get("vin")
-                if isinstance(start_result, dict) and start_result.get("vin")
-                else state.extra.get("vin")
-            ),
-            "device": (
-                start_result.get("device")
-                if isinstance(start_result, dict) and start_result.get("device")
-                else state.extra.get("device")
-            ),
-        }
-        set_session_selection(session, module="", data_category="")
-        clear_navigation_binding(runtime, session)
-        clear_ai_binding(runtime, session)
-        set_live_data_active(runtime, session, False)
+        start_payload, state_extra = _read_backend_start_context(
+            backend,
+            operation=operation,
+        )
+        result = _build_start_diagnostics_result(
+            backend,
+            operation=operation,
+            start_payload=start_payload,
+            state_extra=state_extra,
+        )
+        _reset_session_runtime_state(runtime, session)
         orchestrator.emit_progress(
             session_id,
             f"{session.backend_name or 'Diagnostic'} backend started",
             result,
         )
         logger.info(
-            "[NETWORK_GATE] session=%s decision=allow resumed=%s override=%s modules=%s device=%s %s",
+            "[NETWORK_GATE] session=%s decision=allow resumed=%s override=%s modules=%s devices=%s device=%s %s",
             session_id,
             resumed,
             bool(effective_override),
-            len(result["modules"]),
+            len(result.get("modules") or []),
+            len(result.get("devices") or []),
             result.get("device") or "-",
             network_quality_summary(network_quality),
         )
-
-        payload = {
-            "success": True,
-            "session_id": session_id,
-            "status": session.status.value,
-            "backend_name": session.backend_name,
-            "capabilities": list(getattr(session, "capabilities", []) or []),
-            "workflow": session.backend_name,
-            "result": result,
-            **network_snapshot,
-        }
-        if resumed:
-            payload["resumed"] = True
-            payload["resume_action"] = "start_diagnostics"
-        return payload
+        return _started_diagnostics_payload(
+            session,
+            result=result,
+            network_snapshot=network_snapshot,
+            resumed=resumed,
+        )
     except OperationCancelledError:
         reset_backend_startup_state(backend, session_id=session_id, reason="cancel")
         logger.info("SESSION %s start_diagnostics cancelled", session_id)

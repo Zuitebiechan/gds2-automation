@@ -70,6 +70,37 @@ def test_start_ai_diagnose_requires_data_category(monkeypatch) -> None:
     assert payload == {"success": False, "error": "data_category required"}
 
 
+def test_start_ai_diagnose_rejects_non_string_session_id() -> None:
+    payload, status = session_ai_handlers.start_ai_diagnose({"session_id": 42})
+
+    assert status == 400
+    assert payload == {"success": False, "error": "session_id must be a string"}
+
+
+def test_start_ai_diagnose_rejects_non_string_data_category(monkeypatch) -> None:
+    session = _session("session-ai", capabilities=[BackendCapability.AI_DATA_COLLECTION])
+    orch = _FakeOrchestrator(session)
+
+    monkeypatch.setattr(session_ai_handlers, "get_orchestrator", lambda: orch)
+    monkeypatch.setattr(session_ai_handlers, "get_backend", lambda: object())
+    monkeypatch.setattr(session_ai_handlers, "get_ai_engine", lambda: object())
+    monkeypatch.setattr(session_ai_handlers, "_runtime", lambda: WorkerRuntime())
+    monkeypatch.setattr(
+        session_ai_handlers,
+        "resolve_session_vehicle_context",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("resolve_session_vehicle_context should not be called")
+        ),
+    )
+
+    payload, status = session_ai_handlers.start_ai_diagnose(
+        {"session_id": "session-ai", "data_category": {"name": "Live Data"}}
+    )
+
+    assert status == 400
+    assert payload == {"success": False, "error": "data_category must be a string"}
+
+
 def test_stream_ai_diagnose_events_binds_ai_iterator(monkeypatch) -> None:
     session = _session("session-ai", capabilities=[BackendCapability.AI_DATA_COLLECTION])
     orch = _FakeOrchestrator(session)
@@ -143,6 +174,52 @@ def test_start_live_data_session_returns_backend_payload_and_scope(monkeypatch) 
     }
 
 
+def test_start_live_data_session_rejects_invalid_interval_ms(monkeypatch) -> None:
+    session = _session("session-live", capabilities=[BackendCapability.LIVE_DATA])
+    orch = _FakeOrchestrator(session)
+
+    monkeypatch.setattr(session_live_data_handlers, "get_orchestrator", lambda: orch)
+    monkeypatch.setattr(session_live_data_handlers, "get_backend", lambda: object())
+    monkeypatch.setattr(session_live_data_handlers, "_runtime", lambda: WorkerRuntime())
+    monkeypatch.setattr(
+        session_live_data_handlers,
+        "start_live_data",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("start_live_data should not be called")
+        ),
+    )
+
+    payload, status = session_live_data_handlers.start_live_data_session(
+        {"session_id": "session-live", "interval_ms": "fast"}
+    )
+
+    assert status == 400
+    assert payload == {"success": False, "error": "interval_ms must be an integer"}
+
+
+def test_start_live_data_session_rejects_non_string_data_category(monkeypatch) -> None:
+    session = _session("session-live", capabilities=[BackendCapability.LIVE_DATA])
+    orch = _FakeOrchestrator(session)
+
+    monkeypatch.setattr(session_live_data_handlers, "get_orchestrator", lambda: orch)
+    monkeypatch.setattr(session_live_data_handlers, "get_backend", lambda: object())
+    monkeypatch.setattr(session_live_data_handlers, "_runtime", lambda: WorkerRuntime())
+    monkeypatch.setattr(
+        session_live_data_handlers,
+        "start_live_data",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("start_live_data should not be called")
+        ),
+    )
+
+    payload, status = session_live_data_handlers.start_live_data_session(
+        {"session_id": "session-live", "data_category": ["Live Data"]}
+    )
+
+    assert status == 400
+    assert payload == {"success": False, "error": "data_category must be a string"}
+
+
 def test_stream_live_data_events_returns_404_when_stream_is_inactive(monkeypatch) -> None:
     session = _session("session-live", capabilities=[BackendCapability.LIVE_DATA])
     orch = _FakeOrchestrator(session)
@@ -161,6 +238,58 @@ def test_stream_live_data_events_returns_404_when_stream_is_inactive(monkeypatch
         "success": False,
         "error": "No active live data stream for session-live",
     }
+
+
+def test_read_session_dtcs_rejects_non_string_session_id() -> None:
+    payload, status = session_live_data_handlers.read_session_dtcs({"session_id": ["bad"]})
+
+    assert status == 400
+    assert payload == {"success": False, "error": "session_id must be a string"}
+
+
+def test_read_session_dtcs_rejects_non_string_module(monkeypatch) -> None:
+    session = _session("session-live", capabilities=[BackendCapability.READ_DTCS])
+    orch = _FakeOrchestrator(session)
+
+    monkeypatch.setattr(session_live_data_handlers, "get_orchestrator", lambda: orch)
+    monkeypatch.setattr(session_live_data_handlers, "get_backend", lambda: object())
+    monkeypatch.setattr(
+        session_live_data_handlers,
+        "read_dtcs",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("read_dtcs should not be called")
+        ),
+    )
+
+    payload, status = session_live_data_handlers.read_session_dtcs(
+        {"session_id": "session-live", "module": {"name": "ECM"}}
+    )
+
+    assert status == 400
+    assert payload == {"success": False, "error": "module must be a string"}
+
+
+def test_clear_session_dtcs_rejects_non_string_data_category(monkeypatch) -> None:
+    session = _session("session-live", capabilities=[BackendCapability.CLEAR_DTCS])
+    orch = _FakeOrchestrator(session)
+
+    monkeypatch.setattr(session_live_data_handlers, "get_orchestrator", lambda: orch)
+    monkeypatch.setattr(session_live_data_handlers, "get_backend", lambda: object())
+    monkeypatch.setattr(session_live_data_handlers, "_runtime", lambda: WorkerRuntime())
+    monkeypatch.setattr(
+        session_live_data_handlers,
+        "clear_dtcs",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("clear_dtcs should not be called")
+        ),
+    )
+
+    payload, status = session_live_data_handlers.clear_session_dtcs(
+        {"session_id": "session-live", "data_category": ["Engine Data"]}
+    )
+
+    assert status == 400
+    assert payload == {"success": False, "error": "data_category must be a string"}
 
 
 def test_stop_live_data_session_returns_conflict_when_session_not_running(monkeypatch) -> None:
@@ -213,3 +342,28 @@ def test_submit_navigation_decision_conflict_maps_to_409(monkeypatch) -> None:
         "success": False,
         "error": "Session is not awaiting a decision (status=running)",
     }
+
+
+def test_start_navigation_session_rejects_non_string_goal(monkeypatch) -> None:
+    session = _session("session-nav", capabilities=[BackendCapability.NAVIGATION])
+    orch = _FakeOrchestrator(session)
+
+    monkeypatch.setattr(session_navigation_handlers, "get_orchestrator", lambda: orch)
+    monkeypatch.setattr(session_navigation_handlers, "_runtime", lambda: WorkerRuntime())
+    monkeypatch.setattr(
+        session_navigation_handlers,
+        "start_navigation",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("start_navigation should not be called")
+        ),
+    )
+
+    payload, status = session_navigation_handlers.start_navigation_session_for_business(
+        {
+            "session_id": "session-nav",
+            "goal": {"screen": "data_display"},
+        }
+    )
+
+    assert status == 400
+    assert payload == {"success": False, "error": "goal must be a string"}

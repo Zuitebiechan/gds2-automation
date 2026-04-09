@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import ssl
 import struct
 import types
 
@@ -89,6 +90,89 @@ def test_authenticate_vci_rejects_replayed_auth_request(monkeypatch) -> None:
     success, reason = ProtocolDecoder.decode_auth_rsp(writer_b.writes[0][HEADER_SIZE:length])
     assert success is False
     assert "replay" in reason
+
+
+def test_authenticate_vci_rejects_invalid_short_frame_length() -> None:
+    server = ReverseProxyServer(config=ProxyConfig.from_args(auth_token="secret"))
+    short_header = struct.pack(">IIHI", reverse_server_module.MAGIC, HEADER_SIZE - 1, MsgType.AUTH_REQ, 7)
+    reader = _FakeReader(short_header)
+    writer = _FakeWriter()
+
+    accepted = asyncio.run(server._authenticate_vci(reader, writer))
+
+    assert accepted is False
+    assert writer.writes == []
+
+
+def test_authenticate_vci_rejects_oversized_frame_length() -> None:
+    server = ReverseProxyServer(config=ProxyConfig.from_args(auth_token="secret"))
+    huge_header = struct.pack(">IIHI", reverse_server_module.MAGIC, HEADER_SIZE + 2_000_001, MsgType.AUTH_REQ, 7)
+    reader = _FakeReader(huge_header)
+    writer = _FakeWriter()
+
+    accepted = asyncio.run(server._authenticate_vci(reader, writer))
+
+    assert accepted is False
+    assert writer.writes == []
+
+
+def test_build_server_tls_context_loads_cert_chain_and_optional_client_ca(monkeypatch) -> None:
+    observed: dict[str, object] = {}
+
+    class _FakeContext:
+        minimum_version = None
+
+        def load_cert_chain(self, certfile, keyfile):
+            observed["certfile"] = certfile
+            observed["keyfile"] = keyfile
+
+        def load_verify_locations(self, cafile=None):
+            observed["cafile"] = cafile
+
+        verify_mode = None
+
+    def _fake_create_default_context(purpose):
+        observed["purpose"] = purpose
+        return _FakeContext()
+
+    monkeypatch.setattr(
+        "vci_proxy.reverse_server.ssl.create_default_context",
+        _fake_create_default_context,
+    )
+
+    server = ReverseProxyServer(
+        config=ProxyConfig.from_args(
+            auth_token="secret",
+            tls_enabled=True,
+            tls_certfile="C:/certs/server.crt",
+            tls_keyfile="C:/certs/server.key",
+            tls_ca_file="C:/certs/ca.pem",
+            tls_require_client_cert=True,
+        )
+    )
+
+    context = server._build_tls_server_context()
+
+    assert isinstance(context, _FakeContext)
+    assert observed["purpose"] == ssl.Purpose.CLIENT_AUTH
+    assert observed["certfile"] == "C:/certs/server.crt"
+    assert observed["keyfile"] == "C:/certs/server.key"
+    assert observed["cafile"] == "C:/certs/ca.pem"
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.minimum_version == ssl.TLSVersion.TLSv1_2
+
+
+def test_build_server_tls_context_requires_cert_and_key() -> None:
+    server = ReverseProxyServer(
+        config=ProxyConfig.from_args(
+            auth_token="secret",
+            tls_enabled=True,
+            tls_certfile="C:/certs/server.crt",
+        )
+    )
+
+    with pytest.raises(ValueError, match="TLS certfile and keyfile are required"):
+        server._build_tls_server_context()
 
 
 def test_try_serve_cached_returns_cached_ioctl_response() -> None:

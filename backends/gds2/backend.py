@@ -9,6 +9,11 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from backends.gds2.action_adapter import GDS2ActionAdapter
+from backends.gds2.action_runtime import PolicyGuard
+from diagnostic_platform.action_schema import ActionStep, GDS2Action
+from diagnostic_platform.action_runtime import DeterministicExecutor
+from diagnostic_platform.branch_planning import BranchDecisionRequiredError
 from diagnostic_platform.contracts import (
     BackendActionRuntime,
     BackendCapability,
@@ -22,7 +27,7 @@ from diagnostic_platform.contracts import (
     SamplingQuality,
     VehicleContext,
 )
-from diagnostic_platform.runtime.worker_runtime import OperationCancelledError
+from diagnostic_platform.runtime.errors import OperationCancelledError
 from diagnostic_platform.sse import (
     DEFAULT_AGENT_STREAM_SCOPE,
     broadcast_agent_event,
@@ -237,12 +242,6 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
     ) -> dict[str, Any]:
         """Execute a named backend action through the GDS2 action runtime."""
         try:
-            try:
-                from src.gds2_orchestration import ActionStep, GDS2Action
-            except ImportError:
-                from src.gds2_orchestration.contracts import ActionStep, GDS2Action
-            from src.gds2_orchestration.planner import BranchDecisionRequiredError
-
             step = ActionStep(
                 action=GDS2Action[action.upper()],
                 args=args or {},
@@ -711,12 +710,7 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
 
     def build_action_runtime(self) -> BackendActionRuntime:
         """Build a backend-owned executor/adapter bridge for generic actions."""
-        try:
-            from src.gds2_orchestration import DeterministicExecutor, GDS2ActionAdapter
-        except ImportError:
-            from src.gds2_orchestration import DeterministicExecutor, GDS2ActionAdapter
-
-        executor = DeterministicExecutor()
+        executor = DeterministicExecutor(policy_guard=PolicyGuard())
         adapter = GDS2ActionAdapter(self.get_guided_runtime())
         adapter.register_all(executor)
         return BackendActionRuntime(executor=executor, adapter=adapter)

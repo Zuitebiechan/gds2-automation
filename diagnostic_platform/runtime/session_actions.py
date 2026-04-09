@@ -5,13 +5,18 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
+from diagnostic_platform.action_schema import ActionStep, GDS2Action
 from diagnostic_platform.contracts import (
     BackendCapability,
     DiagnosticBackend,
     UnsupportedCapabilityError,
 )
-from src.gds2_orchestration.contracts.action_schema import ActionStep, GDS2Action
-from src.gds2_orchestration.session_orchestrator import SessionStatus
+from diagnostic_platform.session_models import SessionStatus
+from diagnostic_platform.safe_utils import (
+    mapping_or_empty as _mapping_or_empty,
+    status_value as _status_value,
+    strip_optional_text as _strip_optional_text,
+)
 
 from .diagnostics_runtime import (
     start_live_data_stream as start_diagnostics_live_data_stream,
@@ -38,12 +43,13 @@ from .session_state import (
 from .worker_runtime import WorkerRuntime
 
 logger = logging.getLogger(__name__)
+_CLEAR_DTCS_READY_PAGES = {"data_list", "data_display", "sub_data_list"}
 
 
 def ensure_session_capability(session: Any, capability: BackendCapability) -> None:
     """Validate one running session supports the requested capability."""
-    if session.status != SessionStatus.RUNNING:
-        raise ValueError(f"Session not running (status={session.status.value})")
+    if _status_value(session.status) != SessionStatus.RUNNING.value:
+        raise ValueError(f"Session not running (status={_status_value(session.status)})")
     available = {
         str(item)
         for item in (getattr(session, "capabilities", None) or [])
@@ -63,7 +69,7 @@ def ensure_running_gds2_session(session: Any, *, capability: str) -> None:
     }
     ensure_session_capability(
         session,
-        capability_map.get(capability.strip().lower(), BackendCapability.CORE_SESSION),
+        capability_map.get(_strip_optional_text(capability).lower(), BackendCapability.CORE_SESSION),
     )
 
 
@@ -74,13 +80,13 @@ def resolve_session_vehicle_context(
     backend: Any,
 ) -> dict[str, str]:
     """Resolve VIN/module/data-category from request, session, then backend state."""
-    vin = (data.get("vin") or session.context.vin or "").strip()
-    module = (data.get("module") or getattr(session, "selected_module", "") or "").strip()
-    data_category = (
-        data.get("data_category")
-        or getattr(session, "selected_data_category", "")
-        or ""
-    ).strip()
+    vin = _strip_optional_text(data.get("vin")) or _strip_optional_text(session.context.vin)
+    module = _strip_optional_text(data.get("module")) or _strip_optional_text(
+        getattr(session, "selected_module", "")
+    )
+    data_category = _strip_optional_text(data.get("data_category")) or _strip_optional_text(
+        getattr(session, "selected_data_category", "")
+    )
 
     if vin and module and data_category:
         return {
@@ -100,24 +106,168 @@ def resolve_session_vehicle_context(
         state_extra = {}
 
     if not vin:
-        vin = (state_extra.get("vin") or "").strip()
+        vin = _strip_optional_text(state_extra.get("vin"))
     if not module:
-        module = (
+        module = _strip_optional_text(
             getattr(state, "current_module", "")
-            or state_extra.get("module")
-            or ""
-        ).strip()
+        ) or _strip_optional_text(state_extra.get("module"))
     if not data_category:
-        data_category = (
+        data_category = _strip_optional_text(
             getattr(state, "current_data_category", "")
-            or state_extra.get("data_category")
-            or ""
-        ).strip()
+        ) or _strip_optional_text(state_extra.get("data_category"))
 
     return {
         "vin": vin,
         "module": module,
         "data_category": data_category,
+    }
+
+
+def _detect_backend_page(
+    backend: Any,
+    *,
+    state: Any | None = None,
+    fallback: str = "",
+) -> str:
+    """Return the current backend page, falling back to backend state when needed."""
+    try:
+        return backend.detect_current_page()
+    except (UnsupportedCapabilityError, NotImplementedError):
+        resolved_state = state if state is not None else backend.get_state()
+        return getattr(resolved_state, "current_page", fallback)
+
+
+def _read_backend_state_and_page(backend: Any) -> tuple[Any, str]:
+    """Return backend state plus the best-effort current page value."""
+    state = backend.get_state()
+    return state, _detect_backend_page(backend, state=state)
+
+
+def _maybe_select_module_for_session(
+    session: Any,
+    *,
+    backend: Any,
+    state: Any,
+    current_page: str,
+    module_name: str,
+) -> tuple[Any, str]:
+    """Select one module only when the backend is not already on it."""
+    if not module_name or getattr(state, "current_module", "") == module_name:
+        return state, current_page
+
+    backend.select_module(module_name)
+    set_session_selection(session, module=module_name)
+    state = backend.get_state()
+    return state, _detect_backend_page(backend, state=state)
+
+
+def _maybe_select_data_category_for_session(
+    session: Any,
+    *,
+    backend: Any,
+    state: Any,
+    data_category: str,
+    force: bool = False,
+) -> None:
+    """Select one data category only when the backend is not already on it."""
+    if (
+        not data_category
+        or (not force and getattr(state, "current_data_category", "") == data_category)
+    ):
+        return
+
+    backend.select_data_category(data_category)
+    set_session_selection(session, data_category=data_category)
+
+
+def _ensure_clear_dtcs_allowed(runtime: WorkerRuntime, session: Any) -> None:
+    """Reject clear-DTC requests that conflict with active worker-side flows."""
+    if live_data_active(runtime, session.session_id):
+        raise RuntimeError("Cannot clear DTCs while live data streaming is active")
+    if navigation_session_id(runtime, session.session_id):
+        raise RuntimeError("Cannot clear DTCs while navigation is active")
+    if ai_session_id(runtime, session.session_id):
+        raise RuntimeError("Cannot clear DTCs while AI diagnosis is active")
+
+
+def _clear_dtcs_context_flags(session: Any, data: dict[str, Any]) -> tuple[bool, bool]:
+    """Return whether request/session context should drive pre-clear reselection."""
+    explicit_module = _strip_optional_text(data.get("module"))
+    explicit_data_category = _strip_optional_text(data.get("data_category"))
+    explicit_context_requested = bool(explicit_module or explicit_data_category)
+
+    remembered_module = _strip_optional_text(getattr(session, "selected_module", ""))
+    remembered_data_category = _strip_optional_text(getattr(session, "selected_data_category", ""))
+    remembered_context_available = bool(remembered_module or remembered_data_category)
+    return explicit_context_requested, remembered_context_available
+
+
+def _apply_explicit_clear_dtcs_context(
+    session: Any,
+    data: dict[str, Any],
+    *,
+    backend: Any,
+    state: Any,
+    current_page: str,
+) -> tuple[Any, str]:
+    """Apply request-provided module/category context before clearing DTCs."""
+    context = resolve_session_vehicle_context(session, data, backend=backend)
+    state, current_page = _maybe_select_module_for_session(
+        session,
+        backend=backend,
+        state=state,
+        current_page=current_page,
+        module_name=context.get("module", ""),
+    )
+    _maybe_select_data_category_for_session(
+        session,
+        backend=backend,
+        state=state,
+        data_category=context.get("data_category", ""),
+    )
+    return state, current_page
+
+
+def _apply_remembered_clear_dtcs_context(
+    session: Any,
+    data: dict[str, Any],
+    *,
+    backend: Any,
+    state: Any,
+    current_page: str,
+) -> tuple[Any, str]:
+    """Apply remembered session context when clear-DTC runs away from Data Display."""
+    context = resolve_session_vehicle_context(session, data, backend=backend)
+    module_name = context.get("module", "")
+    data_category = context.get("data_category", "")
+
+    if module_name and current_page not in _CLEAR_DTCS_READY_PAGES:
+        state, current_page = _maybe_select_module_for_session(
+            session,
+            backend=backend,
+            state=state,
+            current_page=current_page,
+            module_name=module_name,
+        )
+
+    if data_category and current_page != "data_display":
+        _maybe_select_data_category_for_session(
+            session,
+            backend=backend,
+            state=state,
+            data_category=data_category,
+            force=True,
+        )
+    return state, current_page
+
+
+def _clear_dtcs_result_payload(clear_result: Any, *, page_context: str) -> dict[str, Any]:
+    """Build the normalized clear-DTC result payload."""
+    return {
+        "success": bool(getattr(clear_result, "success", True)),
+        "cleared_count": int(getattr(clear_result, "cleared_count", 0) or 0),
+        "message": str(getattr(clear_result, "message", "") or "Clear DTCs completed"),
+        "page_context": page_context,
     }
 
 
@@ -199,6 +349,8 @@ def resolve_ai_event_stream(
 
 def handle_ai_stream_terminal_event(runtime: WorkerRuntime, session: Any, message: str) -> bool:
     """Clear AI binding when one terminal SSE event is observed."""
+    if not isinstance(message, str):
+        return False
     if message.startswith("event: done\n") or message.startswith("event: error\n"):
         clear_ai_binding(runtime, session)
         return True
@@ -211,6 +363,8 @@ def handle_live_data_stream_terminal_event(
     message: str,
 ) -> bool:
     """Clear live-data activity when one terminal SSE event is observed."""
+    if not isinstance(message, str):
+        return False
     if message.startswith("event: done\n") or message.startswith("event: error\n"):
         set_live_data_active(runtime, session, False)
         return True
@@ -250,6 +404,7 @@ def resolve_navigation(runtime: WorkerRuntime, session: Any) -> tuple[str, Any]:
 
 def apply_navigation_event(runtime: WorkerRuntime, session: Any, nav_session: Any, event: dict[str, Any]) -> str:
     """Apply one navigation SSE event to worker/session state."""
+    event = _mapping_or_empty(event)
     event_type = event.get("type", "progress")
     if event_type == "progress":
         nav_session.current_page = event.get("page", nav_session.current_page)
@@ -258,13 +413,11 @@ def apply_navigation_event(runtime: WorkerRuntime, session: Any, nav_session: An
         nav_session.pending_decision_id = event.get("decision_id")
         nav_session.pending_items = event.get("items", [])
     elif event_type == "done":
-        selections = event.get("selections") or {}
-        module = str(selections.get("module") or "").strip()
-        data_category = str(
+        selections = _mapping_or_empty(event.get("selections"))
+        module = _strip_optional_text(selections.get("module"))
+        data_category = _strip_optional_text(
             selections.get("data_category")
-            or selections.get("selected_item")
-            or ""
-        ).strip()
+        ) or _strip_optional_text(selections.get("selected_item"))
         if module or data_category:
             set_session_selection(
                 session,
@@ -280,11 +433,7 @@ def apply_navigation_event(runtime: WorkerRuntime, session: Any, nav_session: An
 
 def navigation_terminal_payload(runtime: WorkerRuntime, session: Any, nav_session: Any) -> dict[str, Any] | None:
     """Return one synthesized terminal payload when navigation has already finished."""
-    nav_status = (
-        nav_session.status
-        if isinstance(nav_session.status, str)
-        else nav_session.status.value
-    )
+    nav_status = _status_value(nav_session.status)
     if nav_status not in ("completed", "failed", "aborted"):
         return None
 
@@ -329,7 +478,7 @@ def navigation_status_payload(runtime: WorkerRuntime, session: Any) -> dict[str,
     nav_sid, nav_session = resolve_navigation(runtime, session)
     payload: dict[str, Any] = {
         "navigation_session_id": nav_sid,
-        "status": nav_session.status.value,
+        "status": _status_value(nav_session.status),
         "goal": nav_session.goal,
         "current_page": nav_session.current_page,
     }
@@ -352,33 +501,27 @@ def read_dtcs(
 ) -> dict[str, Any]:
     """Read DTCs for one running backend-neutral session."""
     context = resolve_session_vehicle_context(session, data, backend=backend)
-    state = backend.get_state()
-    try:
-        current_page = backend.detect_current_page()
-    except (UnsupportedCapabilityError, NotImplementedError):
-        current_page = getattr(state, "current_page", "")
+    state, current_page = _read_backend_state_and_page(backend)
 
     module_name = context.get("module", "")
     data_category = context.get("data_category", "")
 
-    if module_name and getattr(state, "current_module", "") != module_name:
-        backend.select_module(module_name)
-        set_session_selection(session, module=module_name)
-        state = backend.get_state()
-        try:
-            current_page = backend.detect_current_page()
-        except (UnsupportedCapabilityError, NotImplementedError):
-            current_page = getattr(state, "current_page", "")
-
-    if data_category and getattr(state, "current_data_category", "") != data_category:
-        backend.select_data_category(data_category)
-        set_session_selection(session, data_category=data_category)
+    state, current_page = _maybe_select_module_for_session(
+        session,
+        backend=backend,
+        state=state,
+        current_page=current_page,
+        module_name=module_name,
+    )
+    _maybe_select_data_category_for_session(
+        session,
+        backend=backend,
+        state=state,
+        data_category=data_category,
+    )
 
     dtcs = backend.read_dtcs()
-    try:
-        page_context = backend.detect_current_page()
-    except (UnsupportedCapabilityError, NotImplementedError):
-        page_context = getattr(backend.get_state(), "current_page", "")
+    page_context = _detect_backend_page(backend)
     emit_progress(f"Read DTCs completed ({len(dtcs)} codes)")
     return {
         "dtcs": [
@@ -406,81 +549,41 @@ def clear_dtcs(
     emit_progress: Callable[[str], None],
 ) -> dict[str, Any]:
     """Clear DTCs for one running backend-neutral session."""
-    if live_data_active(runtime, session.session_id):
-        raise RuntimeError("Cannot clear DTCs while live data streaming is active")
-    if navigation_session_id(runtime, session.session_id):
-        raise RuntimeError("Cannot clear DTCs while navigation is active")
-    if ai_session_id(runtime, session.session_id):
-        raise RuntimeError("Cannot clear DTCs while AI diagnosis is active")
+    _ensure_clear_dtcs_allowed(runtime, session)
 
     operation = runtime.start_operation(session.session_id, "clear_dtcs")
     try:
-        state = backend.get_state()
-        try:
-            current_page = backend.detect_current_page()
-        except (UnsupportedCapabilityError, NotImplementedError):
-            current_page = getattr(state, "current_page", "")
-
-        explicit_module = str(data.get("module") or "").strip()
-        explicit_data_category = str(data.get("data_category") or "").strip()
-        explicit_context_requested = bool(explicit_module or explicit_data_category)
-        remembered_module = str(getattr(session, "selected_module", "") or "").strip()
-        remembered_data_category = str(
-            getattr(session, "selected_data_category", "") or ""
-        ).strip()
-        remembered_context_available = bool(remembered_module or remembered_data_category)
+        state, current_page = _read_backend_state_and_page(backend)
+        explicit_context_requested, remembered_context_available = _clear_dtcs_context_flags(
+            session,
+            data,
+        )
 
         if explicit_context_requested:
-            context = resolve_session_vehicle_context(session, data, backend=backend)
-            module_name = context.get("module", "")
-            data_category = context.get("data_category", "")
-
-            if module_name and getattr(state, "current_module", "") != module_name:
-                backend.select_module(module_name)
-                set_session_selection(session, module=module_name)
-                state = backend.get_state()
-                try:
-                    current_page = backend.detect_current_page()
-                except (UnsupportedCapabilityError, NotImplementedError):
-                    current_page = getattr(state, "current_page", "")
-
-            if data_category and getattr(state, "current_data_category", "") != data_category:
-                backend.select_data_category(data_category)
-                set_session_selection(session, data_category=data_category)
+            state, current_page = _apply_explicit_clear_dtcs_context(
+                session,
+                data,
+                backend=backend,
+                state=state,
+                current_page=current_page,
+            )
         elif current_page != "data_display" and remembered_context_available:
-            context = resolve_session_vehicle_context(session, data, backend=backend)
-            module_name = context.get("module", "")
-            data_category = context.get("data_category", "")
-
-            if module_name and current_page not in ("data_list", "data_display", "sub_data_list"):
-                backend.select_module(module_name)
-                set_session_selection(session, module=module_name)
-                state = backend.get_state()
-                try:
-                    current_page = backend.detect_current_page()
-                except (UnsupportedCapabilityError, NotImplementedError):
-                    current_page = getattr(state, "current_page", "")
-
-            if data_category and current_page != "data_display":
-                backend.select_data_category(data_category)
-                set_session_selection(session, data_category=data_category)
+            state, current_page = _apply_remembered_clear_dtcs_context(
+                session,
+                data,
+                backend=backend,
+                state=state,
+                current_page=current_page,
+            )
 
         clear_result = backend.clear_dtcs()
-        try:
-            page_context = backend.detect_current_page()
-        except (UnsupportedCapabilityError, NotImplementedError):
-            page_context = getattr(backend.get_state(), "current_page", current_page)
+        page_context = _detect_backend_page(backend, fallback=current_page)
 
         emit_progress(
             "Clear DTCs completed "
             f"({int(getattr(clear_result, 'cleared_count', 0) or 0)} codes)"
         )
-        return {
-            "success": bool(getattr(clear_result, "success", True)),
-            "cleared_count": int(getattr(clear_result, "cleared_count", 0) or 0),
-            "message": str(getattr(clear_result, "message", "") or "Clear DTCs completed"),
-            "page_context": page_context,
-        }
+        return _clear_dtcs_result_payload(clear_result, page_context=page_context)
     finally:
         runtime.finish_operation(operation)
 
@@ -606,7 +709,7 @@ def resume_branch_selection(
     if not selected_choice:
         raise ValueError(f"Invalid branch option_id: {option_id}")
 
-    resume_action = str(pending_gate.context.get("resume_action") or "").strip()
+    resume_action = _strip_optional_text(pending_gate.context.get("resume_action"))
     if not resume_action:
         raise ValueError("Missing resume_action in branch decision context")
 

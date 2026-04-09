@@ -15,6 +15,7 @@ import struct
 import time
 import logging
 import argparse
+import ssl
 from typing import Optional
 
 from .config import ProxyConfig
@@ -29,6 +30,7 @@ from .benchmark import (
     strip_timing_trailer,
 )
 from .protocol import MAGIC, HEADER_SIZE, MsgType, MSG_NAMES, ProtocolDecoder, ProtocolEncoder
+from .tls_utils import harden_tls_context
 from .tunnel_quality import (
     TunnelQualityTracker,
     write_tunnel_quality_snapshot,
@@ -40,6 +42,41 @@ logging.basicConfig(
     datefmt='%H:%M:%S'
 )
 logger = logging.getLogger(__name__)
+
+MAX_FRAME_BODY_BYTES = 1_000_000
+DEFAULT_FRAME_BODY_READ_TIMEOUT_S = 10.0
+
+
+def _validated_body_length(length: int) -> int:
+    if length < HEADER_SIZE:
+        raise ValueError(f"Invalid frame length: {length} < {HEADER_SIZE}")
+
+    body_len = length - HEADER_SIZE
+    if body_len > MAX_FRAME_BODY_BYTES:
+        raise ValueError(
+            f"Frame body too large: {body_len} > {MAX_FRAME_BODY_BYTES}"
+        )
+    return body_len
+
+
+async def _read_frame_body(
+    reader: asyncio.StreamReader,
+    length: int,
+    *,
+    timeout: float = DEFAULT_FRAME_BODY_READ_TIMEOUT_S,
+) -> bytes:
+    body_len = _validated_body_length(length)
+    if body_len <= 0:
+        return b""
+
+    try:
+        return await asyncio.wait_for(reader.readexactly(body_len), timeout=timeout)
+    except asyncio.TimeoutError as exc:
+        raise TimeoutError(f"Timed out reading frame body ({body_len} bytes)") from exc
+    except asyncio.IncompleteReadError as exc:
+        raise ConnectionError(
+            f"Incomplete frame body ({len(exc.partial)} of {body_len} bytes)"
+        ) from exc
 
 
 class ReverseProxyServer:
@@ -75,11 +112,34 @@ class ReverseProxyServer:
         # Generalized read-only IOCTL cache (replaces VBATT-only cache)
         self._ioctl_cache = IoctlCache(self.config.ioctl_cache)
 
+    def _build_tls_server_context(self) -> ssl.SSLContext | None:
+        """Build optional TLS listener context for inbound reverse clients."""
+        if not self.config.tls.enabled:
+            return None
+
+        certfile = self.config.tls.certfile
+        keyfile = self.config.tls.keyfile
+        if not certfile or not keyfile:
+            raise ValueError("TLS certfile and keyfile are required")
+
+        context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        context.load_cert_chain(certfile=certfile, keyfile=keyfile)
+        harden_tls_context(context)
+
+        if self.config.tls.require_client_cert:
+            if not self.config.tls.ca_file:
+                raise ValueError("TLS CA file is required when client certificates are enforced")
+            context.load_verify_locations(cafile=self.config.tls.ca_file)
+            context.verify_mode = ssl.CERT_REQUIRED
+
+        return context
+
     async def start(self):
         """启动服务器"""
         # 启动 VCI 监听服务
+        tls_context = self._build_tls_server_context()
         vci_server = await asyncio.start_server(
-            self._handle_vci_connection, '0.0.0.0', self.listen_port
+            self._handle_vci_connection, '0.0.0.0', self.listen_port, ssl=tls_context
         )
         logger.info(f"等待 VCI Proxy 连接到端口 {self.listen_port}...")
 
@@ -91,6 +151,8 @@ class ReverseProxyServer:
 
         if self.config.auth.enabled:
             logger.info("PSK authentication enabled")
+        if self.config.tls.enabled:
+            logger.info("Reverse tunnel TLS enabled")
         if self.config.read_msgs_cache.enabled:
             logger.info(
                 f"ReadMsgs cache enabled (TTL={self.config.read_msgs_cache.ttl_ms}ms)"
@@ -163,8 +225,15 @@ class ReverseProxyServer:
             logger.warning(f"Invalid magic during auth: {magic:#x}")
             return False
 
-        body_len = length - HEADER_SIZE
-        body = await reader.readexactly(body_len) if body_len > 0 else b''
+        try:
+            body = await _read_frame_body(
+                reader,
+                length,
+                timeout=float(self.config.auth.auth_timeout_s),
+            )
+        except (ValueError, TimeoutError, ConnectionError) as exc:
+            logger.warning("Invalid auth frame from VCI client: %s", exc)
+            return False
 
         if msg_type == MsgType.AUTH_REQ:
             if self.config.auth.enabled and not self.config.auth.token:
@@ -229,9 +298,11 @@ class ReverseProxyServer:
                 logger.warning(f"Invalid magic in handshake phase 2: {magic2:#x}")
                 return False
 
-            body2_len = length2 - HEADER_SIZE
-            if body2_len > 0:
-                await reader.readexactly(body2_len)  # drain body
+            try:
+                await _read_frame_body(reader, length2, timeout=5.0)
+            except (ValueError, TimeoutError, ConnectionError) as exc:
+                logger.warning("Invalid handshake frame in phase 2: %s", exc)
+                return False
 
             if msg_type2 not in (MsgType.HEARTBEAT, MsgType.HEARTBEAT_ACK):
                 logger.warning(
@@ -325,8 +396,11 @@ class ReverseProxyServer:
                     logger.warning(f"无效的 Magic: {magic:#x}")
                     break
 
-                body_len = length - HEADER_SIZE
-                body = await reader.readexactly(body_len) if body_len > 0 else b''
+                try:
+                    body = await _read_frame_body(reader, length)
+                except (ValueError, TimeoutError, ConnectionError) as exc:
+                    logger.warning("VCI frame rejected: %s", exc)
+                    break
 
                 # 处理心跳消息 - 发送 ACK
                 if msg_type == MsgType.HEARTBEAT:
@@ -610,8 +684,11 @@ class ReverseProxyServer:
                     logger.warning(f"无效的 Magic: {magic:#x}")
                     break
 
-                body_len = length - HEADER_SIZE
-                body = await reader.readexactly(body_len) if body_len > 0 else b''
+                try:
+                    body = await _read_frame_body(reader, length)
+                except (ValueError, TimeoutError, ConnectionError) as exc:
+                    logger.warning("代理请求帧被拒绝: %s", exc)
+                    break
 
                 msg_name = MSG_NAMES.get(msg_type, f"0x{msg_type:04x}")
                 started_at_s = time.time()
@@ -717,6 +794,16 @@ def main():
                        help='本地代理端口 (默认: 9001)')
     parser.add_argument('--auth-token', type=str, default=None,
                        help='PSK authentication token')
+    parser.add_argument('--tls', action='store_true',
+                       help='Enable TLS for reverse-client connections')
+    parser.add_argument('--tls-cert', type=str, default=None,
+                       help='TLS certificate file for the reverse server')
+    parser.add_argument('--tls-key', type=str, default=None,
+                       help='TLS private key file for the reverse server')
+    parser.add_argument('--tls-ca', type=str, default=None,
+                       help='CA bundle for validating reverse-client certificates')
+    parser.add_argument('--tls-require-client-cert', action='store_true',
+                       help='Require reverse clients to present a trusted certificate')
     parser.add_argument('--no-read-cache', action='store_true',
                        help='Disable ReadMsgs BUFFER_EMPTY cache')
     parser.add_argument('--read-cache-ttl', type=int, default=150,
@@ -739,6 +826,11 @@ def main():
 
     config = ProxyConfig.from_args(
         auth_token=args.auth_token,
+        tls_enabled=args.tls,
+        tls_certfile=args.tls_cert,
+        tls_keyfile=args.tls_key,
+        tls_ca_file=args.tls_ca,
+        tls_require_client_cert=args.tls_require_client_cert,
         no_read_cache=args.no_read_cache,
         read_cache_ttl=args.read_cache_ttl,
         no_filter_dedup=args.no_filter_dedup,
@@ -754,6 +846,7 @@ def main():
     print(f"VCI Proxy 连接端口: {args.listen_port}")
     print(f"本地代理端口: {args.proxy_port}")
     print(f"Auth: {'enabled' if config.auth.enabled else 'disabled'}")
+    print(f"TLS: {'enabled' if config.tls.enabled else 'disabled'}")
     print(f"ReadMsgs cache: {'enabled' if config.read_msgs_cache.enabled else 'disabled'}"
           f" (TTL={config.read_msgs_cache.ttl_ms}ms)")
     print(f"Filter dedup: {'enabled' if config.filter_dedup.enabled else 'disabled'}")

@@ -1,3 +1,4 @@
+import json
 import threading
 import time
 import types
@@ -5,26 +6,42 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import diagnostic_platform.session_orchestrator as platform_session_orchestrator_module
 import src.gds2_orchestration.session_orchestrator as session_orchestrator_module
 import diagnostic_platform.runtime.worker_runtime as worker_runtime_module
 from diagnostic_platform.runtime.navigation_runtime import NavSession, NavSessionStatus
-from diagnostic_platform.runtime.session_actions import clear_dtcs
+from diagnostic_platform.runtime.session_actions import (
+    apply_navigation_event,
+    clear_dtcs,
+    handle_ai_stream_terminal_event,
+    handle_live_data_stream_terminal_event,
+    navigation_status_payload,
+    resolve_session_vehicle_context,
+)
 from diagnostic_platform.runtime.session_decisions import build_branch_gate, submit_session_decision
 from diagnostic_platform.runtime.session_lifecycle import (
     abort_business_session,
     build_session_status_payload,
     start_business_session,
 )
-from diagnostic_platform.runtime.session_preflight import run_start_diagnostics
-from diagnostic_platform.runtime.session_preflight import build_network_quality_gate
+from diagnostic_platform.runtime.session_preflight import (
+    build_network_quality_gate,
+    get_session_network_snapshot,
+    run_start_diagnostics,
+)
 from diagnostic_platform.runtime.worker_runtime import WorkerRuntime
 from src.gds2_orchestration.session_orchestrator import SessionContext, SessionOrchestrator
+
+
+class _StableValue:
+    def __str__(self) -> str:
+        return "stable-value"
 
 
 def _start_gds2_session(monkeypatch):
     runtime = WorkerRuntime()
     orchestrator = SessionOrchestrator()
-    monkeypatch.setattr(session_orchestrator_module, "route_backend", lambda brand: "gds2")
+    monkeypatch.setattr(platform_session_orchestrator_module, "route_backend", lambda brand: "gds2")
     payload = start_business_session(
         runtime,
         orchestrator=orchestrator,
@@ -187,6 +204,301 @@ def test_clear_dtcs_uses_current_context_without_hidden_reselection(monkeypatch)
     backend.clear_dtcs.assert_called_once_with()
 
 
+def test_clear_dtcs_explicit_context_selects_module_and_category(monkeypatch):
+    runtime, _, session, _ = _start_gds2_session(monkeypatch)
+
+    class BackendWithExplicitSelection:
+        def __init__(self):
+            self.current_page = "module_list"
+            self.current_module = ""
+            self.current_data_category = ""
+            self.select_module_calls: list[str] = []
+            self.select_data_category_calls: list[str] = []
+
+        def get_state(self):
+            return types.SimpleNamespace(
+                current_page=self.current_page,
+                current_module=self.current_module,
+                current_data_category=self.current_data_category,
+            )
+
+        def detect_current_page(self):
+            return self.current_page
+
+        def select_module(self, module_name):
+            self.select_module_calls.append(module_name)
+            self.current_module = module_name
+            self.current_page = "data_list"
+
+        def select_data_category(self, data_category):
+            self.select_data_category_calls.append(data_category)
+            self.current_data_category = data_category
+            self.current_page = "data_display"
+
+        def clear_dtcs(self):
+            return types.SimpleNamespace(
+                success=True,
+                cleared_count=1,
+                message="Clear DTCs completed",
+            )
+
+    backend = BackendWithExplicitSelection()
+
+    payload = clear_dtcs(
+        runtime,
+        session,
+        {
+            "session_id": session.session_id,
+            "module": "ECM",
+            "data_category": "Engine Data",
+        },
+        backend=backend,
+        emit_progress=lambda _message: None,
+    )
+
+    assert payload == {
+        "success": True,
+        "cleared_count": 1,
+        "message": "Clear DTCs completed",
+        "page_context": "data_display",
+    }
+    assert backend.select_module_calls == ["ECM"]
+    assert backend.select_data_category_calls == ["Engine Data"]
+    assert session.selected_module == "ECM"
+    assert session.selected_data_category == "Engine Data"
+
+
+def test_clear_dtcs_uses_remembered_context_when_not_on_data_display(monkeypatch):
+    runtime, _, session, _ = _start_gds2_session(monkeypatch)
+    session.selected_module = "ECM"
+    session.selected_data_category = "Engine Data"
+
+    class BackendWithRememberedSelection:
+        def __init__(self):
+            self.current_page = "module_list"
+            self.current_module = ""
+            self.current_data_category = ""
+            self.select_module_calls: list[str] = []
+            self.select_data_category_calls: list[str] = []
+
+        def get_state(self):
+            return types.SimpleNamespace(
+                current_page=self.current_page,
+                current_module=self.current_module,
+                current_data_category=self.current_data_category,
+            )
+
+        def detect_current_page(self):
+            return self.current_page
+
+        def select_module(self, module_name):
+            self.select_module_calls.append(module_name)
+            self.current_module = module_name
+            self.current_page = "data_list"
+
+        def select_data_category(self, data_category):
+            self.select_data_category_calls.append(data_category)
+            self.current_data_category = data_category
+            self.current_page = "data_display"
+
+        def clear_dtcs(self):
+            return types.SimpleNamespace(
+                success=True,
+                cleared_count=2,
+                message="Clear DTCs completed",
+            )
+
+    backend = BackendWithRememberedSelection()
+
+    payload = clear_dtcs(
+        runtime,
+        session,
+        {"session_id": session.session_id},
+        backend=backend,
+        emit_progress=lambda _message: None,
+    )
+
+    assert payload == {
+        "success": True,
+        "cleared_count": 2,
+        "message": "Clear DTCs completed",
+        "page_context": "data_display",
+    }
+    assert backend.select_module_calls == ["ECM"]
+    assert backend.select_data_category_calls == ["Engine Data"]
+    assert session.selected_module == "ECM"
+    assert session.selected_data_category == "Engine Data"
+
+
+def test_clear_dtcs_reselects_remembered_category_outside_data_display(monkeypatch):
+    runtime, _, session, _ = _start_gds2_session(monkeypatch)
+    session.selected_module = "ECM"
+    session.selected_data_category = "Engine Data"
+
+    class BackendRequiringCategoryReselection:
+        def __init__(self):
+            self.current_page = "data_list"
+            self.current_module = "ECM"
+            self.current_data_category = "Engine Data"
+            self.select_data_category_calls: list[str] = []
+
+        def get_state(self):
+            return types.SimpleNamespace(
+                current_page=self.current_page,
+                current_module=self.current_module,
+                current_data_category=self.current_data_category,
+            )
+
+        def detect_current_page(self):
+            return self.current_page
+
+        def select_data_category(self, data_category):
+            self.select_data_category_calls.append(data_category)
+            self.current_page = "data_display"
+
+        def clear_dtcs(self):
+            return types.SimpleNamespace(
+                success=True,
+                cleared_count=1,
+                message="Clear DTCs completed",
+            )
+
+    backend = BackendRequiringCategoryReselection()
+
+    payload = clear_dtcs(
+        runtime,
+        session,
+        {"session_id": session.session_id},
+        backend=backend,
+        emit_progress=lambda _message: None,
+    )
+
+    assert payload == {
+        "success": True,
+        "cleared_count": 1,
+        "message": "Clear DTCs completed",
+        "page_context": "data_display",
+    }
+    assert backend.select_data_category_calls == ["Engine Data"]
+
+
+def test_resolve_session_vehicle_context_ignores_non_string_state_values() -> None:
+    session = types.SimpleNamespace(
+        context=types.SimpleNamespace(vin=["VIN123"]),
+        selected_module={"name": "ECM"},
+        selected_data_category=None,
+    )
+    backend = types.SimpleNamespace(
+        get_state=lambda: types.SimpleNamespace(
+            current_module=["Current Module"],
+            current_data_category={"name": "Engine Data"},
+            extra={
+                "vin": 12345,
+                "module": ["Extra Module"],
+                "data_category": object(),
+            },
+        )
+    )
+
+    context = resolve_session_vehicle_context(
+        session,
+        {
+            "vin": {"value": "bad"},
+            "module": ["bad"],
+            "data_category": 99,
+        },
+        backend=backend,
+    )
+
+    assert context == {
+        "vin": "",
+        "module": "",
+        "data_category": "",
+    }
+
+
+def test_get_session_network_snapshot_ignores_non_mapping_preflight_payload(monkeypatch):
+    _, orchestrator, session, _ = _start_gds2_session(monkeypatch)
+    session.network_override = {
+        "allowed": True,
+        "connection_epoch": "epoch-1",
+        "reason": "stale",
+    }
+    backend = types.SimpleNamespace(preflight=lambda: ["bad"])
+
+    snapshot = get_session_network_snapshot(
+        orchestrator=orchestrator,
+        backend=backend,
+        session_id=session.session_id,
+    )
+
+    assert snapshot == {
+        "network_quality": None,
+        "network_override": None,
+        "connection_epoch": None,
+    }
+    assert session.network_override is None
+
+
+def test_apply_navigation_event_ignores_non_mapping_event() -> None:
+    runtime = WorkerRuntime()
+    session = types.SimpleNamespace(
+        session_id="session-1",
+        selected_module="",
+        selected_data_category="",
+    )
+    nav_session = types.SimpleNamespace(
+        current_page="module_list",
+        status=NavSessionStatus.RUNNING,
+        pending_decision_id=None,
+        pending_items=[],
+    )
+
+    event_type = apply_navigation_event(runtime, session, nav_session, ["bad-event"])
+
+    assert event_type == "progress"
+    assert nav_session.current_page == "module_list"
+    assert nav_session.pending_decision_id is None
+    assert nav_session.pending_items == []
+
+
+def test_handle_ai_stream_terminal_event_ignores_non_string_message() -> None:
+    runtime = WorkerRuntime()
+    session = types.SimpleNamespace(session_id="session-1")
+    runtime.bind_business_session(session.session_id)
+    runtime.bind_ai_session(session.session_id, "ai-1")
+
+    handled = handle_ai_stream_terminal_event(runtime, session, {"bad": True})
+
+    assert handled is False
+    assert runtime.get_ai_session_id(session.session_id) == "ai-1"
+
+
+def test_handle_live_data_stream_terminal_event_ignores_non_string_message() -> None:
+    runtime = WorkerRuntime()
+    session = types.SimpleNamespace(session_id="session-1")
+    runtime.set_live_data_active(session.session_id, True)
+
+    handled = handle_live_data_stream_terminal_event(runtime, session, {"bad": True})
+
+    assert handled is False
+    assert runtime.is_live_data_active(session.session_id) is True
+
+
+def test_navigation_status_payload_accepts_string_status() -> None:
+    runtime = WorkerRuntime()
+    session = types.SimpleNamespace(session_id="session-1")
+    nav_session = NavSession(session_id="nav-1", goal="Navigate to Data Display")
+    nav_session.status = "completed"
+    runtime.set_navigation_session(nav_session.session_id, nav_session)
+    runtime.bind_navigation_session(session.session_id, nav_session.session_id)
+
+    payload = navigation_status_payload(runtime, session)
+
+    assert payload["navigation_session_id"] == "nav-1"
+    assert payload["status"] == "completed"
+
+
 def test_abort_business_session_clears_worker_bindings(monkeypatch):
     runtime, orchestrator, session, _ = _start_gds2_session(monkeypatch)
 
@@ -252,9 +564,9 @@ def test_abort_business_session_cancels_active_worker_operation(monkeypatch):
 
 def test_start_business_session_serializes_concurrent_starts(monkeypatch):
     orchestrator = SessionOrchestrator()
-    monkeypatch.setattr(session_orchestrator_module, "route_backend", lambda brand: "gds2")
+    monkeypatch.setattr(platform_session_orchestrator_module, "route_backend", lambda brand: "gds2")
 
-    real_uuid4 = session_orchestrator_module.uuid.uuid4
+    real_uuid4 = platform_session_orchestrator_module.uuid.uuid4
     start_gate = threading.Event()
     created_sessions: list[str] = []
     failures: list[str] = []
@@ -264,7 +576,7 @@ def test_start_business_session_serializes_concurrent_starts(monkeypatch):
         time.sleep(0.05)
         return real_uuid4()
 
-    monkeypatch.setattr(session_orchestrator_module.uuid, "uuid4", slow_uuid4)
+    monkeypatch.setattr(platform_session_orchestrator_module.uuid, "uuid4", slow_uuid4)
 
     def worker() -> None:
         try:
@@ -306,6 +618,35 @@ def test_complete_session_keeps_terminal_event_when_queue_is_full(monkeypatch):
     assert any(message.startswith("event: done\n") for message in drained)
 
 
+def test_emit_progress_stringifies_non_json_extra_values(monkeypatch):
+    _, orchestrator, session, _ = _start_gds2_session(monkeypatch)
+    event_queue = orchestrator.get_event_queue(session.session_id)
+    assert event_queue is not None
+    _ = event_queue.get_nowait()
+
+    orchestrator.emit_progress(
+        session.session_id,
+        RuntimeError("progress update"),
+        {
+            "detail": RuntimeError("boom"),
+            "value": _StableValue(),
+            "nested": {"reason": RuntimeError("bad")},
+        },
+    )
+
+    raw_message = event_queue.get_nowait()
+    lines = raw_message.strip().splitlines()
+    assert lines[0] == "event: progress"
+    payload = json.loads(lines[1].removeprefix("data: "))
+    assert payload == {
+        "session_id": session.session_id,
+        "message": "progress update",
+        "detail": "boom",
+        "value": "stable-value",
+        "nested": {"reason": "bad"},
+    }
+
+
 def test_terminal_session_cleanup_evicts_session_state(monkeypatch):
     _, orchestrator, session, _ = _start_gds2_session(monkeypatch)
 
@@ -324,7 +665,7 @@ def test_terminal_session_cleanup_evicts_session_state(monkeypatch):
             return None
 
     monkeypatch.setattr(
-        session_orchestrator_module,
+        platform_session_orchestrator_module,
         "threading",
         types.SimpleNamespace(Timer=ImmediateTimer),
         raising=False,
@@ -420,3 +761,76 @@ def test_run_start_diagnostics_cleans_backend_after_failure(monkeypatch):
         )
 
     backend.reset_startup_state.assert_called_once_with()
+
+
+def test_run_start_diagnostics_preserves_device_selection_result(monkeypatch):
+    runtime, orchestrator, session, _ = _start_gds2_session(monkeypatch)
+    backend = MagicMock()
+    backend.preflight.return_value = {
+        "network_quality": {
+            "grade": "good",
+            "status": "healthy",
+            "reason": "ok",
+            "connection_epoch": "epoch-1",
+            "sample_count": 5,
+            "fresh": True,
+            "connected": True,
+        },
+        "connection_epoch": "epoch-1",
+    }
+    backend.start.return_value = {
+        "devices": ["VCI Proxy (Remote)", "Bench VCI"],
+        "at_device_explorer": True,
+        "device_connected": False,
+    }
+    backend.get_state.return_value = types.SimpleNamespace(extra={})
+
+    payload = run_start_diagnostics(
+        runtime,
+        orchestrator=orchestrator,
+        backend=backend,
+        session_id=session.session_id,
+    )
+
+    assert payload["success"] is True
+    assert payload["result"] == {
+        "devices": ["VCI Proxy (Remote)", "Bench VCI"],
+        "at_device_explorer": True,
+        "device_connected": False,
+    }
+    backend.get_modules.assert_not_called()
+
+
+def test_run_start_diagnostics_ignores_non_mapping_state_extra(monkeypatch):
+    runtime, orchestrator, session, _ = _start_gds2_session(monkeypatch)
+    backend = MagicMock()
+    backend.preflight.return_value = {
+        "network_quality": {
+            "grade": "good",
+            "status": "healthy",
+            "reason": "ok",
+            "connection_epoch": "epoch-1",
+            "sample_count": 5,
+            "fresh": True,
+            "connected": True,
+        },
+        "connection_epoch": "epoch-1",
+    }
+    backend.start.return_value = {}
+    backend.get_state.return_value = types.SimpleNamespace(extra=["bad"])
+    backend.get_modules.return_value = ["Engine", "ABS"]
+
+    payload = run_start_diagnostics(
+        runtime,
+        orchestrator=orchestrator,
+        backend=backend,
+        session_id=session.session_id,
+    )
+
+    assert payload["success"] is True
+    assert payload["result"] == {
+        "modules": ["Engine", "ABS"],
+        "vin": None,
+        "device": None,
+    }
+    backend.get_modules.assert_called_once_with()

@@ -2,7 +2,16 @@ import json
 import os
 
 from src.streaming import agent_data_collector as collector_module
-from src.streaming.agent_data_collector import AgentDataCollector
+from src.streaming.agent_data_collector import (
+    AgentDataCollector,
+    _guard_event_signature,
+    _parse_agent_json,
+)
+
+
+class _StableValue:
+    def __str__(self) -> str:
+        return "stable-value"
 
 
 def _write_latest_json(path, *, extraction_count=1, version="2.0"):
@@ -92,3 +101,116 @@ def test_check_agent_available_still_rejects_stale_file(tmp_path, monkeypatch):
     assert result["available"] is False
     assert result["age_seconds"] == 12.0
     assert result["extraction_count"] == 9
+
+
+def test_guard_event_signature_stringifies_non_json_values() -> None:
+    signature = _guard_event_signature(
+        {
+            "ok": True,
+            "detail": _StableValue(),
+            "error": RuntimeError("boom"),
+        }
+    )
+
+    assert signature == '{"detail": "stable-value", "error": "boom", "ok": true}'
+
+
+def test_parse_agent_json_reads_v2_tables_and_normalizes_timestamp() -> None:
+    snapshot = _parse_agent_json(
+        {
+            "timestamp": 1_710_000_000_123,
+            "extractionCount": 7,
+            "extractionDurationMs": 45,
+            "pageContext": {"page": "data_display"},
+            "tables": [
+                {
+                    "tableType": "data_display",
+                    "columns": ["Module", "Parameter Name", "Value", "Units"],
+                    "rows": [
+                        {"Module": "ECM", "Parameter Name": "RPM", "Value": 900, "Units": "rpm"},
+                        {"Module": "ECM", "Parameter Name": "", "Value": 1, "Units": ""},
+                    ],
+                },
+                {
+                    "tableType": "dtc",
+                    "columns": ["Control Module", "DTC", "Description", "Status"],
+                    "rows": [
+                        {
+                            "Control Module": "ECM",
+                            "DTC": "P0101",
+                            "Description": "MAF performance",
+                            "Status": "Active",
+                        },
+                        {
+                            "Control Module": "ECM",
+                            "DTC": "",
+                            "Description": "ignored",
+                            "Status": "History",
+                        },
+                    ],
+                },
+            ],
+        }
+    )
+
+    assert snapshot.extraction_count == 7
+    assert snapshot.extraction_duration_ms == 45
+    assert snapshot.page_context == {"page": "data_display"}
+    assert snapshot.table_count == 2
+    assert len(snapshot.raw_tables) == 2
+    assert snapshot.agent_timestamp_s == 1_710_000_000.123
+    assert snapshot.parameters == [
+        {"module": "ECM", "name": "RPM", "value": "900", "unit": "rpm"}
+    ]
+    assert [dtc.code for dtc in snapshot.dtcs] == ["P0101"]
+    assert snapshot.dtcs[0].description == "MAF performance"
+
+
+def test_parse_agent_json_falls_back_to_v1_tableview_controls() -> None:
+    snapshot = _parse_agent_json(
+        {
+            "timestamp": 123.0,
+            "windows": [
+                {
+                    "controls": [
+                        {
+                            "type": "Label",
+                            "text": "ignored",
+                        },
+                        {
+                            "type": "TableView",
+                            "columns": ["Module", "Parameter Name", "Value", "Unit"],
+                            "rows": [
+                                {
+                                    "Module": "ECM",
+                                    "Parameter Name": "Coolant Temp",
+                                    "Value": 88,
+                                    "Unit": "C",
+                                }
+                            ],
+                        },
+                        {
+                            "type": "TableView",
+                            "columns": ["Control Module", "DTC", "Description", "Status"],
+                            "rows": [
+                                {
+                                    "Control Module": "ABS",
+                                    "DTC": "C0035",
+                                    "Description": "Wheel speed sensor",
+                                    "Status": "Current",
+                                }
+                            ],
+                        },
+                    ]
+                }
+            ],
+        }
+    )
+
+    assert snapshot.table_count == 0
+    assert snapshot.raw_tables == []
+    assert snapshot.agent_timestamp_s == 123.0
+    assert snapshot.parameters == [
+        {"module": "ECM", "name": "Coolant Temp", "value": "88", "unit": "C"}
+    ]
+    assert [dtc.code for dtc in snapshot.dtcs] == ["C0035"]

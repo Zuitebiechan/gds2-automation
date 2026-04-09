@@ -27,12 +27,28 @@ from diagnostic_platform.sse import (
     DEFAULT_AGENT_STREAM_SCOPE,
 )
 from src.diagnosis.ai_engine import AIEngine
+from server.api.http_utils import (
+    RequestPayloadError,
+    internal_error_payload,
+    read_text_mapping_field,
+    require_json_object,
+)
 
 
 # Lightweight exception kept from removed AI recovery system
 class WorkflowRecoveryError(Exception):
     """Raised when workflow needs to be restarted from a different page."""
-    pass
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        target_page: str = "",
+        reasoning: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.target_page = target_page
+        self.reasoning = reasoning
 
 
 logger = logging.getLogger(__name__)
@@ -42,6 +58,32 @@ diagnostics_bp = Blueprint("diagnostics", __name__, url_prefix="/api/diagnose")
 
 def _runtime():
     return get_worker_runtime()
+
+
+def _read_text_field(
+    data: dict[str, object],
+    field: str,
+    *,
+    default: str = "",
+) -> str:
+    return read_text_mapping_field(data, field, default=default)
+
+
+def _read_query_text_arg(field: str, *, default: str = "") -> str:
+    return read_text_mapping_field(request.args, field, default=default)
+
+
+def _read_int_field(
+    data: dict[str, object],
+    field: str,
+    *,
+    default: int,
+) -> int:
+    value = data.get(field, default)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{field} must be an integer") from None
 
 
 def _build_ai_engine() -> AIEngine:
@@ -68,10 +110,12 @@ def _load_zhipu_api_key() -> str | None:
     )
     config_path = os.path.join(config_dir, "config.json")
     try:
-        with open(config_path, "r") as f:
+        with open(config_path, "r", encoding="utf-8") as f:
             config = json.load(f)
-        return config.get("zhipu_api_key", "").strip() or None
+        return read_text_mapping_field(config, "zhipu_api_key") or None
     except (FileNotFoundError, json.JSONDecodeError):
+        return None
+    except ValueError:
         return None
 
 
@@ -87,7 +131,7 @@ def _default_backend_name() -> str:
 
 def _resolve_backend_name(data: dict[str, object] | None = None) -> str:
     payload = data or {}
-    explicit = str(payload.get("backend_name") or "").strip()
+    explicit = _read_text_field(payload, "backend_name")
     if explicit:
         return explicit
     active_bundle = _runtime().get_active_backend_bundle()
@@ -153,15 +197,23 @@ def stop_live_data_stream(*, backend_name: str | None = None) -> dict[str, objec
 def diagnose_start():
     """One-button start: start + auto-connect + modules."""
     try:
-        data = request.json or {}
+        data = require_json_object(request)
         payload = build_diagnostics_start_payload(
             backend=_get_backend(_resolve_backend_name(data)),
         )
-        logger.info(
-            "DIAG start ready modules=%s device=%s",
-            len(payload["modules"]),
-            payload.get("device") or "-",
-        )
+        if "modules" in payload:
+            logger.info(
+                "DIAG start ready modules=%s device=%s",
+                len(payload["modules"]),
+                payload.get("device") or "-",
+            )
+        elif "devices" in payload:
+            logger.info(
+                "DIAG start awaiting device selection devices=%s",
+                len(payload["devices"]),
+            )
+        else:
+            logger.info("DIAG start ready payload_keys=%s", sorted(payload.keys()))
         return jsonify(payload)
 
     except WorkflowRecoveryError as e:
@@ -173,22 +225,29 @@ def diagnose_start():
             "reasoning": e.reasoning,
             "error": str(e),
         }), 200
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
 
     except Exception as e:
         logger.exception("diagnose_start failed")
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify(internal_error_payload()), 500
 
 
 @diagnostics_bp.route('/dtcs')
 def diagnose_dtcs():
     """Read DTCs directly from the diagnostics backend."""
     try:
-        backend = _get_backend((request.args.get('backend_name') or '').strip() or None)
+        backend_name = _read_query_text_arg("backend_name")
+        module_name = _read_query_text_arg("module")
+        data_category = _read_query_text_arg("data_category")
+        backend = _get_backend(backend_name or None)
         _ensure_backend_capability(backend, BackendCapability.READ_DTCS)
         payload = read_diagnostic_dtcs(
             backend=backend,
-            module_name=request.args.get('module', '').strip(),
-            data_category=request.args.get('data_category', '').strip(),
+            module_name=module_name,
+            data_category=data_category,
         )
         logger.info(
             "DIAG DTC read count=%s page=%s",
@@ -214,24 +273,27 @@ def diagnose_dtcs():
     except RuntimeError as e:
         logger.info(f"diagnose_dtcs invalid state: {e}")
         return jsonify({"success": False, "error": str(e), "dtcs": []}), 400
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc), "dtcs": []}), 400
 
     except Exception as e:
         logger.exception("diagnose_dtcs failed")
-        return jsonify({"success": False, "error": str(e), "dtcs": []}), 500
+        payload = internal_error_payload()
+        payload["dtcs"] = []
+        return jsonify(payload), 500
 
 
 @diagnostics_bp.route('/clear_dtcs', methods=['POST'])
 def diagnose_clear_dtcs():
     """Clear DTCs directly from the diagnostics backend."""
-    data = request.json or {}
-
     try:
+        data = require_json_object(request)
         backend = _get_backend(_resolve_backend_name(data))
         _ensure_backend_capability(backend, BackendCapability.CLEAR_DTCS)
         payload = clear_diagnostic_dtcs(
             backend=backend,
-            module_name=str(data.get('module') or '').strip(),
-            data_category=str(data.get('data_category') or '').strip(),
+            module_name=_read_text_field(data, 'module'),
+            data_category=_read_text_field(data, 'data_category'),
         )
         logger.info(
             "DIAG clear_dtcs cleared=%s page=%s",
@@ -245,21 +307,25 @@ def diagnose_clear_dtcs():
     except RuntimeError as e:
         logger.info(f"diagnose_clear_dtcs invalid state: {e}")
         return jsonify({"success": False, "error": str(e)}), 400
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
     except Exception as e:
         logger.exception("diagnose_clear_dtcs failed")
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify(internal_error_payload()), 500
 
 
 @diagnostics_bp.route('/select_module', methods=['POST'])
 def diagnose_select_module():
     """Select module and return data categories."""
-    data = request.json or {}
-    module = data.get('module')
-
-    if not module:
-        return jsonify({"success": False, "error": "Module name required"}), 400
-
     try:
+        data = require_json_object(request)
+        module = _read_text_field(data, 'module')
+
+        if not module:
+            return jsonify({"success": False, "error": "Module name required"}), 400
+
         backend = _get_backend(_resolve_backend_name(data))
         payload = select_diagnostic_module(backend=backend, module=module)
         logger.info("DIAG module=%s categories=%s", module, len(payload["data_categories"]))
@@ -274,23 +340,27 @@ def diagnose_select_module():
             "reasoning": e.reasoning,
             "error": str(e),
         }), 200
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
 
     except Exception as e:
         logger.exception("diagnose_select_module failed")
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify(internal_error_payload()), 500
 
 
 @diagnostics_bp.route('/live_data/start', methods=['POST'])
 def diagnose_live_data_start():
     """Navigate to Data Display and start live Agent streaming."""
-    data = request.json or {}
-    data_category = data.get('data_category')
-    interval_ms = data.get('interval_ms', 100)
-
-    if not data_category:
-        return jsonify({"success": False, "error": "Data category required"}), 400
-
     try:
+        data = require_json_object(request)
+        data_category = _read_text_field(data, 'data_category')
+        interval_ms = _read_int_field(data, 'interval_ms', default=100)
+
+        if not data_category:
+            return jsonify({"success": False, "error": "Data category required"}), 400
+
         return jsonify(
             start_live_data_stream(
                 data_category,
@@ -308,13 +378,17 @@ def diagnose_live_data_start():
             "reasoning": e.reasoning,
             "error": str(e),
         }), 200
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
 
     except UnsupportedCapabilityError as e:
         return jsonify({"success": False, "error": str(e)}), 501
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
 
     except Exception as e:
         logger.exception("diagnose_live_data_start failed")
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify(internal_error_payload()), 500
 
 
 @diagnostics_bp.route('/live_data/events')
@@ -332,14 +406,18 @@ def diagnose_live_data_events():
 def diagnose_live_data_stop():
     """Stop diagnostics live streaming and go back from Data Display."""
     try:
-        data = request.json or {}
+        data = require_json_object(request)
         return jsonify(stop_live_data_stream(backend_name=_resolve_backend_name(data)))
 
     except UnsupportedCapabilityError as e:
         return jsonify({"success": False, "error": str(e)}), 501
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
     except Exception as e:
         logger.exception("diagnose_live_data_stop failed")
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify(internal_error_payload()), 500
 
 
 # =========================================================================
@@ -350,20 +428,20 @@ def diagnose_live_data_stop():
 @diagnostics_bp.route('/ai_diagnose', methods=['POST'])
 def diagnose_ai_start():
     """Start AI diagnosis: navigate to Data Display, 30s data collection + LLM analysis."""
-    data = request.json or {}
-    data_category = data.get('data_category', '')
-    vehicle_context = {
-        'vin': data.get('vin', ''),
-        'module': data.get('module', ''),
-        'data_category': data_category,
-        'brand': data.get('brand', ''),
-        'model': data.get('model', ''),
-    }
-
-    if not data_category:
-        return jsonify({"success": False, "error": "data_category required"}), 400
-
     try:
+        data = require_json_object(request)
+        data_category = _read_text_field(data, 'data_category')
+        vehicle_context = {
+            'vin': _read_text_field(data, 'vin'),
+            'module': _read_text_field(data, 'module'),
+            'data_category': data_category,
+            'brand': _read_text_field(data, 'brand'),
+            'model': _read_text_field(data, 'model'),
+        }
+
+        if not data_category:
+            return jsonify({"success": False, "error": "data_category required"}), 400
+
         engine = _get_ai_engine()
         backend = _get_backend(_resolve_backend_name(data))
         _ensure_backend_capability(backend, BackendCapability.AI_DATA_COLLECTION)
@@ -394,6 +472,10 @@ def diagnose_ai_start():
             "reasoning": e.reasoning,
             "error": str(e),
         }), 409
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
 
     except UnsupportedCapabilityError as e:
         return jsonify({"success": False, "error": str(e)}), 501
@@ -403,20 +485,24 @@ def diagnose_ai_start():
 
     except Exception as e:
         logger.exception("diagnose_ai_start failed")
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify(internal_error_payload()), 500
 
 
 @diagnostics_bp.route('/ai_diagnose/events')
 def diagnose_ai_events():
     """SSE endpoint for AI diagnosis progress + streamed LLM result."""
-    session_id = request.args.get('session_id', '').strip()
-    if not session_id:
-        return jsonify({"success": False, "error": "session_id required"}), 400
+    try:
+        session_id = _read_query_text_arg("session_id")
+        if not session_id:
+            return jsonify({"success": False, "error": "session_id required"}), 400
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
 
     try:
         engine = _get_ai_engine()
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.exception("diagnose_ai_events failed to build engine")
+        return jsonify(internal_error_payload()), 500
 
     event_queue = engine.get_event_queue(session_id)
     if event_queue is None:
@@ -436,21 +522,21 @@ def diagnose_ai_events():
 @diagnostics_bp.route('/ai_diagnose/retry', methods=['POST'])
 def diagnose_ai_retry():
     """Retry LLM analysis with cached payload (skip re-collection)."""
-    data = request.json or {}
-    cached_payload_id = data.get('cached_payload_id', '').strip()
-    vehicle_context = {
-        'vin': data.get('vin', ''),
-        'module': data.get('module', ''),
-        'data_category': data.get('data_category', ''),
-    }
-
-    if not cached_payload_id:
-        return jsonify({
-            "success": False,
-            "error": "cached_payload_id required",
-        }), 400
-
     try:
+        data = require_json_object(request)
+        cached_payload_id = _read_text_field(data, 'cached_payload_id')
+        vehicle_context = {
+            'vin': _read_text_field(data, 'vin'),
+            'module': _read_text_field(data, 'module'),
+            'data_category': _read_text_field(data, 'data_category'),
+        }
+
+        if not cached_payload_id:
+            return jsonify({
+                "success": False,
+                "error": "cached_payload_id required",
+            }), 400
+
         session_id = retry_public_ai_diagnosis(
             engine=_get_ai_engine(),
             cached_payload_id=cached_payload_id,
@@ -465,7 +551,11 @@ def diagnose_ai_retry():
 
     except RuntimeError as e:
         return jsonify({"success": False, "error": str(e)}), 409
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
 
     except Exception as e:
         logger.exception("diagnose_ai_retry failed")
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify(internal_error_payload()), 500
