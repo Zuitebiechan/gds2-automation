@@ -36,6 +36,7 @@ Use it as the primary source of truth after the code itself. Each document has a
 | --- | --- |
 | `agent_docs/ops/deployment_and_operations.md` | Environment setup, ports, startup, secrets, logs, build/run conventions |
 | `agent_docs/ops/vci_proxy_and_tunnel.md` | Tunnel protocol path, reverse server/client, GUI/tray client, auth, cache, quality tracking |
+| `agent_docs/ops/aws_local_zone_customer_node.md` | Plain-language deployment guide for one-customer-per-node AWS Local Zone Windows workers |
 
 ## Supporting Material
 

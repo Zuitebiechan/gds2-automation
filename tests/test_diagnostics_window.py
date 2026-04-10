@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import tkinter as tk
 
 from vci_proxy.diagnostics_window import DiagnosticsWindow
@@ -146,3 +147,134 @@ def test_handle_session_status_result_disables_clear_dtcs_while_session_ai_activ
 
     assert window._current_page == "data_display"
     assert window._clear_dtc_button.state == tk.DISABLED
+
+
+def test_request_headers_include_api_token_when_configured() -> None:
+    window = DiagnosticsWindow.__new__(DiagnosticsWindow)
+    window._api_token = "api-secret"
+
+    assert window._request_headers() == {"X-API-Token": "api-secret"}
+
+
+def test_request_headers_omit_api_token_when_missing() -> None:
+    window = DiagnosticsWindow.__new__(DiagnosticsWindow)
+    window._api_token = ""
+
+    assert window._request_headers() == {}
+
+
+def test_api_call_sends_api_token_header(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    window = DiagnosticsWindow.__new__(DiagnosticsWindow)
+    window._api_base = "https://cust001.diag.example.com"
+    window._api_token = "api-secret"
+    window._queue = []
+
+    class _ImmediateThread:
+        def __init__(self, target=None, daemon=None, name=None):
+            self.target = target
+            self.daemon = daemon
+            self.name = name
+
+        def start(self):
+            if self.target is not None:
+                self.target()
+
+    class _Queue:
+        def put(self, item) -> None:
+            captured["queue_item"] = item
+
+    class _Response:
+        ok = True
+        status_code = 200
+        reason = "OK"
+
+        @staticmethod
+        def json() -> dict[str, object]:
+            return {"success": True}
+
+    def _fake_post(url, json=None, params=None, timeout=None, headers=None):
+        captured["url"] = url
+        captured["json"] = json
+        captured["params"] = params
+        captured["timeout"] = timeout
+        captured["headers"] = headers
+        return _Response()
+
+    window._queue = _Queue()
+    monkeypatch.setattr(threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr("vci_proxy.diagnostics_window.requests.post", _fake_post)
+
+    window._api_call(
+        "POST",
+        "/api/session/start",
+        json_data={"brand": "gds2"},
+        callback_event="session_start_result",
+    )
+
+    assert captured["url"] == "https://cust001.diag.example.com/api/session/start"
+    assert captured["headers"] == {"X-API-Token": "api-secret"}
+    assert captured["queue_item"] == ("session_start_result", {"success": True})
+
+
+def test_start_session_sse_thread_sends_api_token_header(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    window = DiagnosticsWindow.__new__(DiagnosticsWindow)
+    window._api_base = "https://cust001.diag.example.com"
+    window._api_token = "api-secret"
+    window._session_sse_running = False
+    window._session_sse_thread = None
+    window._session_sse_response = None
+    window._queue = _QueueForSse()
+
+    class _ImmediateThread:
+        def __init__(self, target=None, daemon=None, name=None):
+            self.target = target
+            self.daemon = daemon
+            self.name = name
+
+        def start(self):
+            if self.target is not None:
+                self.target()
+
+        def is_alive(self) -> bool:
+            return False
+
+        def join(self, timeout=None) -> None:
+            return None
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def iter_lines(self, decode_unicode=True):
+            return iter([])
+
+        def close(self) -> None:
+            return None
+
+    def _fake_get(url, stream=None, timeout=None, headers=None):
+        captured["url"] = url
+        captured["stream"] = stream
+        captured["timeout"] = timeout
+        captured["headers"] = headers
+        return _Response()
+
+    monkeypatch.setattr(threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr("vci_proxy.diagnostics_window.requests.get", _fake_get)
+
+    window._start_session_sse_thread("session-123")
+
+    assert captured["url"] == "https://cust001.diag.example.com/api/session/events?session_id=session-123"
+    assert captured["headers"] == {"X-API-Token": "api-secret"}
+
+
+class _QueueForSse:
+    def put(self, item) -> None:
+        return None

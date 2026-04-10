@@ -159,3 +159,75 @@ def test_session_domain_handler_modules_exist():
     assert hasattr(navigation_module, "submit_navigation_decision_for_business")
     assert hasattr(navigation_module, "abort_navigation_session_for_business")
     assert hasattr(navigation_module, "build_navigation_status_for_business")
+
+
+def test_local_zone_edge_assets_exist_and_are_documented():
+    deployment_doc = (ROOT / "agent_docs" / "ops" / "deployment_and_operations.md").read_text(
+        encoding="utf-8"
+    )
+
+    expected_assets = [
+        ROOT / "scripts" / "local_zone" / "Caddyfile.example",
+        ROOT / "scripts" / "local_zone" / "start_edge_proxy.ps1",
+        ROOT / "scripts" / "local_zone" / "test_edge_health.ps1",
+        ROOT / "scripts" / "local_zone" / "deploy_customer_node.ps1",
+        ROOT / "scripts" / "local_zone" / "register_edge_autostart.bat",
+        ROOT / "scripts" / "local_zone" / "unregister_edge_autostart.bat",
+        ROOT / "scripts" / "local_zone" / "customer_node.env.example",
+        ROOT / "scripts" / "local_zone" / "README.md",
+        ROOT / "agent_docs" / "ops" / "aws_local_zone_customer_node.md",
+    ]
+
+    for path in expected_assets:
+        assert path.exists(), f"Missing Local Zone deployment asset: {path}"
+        assert path.name in deployment_doc, f"{path.name} should be referenced in deployment docs"
+
+
+def test_local_zone_caddy_template_keeps_flask_private():
+    caddyfile = (ROOT / "scripts" / "local_zone" / "Caddyfile.example").read_text(
+        encoding="utf-8"
+    )
+
+    assert "reverse_proxy 127.0.0.1:8080" in caddyfile
+    assert "{env.EDGE_DOMAIN}" in caddyfile
+    assert ":8080" not in caddyfile.splitlines()[0]
+
+
+def test_local_zone_healthcheck_script_covers_loopback_and_public_edge():
+    script = (ROOT / "scripts" / "local_zone" / "test_edge_health.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert "127.0.0.1:8080" in script
+    assert "https://" in script
+    assert "X-API-Token" in script
+
+
+def test_local_zone_autostart_script_registers_edge_task():
+    script = (ROOT / "scripts" / "local_zone" / "register_edge_autostart.bat").read_text(
+        encoding="utf-8"
+    )
+
+    assert "DiagPlatform-EdgeProxy" in script
+    assert "start_edge_proxy.ps1" in script
+    assert "schtasks /create" in script
+
+
+def test_local_zone_env_template_covers_edge_and_api_settings():
+    template = (ROOT / "scripts" / "local_zone" / "customer_node.env.example").read_text(
+        encoding="utf-8"
+    )
+
+    assert "EDGE_DOMAIN=" in template
+    assert "DIAGNOSTIC_API_TOKEN=" in template
+    assert "DIAGNOSTIC_API_HOST=127.0.0.1" in template
+
+
+def test_local_zone_deploy_script_chains_service_proxy_and_healthcheck():
+    script = (ROOT / "scripts" / "local_zone" / "deploy_customer_node.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert "cloud_start_services.bat" in script
+    assert "start_edge_proxy.ps1" in script
+    assert "test_edge_health.ps1" in script

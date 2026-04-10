@@ -78,6 +78,43 @@ Also keep the OEM runtime available:
 
 - for GDS2, the Java agent should be writing to `~/gds2-data/latest.json`
 
+### Recommended production edge pattern
+
+For customer-facing cloud nodes, prefer:
+
+- keep Flask bound to `127.0.0.1:8080`
+- place a reverse proxy such as Caddy or IIS in front of Flask
+- expose only `443` publicly for the diagnostics GUI
+- keep `8080` private to the cloud node
+- expose `9000` for the reverse tunnel, ideally with TLS enabled
+
+This pattern is the preferred shape for one-customer-per-node deployments,
+including AWS Local Zone worker nodes.
+
+Example public flow:
+
+```text
+GUI -> https://customer-node.example.com:443 -> reverse proxy -> 127.0.0.1:8080
+```
+
+Example reverse-proxy flow:
+
+```text
+Local reverse client -> tls://customer-node.example.com:9000 -> reverse_server
+```
+
+Repository templates for this pattern:
+
+- `scripts/local_zone/Caddyfile.example`
+- `scripts/local_zone/start_edge_proxy.ps1`
+- `scripts/local_zone/test_edge_health.ps1`
+- `scripts/local_zone/deploy_customer_node.ps1`
+- `scripts/local_zone/register_edge_autostart.bat`
+- `scripts/local_zone/unregister_edge_autostart.bat`
+- `scripts/local_zone/customer_node.env.example`
+- `scripts/local_zone/README.md`
+- `agent_docs/ops/aws_local_zone_customer_node.md`
+
 ### Local side
 
 Development mode:
@@ -103,6 +140,20 @@ python -m vci_proxy.reverse_client ^
 The tray client persists TLS trust settings in `%APPDATA%\VCI_Proxy\config.json`
 using `tls_enabled`, `tls_ca_file`, and `tls_server_name`.
 
+The diagnostics GUI now also supports these API settings in
+`%APPDATA%\VCI_Proxy\config.json`:
+
+- `api_scheme`: `http` or `https`
+- `api_port`: API listener or proxy port such as `443`
+- `api_token`: optional API token sent as `X-API-Token`
+
+For production customer nodes behind a reverse proxy, prefer:
+
+- `api_scheme=https`
+- `host=<customer-domain>`
+- `api_port=443`
+- `api_token=<per-node api token>` when `DIAGNOSTIC_API_TOKEN` is enabled
+
 ### Windows client build
 
 ```bash
@@ -116,6 +167,12 @@ Current default ports:
 - `8080`: Flask API
 - `9000`: reverse tunnel listener for the local proxy client
 - `9001`: cloud-side local proxy listener used by the virtual J2534 DLL
+
+Recommended production exposure:
+
+- `443`: public diagnostics API entrypoint through reverse proxy
+- `9000`: public reverse tunnel entrypoint
+- `8080`: private loopback-only Flask upstream
 
 ## Important Runtime Paths
 

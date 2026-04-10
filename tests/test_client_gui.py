@@ -60,9 +60,11 @@ def test_load_config_merges_saved_values_with_defaults(monkeypatch, tmp_path) ->
     loaded = client_gui.load_config()
 
     assert loaded == {
+        "api_scheme": "http",
         "host": "diag.example",
         "port": 9000,
         "api_port": 9090,
+        "api_token": "",
         "auth_token": "",
         "dll_path": "",
         "tls_enabled": False,
@@ -74,9 +76,11 @@ def test_load_config_merges_saved_values_with_defaults(monkeypatch, tmp_path) ->
 def test_save_config_persists_json(monkeypatch, tmp_path) -> None:
     client_gui = _import_client_gui(monkeypatch, tmp_path)
     config = {
+        "api_scheme": "https",
         "host": "diag.example",
         "port": 9100,
         "api_port": 8081,
+        "api_token": "api-secret",
         "auth_token": "secret",
         "dll_path": "C:/drivers/demo.dll",
         "tls_enabled": True,
@@ -140,9 +144,11 @@ def test_start_client_builds_reverse_proxy_client_and_starts_thread(monkeypatch,
 
     app = client_gui.VCIProxyTrayApp()
     app._config = {
+        "api_scheme": "http",
         "host": "diag.example",
         "port": 9000,
         "api_port": 8080,
+        "api_token": "",
         "auth_token": "secret",
         "dll_path": "C:/drivers/demo.dll",
         "tls_enabled": True,
@@ -214,9 +220,11 @@ def test_on_settings_dispatches_dialog_work_to_background_thread(monkeypatch, tm
 
     app = client_gui.VCIProxyTrayApp()
     app._config = {
+        "api_scheme": "http",
         "host": "diag.example",
         "port": 9000,
         "api_port": 8080,
+        "api_token": "",
         "auth_token": "secret",
         "dll_path": "",
     }
@@ -263,9 +271,11 @@ def test_on_settings_cancel_does_not_restart_client_when_auth_token_is_missing(m
 
     app = client_gui.VCIProxyTrayApp()
     app._config = {
+        "api_scheme": "http",
         "host": "diag.example",
         "port": 9000,
         "api_port": 8080,
+        "api_token": "",
         "auth_token": "",
         "dll_path": "",
     }
@@ -291,18 +301,22 @@ def test_run_settings_dialog_preserves_existing_tls_config(monkeypatch, tmp_path
 
         def show(self):
             return {
+                "api_scheme": "https",
                 "host": "diag.example",
                 "port": 9000,
                 "api_port": 8080,
+                "api_token": "api-secret",
                 "auth_token": "secret",
                 "dll_path": "",
             }
 
     app = client_gui.VCIProxyTrayApp()
     app._config = {
+        "api_scheme": "http",
         "host": "diag.example",
         "port": 9000,
         "api_port": 8080,
+        "api_token": "",
         "auth_token": "secret",
         "dll_path": "",
         "tls_enabled": True,
@@ -320,6 +334,8 @@ def test_run_settings_dialog_preserves_existing_tls_config(monkeypatch, tmp_path
     assert observed["saved"]["tls_enabled"] is True
     assert observed["saved"]["tls_ca_file"] == "C:/certs/ca.pem"
     assert observed["saved"]["tls_server_name"] == "diag.example"
+    assert observed["saved"]["api_scheme"] == "https"
+    assert observed["saved"]["api_token"] == "api-secret"
     assert observed["started"] is True
 
 
@@ -333,18 +349,22 @@ def test_run_prompts_for_settings_when_auth_token_is_missing(monkeypatch, tmp_pa
 
         def show(self):
             return {
+                "api_scheme": "https",
                 "host": "diag.example",
                 "port": 9000,
                 "api_port": 8080,
+                "api_token": "api-secret",
                 "auth_token": "secret",
                 "dll_path": "",
             }
 
     app = client_gui.VCIProxyTrayApp()
     app._config = {
+        "api_scheme": "http",
         "host": "diag.example",
         "port": 9000,
         "api_port": 8080,
+        "api_token": "",
         "auth_token": "",
         "dll_path": "",
         "tls_enabled": True,
@@ -362,6 +382,8 @@ def test_run_prompts_for_settings_when_auth_token_is_missing(monkeypatch, tmp_pa
     assert observed["saved"]["tls_enabled"] is True
     assert observed["saved"]["tls_ca_file"] == "C:/certs/ca.pem"
     assert observed["saved"]["tls_server_name"] == "diag.example"
+    assert observed["saved"]["api_scheme"] == "https"
+    assert observed["saved"]["api_token"] == "api-secret"
     assert observed["started"] is True
     assert app._tray is not None
     assert app._tray.ran is True
@@ -388,8 +410,9 @@ def test_on_diagnostics_opens_window_with_expected_api_base(monkeypatch, tmp_pat
     fake_diagnostics_module = types.ModuleType("vci_proxy.diagnostics_window")
 
     class _FakeDiagnosticsWindow:
-        def __init__(self, api_base: str):
+        def __init__(self, api_base: str, *, api_token: str = ""):
             opened["api_base"] = api_base
+            opened["api_token"] = api_token
 
         def show(self) -> None:
             opened["shown"] = True
@@ -411,12 +434,61 @@ def test_on_diagnostics_opens_window_with_expected_api_base(monkeypatch, tmp_pat
     monkeypatch.setattr(client_gui.threading, "Thread", _ImmediateThread)
 
     app = client_gui.VCIProxyTrayApp()
-    app._config = {"host": "127.0.0.1", "api_port": 8080}
+    app._config = {"api_scheme": "http", "host": "127.0.0.1", "api_port": 8080, "api_token": ""}
     app._show_threadsafe_error = lambda title, message: pytest.fail(f"unexpected error dialog: {title}: {message}")
 
     app._on_diagnostics()
 
     assert opened == {
         "api_base": "http://127.0.0.1:8080",
+        "api_token": "",
+        "shown": True,
+    }
+
+
+def test_on_diagnostics_supports_https_and_api_token(monkeypatch, tmp_path) -> None:
+    client_gui = _import_client_gui(monkeypatch, tmp_path)
+    opened: dict[str, object] = {}
+
+    fake_diagnostics_module = types.ModuleType("vci_proxy.diagnostics_window")
+
+    class _FakeDiagnosticsWindow:
+        def __init__(self, api_base: str, *, api_token: str = ""):
+            opened["api_base"] = api_base
+            opened["api_token"] = api_token
+
+        def show(self) -> None:
+            opened["shown"] = True
+
+    class _ImmediateThread:
+        def __init__(self, target=None, daemon=None, name=None):
+            self.target = target
+            self.daemon = daemon
+            self.name = name
+            self.started = False
+
+        def start(self):
+            self.started = True
+            if self.target is not None:
+                self.target()
+
+    fake_diagnostics_module.DiagnosticsWindow = _FakeDiagnosticsWindow
+    monkeypatch.setitem(sys.modules, "vci_proxy.diagnostics_window", fake_diagnostics_module)
+    monkeypatch.setattr(client_gui.threading, "Thread", _ImmediateThread)
+
+    app = client_gui.VCIProxyTrayApp()
+    app._config = {
+        "api_scheme": "https",
+        "host": "cust001.diag.example.com",
+        "api_port": 443,
+        "api_token": "api-secret",
+    }
+    app._show_threadsafe_error = lambda title, message: pytest.fail(f"unexpected error dialog: {title}: {message}")
+
+    app._on_diagnostics()
+
+    assert opened == {
+        "api_base": "https://cust001.diag.example.com:443",
+        "api_token": "api-secret",
         "shown": True,
     }
