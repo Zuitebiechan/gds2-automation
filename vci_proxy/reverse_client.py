@@ -56,6 +56,26 @@ class ReverseProxyClient:
         self._active_writer: Optional[asyncio.StreamWriter] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._backoff_sleep_task: Optional[asyncio.Task] = None
+        self._instance_id = f"pid={os.getpid()}-obj={id(self):x}"
+        self._attempt_counter = 0
+
+    @staticmethod
+    def _describe_task_state(task: Optional[asyncio.Task]) -> str:
+        if task is None:
+            return "none"
+        cancelled_attr = getattr(task, "cancelled", None)
+        if callable(cancelled_attr):
+            if cancelled_attr():
+                return "cancelled"
+        elif cancelled_attr:
+            return "cancelled"
+        done_attr = getattr(task, "done", None)
+        if callable(done_attr):
+            if done_attr():
+                return "done"
+        elif done_attr:
+            return "done"
+        return "pending"
 
     def _build_tls_connection_options(self) -> tuple[ssl.SSLContext | None, str | None]:
         """Build optional TLS connection settings for the reverse tunnel."""
@@ -98,7 +118,13 @@ class ReverseProxyClient:
             return
 
         self._active_writer = None
+        peer = writer.get_extra_info("peername")
         try:
+            logger.info(
+                "[CLIENT_CONN] instance=%s closing active writer peer=%s",
+                self._instance_id,
+                peer,
+            )
             writer.close()
         except Exception:
             return
@@ -131,8 +157,46 @@ class ReverseProxyClient:
             except Exception:
                 pass
 
+    async def _release_prewarmed_device(self) -> None:
+        """Close any device handle opened only for pre-warm."""
+        device_id = self._prewarm_device_id
+        self._prewarm_device_id = None
+        self._prewarm_ret = None
+        if device_id is None or self.driver is None:
+            return
+
+        loop = asyncio.get_running_loop()
+        try:
+            ret = await loop.run_in_executor(None, self.driver.close, device_id)
+        except Exception as exc:
+            logger.warning(
+                "Failed to release pre-warmed device_id=%s: %s",
+                device_id,
+                exc,
+            )
+            return
+
+        if ret == 0:
+            logger.info("Released pre-warmed device_id=%s", device_id)
+            return
+
+        error_name_getter = getattr(self.driver, "get_error_name", None)
+        error_name = error_name_getter(ret) if callable(error_name_getter) else f"ERROR_{ret:#x}"
+        logger.warning(
+            "Failed to release pre-warmed device_id=%s, ret=%s (%s)",
+            device_id,
+            ret,
+            error_name,
+        )
+
     async def shutdown(self) -> None:
         """Gracefully stop background work and close the active tunnel."""
+        logger.info(
+            "[CLIENT_CTRL] shutdown begin instance=%s prewarm_device_id=%s prewarm_task=%s",
+            self._instance_id,
+            self._prewarm_device_id,
+            self._describe_task_state(self._prewarm_task),
+        )
         self.running = False
 
         backoff_sleep_task = self._backoff_sleep_task
@@ -141,11 +205,11 @@ class ReverseProxyClient:
             backoff_sleep_task.cancel()
 
         await self._cancel_prewarm_task()
+        await self._release_prewarmed_device()
         await self._close_writer()
 
-        self._prewarm_device_id = None
-        self._prewarm_ret = None
         self._ioctl_cache.invalidate()
+        logger.info("[CLIENT_CTRL] shutdown finished instance=%s", self._instance_id)
 
     async def connect_and_serve(self) -> None:
         """Connect to the reverse server and serve requests until stopped."""
@@ -163,9 +227,17 @@ class ReverseProxyClient:
 
         try:
             while self.running:
+                self._attempt_counter += 1
+                attempt_label = f"attempt={self._attempt_counter}"
                 try:
                     self._notify_status("connecting", f"{self.server_host}:{self.server_port}")
-                    logger.info("Connecting to %s:%s", self.server_host, self.server_port)
+                    logger.info(
+                        "[CLIENT_CONN] instance=%s %s connecting target=%s:%s",
+                        self._instance_id,
+                        attempt_label,
+                        self.server_host,
+                        self.server_port,
+                    )
                     ssl_context, server_hostname = self._build_tls_connection_options()
 
                     reader, writer = await asyncio.open_connection(
@@ -187,17 +259,37 @@ class ReverseProxyClient:
                         if hasattr(socket, "TCP_KEEPCNT"):
                             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
 
-                    logger.info("Connected to reverse server")
+                    logger.info(
+                        "[CLIENT_CONN] instance=%s %s connected local=%s remote=%s",
+                        self._instance_id,
+                        attempt_label,
+                        writer.get_extra_info("sockname"),
+                        writer.get_extra_info("peername"),
+                    )
                     if ssl_context is not None:
-                        logger.info("Reverse tunnel TLS enabled")
+                        logger.info(
+                            "[CLIENT_CONN] instance=%s %s reverse tunnel TLS enabled server_name=%s",
+                            self._instance_id,
+                            attempt_label,
+                            server_hostname,
+                        )
                     self._notify_status("connected", f"{self.server_host}:{self.server_port}")
                     backoff_seconds = 5.0
 
-                    if await self._send_registration(reader, writer):
+                    if await self._send_registration(reader, writer, attempt_label=attempt_label):
+                        logger.info(
+                            "[CLIENT_CONN] instance=%s %s registration complete, entering request loop",
+                            self._instance_id,
+                            attempt_label,
+                        )
                         self._prewarm_task = asyncio.create_task(self._prewarm_open())
-                        await self._handle_requests(reader, writer)
+                        await self._handle_requests(reader, writer, attempt_label=attempt_label)
                     else:
-                        logger.warning("Authentication failed, reconnecting")
+                        logger.warning(
+                            "[CLIENT_CONN] instance=%s %s registration/auth failed, reconnecting",
+                            self._instance_id,
+                            attempt_label,
+                        )
 
                 except ConnectionRefusedError:
                     self._notify_status(
@@ -205,7 +297,9 @@ class ReverseProxyClient:
                         f"Connection refused, retrying in {backoff_seconds:.0f}s",
                     )
                     logger.warning(
-                        "Connection refused, retrying in %.0fs",
+                        "[CLIENT_CONN] instance=%s %s connection refused, retrying in %.0fs",
+                        self._instance_id,
+                        attempt_label,
                         backoff_seconds,
                     )
                 except Exception as exc:
@@ -214,17 +308,31 @@ class ReverseProxyClient:
                             "disconnected",
                             f"Error: {exc}, retrying in {backoff_seconds:.0f}s",
                         )
-                    logger.error(
-                        "Connection error: %s, retrying in %.0fs",
-                        exc,
+                    logger.exception(
+                        "[CLIENT_CONN] instance=%s %s connection error, retrying in %.0fs",
+                        self._instance_id,
+                        attempt_label,
                         backoff_seconds,
                     )
                 finally:
+                    logger.info(
+                        "[CLIENT_CONN] instance=%s %s cleanup begin active_writer=%s prewarm_device_id=%s prewarm_task=%s",
+                        self._instance_id,
+                        attempt_label,
+                        self._active_writer is not None,
+                        self._prewarm_device_id,
+                        self._describe_task_state(self._prewarm_task),
+                    )
                     await self._cancel_prewarm_task()
+                    await self._release_prewarmed_device()
                     await self._close_writer()
-                    self._prewarm_device_id = None
-                    self._prewarm_ret = None
                     self._ioctl_cache.invalidate()
+                    logger.info(
+                        "[CLIENT_CONN] instance=%s %s cleanup finished running=%s",
+                        self._instance_id,
+                        attempt_label,
+                        self.running,
+                    )
 
                 if self.running:
                     self._backoff_sleep_task = asyncio.create_task(
@@ -240,12 +348,14 @@ class ReverseProxyClient:
         finally:
             await self.shutdown()
             self._loop = None
-            logger.info("Client stopped")
+            logger.info("[CLIENT_CTRL] client stopped instance=%s", self._instance_id)
 
     async def _send_registration(
         self,
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
+        *,
+        attempt_label: str = "attempt=unknown",
     ) -> bool:
         """Register with the server using auth or the legacy heartbeat path."""
         if self.config.auth.enabled and self.config.auth.token:
@@ -254,7 +364,12 @@ class ReverseProxyClient:
             msg = ProtocolEncoder.encode_auth_req(timestamp, signature, 0)
             writer.write(msg)
             await writer.drain()
-            logger.info("Sent auth request")
+            logger.info(
+                "[CLIENT_CONN] instance=%s %s sent auth request ts=%s",
+                self._instance_id,
+                attempt_label,
+                timestamp,
+            )
 
             try:
                 header = await asyncio.wait_for(
@@ -272,25 +387,53 @@ class ReverseProxyClient:
                 if msg_type == MsgType.AUTH_RSP:
                     success, message = ProtocolDecoder.decode_auth_rsp(body)
                     if success:
-                        logger.info("Authentication succeeded: %s", message)
+                        logger.info(
+                            "[CLIENT_CONN] instance=%s %s authentication succeeded: %s",
+                            self._instance_id,
+                            attempt_label,
+                            message,
+                        )
                     else:
-                        logger.error("Authentication failed: %s", message)
+                        logger.error(
+                            "[CLIENT_CONN] instance=%s %s authentication failed: %s",
+                            self._instance_id,
+                            attempt_label,
+                            message,
+                        )
                     return success
 
                 if msg_type == MsgType.HEARTBEAT_ACK:
-                    logger.info("Server accepted auth as legacy heartbeat")
+                    logger.info(
+                        "[CLIENT_CONN] instance=%s %s server accepted auth as legacy heartbeat",
+                        self._instance_id,
+                        attempt_label,
+                    )
                     return True
 
-                logger.warning("Unexpected auth response type: %#x", msg_type)
+                logger.warning(
+                    "[CLIENT_CONN] instance=%s %s unexpected auth response type: %#x",
+                    self._instance_id,
+                    attempt_label,
+                    msg_type,
+                )
                 return False
             except asyncio.TimeoutError:
-                logger.error("Auth response timeout")
+                logger.error(
+                    "[CLIENT_CONN] instance=%s %s auth response timeout after %ss",
+                    self._instance_id,
+                    attempt_label,
+                    self.config.auth.auth_timeout_s,
+                )
                 return False
 
         msg = ProtocolEncoder.encode_heartbeat(0)
         writer.write(msg)
         await writer.drain()
-        logger.info("Sent registration heartbeat (phase 1)")
+        logger.info(
+            "[CLIENT_CONN] instance=%s %s sent registration heartbeat phase=1",
+            self._instance_id,
+            attempt_label,
+        )
 
         try:
             header = await asyncio.wait_for(reader.readexactly(HEADER_SIZE), timeout=5.0)
@@ -312,13 +455,19 @@ class ReverseProxyClient:
         msg2 = ProtocolEncoder.encode_heartbeat(1)
         writer.write(msg2)
         await writer.drain()
-        logger.info("Sent registration heartbeat (phase 2)")
+        logger.info(
+            "[CLIENT_CONN] instance=%s %s sent registration heartbeat phase=2",
+            self._instance_id,
+            attempt_label,
+        )
         return True
 
     async def _handle_requests(
         self,
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
+        *,
+        attempt_label: str = "attempt=unknown",
     ) -> None:
         while self.running:
             try:
@@ -326,7 +475,12 @@ class ReverseProxyClient:
                 magic, length, msg_type, sequence = Message.decode_header(header)
 
                 if magic != MAGIC:
-                    logger.warning("Invalid magic: %#x", magic)
+                    logger.warning(
+                        "[CLIENT_CONN] instance=%s %s invalid magic from server: %#x",
+                        self._instance_id,
+                        attempt_label,
+                        magic,
+                    )
                     break
 
                 body_len = length - HEADER_SIZE
@@ -342,13 +496,28 @@ class ReverseProxyClient:
                     await writer.drain()
 
             except asyncio.TimeoutError:
+                logger.info(
+                    "[CLIENT_CONN] instance=%s %s idle for 25s, sending heartbeat",
+                    self._instance_id,
+                    attempt_label,
+                )
                 writer.write(ProtocolEncoder.encode_heartbeat(0))
                 await writer.drain()
             except asyncio.IncompleteReadError:
-                logger.info("Server disconnected")
+                logger.warning(
+                    "[CLIENT_CONN] instance=%s %s server disconnected prewarm_device_id=%s prewarm_task=%s",
+                    self._instance_id,
+                    attempt_label,
+                    self._prewarm_device_id,
+                    self._describe_task_state(self._prewarm_task),
+                )
                 break
             except Exception as exc:
-                logger.error("Request handling error: %s", exc)
+                logger.exception(
+                    "[CLIENT_CONN] instance=%s %s request handling error",
+                    self._instance_id,
+                    attempt_label,
+                )
                 break
 
     async def _prewarm_open(self) -> None:
@@ -364,7 +533,13 @@ class ReverseProxyClient:
                 self._prewarm_ret = ret
                 logger.info("Pre-warm: PassThruOpen OK, device_id=%s", device_id)
             else:
-                logger.warning("Pre-warm: PassThruOpen failed, ret=%s", ret)
+                error_name_getter = getattr(self.driver, "get_error_name", None)
+                error_name = error_name_getter(ret) if callable(error_name_getter) else f"ERROR_{ret:#x}"
+                logger.warning(
+                    "Pre-warm: PassThruOpen failed, ret=%s (%s)",
+                    ret,
+                    error_name,
+                )
                 self._prewarm_device_id = None
                 self._prewarm_ret = None
         except Exception as exc:
@@ -565,6 +740,11 @@ class ReverseProxyClient:
     def stop(self) -> concurrent.futures.Future[None]:
         """Request a graceful shutdown and return a future for completion."""
         loop = self._loop
+        logger.info(
+            "[CLIENT_CTRL] stop requested instance=%s loop_running=%s",
+            self._instance_id,
+            bool(loop is not None and loop.is_running()),
+        )
         if loop is not None and loop.is_running():
             return asyncio.run_coroutine_threadsafe(self.shutdown(), loop)
 

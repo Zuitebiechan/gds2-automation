@@ -353,8 +353,17 @@ class VCIProxyTrayApp:
 
     def _on_status_change(self, status: str, detail: str = ""):
         """Callback from ReverseProxyClient (called from background thread)."""
+        previous_status = self._status
+        previous_detail = self._status_detail
         self._status = status
         self._status_detail = detail
+        if previous_status != status or previous_detail != detail:
+            logger.info(
+                "[GUI_STATUS] %s -> %s detail=%s",
+                previous_status,
+                status,
+                detail or "-",
+            )
         self._update_tray()
 
     def _update_tray(self):
@@ -379,12 +388,25 @@ class VCIProxyTrayApp:
     def _start_client(self):
         """Start the reverse proxy client in a background thread."""
         if self._client_thread and self._client_thread.is_alive():
+            logger.info("[GUI_CTRL] start skipped because client thread is already alive")
             return
         if not self._has_required_config():
+            logger.info("[GUI_CTRL] start skipped because required config is missing")
             self._on_status_change("idle", "Settings required")
             return
 
         cfg = self._config
+        logger.info(
+            "[GUI_CTRL] starting reverse client pid=%s host=%s port=%s tls=%s api=%s://%s:%s dll_configured=%s",
+            os.getpid(),
+            cfg.get("host"),
+            cfg.get("port"),
+            bool(cfg.get("tls_enabled")),
+            cfg.get("api_scheme") or "http",
+            cfg.get("host"),
+            cfg.get("api_port"),
+            bool(cfg.get("dll_path")),
+        )
         proxy_config = ProxyConfig.from_args(
             auth_token=cfg.get("auth_token") or None,
             tls_enabled=bool(cfg.get("tls_enabled")),
@@ -409,9 +431,10 @@ class VCIProxyTrayApp:
             try:
                 self._loop.run_until_complete(client.connect_and_serve())
             except Exception as e:
-                logger.error(f"Client thread error: {e}")
+                logger.exception("Client thread error")
                 self._on_status_change("error", str(e))
             finally:
+                logger.info("[GUI_CTRL] client thread exiting")
                 self._loop.close()
                 self._loop = None
 
@@ -420,6 +443,11 @@ class VCIProxyTrayApp:
 
     def _stop_client(self):
         """Stop the reverse proxy client."""
+        logger.info(
+            "[GUI_CTRL] stopping reverse client has_client=%s thread_alive=%s",
+            self._client is not None,
+            bool(self._client_thread and self._client_thread.is_alive()),
+        )
         stop_future = None
         if self._client:
             stop_future = self._client.stop()
@@ -437,9 +465,11 @@ class VCIProxyTrayApp:
         self._client = None
         self._loop = None
         self._on_status_change("idle", "")
+        logger.info("[GUI_CTRL] reverse client stopped")
 
     def _restart_client(self):
         """Stop and restart the client (e.g. after config change)."""
+        logger.info("[GUI_CTRL] restarting reverse client")
         self._stop_client()
         if self._client_thread:
             self._client_thread.join(timeout=5)
@@ -449,15 +479,18 @@ class VCIProxyTrayApp:
 
     def _run_settings_dialog(self) -> None:
         """Open settings dialog outside the tray callback thread."""
+        logger.info("[GUI_CTRL] opening settings dialog")
         self._stop_client()
         try:
             dialog = ConfigDialog(self._config)
             result = dialog.show()
             if result:
+                logger.info("[GUI_CTRL] settings updated, restarting client")
                 self._config = normalize_config({**self._config, **result})
                 save_config(self._config)
                 self._start_client()
             elif self._has_required_config():
+                logger.info("[GUI_CTRL] settings dialog cancelled, restoring previous client")
                 # User cancelled but had previous config — restart with old config
                 self._start_client()
         finally:
@@ -466,6 +499,7 @@ class VCIProxyTrayApp:
     def _on_settings(self, icon=None, item=None):
         """Open settings dialog."""
         if self._settings_dialog_thread and self._settings_dialog_thread.is_alive():
+            logger.info("[GUI_CTRL] settings dialog request ignored because one is already open")
             return
         self._settings_dialog_thread = threading.Thread(
             target=self._run_settings_dialog,
@@ -520,6 +554,7 @@ class VCIProxyTrayApp:
 
     def _on_quit(self, icon=None, item=None):
         """Quit the application."""
+        logger.info("[GUI_CTRL] quit requested")
         self._stop_client()
         if self._tray:
             self._tray.stop()
@@ -592,6 +627,7 @@ def main():
             logging.FileHandler(str(log_file), encoding='utf-8'),
         ],
     )
+    logger.info("[GUI_CTRL] client_gui starting pid=%s log_file=%s", os.getpid(), log_file)
 
     app = VCIProxyTrayApp()
     app.run()

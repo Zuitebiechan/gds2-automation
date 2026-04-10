@@ -341,6 +341,7 @@ class ReverseProxyServer:
                                      writer: asyncio.StreamWriter):
         """处理 VCI Proxy 的连接"""
         addr = writer.get_extra_info('peername')
+        disconnect_reason = "handler_exit"
         logger.info(f"VCI Proxy 已连接: {addr}")
 
         # Disable Nagle algorithm for lower latency
@@ -352,12 +353,18 @@ class ReverseProxyServer:
         # Authenticate before accepting the connection
         if not await self._authenticate_vci(reader, writer):
             logger.warning(f"VCI Proxy authentication failed, closing: {addr}")
+            logger.info("[TUNNEL_CONN] auth_failed addr=%s", addr)
             writer.close()
             return
 
         # 关闭已有的 VCI 连接
         if self.vci_writer is not None:
             logger.warning(f"替换已有 VCI 连接，新连接: {addr}")
+            logger.info(
+                "[TUNNEL_CONN] replacing existing connection old_epoch=%s new_addr=%s",
+                self._connection_epoch,
+                addr,
+            )
             old_writer = self.vci_writer
             self.vci_connected.clear()
             self._cancel_probe_task()
@@ -393,12 +400,14 @@ class ReverseProxyServer:
                 magic, length, msg_type, sequence = struct.unpack('>IIHI', header)
 
                 if magic != MAGIC:
+                    disconnect_reason = f"invalid_magic:{magic:#x}"
                     logger.warning(f"无效的 Magic: {magic:#x}")
                     break
 
                 try:
                     body = await _read_frame_body(reader, length)
                 except (ValueError, TimeoutError, ConnectionError) as exc:
+                    disconnect_reason = f"frame_rejected:{exc}"
                     logger.warning("VCI frame rejected: %s", exc)
                     break
 
@@ -424,19 +433,22 @@ class ReverseProxyServer:
                 else:
                     logger.warning(f"收到未知消息: type={msg_type:#x}, seq={sequence}")
 
-        except asyncio.IncompleteReadError:
+        except asyncio.IncompleteReadError as exc:
+            disconnect_reason = f"eof expected={exc.expected} partial={len(exc.partial)}"
             logger.info(f"VCI Proxy 断开连接: {addr}")
         except Exception as e:
-            logger.error(f"VCI 连接错误: {e}")
+            disconnect_reason = f"exception:{type(e).__name__}:{e}"
+            logger.exception(f"VCI 连接错误: {e}")
         finally:
             self.vci_connected.clear()
             self._cancel_probe_task()
             self._cancel_pending_futures()
             self._tunnel_quality.mark_disconnected(self._connection_epoch)
             logger.info(
-                "[TUNNEL_CONN] disconnected addr=%s epoch=%s",
+                "[TUNNEL_CONN] disconnected addr=%s epoch=%s reason=%s",
                 addr,
                 self._connection_epoch,
+                disconnect_reason,
             )
             self._write_tunnel_quality_snapshot()
             self.vci_reader = None

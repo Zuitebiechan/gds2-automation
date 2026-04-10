@@ -169,7 +169,7 @@ def test_connect_and_serve_passes_tls_context_to_open_connection(monkeypatch) ->
         observed["server_hostname"] = kwargs.get("server_hostname")
         return _FakeReader(), fake_writer
 
-    async def _fake_send_registration(reader, writer):
+    async def _fake_send_registration(reader, writer, **_kwargs):
         assert writer is fake_writer
         client.running = False
         return False
@@ -211,17 +211,27 @@ def test_shutdown_closes_active_writer_and_cancels_prewarm_task() -> None:
         def cancel(self) -> None:
             self.cancelled = True
 
+    closed_device_ids: list[int] = []
     client = ReverseProxyClient("example.com", 9000, config=ProxyConfig.from_args(auth_token="secret"))
     client.running = True
     client._ioctl_cache = types.SimpleNamespace(invalidate=lambda: None)
     client._active_writer = _FakeWriter()
     client._prewarm_task = _FakeTask()
+    client._prewarm_device_id = 1234
+    client._prewarm_ret = 0
+    client.driver = types.SimpleNamespace(
+        close=lambda device_id: closed_device_ids.append(device_id) or 0,
+        get_error_name=lambda code: f"ERROR_{code:#x}",
+    )
 
     asyncio.run(client.shutdown())
 
     assert client.running is False
     assert client._active_writer is None
     assert client._prewarm_task is None
+    assert client._prewarm_device_id is None
+    assert client._prewarm_ret is None
+    assert closed_device_ids == [1234]
 
 
 def test_stop_schedules_shutdown_on_running_loop(monkeypatch) -> None:
