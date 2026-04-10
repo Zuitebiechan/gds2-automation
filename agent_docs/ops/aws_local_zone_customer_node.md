@@ -5,6 +5,9 @@
 This guide describes the simplest production-style deployment for one customer
 per Windows cloud node in AWS Local Zone.
 
+For automated fleet allocation, hot-pool strategy, routing, and cost guidance,
+also read `agent_docs/ops/aws_local_zone_node_allocation.md`.
+
 ## Plain-language summary
 
 Treat each customer node like one dedicated diagnostics workstation in the
