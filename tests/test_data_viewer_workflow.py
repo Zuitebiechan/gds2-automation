@@ -92,6 +92,67 @@ def test_connect_device_returns_modules_after_diagnostics_menu_transition() -> N
     assert workflow.controller.nav.selected == [(0, 0, True)]
 
 
+def test_start_uses_connected_page_path_when_device_is_already_connected() -> None:
+    class _ConnectedController:
+        def detect_current_page(self):
+            return GDS2Page.MODULE_LIST
+
+    workflow = DataViewerWorkflow.__new__(DataViewerWorkflow)
+    workflow.controller = _ConnectedController()
+    workflow._mapping = _FakeMapping()
+    workflow._vehicle_id = "current_vehicle"
+    workflow._vin = None
+    workflow._device = None
+    workflow._module = None
+    workflow._data_category = None
+
+    workflow._navigate_to_main_menu = lambda status: None
+    workflow._navigate_to_module_list_from = (
+        lambda current, status: {"modules": ["ECM", "TCM"], "device_connected": True}
+    )
+
+    result = workflow.start()
+
+    assert result == {"modules": ["ECM", "TCM"], "device_connected": True}
+
+
+def test_start_returns_devices_when_diagnostics_opens_device_explorer(monkeypatch) -> None:
+    class _MainMenuController:
+        def detect_current_page(self):
+            return GDS2Page.MAIN_MENU
+
+        def start_diagnostics(self):
+            return NavigationResult(success=True, page=GDS2Page.DEVICE_EXPLORER, context={})
+
+    class _Explorer:
+        def find_dialog(self, timeout_sec: float = 5.0):
+            return True
+
+        def get_device_names(self):
+            return ["VCI Proxy (Remote)"]
+
+    monkeypatch.setattr("src.native.device_explorer.DeviceExplorerController", _Explorer)
+
+    workflow = DataViewerWorkflow.__new__(DataViewerWorkflow)
+    workflow.controller = _MainMenuController()
+    workflow._mapping = _FakeMapping()
+    workflow._vehicle_id = "current_vehicle"
+    workflow._vin = None
+    workflow._device = None
+    workflow._module = None
+    workflow._data_category = None
+
+    workflow._navigate_to_main_menu = lambda status: None
+
+    result = workflow.start()
+
+    assert result == {
+        "devices": ["VCI Proxy (Remote)"],
+        "at_device_explorer": True,
+        "device_connected": False,
+    }
+
+
 def test_connect_device_preserves_existing_device_name_for_connected_session() -> None:
     class _ConnectedController:
         def __init__(self) -> None:
@@ -128,6 +189,25 @@ def test_connect_device_preserves_existing_device_name_for_connected_session() -
         "device": "VCI Proxy (Remote)",
     }
     assert workflow.controller.context["device"] == "VCI Proxy (Remote)"
+
+
+def test_connect_device_requires_explicit_device_name_when_not_connected() -> None:
+    class _MainMenuController:
+        def detect_current_page(self):
+            return GDS2Page.MAIN_MENU
+
+    workflow = DataViewerWorkflow.__new__(DataViewerWorkflow)
+    workflow.controller = _MainMenuController()
+    workflow._mapping = _FakeMapping()
+    workflow._vehicle_id = "current_vehicle"
+    workflow._vin = None
+    workflow._device = None
+    workflow._module = None
+    workflow._data_category = None
+    workflow.stop_monitoring = lambda: None
+
+    with pytest.raises(RuntimeError, match="Device name required when not at a connected page"):
+        workflow.connect_device("default")
 
 
 def test_connect_device_raises_when_module_diagnostics_entry_is_missing() -> None:
@@ -379,6 +459,160 @@ def test_select_data_category_caches_sub_categories_before_selecting_sub_item() 
             {"Fuel System": 0, "Injector Balance": 1},
         )
     ]
+
+
+def test_select_data_category_returns_to_data_list_before_reselecting() -> None:
+    class _DisplayController:
+        def __init__(self) -> None:
+            self.back_calls = 0
+
+        def detect_current_page(self):
+            return GDS2Page.DATA_DISPLAY
+
+        def go_back(self):
+            self.back_calls += 1
+            return NavigationResult(success=True, page=GDS2Page.DATA_LIST, context={})
+
+        def wait_for_list(self):
+            return ["Engine Data", "Transmission Data"]
+
+        def select_data_category(self, category_name: str):
+            return NavigationResult(
+                success=True,
+                page=GDS2Page.DATA_DISPLAY,
+                context={"data_category": category_name},
+            )
+
+    workflow = DataViewerWorkflow.__new__(DataViewerWorkflow)
+    workflow.controller = _DisplayController()
+    workflow._mapping = _FakeMapping()
+    workflow._vehicle_id = "VIN123"
+    workflow._vin = "VIN123"
+    workflow._device = "VCI Proxy (Remote)"
+    workflow._module = "ECM"
+    workflow._data_category = None
+    workflow.stop_monitoring = lambda: None
+    workflow._resolve_branch_choice = lambda **kwargs: "Engine Data"
+
+    result = workflow.select_data_category("Engine Data")
+
+    assert result == {
+        "monitoring": True,
+        "sub_categories": None,
+    }
+    assert workflow.controller.back_calls == 1
+    assert workflow._data_category == "Engine Data"
+
+
+def test_select_module_opens_submenu_and_caches_data_categories() -> None:
+    class _ModuleNav:
+        def __init__(self, controller) -> None:
+            self._controller = controller
+            self.selected: list[tuple[int, int, bool]] = []
+
+        def select_list_item(
+            self,
+            list_index: int,
+            item_index: int,
+            double_click: bool = True,
+        ) -> dict:
+            self.selected.append((list_index, item_index, double_click))
+            if self._controller._page == GDS2Page.MODULE_LIST:
+                self._controller._page = GDS2Page.MODULE_SUBMENU
+            elif self._controller._page == GDS2Page.MODULE_SUBMENU:
+                self._controller._page = GDS2Page.DATA_LIST
+            return {"success": True, "message": ""}
+
+    class _ModuleController:
+        def __init__(self) -> None:
+            self._page = GDS2Page.MODULE_LIST
+            self._current_page = GDS2Page.UNKNOWN
+            self.nav = _ModuleNav(self)
+            self.context: dict[str, str] = {}
+
+        def detect_current_page(self):
+            return self._page
+
+        def wait_for_list(self, previous_items=None):
+            if self._page == GDS2Page.MODULE_LIST:
+                return ["ECM", "TCM"]
+            if self._page == GDS2Page.MODULE_SUBMENU:
+                return ["Data Display", "Module Information"]
+            return ["Engine Data", "Transmission Data"]
+
+        def wait_for_page_transition(self, page, timeout: int = 30):
+            return self._page
+
+        def dismiss_warning_dialog(self):
+            return None
+
+        def set_context(self, **kwargs) -> None:
+            self.context.update(kwargs)
+
+    workflow = DataViewerWorkflow.__new__(DataViewerWorkflow)
+    workflow.controller = _ModuleController()
+    workflow._mapping = _FakeMapping()
+    workflow._vehicle_id = "VIN123"
+    workflow._vin = "VIN123"
+    workflow._device = "VCI Proxy (Remote)"
+    workflow._module = None
+    workflow._data_category = None
+    workflow.stop_monitoring = lambda: None
+    workflow._navigate_to_module_list = lambda status: None
+    workflow._resolve_branch_choice = (
+        lambda **kwargs: "ECM"
+        if kwargs["choices"] == ["ECM", "TCM"]
+        else "Data Display"
+    )
+
+    result = workflow.select_module("ECM")
+
+    assert result == {"data_categories": ["Engine Data", "Transmission Data"]}
+    assert workflow.controller.nav.selected == [(0, 0, True), (0, 0, True)]
+    assert workflow.controller.context["module"] == "ECM"
+    assert workflow._module == "ECM"
+    assert workflow.mapping.data_updates == [
+        (
+            "VIN123",
+            "ECM",
+            {"Engine Data": 0, "Transmission Data": 1},
+        )
+    ]
+
+
+def test_select_module_raises_when_module_selection_fails() -> None:
+    class _ModuleNav:
+        def select_list_item(
+            self,
+            list_index: int,
+            item_index: int,
+            double_click: bool = True,
+        ) -> dict:
+            return {"success": False, "message": "boom"}
+
+    class _ModuleController:
+        def __init__(self) -> None:
+            self._page = GDS2Page.MODULE_LIST
+            self._current_page = GDS2Page.UNKNOWN
+            self.nav = _ModuleNav()
+
+        def wait_for_list(self, previous_items=None):
+            return ["ECM", "TCM"]
+
+    workflow = DataViewerWorkflow.__new__(DataViewerWorkflow)
+    workflow.controller = _ModuleController()
+    workflow._mapping = _FakeMapping()
+    workflow._vehicle_id = "VIN123"
+    workflow._vin = "VIN123"
+    workflow._device = "VCI Proxy (Remote)"
+    workflow._module = None
+    workflow._data_category = None
+    workflow.stop_monitoring = lambda: None
+    workflow._navigate_to_module_list = lambda status: None
+    workflow._resolve_branch_choice = lambda **kwargs: "ECM"
+
+    with pytest.raises(RuntimeError, match="Failed to select module: boom"):
+        workflow.select_module("ECM")
 
 
 def test_select_sub_module_caches_data_categories() -> None:

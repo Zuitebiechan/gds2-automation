@@ -84,6 +84,16 @@ class NavigationController:
         "数据展示",
     )
 
+    _PRIOR_DISCONNECT_CONTEXT = frozenset(
+        {
+            GDS2Page.DATA_DISPLAY,
+            GDS2Page.DATA_LIST,
+            GDS2Page.SUB_DATA_LIST,
+            GDS2Page.MODULE_SUBMENU,
+            GDS2Page.J2534_DISCONNECT,
+        }
+    )
+
     def __init__(self, nav=None):
         """
         Initialize navigation controller.
@@ -330,6 +340,106 @@ class NavigationController:
             logger.debug(f"get_page_id failed: {e}, falling back to heuristic")
             return GDS2Page.UNKNOWN
 
+    def _load_heuristic_page_state(self) -> tuple[set[str], List[str]]:
+        """Fetch button and list state once, then cache it for snapshot reuse."""
+        buttons = self.nav.get_buttons()
+        button_texts = {b.get('text', '') for b in buttons if b.get('text')}
+        items = self.nav.get_list_items(0)
+
+        self._cached_button_texts = list(button_texts)
+        self._cached_items = list(items) if items else []
+        self._cache_time = time.time()
+
+        logger.debug(f"Heuristic detection - Buttons: {button_texts}")
+        logger.debug(f"Heuristic detection - List items: {len(items)}, first 5: {items[:5] if items else []}")
+        return button_texts, items
+
+    @staticmethod
+    def _has_deep_page_toolbar(button_texts: set[str]) -> bool:
+        """Detect toolbar buttons that only appear on deeper navigation pages."""
+        return "Back" in button_texts or "Vehicle Menu" in button_texts
+
+    @staticmethod
+    def _is_back_only_empty_list_state(button_texts: set[str]) -> bool:
+        """Detect ambiguous empty-list states that may be loading or disconnect pages."""
+        return (
+            "Back" in button_texts
+            and "Create Report" not in button_texts
+            and "Diagnostics" not in button_texts
+            and "Update" not in button_texts
+            and "Enter" not in button_texts
+        )
+
+    def _detect_empty_list_heuristic_page(self, button_texts: set[str], items: List[str]) -> Optional[GDS2Page]:
+        """Classify empty-list transitional pages before generic button checks."""
+        if items:
+            return None
+
+        if not button_texts:
+            return GDS2Page.LOADING
+
+        if "Enter" in button_texts and self._has_deep_page_toolbar(button_texts):
+            return GDS2Page.LOADING
+
+        if not self._is_back_only_empty_list_state(button_texts):
+            return None
+
+        if "OK" in button_texts:
+            return GDS2Page.J2534_DISCONNECT
+
+        if self._current_page in self._PRIOR_DISCONNECT_CONTEXT:
+            return GDS2Page.J2534_DISCONNECT
+
+        logger.debug(
+            "Ambiguous Back-only empty-list state from %s -> treating as LOADING",
+            self._current_page.value,
+        )
+        return GDS2Page.LOADING
+
+    def _detect_list_heuristic_page(self, button_texts: set[str], items: List[str]) -> Optional[GDS2Page]:
+        """Classify list-driven pages after more specific empty-state checks."""
+        if not items:
+            return None
+
+        if "Back" in button_texts and self._is_module_submenu_items(items):
+            return GDS2Page.MODULE_SUBMENU
+
+        if any("Module Diagnostics" in item for item in items):
+            return GDS2Page.DIAGNOSTICS_MENU
+
+        if any("[" in item and "]" in item for item in items):
+            return GDS2Page.MODULE_LIST
+
+        if "Back" in button_texts:
+            return GDS2Page.DATA_LIST
+
+        return None
+
+    def _detect_vehicle_selection_heuristic_page(
+        self,
+        button_texts: set[str],
+        items: List[str],
+    ) -> Optional[GDS2Page]:
+        """Classify vehicle-selection states after deep-page loading guards."""
+        if items:
+            return None
+
+        if "Enter" in button_texts:
+            if not self._has_deep_page_toolbar(button_texts):
+                return GDS2Page.VEHICLE_SELECTION
+
+            logger.debug("Rule 7 blocked: Enter+empty list with deep-page buttons present")
+
+        if (
+            ("Disconnect" in button_texts or "Select Device" in button_texts)
+            and "Back" not in button_texts
+            and "Vehicle Menu" not in button_texts
+            and "Create Report" not in button_texts
+        ):
+            return GDS2Page.VEHICLE_SELECTION
+
+        return None
+
     def _detect_via_heuristic(self) -> GDS2Page:
         """
         Fallback page detection using button/list heuristics.
@@ -339,18 +449,7 @@ class NavigationController:
         (older JAR versions).
         """
         try:
-            buttons = self.nav.get_buttons()
-            button_texts = {b.get('text', '') for b in buttons if b.get('text')}
-
-            items = self.nav.get_list_items(0)
-
-            # Cache IPC results for get_snapshot() reuse
-            self._cached_button_texts = list(button_texts)
-            self._cached_items = list(items) if items else []
-            self._cache_time = time.time()
-
-            logger.debug(f"Heuristic detection - Buttons: {button_texts}")
-            logger.debug(f"Heuristic detection - List items: {len(items)}, first 5: {items[:5] if items else []}")
+            button_texts, items = self._load_heuristic_page_state()
 
             # Detection rules - ORDER MATTERS!
             # More specific rules (with list content checks) come FIRST
@@ -368,88 +467,21 @@ class NavigationController:
             if self._is_clear_dtcs_confirmation_state(button_texts):
                 return GDS2Page.CLEAR_DTCS_CONFIRMATION
 
-            # 1c. Transitional loading page: no list content and either no actionable
-            # buttons or stale deep-page buttons while GDS2 is repainting.
-            if not items:
-                if not button_texts:
-                    return GDS2Page.LOADING
-                if "Enter" in button_texts and ("Back" in button_texts or "Vehicle Menu" in button_texts):
-                    return GDS2Page.LOADING
-
-            # 1d. Lost communication page variants: always has Back.
-            #     IMPORTANT: during vehicle_selection -> diagnostics_menu transition,
-            #     GDS2 can briefly expose toolbar-only buttons with empty lists.
-            #     Treat ambiguous Back-only states as LOADING unless we have
-            #     strong disconnect evidence (OK button or prior deep-page context).
-            if (
-                "Back" in button_texts
-                and not items
-                and "Create Report" not in button_texts
-                and "Diagnostics" not in button_texts
-                and "Update" not in button_texts
-                and "Enter" not in button_texts
-            ):
-                if "OK" in button_texts:
-                    return GDS2Page.J2534_DISCONNECT
-
-                prior_disconnect_context = {
-                    GDS2Page.DATA_DISPLAY,
-                    GDS2Page.DATA_LIST,
-                    GDS2Page.SUB_DATA_LIST,
-                    GDS2Page.MODULE_SUBMENU,
-                    GDS2Page.J2534_DISCONNECT,
-                }
-                if self._current_page in prior_disconnect_context:
-                    return GDS2Page.J2534_DISCONNECT
-
-                logger.debug(
-                    "Ambiguous Back-only empty-list state from %s -> treating as LOADING",
-                    self._current_page.value,
-                )
-                return GDS2Page.LOADING
+            empty_list_page = self._detect_empty_list_heuristic_page(button_texts, items)
+            if empty_list_page is not None:
+                return empty_list_page
 
             # 2. MAIN_MENU: Has "Diagnostics" and "Update" buttons
             if "Diagnostics" in button_texts and "Update" in button_texts:
                 return GDS2Page.MAIN_MENU
 
-            # 3. MODULE_SUBMENU: Must look like function menu (not Data Display alone)
-            if items and "Back" in button_texts and self._is_module_submenu_items(items):
-                return GDS2Page.MODULE_SUBMENU
+            list_page = self._detect_list_heuristic_page(button_texts, items)
+            if list_page is not None:
+                return list_page
 
-            # 4. DIAGNOSTICS_MENU: List contains "Module Diagnostics"
-            if items and any("Module Diagnostics" in item for item in items):
-                return GDS2Page.DIAGNOSTICS_MENU
-
-            # 5. MODULE_LIST: List items look like modules (contain brackets like [K20])
-            if items and any("[" in item and "]" in item for item in items):
-                return GDS2Page.MODULE_LIST
-
-            # 6. DATA_LIST: Has list items and Back button (but not specific markers above)
-            if items and "Back" in button_texts:
-                return GDS2Page.DATA_LIST
-
-            # 7. VEHICLE_SELECTION: Has "Enter" button but NO list items
-            #    Exclude deep pages where list hasn't loaded yet.
-            #    "Back" and "Vehicle Menu" only appear on deep pages,
-            #    never on vehicle_selection.
-            if "Enter" in button_texts and not items:
-                if "Back" not in button_texts and "Vehicle Menu" not in button_texts:
-                    return GDS2Page.VEHICLE_SELECTION
-                else:
-                    logger.debug(
-                        "Rule 7 blocked: Enter+empty list with deep-page buttons present"
-                    )
-
-            # 8. Also check for "Disconnect" or "Select Device" buttons for VEHICLE_SELECTION
-            #    Guard against false positives on deep pages where toolbar buttons may persist.
-            if (
-                ("Disconnect" in button_texts or "Select Device" in button_texts)
-                and not items
-                and "Back" not in button_texts
-                and "Vehicle Menu" not in button_texts
-                and "Create Report" not in button_texts
-            ):
-                return GDS2Page.VEHICLE_SELECTION
+            vehicle_selection_page = self._detect_vehicle_selection_heuristic_page(button_texts, items)
+            if vehicle_selection_page is not None:
+                return vehicle_selection_page
 
             return GDS2Page.UNKNOWN
 
@@ -458,6 +490,7 @@ class NavigationController:
         except Exception as e:
             logger.error(f"Heuristic page detection failed: {e}")
             return GDS2Page.UNKNOWN
+
     def refresh_state(self) -> GDS2Page:
         """Refresh and return current page state."""
         with self._lock:

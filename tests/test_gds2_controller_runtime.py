@@ -443,6 +443,167 @@ def test_navigation_controller_detects_clear_dtcs_selection_without_list_items()
     assert controller.detect_current_page(retries=0) == GDS2Page.CLEAR_DTCS_SELECTION
 
 
+def test_navigation_controller_treats_ambiguous_back_only_empty_list_as_loading() -> None:
+    class _HeuristicNav:
+        def get_page_id(self):
+            return None
+
+        def get_buttons(self):
+            return [
+                {"text": "Back", "enabled": True},
+            ]
+
+        def get_list_items(self, list_index: int = 0):
+            return []
+
+    controller = NavigationController(nav=_HeuristicNav())
+    controller._current_page = GDS2Page.MAIN_MENU
+
+    assert controller.detect_current_page(retries=0) == GDS2Page.LOADING
+
+
+def test_navigation_controller_treats_empty_buttons_and_list_as_loading() -> None:
+    class _HeuristicNav:
+        def get_page_id(self):
+            return None
+
+        def get_buttons(self):
+            return []
+
+        def get_list_items(self, list_index: int = 0):
+            return []
+
+    controller = NavigationController(nav=_HeuristicNav())
+
+    assert controller.detect_current_page(retries=0) == GDS2Page.LOADING
+
+
+def test_navigation_controller_treats_back_only_empty_list_as_disconnect_from_deep_context() -> None:
+    class _HeuristicNav:
+        def get_page_id(self):
+            return None
+
+        def get_buttons(self):
+            return [
+                {"text": "Back", "enabled": True},
+            ]
+
+        def get_list_items(self, list_index: int = 0):
+            return []
+
+    controller = NavigationController(nav=_HeuristicNav())
+    controller._current_page = GDS2Page.DATA_DISPLAY
+
+    assert controller.detect_current_page(retries=0) == GDS2Page.J2534_DISCONNECT
+
+
+def test_navigation_controller_treats_enter_with_back_and_empty_list_as_loading() -> None:
+    class _HeuristicNav:
+        def get_page_id(self):
+            return None
+
+        def get_buttons(self):
+            return [
+                {"text": "Enter", "enabled": True},
+                {"text": "Back", "enabled": True},
+            ]
+
+        def get_list_items(self, list_index: int = 0):
+            return []
+
+    controller = NavigationController(nav=_HeuristicNav())
+
+    assert controller.detect_current_page(retries=0) == GDS2Page.LOADING
+
+
+def test_navigation_controller_detects_vehicle_selection_without_deep_page_buttons() -> None:
+    class _HeuristicNav:
+        def get_page_id(self):
+            return None
+
+        def get_buttons(self):
+            return [
+                {"text": "Disconnect", "enabled": True},
+                {"text": "Select Device", "enabled": True},
+            ]
+
+        def get_list_items(self, list_index: int = 0):
+            return []
+
+    controller = NavigationController(nav=_HeuristicNav())
+
+    assert controller.detect_current_page(retries=0) == GDS2Page.VEHICLE_SELECTION
+
+
+def test_navigation_controller_detects_loading_when_buttons_and_items_are_empty() -> None:
+    class _HeuristicNav:
+        def get_page_id(self):
+            return None
+
+        def get_buttons(self):
+            return []
+
+        def get_list_items(self, list_index: int = 0):
+            return []
+
+    controller = NavigationController(nav=_HeuristicNav())
+
+    assert controller.detect_current_page(retries=0) == GDS2Page.LOADING
+
+
+def test_navigation_controller_detects_loading_for_enter_with_deep_page_buttons() -> None:
+    class _HeuristicNav:
+        def get_page_id(self):
+            return None
+
+        def get_buttons(self):
+            return [
+                {"text": "Enter", "enabled": True},
+                {"text": "Back", "enabled": True},
+            ]
+
+        def get_list_items(self, list_index: int = 0):
+            return []
+
+    controller = NavigationController(nav=_HeuristicNav())
+
+    assert controller.detect_current_page(retries=0) == GDS2Page.LOADING
+
+
+def test_navigation_controller_detects_disconnect_from_back_only_state_with_deep_context() -> None:
+    class _HeuristicNav:
+        def get_page_id(self):
+            return None
+
+        def get_buttons(self):
+            return [{"text": "Back", "enabled": True}]
+
+        def get_list_items(self, list_index: int = 0):
+            return []
+
+    controller = NavigationController(nav=_HeuristicNav())
+    controller._current_page = GDS2Page.DATA_DISPLAY
+
+    assert controller.detect_current_page(retries=0) == GDS2Page.J2534_DISCONNECT
+
+
+def test_navigation_controller_detects_loading_from_back_only_state_without_deep_context() -> None:
+    class _HeuristicNav:
+        def get_page_id(self):
+            return None
+
+        def get_buttons(self):
+            return [{"text": "Back", "enabled": True}]
+
+        def get_list_items(self, list_index: int = 0):
+            return []
+
+    controller = NavigationController(nav=_HeuristicNav())
+    controller._current_page = GDS2Page.VEHICLE_SELECTION
+
+    assert controller.detect_current_page(retries=0) == GDS2Page.LOADING
+
+
 def test_navigation_controller_click_enter_retries_vehicle_selection() -> None:
     class _EnterNav:
         def __init__(self) -> None:

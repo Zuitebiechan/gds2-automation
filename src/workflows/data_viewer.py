@@ -100,38 +100,7 @@ class DataViewerWorkflow:
         # At Main Menu - click Diagnostics
         status("Opening Diagnostics...")
         result = self.controller.start_diagnostics()
-
-        if not result.success:
-            raise RuntimeError(f"Failed to start diagnostics: {result.error}")
-
-        # Check what appeared after clicking Diagnostics
-        if result.page == GDS2Page.DEVICE_EXPLORER:
-            # Device not connected - show device list
-            status("Scanning for devices...")
-            from ..native.device_explorer import DeviceExplorerController
-            explorer = DeviceExplorerController()
-
-            if not explorer.find_dialog(timeout_sec=5.0):
-                raise RuntimeError("Device Explorer dialog not found")
-
-            devices = explorer.get_device_names()
-            if not devices:
-                raise RuntimeError("No devices found in Device Explorer")
-
-            status(f"Found {len(devices)} device(s)")
-
-            return {
-                "devices": devices,
-                "at_device_explorer": True,
-                "device_connected": False,
-            }
-
-        # Device already connected - went past Device Explorer
-        if result.page in CONNECTED_PAGES:
-            status("Device already connected")
-            return self._navigate_to_module_list_from(result.page, status)
-
-        raise RuntimeError(f"Unexpected page after Diagnostics: {result.page.value}")
+        return self._handle_start_diagnostics_result(result, status)
 
     def _navigate_to_module_list_from(self, current: GDS2Page, status) -> dict:
         """
@@ -171,21 +140,7 @@ class DataViewerWorkflow:
 
         status("Connecting...")
 
-        # Check if this is a "continue with existing device" request
-        current = self.controller.detect_current_page()
-        is_continue_request = (not device_name or device_name == "default")
-
-        # Pages that indicate device is already connected
-        if is_continue_request and current in CONNECTED_PAGES:
-            # Device already connected, continue from current page
-            logger.info(f"Device already connected at {current.value}, continuing...")
-            status("Device already connected, continuing...")
-        else:
-            # Need to select a device
-            if not device_name or device_name == "default":
-                raise RuntimeError("Device name required when not at a connected page")
-            self._ensure_device_selected(device_name, status)
-            current = self.controller.detect_current_page()
+        current = self._prepare_device_connection(device_name, status)
 
         logger.info(f"Navigating to Module List from {current.value}")
         self._advance_connected_page_to_module_list(
@@ -213,35 +168,9 @@ class DataViewerWorkflow:
         status("Navigating to Module List...")
         self._navigate_to_module_list(status)
 
-        # Select module from list
-        status(f"Selecting {module_name}...")
-        items = self.controller.wait_for_list()
-        if not items:
-            raise RuntimeError("No modules found")
-
-        resolved_module = self._resolve_branch_choice(
-            domain=DecisionDomain.MODULE,
-            target=module_name,
-            choices=items,
-            fallback_to_first=False,
-        )
-        target_index = self._find_item_index(items, resolved_module)
-        if target_index is None:
-            raise RuntimeError(f"Module '{module_name}' not found")
-
-        matched = items[target_index]
-        result = self.controller.nav.select_list_item(0, target_index, double_click=True)
-        if not result.get('success'):
-            raise RuntimeError(f"Failed to select module: {result.get('message')}")
-
-        # Wait for page transition instead of blind sleep
-        try:
-            self.controller.wait_for_page_transition(GDS2Page.MODULE_LIST, timeout=30)
-        except TimeoutError:
-            logger.warning("Page did not transition after module selection")
-        self.controller.set_context(module=matched)
-        self._module = matched
-        self.controller._current_page = self.controller.detect_current_page()
+        items, resolved_module, target_index, matched = self._prepare_module_selection(module_name)
+        status(f"Selecting {resolved_module}...")
+        self._select_module_from_list(target_index=target_index, matched_module=matched)
 
         # Select target submenu entry (typically Data Display) from Module Submenu.
         # If ambiguous, raise BranchDecisionRequiredError for HITL decision flow.
@@ -278,14 +207,8 @@ class DataViewerWorkflow:
         # Stop any active monitoring
         self.stop_monitoring()
 
-        # Navigate to Data List if needed
-        current = self.controller.detect_current_page()
-        if current == GDS2Page.DATA_DISPLAY:
-            status("Going back to Data List...")
-            self.controller.go_back()
-            # go_back now uses wait_for_page_transition internally
+        self._return_to_data_list_if_needed(status)
 
-        # Select data category
         list_items = self.controller.wait_for_list()
         if not list_items:
             raise RuntimeError("No data categories found")
@@ -301,24 +224,11 @@ class DataViewerWorkflow:
         if not result.success:
             raise RuntimeError(f"Failed to select data category: {result.error}")
 
-        sub_categories = None
-        if result.page == GDS2Page.SUB_DATA_LIST:
-            sub_categories = self._handle_sub_category_result(
-                data_category=resolved_category,
-                choices=result.choices,
-            )
-            if sub_categories:
-                chosen_sub = self._resolve_branch_choice(
-                    domain=DecisionDomain.SUB_CATEGORY,
-                    target=resolved_category,
-                    choices=sub_categories,
-                    fallback_to_first=False,
-                )
-                if chosen_sub is not None:
-                    status(f"Selecting {chosen_sub}...")
-                    result = self.controller.select_sub_category(chosen_sub)
-                if not result.success:
-                    raise RuntimeError(f"Failed to select sub-category: {result.error}")
+        sub_categories = self._select_data_category_sub_category_if_needed(
+            data_category=resolved_category,
+            result=result,
+            status=status,
+        )
 
         self._data_category = resolved_category
 
@@ -469,28 +379,15 @@ class DataViewerWorkflow:
 
         status("Navigating to Vehicle Selection...")
 
-        # Navigate back towards Main Menu / Vehicle Selection
         self._navigate_to_main_menu(status)
 
         current = self.controller.detect_current_page()
         logger.info(f"After navigation, at page: {current.value}")
+        current = self._advance_to_device_selection_or_explorer(current, status)
 
-        # If at Main Menu, click Diagnostics to get to Vehicle Selection or Device Explorer
-        if current == GDS2Page.MAIN_MENU:
-            status("Opening Diagnostics...")
-            result = self.controller.start_diagnostics()
-            if not result.success:
-                raise RuntimeError(f"Failed to start diagnostics: {result.error}")
-            current = result.page
-
-            # If Device Explorer opened directly, we're done
-            if current == GDS2Page.DEVICE_EXPLORER:
-                self._clear_connection_context()
-                return self._get_devices_from_explorer(status)
-
-        # Should be at Vehicle Selection now
-        if current != GDS2Page.VEHICLE_SELECTION:
-            raise RuntimeError(f"Expected Vehicle Selection, got {current.value}")
+        if current == GDS2Page.DEVICE_EXPLORER:
+            self._clear_connection_context()
+            return self._get_devices_from_explorer(status)
 
         explorer = self._open_device_explorer_after_disconnect(status)
         return self._get_devices_from_explorer(status, explorer=explorer)
@@ -515,6 +412,23 @@ class DataViewerWorkflow:
             "devices": devices,
             "at_device_explorer": True,
         }
+
+    def _handle_start_diagnostics_result(self, result: NavigationResult, status) -> dict:
+        """Normalize Diagnostics startup results into either device-pick or connected flow."""
+        if not result.success:
+            raise RuntimeError(f"Failed to start diagnostics: {result.error}")
+
+        if result.page == GDS2Page.DEVICE_EXPLORER:
+            return {
+                **self._get_devices_from_explorer(status),
+                "device_connected": False,
+            }
+
+        if result.page in CONNECTED_PAGES:
+            status("Device already connected")
+            return self._navigate_to_module_list_from(result.page, status)
+
+        raise RuntimeError(f"Unexpected page after Diagnostics: {result.page.value}")
 
     def auto_start(self, on_status: StatusCallback = None) -> dict:
         """
@@ -573,24 +487,7 @@ class DataViewerWorkflow:
 
         status("Reading DTCs from current Data Display page...")
 
-        raw = None
-        json_path = Path(collector.json_path)
-        if not json_path.exists():
-            raise RuntimeError(f"Agent JSON file not found: {json_path}")
-        for encoding in ['gbk', 'utf-8', 'utf-8-sig', 'latin-1', 'cp1252']:
-            try:
-                with json_path.open('r', encoding=encoding) as f:
-                    raw = json.load(f)
-                break
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                continue
-            except OSError as exc:
-                raise RuntimeError(f"Failed to read Agent JSON file: {exc}") from exc
-
-        if raw is None:
-            raise RuntimeError("Failed to decode Agent JSON file")
-
-        snapshot = _parse_agent_json(raw)
+        snapshot = _parse_agent_json(self._load_agent_json_payload(collector.json_path))
         self._ensure_agent_snapshot_matches_page(snapshot.page_context)
 
         return {
@@ -631,56 +528,23 @@ class DataViewerWorkflow:
         self._click_agent_button("Clear DTCs")
 
         dialog_page = self._wait_for_clear_dtcs_page(timeout_sec=10.0)
-        if dialog_page == GDS2Page.CLEAR_DTCS_SELECTION:
-            status("Selecting all modules for DTC clear...")
-            if not self._wait_for_button_state("Add All", enabled=True, timeout_sec=5.0):
-                raise RuntimeError("Add All button did not become enabled on Clear DTCs page.")
-            self._click_agent_button("Add All")
-            if not self._wait_for_button_state("OK", enabled=True, timeout_sec=5.0):
-                raise RuntimeError("OK button did not become enabled after selecting modules.")
-            self._sleep(0.8)
-            status("Confirming module selection...")
-            self._click_agent_button("OK")
-            dialog_deadline = time.time() + 15.0
-            dialog_page = GDS2Page.CLEAR_DTCS_SELECTION
-            while time.time() < dialog_deadline:
-                dialog_page = self._wait_for_clear_dtcs_page(
-                    timeout_sec=2.0,
-                    allow_data_display=True,
-                )
-                if dialog_page != GDS2Page.CLEAR_DTCS_SELECTION:
-                    break
-                self._sleep(0.5)
-            if dialog_page == GDS2Page.CLEAR_DTCS_SELECTION:
-                raise RuntimeError("Timed out waiting for final Clear DTCs confirmation page.")
+        dialog_page = self._handle_clear_dtcs_selection_page(dialog_page, status)
 
         if dialog_page == GDS2Page.CLEAR_DTCS_CONFIRMATION:
-            if not self._wait_for_button_state("OK", enabled=True, timeout_sec=5.0):
-                raise RuntimeError("Confirmation OK button did not become enabled.")
-            self._sleep(1.0)
-            status("Submitting Clear DTCs command...")
-            self._click_agent_button("OK")
+            self._submit_clear_dtcs_confirmation(status)
         elif dialog_page == GDS2Page.DATA_DISPLAY:
-            post_clear_count = self._read_dtc_count_with_fallback(default=pre_clear_count)
-            cleared_count = max(0, pre_clear_count - post_clear_count)
             status("Clear DTCs completed")
-            return {
-                "success": True,
-                "cleared_count": cleared_count,
-                "message": "Clear DTCs completed",
-                "page_context": GDS2Page.DATA_DISPLAY.value,
-            }
+            return self._build_clear_dtcs_success_payload(
+                pre_clear_count=pre_clear_count,
+                page=GDS2Page.DATA_DISPLAY,
+            )
 
         final_page = self._wait_for_data_display_restore(timeout_sec=30.0)
-        post_clear_count = self._read_dtc_count_with_fallback(default=pre_clear_count)
-        cleared_count = max(0, pre_clear_count - post_clear_count)
         status("Clear DTCs completed")
-        return {
-            "success": True,
-            "cleared_count": cleared_count,
-            "message": "Clear DTCs completed",
-            "page_context": final_page.value,
-        }
+        return self._build_clear_dtcs_success_payload(
+            pre_clear_count=pre_clear_count,
+            page=final_page,
+        )
 
     def get_state(self) -> dict:
         """Return current viewer state."""
@@ -708,66 +572,113 @@ class DataViewerWorkflow:
 
         After this method returns, GDS2 should be at Vehicle Selection with the new device.
         """
-        from ..native.device_explorer import DeviceExplorerController
-
-        # Case 1: Device Explorer is already open (e.g. just called start())
-        explorer = DeviceExplorerController()
-        if explorer.find_dialog(timeout_sec=2.0):
-            self._clear_connection_context()
-            self._select_in_explorer(explorer, device_name, status)
+        if self._select_device_in_existing_explorer(device_name, status):
             return
 
-        # Case 2: Navigate back towards Main Menu
         status("Navigating back...")
         self._navigate_to_main_menu(status)
 
-        # Check where we ended up
         current = self.controller.detect_current_page()
         logger.info(f"After navigation, at page: {current.value}")
+        self._select_device_from_navigation_page(current, device_name, status)
 
-        # Case 2a: At Vehicle Selection - device is connected, need to disconnect
+    def _select_device_in_existing_explorer(self, device_name: str, status) -> bool:
+        """Use an already-open Device Explorer dialog when available."""
+        from ..native.device_explorer import DeviceExplorerController
+
+        explorer = DeviceExplorerController()
+        if not explorer.find_dialog(timeout_sec=2.0):
+            return False
+
+        self._clear_connection_context()
+        self._select_in_explorer(explorer, device_name, status)
+        return True
+
+    def _select_device_from_navigation_page(
+        self,
+        current: GDS2Page,
+        device_name: str,
+        status,
+    ) -> None:
+        """Select a device after navigating back toward a stable entry page."""
         if current == GDS2Page.VEHICLE_SELECTION:
             explorer = self._open_device_explorer_after_disconnect(status)
             self._select_in_explorer(explorer, device_name, status)
             return
 
-        # Case 2b: At Main Menu - click Diagnostics
         if current == GDS2Page.MAIN_MENU:
-            status("Opening Diagnostics...")
-            result = self.controller.start_diagnostics()
-            if not result.success:
-                raise RuntimeError(f"Failed to start diagnostics: {result.error}")
-
-            # Check what appeared
-            if result.page == GDS2Page.DEVICE_EXPLORER:
-                # No device connected - Device Explorer opened directly
-                self._clear_connection_context()
-                explorer = DeviceExplorerController()
-                if not explorer.find_dialog(timeout_sec=5.0):
-                    raise RuntimeError("Device Explorer detected but dialog not found")
-                self._select_in_explorer(explorer, device_name, status)
-                return
-
-            if result.page == GDS2Page.VEHICLE_SELECTION:
-                # Device is still connected - need to disconnect and re-select
-                explorer = self._open_device_explorer_after_disconnect(status)
-                self._select_in_explorer(explorer, device_name, status)
-                return
-
-            raise RuntimeError(
-                f"Unexpected page after Diagnostics: {result.page.value}. "
-                f"Expected Device Explorer or Vehicle Selection."
-            )
+            result = self._start_diagnostics_for_device_selection(status)
+            self._handle_device_selection_diagnostics_result(result, device_name, status)
+            return
 
         raise RuntimeError(
             f"Unexpected page after navigation: {current.value}. "
             f"Expected Main Menu or Vehicle Selection."
         )
 
-    def _open_device_explorer_after_disconnect(self, status):
-        """Disconnect the active device and verify the Device Explorer dialog is available."""
+    def _start_diagnostics_for_device_selection(self, status) -> NavigationResult:
+        """Start Diagnostics while preparing to open or re-open Device Explorer."""
+        status("Opening Diagnostics...")
+        result = self.controller.start_diagnostics()
+        if not result.success:
+            raise RuntimeError(f"Failed to start diagnostics: {result.error}")
+        return result
+
+    def _advance_to_device_selection_or_explorer(
+        self,
+        current: GDS2Page,
+        status,
+    ) -> GDS2Page:
+        """Advance from Main Menu to either Vehicle Selection or Device Explorer."""
+        if current != GDS2Page.MAIN_MENU:
+            if current != GDS2Page.VEHICLE_SELECTION:
+                raise RuntimeError(f"Expected Vehicle Selection, got {current.value}")
+            return current
+
+        result = self._start_diagnostics_for_device_selection(status)
+        current = result.page
+        if current in (GDS2Page.VEHICLE_SELECTION, GDS2Page.DEVICE_EXPLORER):
+            return current
+
+        raise RuntimeError(f"Expected Vehicle Selection, got {current.value}")
+
+    def _handle_device_selection_diagnostics_result(
+        self,
+        result: NavigationResult,
+        device_name: str,
+        status,
+    ) -> None:
+        """Continue device selection based on the page reached after Diagnostics."""
+        if result.page == GDS2Page.DEVICE_EXPLORER:
+            self._clear_connection_context()
+            explorer = self._require_device_explorer_dialog(
+                "Device Explorer detected but dialog not found",
+            )
+            self._select_in_explorer(explorer, device_name, status)
+            return
+
+        if result.page == GDS2Page.VEHICLE_SELECTION:
+            explorer = self._open_device_explorer_after_disconnect(status)
+            self._select_in_explorer(explorer, device_name, status)
+            return
+
+        raise RuntimeError(
+            f"Unexpected page after Diagnostics: {result.page.value}. "
+            f"Expected Device Explorer or Vehicle Selection."
+        )
+
+    @staticmethod
+    def _require_device_explorer_dialog(error_message: str):
+        """Return a visible Device Explorer dialog or raise a descriptive error."""
         from ..native.device_explorer import DeviceExplorerController
 
+        explorer = DeviceExplorerController()
+        if not explorer.find_dialog(timeout_sec=5.0):
+            raise RuntimeError(error_message)
+        return explorer
+
+    def _open_device_explorer_after_disconnect(self, status):
+        """Disconnect the active device and verify the Device Explorer dialog is available."""
         status("Disconnecting current device...")
         disc_result = self.controller.disconnect_device()
         if not disc_result.success:
@@ -780,11 +691,9 @@ class DataViewerWorkflow:
         if not sel_result.success:
             raise RuntimeError(f"Failed to open Device Explorer: {sel_result.error}")
 
-        explorer = DeviceExplorerController()
-        if not explorer.find_dialog(timeout_sec=5.0):
-            raise RuntimeError("Device Explorer dialog not found after Select Device")
-
-        return explorer
+        return self._require_device_explorer_dialog(
+            "Device Explorer dialog not found after Select Device",
+        )
 
     def _select_in_explorer(self, explorer, device_name: str, status):
         """Select device in Device Explorer and click Continue."""
@@ -1147,6 +1056,30 @@ class DataViewerWorkflow:
             return requested_device_name
         return self._device or "Connected Device"
 
+    def _prepare_device_connection(self, device_name: str, status) -> GDS2Page:
+        """Return the connected starting page, selecting a device first when required."""
+        current = self.controller.detect_current_page()
+        if self._can_continue_with_connected_device(device_name, current):
+            logger.info(f"Device already connected at {current.value}, continuing...")
+            status("Device already connected, continuing...")
+            return current
+
+        if not self._has_explicit_device_name(device_name):
+            raise RuntimeError("Device name required when not at a connected page")
+
+        self._ensure_device_selected(device_name, status)
+        return self.controller.detect_current_page()
+
+    @staticmethod
+    def _has_explicit_device_name(device_name: Optional[str]) -> bool:
+        """Return whether the caller explicitly named a concrete device to connect."""
+        return bool(device_name and device_name != "default")
+
+    @staticmethod
+    def _can_continue_with_connected_device(device_name: Optional[str], current: GDS2Page) -> bool:
+        """Return whether the current page already represents a connected device session."""
+        return not DataViewerWorkflow._has_explicit_device_name(device_name) and current in CONNECTED_PAGES
+
     def _clear_connection_context(self) -> None:
         """Drop stale connection-local state after disconnecting the active device."""
         self._device = None
@@ -1154,6 +1087,163 @@ class DataViewerWorkflow:
         self._data_category = None
         if hasattr(self.controller, "set_context"):
             self.controller.set_context(device=None, module=None, data_category=None)
+
+    def _prepare_module_selection(
+        self,
+        module_name: str,
+    ) -> tuple[List[str], str, int, str]:
+        """Load available modules and resolve which one should be opened."""
+        items = self.controller.wait_for_list()
+        if not items:
+            raise RuntimeError("No modules found")
+
+        resolved_module = self._resolve_branch_choice(
+            domain=DecisionDomain.MODULE,
+            target=module_name,
+            choices=items,
+            fallback_to_first=False,
+        )
+        target_index = self._find_item_index(items, resolved_module)
+        if target_index is None:
+            raise RuntimeError(f"Module '{module_name}' not found")
+
+        return items, resolved_module, target_index, items[target_index]
+
+    def _select_module_from_list(self, *, target_index: int, matched_module: str) -> None:
+        """Open one module from the module list and refresh local workflow state."""
+        result = self.controller.nav.select_list_item(0, target_index, double_click=True)
+        if not result.get('success'):
+            raise RuntimeError(f"Failed to select module: {result.get('message')}")
+
+        try:
+            self.controller.wait_for_page_transition(GDS2Page.MODULE_LIST, timeout=30)
+        except TimeoutError:
+            logger.warning("Page did not transition after module selection")
+
+        self.controller.set_context(module=matched_module)
+        self._module = matched_module
+        self.controller._current_page = self.controller.detect_current_page()
+
+    def _handle_clear_dtcs_selection_page(self, dialog_page: GDS2Page, status) -> GDS2Page:
+        """Handle the intermediate Clear DTCs module-selection dialog when present."""
+        if dialog_page != GDS2Page.CLEAR_DTCS_SELECTION:
+            return dialog_page
+
+        status("Selecting all modules for DTC clear...")
+        if not self._wait_for_button_state("Add All", enabled=True, timeout_sec=5.0):
+            raise RuntimeError("Add All button did not become enabled on Clear DTCs page.")
+        self._click_agent_button("Add All")
+        if not self._wait_for_button_state("OK", enabled=True, timeout_sec=5.0):
+            raise RuntimeError("OK button did not become enabled after selecting modules.")
+
+        self._sleep(0.8)
+        status("Confirming module selection...")
+        self._click_agent_button("OK")
+        return self._wait_for_clear_dtcs_confirmation_page()
+
+    def _wait_for_clear_dtcs_confirmation_page(self) -> GDS2Page:
+        """Wait for the final Clear DTCs confirmation step or a direct data-display return."""
+        dialog_deadline = time.time() + 15.0
+        dialog_page = GDS2Page.CLEAR_DTCS_SELECTION
+        while time.time() < dialog_deadline:
+            dialog_page = self._wait_for_clear_dtcs_page(
+                timeout_sec=2.0,
+                allow_data_display=True,
+            )
+            if dialog_page != GDS2Page.CLEAR_DTCS_SELECTION:
+                return dialog_page
+            self._sleep(0.5)
+
+        raise RuntimeError("Timed out waiting for final Clear DTCs confirmation page.")
+
+    def _submit_clear_dtcs_confirmation(self, status) -> None:
+        """Submit the final Clear DTCs confirmation action."""
+        if not self._wait_for_button_state("OK", enabled=True, timeout_sec=5.0):
+            raise RuntimeError("Confirmation OK button did not become enabled.")
+
+        self._sleep(1.0)
+        status("Submitting Clear DTCs command...")
+        self._click_agent_button("OK")
+
+    def _build_clear_dtcs_success_payload(
+        self,
+        *,
+        pre_clear_count: int,
+        page: GDS2Page,
+    ) -> dict:
+        """Compute the clear count delta and return the normalized success payload."""
+        post_clear_count = self._read_dtc_count_with_fallback(default=pre_clear_count)
+        cleared_count = max(0, pre_clear_count - post_clear_count)
+        return {
+            "success": True,
+            "cleared_count": cleared_count,
+            "message": "Clear DTCs completed",
+            "page_context": page.value,
+        }
+
+    @staticmethod
+    def _load_agent_json_payload(json_path_str: str) -> Any:
+        """Load the Agent JSON payload using the first decoding that succeeds."""
+        raw = None
+        json_path = Path(json_path_str)
+        if not json_path.exists():
+            raise RuntimeError(f"Agent JSON file not found: {json_path}")
+
+        for encoding in ['gbk', 'utf-8', 'utf-8-sig', 'latin-1', 'cp1252']:
+            try:
+                with json_path.open('r', encoding=encoding) as f:
+                    raw = json.load(f)
+                break
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            except OSError as exc:
+                raise RuntimeError(f"Failed to read Agent JSON file: {exc}") from exc
+
+        if raw is None:
+            raise RuntimeError("Failed to decode Agent JSON file")
+
+        return raw
+
+    def _return_to_data_list_if_needed(self, status) -> None:
+        """Leave Data Display before selecting another data category."""
+        current = self.controller.detect_current_page()
+        if current == GDS2Page.DATA_DISPLAY:
+            status("Going back to Data List...")
+            self.controller.go_back()
+
+    def _select_data_category_sub_category_if_needed(
+        self,
+        *,
+        data_category: str,
+        result: NavigationResult,
+        status,
+    ) -> Optional[List[str]]:
+        """Handle optional sub-category selection after choosing a data category."""
+        if result.page != GDS2Page.SUB_DATA_LIST:
+            return None
+
+        sub_categories = self._handle_sub_category_result(
+            data_category=data_category,
+            choices=result.choices,
+        )
+        if not sub_categories:
+            return sub_categories
+
+        chosen_sub = self._resolve_branch_choice(
+            domain=DecisionDomain.SUB_CATEGORY,
+            target=data_category,
+            choices=sub_categories,
+            fallback_to_first=False,
+        )
+        if chosen_sub is None:
+            return sub_categories
+
+        status(f"Selecting {chosen_sub}...")
+        sub_result = self.controller.select_sub_category(chosen_sub)
+        if not sub_result.success:
+            raise RuntimeError(f"Failed to select sub-category: {sub_result.error}")
+
+        return sub_categories
 
     def _handle_sub_category_result(
         self,
