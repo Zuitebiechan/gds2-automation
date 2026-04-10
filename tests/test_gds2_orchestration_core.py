@@ -172,7 +172,7 @@ def test_policy_guard_accepts_valid_action() -> None:
 def test_executor_retries_until_handler_succeeds(monkeypatch) -> None:
     executor = DeterministicExecutor()
     attempts = {"count": 0}
-    monkeypatch.setattr("src.gds2_orchestration.executor.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("diagnostic_platform.action_runtime.time.sleep", lambda seconds: None)
 
     def _handler(step: ActionStep, state: UIState):
         attempts["count"] += 1

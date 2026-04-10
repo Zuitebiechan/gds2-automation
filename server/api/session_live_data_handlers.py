@@ -17,10 +17,11 @@ from diagnostic_platform.runtime.session_actions import (
 from diagnostic_platform.runtime.session_state import (
     live_data_active as is_live_data_active,
 )
+from diagnostic_platform.session_models import SessionStatus
 from diagnostic_platform.runtime.session_streams import iter_scoped_agent_events
 from diagnostic_platform.sse import session_agent_stream_scope
-from src.gds2_orchestration.session_orchestrator import SessionStatus
 
+from server.api.http_utils import internal_error_payload
 from server.api.session_dependencies import (
     _runtime,
     get_backend,
@@ -30,19 +31,40 @@ from server.api.session_dependencies import (
 logger = logging.getLogger(__name__)
 
 
+def _read_text_field(
+    data: dict[str, Any],
+    field: str,
+    *,
+    default: str = "",
+) -> str:
+    value = data.get(field, default)
+    if value is None:
+        value = default
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be a string")
+    return value.strip()
+
+
+def _normalize_vehicle_context_data(data: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(data)
+    for field in ("vin", "module", "data_category"):
+        normalized[field] = _read_text_field(data, field)
+    return normalized
+
+
 def read_session_dtcs(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
-    session_id = (data.get("session_id") or "").strip()
-
-    if not session_id:
-        return {"success": False, "error": "session_id required"}, 400
-
     try:
+        session_id = _read_text_field(data, "session_id")
+        if not session_id:
+            return {"success": False, "error": "session_id required"}, 400
+        normalized_data = _normalize_vehicle_context_data(data)
+
         orch = get_orchestrator()
         session = orch.get_session(session_id)
         ensure_session_capability(session, BackendCapability.READ_DTCS)
         result = read_dtcs(
             session,
-            data,
+            normalized_data,
             backend=get_backend(),
             emit_progress=lambda message: orch.emit_progress(session_id, message),
         )
@@ -66,23 +88,23 @@ def read_session_dtcs(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
         return {"success": False, "error": str(exc)}, 400
     except Exception as exc:
         logger.exception("session_dtcs failed")
-        return {"success": False, "error": str(exc)}, 500
+        return internal_error_payload(), 500
 
 
 def clear_session_dtcs(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
-    session_id = (data.get("session_id") or "").strip()
-
-    if not session_id:
-        return {"success": False, "error": "session_id required"}, 400
-
     try:
+        session_id = _read_text_field(data, "session_id")
+        if not session_id:
+            return {"success": False, "error": "session_id required"}, 400
+        normalized_data = _normalize_vehicle_context_data(data)
+
         orch = get_orchestrator()
         session = orch.get_session(session_id)
         ensure_session_capability(session, BackendCapability.CLEAR_DTCS)
         result = clear_dtcs(
             _runtime(),
             session,
-            data,
+            normalized_data,
             backend=get_backend(),
             emit_progress=lambda message: orch.emit_progress(session_id, message),
         )
@@ -108,24 +130,28 @@ def clear_session_dtcs(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
         return {"success": False, "error": str(exc)}, 400
     except Exception as exc:
         logger.exception("session_clear_dtcs failed")
-        return {"success": False, "error": str(exc)}, 500
+        return internal_error_payload(), 500
 
 
 def start_live_data_session(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
-    session_id = (data.get("session_id") or "").strip()
-    interval_ms = int(data.get("interval_ms", 100))
-
-    if not session_id:
-        return {"success": False, "error": "session_id required"}, 400
-
     try:
+        session_id = _read_text_field(data, "session_id")
+        if not session_id:
+            return {"success": False, "error": "session_id required"}, 400
+
+        try:
+            interval_ms = int(data.get("interval_ms", 100))
+        except (TypeError, ValueError):
+            return {"success": False, "error": "interval_ms must be an integer"}, 400
+        normalized_data = _normalize_vehicle_context_data(data)
+
         orch = get_orchestrator()
         session = orch.get_session(session_id)
         ensure_session_capability(session, BackendCapability.LIVE_DATA)
         data_category, payload = start_live_data(
             _runtime(),
             session,
-            data,
+            normalized_data,
             interval_ms=interval_ms,
             backend=get_backend(),
             stream_scope=session_agent_stream_scope(session_id),
@@ -151,7 +177,7 @@ def start_live_data_session(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
         return {"success": False, "error": str(exc)}, 400
     except Exception as exc:
         logger.exception("session_live_data_start failed")
-        return {"success": False, "error": str(exc)}, 500
+        return internal_error_payload(), 500
 
 
 def stream_live_data_events(session_id: str, *, sse_response):
@@ -185,12 +211,11 @@ def stream_live_data_events(session_id: str, *, sse_response):
 
 
 def stop_live_data_session(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
-    session_id = (data.get("session_id") or "").strip()
-
-    if not session_id:
-        return {"success": False, "error": "session_id required"}, 400
-
     try:
+        session_id = _read_text_field(data, "session_id")
+        if not session_id:
+            return {"success": False, "error": "session_id required"}, 400
+
         orch = get_orchestrator()
         session = orch.get_session(session_id)
         if session.status != SessionStatus.RUNNING:
@@ -218,4 +243,4 @@ def stop_live_data_session(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
         return {"success": False, "error": str(exc)}, 501
     except Exception as exc:
         logger.exception("session_live_data_stop failed")
-        return {"success": False, "error": str(exc)}, 500
+        return internal_error_payload(), 500

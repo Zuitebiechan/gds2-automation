@@ -28,8 +28,9 @@ class DiagnosticsWindow:
     POLL_INTERVAL_MS = 100
     SESSION_STATUS_POLL_INTERVAL_MS = 1500
 
-    def __init__(self, api_base_url: str):
+    def __init__(self, api_base_url: str, *, api_token: str = ""):
         self._api_base = api_base_url.rstrip("/")
+        self._api_token = str(api_token or "").strip()
         parsed = urlparse(self._api_base)
         self._server_display = parsed.netloc or self._api_base
 
@@ -99,6 +100,12 @@ class DiagnosticsWindow:
 
         self._root.after(self.POLL_INTERVAL_MS, self._poll_queue)
         self._root.after(self.SESSION_STATUS_POLL_INTERVAL_MS, self._poll_session_status)
+
+    def _request_headers(self) -> dict[str, str]:
+        """Return headers for API requests from the diagnostics window."""
+        if not self._api_token:
+            return {}
+        return {"X-API-Token": self._api_token}
 
     # ------------------------------------------------------------------
     # Window lifecycle
@@ -520,10 +527,22 @@ class DiagnosticsWindow:
         def _worker() -> None:
             url = f"{self._api_base}/{endpoint.lstrip('/')}"
             try:
+                headers = self._request_headers() or None
                 if method.upper() == "POST":
-                    resp = requests.post(url, json=json_data, params=query_params, timeout=60)
+                    resp = requests.post(
+                        url,
+                        json=json_data,
+                        params=query_params,
+                        timeout=60,
+                        headers=headers,
+                    )
                 else:
-                    resp = requests.get(url, params=query_params, timeout=60)
+                    resp = requests.get(
+                        url,
+                        params=query_params,
+                        timeout=60,
+                        headers=headers,
+                    )
 
                 try:
                     data = resp.json()
@@ -1646,7 +1665,12 @@ class DiagnosticsWindow:
                 path = "/api/diagnose/live_data/events"
             url = f"{self._api_base}{path}"
             try:
-                with requests.get(url, stream=True, timeout=None) as response:
+                with requests.get(
+                    url,
+                    stream=True,
+                    timeout=None,
+                    headers=self._request_headers() or None,
+                ) as response:
                     self._sse_response = response
                     response.raise_for_status()
 
@@ -1909,7 +1933,12 @@ class DiagnosticsWindow:
                 path = f"/api/diagnose/ai_diagnose/events?session_id={session_id}"
             url = f"{self._api_base}{path}"
             try:
-                with requests.get(url, stream=True, timeout=(10, 300)) as response:
+                with requests.get(
+                    url,
+                    stream=True,
+                    timeout=(10, 300),
+                    headers=self._request_headers() or None,
+                ) as response:
                     self._ai_sse_response = response
                     response.raise_for_status()
 
@@ -2604,7 +2633,12 @@ class DiagnosticsWindow:
         def _session_sse_worker() -> None:
             url = f"{self._api_base}/api/session/events?session_id={session_id}"
             try:
-                with requests.get(url, stream=True, timeout=(10, None)) as response:
+                with requests.get(
+                    url,
+                    stream=True,
+                    timeout=(10, None),
+                    headers=self._request_headers() or None,
+                ) as response:
                     self._session_sse_response = response
                     response.raise_for_status()
 
@@ -2667,7 +2701,12 @@ class DiagnosticsWindow:
                 path = f"/api/navigate/events?session_id={session_id}"
             url = f"{self._api_base}{path}"
             try:
-                with requests.get(url, stream=True, timeout=(10, None)) as response:
+                with requests.get(
+                    url,
+                    stream=True,
+                    timeout=(10, None),
+                    headers=self._request_headers() or None,
+                ) as response:
                     self._navigate_sse_response = response
                     response.raise_for_status()
 

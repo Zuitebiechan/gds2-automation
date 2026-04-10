@@ -5,7 +5,7 @@ from diagnostic_platform.contracts import BackendCapability, BackendRegistry, Ba
 
 from backends.gds2.backend import GDS2DiagnosticBackend
 from backends.gds2.controller_runtime import GDS2ControllerRuntime
-from src.navigation import GDS2Page, NavigationController
+from src.navigation import GDS2Page, NavigationController, NavigationResult
 from src.streaming.agent_data_collector import AgentSnapshot, DTCInfo
 
 
@@ -441,3 +441,360 @@ def test_navigation_controller_detects_clear_dtcs_selection_without_list_items()
     controller = NavigationController(nav=_HeuristicNav())
 
     assert controller.detect_current_page(retries=0) == GDS2Page.CLEAR_DTCS_SELECTION
+
+
+def test_navigation_controller_treats_ambiguous_back_only_empty_list_as_loading() -> None:
+    class _HeuristicNav:
+        def get_page_id(self):
+            return None
+
+        def get_buttons(self):
+            return [
+                {"text": "Back", "enabled": True},
+            ]
+
+        def get_list_items(self, list_index: int = 0):
+            return []
+
+    controller = NavigationController(nav=_HeuristicNav())
+    controller._current_page = GDS2Page.MAIN_MENU
+
+    assert controller.detect_current_page(retries=0) == GDS2Page.LOADING
+
+
+def test_navigation_controller_treats_empty_buttons_and_list_as_loading() -> None:
+    class _HeuristicNav:
+        def get_page_id(self):
+            return None
+
+        def get_buttons(self):
+            return []
+
+        def get_list_items(self, list_index: int = 0):
+            return []
+
+    controller = NavigationController(nav=_HeuristicNav())
+
+    assert controller.detect_current_page(retries=0) == GDS2Page.LOADING
+
+
+def test_navigation_controller_treats_back_only_empty_list_as_disconnect_from_deep_context() -> None:
+    class _HeuristicNav:
+        def get_page_id(self):
+            return None
+
+        def get_buttons(self):
+            return [
+                {"text": "Back", "enabled": True},
+            ]
+
+        def get_list_items(self, list_index: int = 0):
+            return []
+
+    controller = NavigationController(nav=_HeuristicNav())
+    controller._current_page = GDS2Page.DATA_DISPLAY
+
+    assert controller.detect_current_page(retries=0) == GDS2Page.J2534_DISCONNECT
+
+
+def test_navigation_controller_treats_enter_with_back_and_empty_list_as_loading() -> None:
+    class _HeuristicNav:
+        def get_page_id(self):
+            return None
+
+        def get_buttons(self):
+            return [
+                {"text": "Enter", "enabled": True},
+                {"text": "Back", "enabled": True},
+            ]
+
+        def get_list_items(self, list_index: int = 0):
+            return []
+
+    controller = NavigationController(nav=_HeuristicNav())
+
+    assert controller.detect_current_page(retries=0) == GDS2Page.LOADING
+
+
+def test_navigation_controller_detects_vehicle_selection_without_deep_page_buttons() -> None:
+    class _HeuristicNav:
+        def get_page_id(self):
+            return None
+
+        def get_buttons(self):
+            return [
+                {"text": "Disconnect", "enabled": True},
+                {"text": "Select Device", "enabled": True},
+            ]
+
+        def get_list_items(self, list_index: int = 0):
+            return []
+
+    controller = NavigationController(nav=_HeuristicNav())
+
+    assert controller.detect_current_page(retries=0) == GDS2Page.VEHICLE_SELECTION
+
+
+def test_navigation_controller_detects_loading_when_buttons_and_items_are_empty() -> None:
+    class _HeuristicNav:
+        def get_page_id(self):
+            return None
+
+        def get_buttons(self):
+            return []
+
+        def get_list_items(self, list_index: int = 0):
+            return []
+
+    controller = NavigationController(nav=_HeuristicNav())
+
+    assert controller.detect_current_page(retries=0) == GDS2Page.LOADING
+
+
+def test_navigation_controller_detects_loading_for_enter_with_deep_page_buttons() -> None:
+    class _HeuristicNav:
+        def get_page_id(self):
+            return None
+
+        def get_buttons(self):
+            return [
+                {"text": "Enter", "enabled": True},
+                {"text": "Back", "enabled": True},
+            ]
+
+        def get_list_items(self, list_index: int = 0):
+            return []
+
+    controller = NavigationController(nav=_HeuristicNav())
+
+    assert controller.detect_current_page(retries=0) == GDS2Page.LOADING
+
+
+def test_navigation_controller_detects_disconnect_from_back_only_state_with_deep_context() -> None:
+    class _HeuristicNav:
+        def get_page_id(self):
+            return None
+
+        def get_buttons(self):
+            return [{"text": "Back", "enabled": True}]
+
+        def get_list_items(self, list_index: int = 0):
+            return []
+
+    controller = NavigationController(nav=_HeuristicNav())
+    controller._current_page = GDS2Page.DATA_DISPLAY
+
+    assert controller.detect_current_page(retries=0) == GDS2Page.J2534_DISCONNECT
+
+
+def test_navigation_controller_detects_loading_from_back_only_state_without_deep_context() -> None:
+    class _HeuristicNav:
+        def get_page_id(self):
+            return None
+
+        def get_buttons(self):
+            return [{"text": "Back", "enabled": True}]
+
+        def get_list_items(self, list_index: int = 0):
+            return []
+
+    controller = NavigationController(nav=_HeuristicNav())
+    controller._current_page = GDS2Page.VEHICLE_SELECTION
+
+    assert controller.detect_current_page(retries=0) == GDS2Page.LOADING
+
+
+def test_navigation_controller_click_enter_retries_vehicle_selection() -> None:
+    class _EnterNav:
+        def __init__(self) -> None:
+            self.clicks: list[str] = []
+
+        def click_button(self, text: str) -> dict[str, object]:
+            self.clicks.append(text)
+            return {"success": True}
+
+    nav = _EnterNav()
+    controller = NavigationController(nav=nav)
+    controller._current_page = GDS2Page.VEHICLE_SELECTION
+
+    transitions = iter([GDS2Page.VEHICLE_SELECTION, GDS2Page.DIAGNOSTICS_MENU])
+    dismiss_calls: list[str] = []
+
+    controller.wait_for_page_transition = lambda old_page, timeout: next(transitions)
+    controller.dismiss_warning_dialog = lambda: dismiss_calls.append("dismiss") or False
+    controller.get_list_items = lambda list_index=0: ["Module Diagnostics"]
+
+    result = controller.click_enter()
+
+    assert nav.clicks == ["Enter", "Enter"]
+    assert dismiss_calls == ["dismiss", "dismiss"]
+    assert result.success is True
+    assert result.page == GDS2Page.DIAGNOSTICS_MENU
+    assert result.choices == ["Module Diagnostics"]
+
+
+def test_navigation_controller_click_enter_returns_to_diagnostics_menu_after_auto_skip() -> None:
+    class _EnterNav:
+        def __init__(self) -> None:
+            self.clicks: list[str] = []
+
+        def click_button(self, text: str) -> dict[str, object]:
+            self.clicks.append(text)
+            return {"success": True}
+
+    nav = _EnterNav()
+    controller = NavigationController(nav=nav)
+    controller._current_page = GDS2Page.VEHICLE_SELECTION
+
+    transitions = iter([GDS2Page.MODULE_LIST, GDS2Page.DIAGNOSTICS_MENU])
+    controller.wait_for_page_transition = lambda old_page, timeout: next(transitions)
+    controller.dismiss_warning_dialog = lambda: False
+    controller.get_list_items = lambda list_index=0: ["Module Diagnostics"]
+
+    result = controller.click_enter()
+
+    assert nav.clicks == ["Enter", "Back"]
+    assert result.success is True
+    assert result.page == GDS2Page.DIAGNOSTICS_MENU
+    assert result.choices == ["Module Diagnostics"]
+
+
+def test_navigation_controller_select_data_category_records_sub_list_context() -> None:
+    class _CategoryNav:
+        def __init__(self) -> None:
+            self.selections: list[tuple[int, int, bool]] = []
+
+        def select_list_item(
+            self,
+            list_index: int,
+            target_index: int,
+            *,
+            double_click: bool,
+        ) -> dict[str, object]:
+            self.selections.append((list_index, target_index, double_click))
+            return {"success": True}
+
+        def get_list_items(self, list_index: int = 0) -> list[str]:
+            return ["Fuel System", "Ignition"]
+
+    nav = _CategoryNav()
+    controller = NavigationController(nav=nav)
+    controller._current_page = GDS2Page.DATA_LIST
+    controller.wait_for_list = lambda list_index=0, max_attempts=15, previous_items=None: [
+        "Engine Data",
+        "Transmission Data",
+    ]
+    controller.wait_for_page_transition = lambda old_page, timeout: GDS2Page.UNKNOWN
+
+    result = controller.select_data_category("Engine")
+
+    assert nav.selections == [(0, 0, True)]
+    assert result.success is True
+    assert result.page == GDS2Page.SUB_DATA_LIST
+    assert result.selected == "Engine Data"
+    assert result.choices == ["Fuel System", "Ignition"]
+    assert controller.current_page == GDS2Page.SUB_DATA_LIST
+    assert controller.current_data_category == "Engine Data"
+    assert controller.current_sub_category is None
+    assert controller.history == [GDS2Page.DATA_LIST]
+
+
+def test_navigation_controller_select_sub_category_updates_history_and_context() -> None:
+    class _SubCategoryNav:
+        def __init__(self) -> None:
+            self.selections: list[tuple[int, int, bool]] = []
+
+        def select_list_item(
+            self,
+            list_index: int,
+            target_index: int,
+            *,
+            double_click: bool,
+        ) -> dict[str, object]:
+            self.selections.append((list_index, target_index, double_click))
+            return {"success": True}
+
+    nav = _SubCategoryNav()
+    controller = NavigationController(nav=nav)
+    controller._current_page = GDS2Page.SUB_DATA_LIST
+    controller.set_context(data_category="Engine Data")
+    controller.wait_for_list = lambda list_index=0, max_attempts=15, previous_items=None: [
+        "Fuel System",
+        "Misfire Data",
+    ]
+    controller.wait_for_page_transition = lambda old_page, timeout: GDS2Page.DATA_DISPLAY
+
+    result = controller.select_sub_category("Fuel")
+
+    assert nav.selections == [(0, 0, True)]
+    assert result.success is True
+    assert result.page == GDS2Page.DATA_DISPLAY
+    assert result.selected == "Fuel System"
+    assert controller.current_page == GDS2Page.DATA_DISPLAY
+    assert controller.current_data_category == "Engine Data"
+    assert controller.current_sub_category == "Fuel System"
+    assert controller.history == [GDS2Page.SUB_DATA_LIST]
+
+
+def test_navigation_controller_recover_data_display_connection_uses_soft_ok() -> None:
+    class _RecoveryNav:
+        def __init__(self) -> None:
+            self.clicks: list[str] = []
+
+        def click_button(self, text: str) -> dict[str, object]:
+            self.clicks.append(text)
+            return {"success": True}
+
+    nav = _RecoveryNav()
+    controller = NavigationController(nav=nav)
+    controller.detect_current_page = lambda retries=0: GDS2Page.J2534_DISCONNECT
+    controller.wait_for_page_transition = lambda old_page, timeout: GDS2Page.DATA_DISPLAY
+    controller.get_available_buttons = lambda: {"OK": True}
+
+    result = controller.recover_data_display_connection(
+        data_category="Engine Data",
+        soft_retry_attempts=1,
+        retry_delays=[0.0],
+    )
+
+    assert nav.clicks == ["OK"]
+    assert result.success is True
+    assert result.page == GDS2Page.DATA_DISPLAY
+    assert result.context["recovery_method"] == "soft_ok"
+
+
+def test_navigation_controller_recover_data_display_connection_backtracks_when_ok_unavailable() -> None:
+    controller = NavigationController(nav=MagicMock())
+    controller.detect_current_page = lambda retries=0: GDS2Page.J2534_DISCONNECT
+    controller.get_available_buttons = lambda: {"OK": False}
+
+    back_calls: list[str] = []
+    select_calls: list[str] = []
+
+    def _go_back() -> NavigationResult:
+        back_calls.append("back")
+        return NavigationResult(success=True, page=GDS2Page.DATA_LIST, context={})
+
+    def _select_data_category(category: str) -> NavigationResult:
+        select_calls.append(category)
+        return NavigationResult(
+            success=True,
+            page=GDS2Page.DATA_DISPLAY,
+            selected=category,
+            context={"data_category": category},
+        )
+
+    controller.go_back = _go_back
+    controller.select_data_category = _select_data_category
+
+    result = controller.recover_data_display_connection(
+        data_category="Engine Data",
+        allow_backtrack=True,
+        backtrack_attempts=1,
+    )
+
+    assert back_calls == ["back"]
+    assert select_calls == ["Engine Data"]
+    assert result.success is True
+    assert result.page == GDS2Page.DATA_DISPLAY
+    assert result.context["recovery_method"] == "backtrack"

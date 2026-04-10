@@ -46,6 +46,11 @@ class _ResidualQueue:
         return self._residual_event
 
 
+class _StableValue:
+    def __str__(self) -> str:
+        return "stable-value"
+
+
 def _event_payload(message: str) -> tuple[str, dict[str, object]]:
     lines = message.strip().splitlines()
     event_type = lines[0].removeprefix("event: ")
@@ -92,6 +97,25 @@ def test_iter_engine_events_runs_terminal_callback_before_yielding_terminal_mess
 
     assert terminal_message == 'event: error\ndata: {"error": "boom"}\n\n'
     assert state["cleared"] is True
+
+
+def test_iter_engine_events_ignores_non_string_messages() -> None:
+    events = list(
+        iter_engine_events(
+            session_id="session-1",
+            event_queue=_SequencedQueue(
+                [
+                    ["bad-message"],
+                    'event: done\ndata: {"ok": true}\n\n',
+                ]
+            ),
+        )
+    )
+
+    assert events == [
+        'event: connected\ndata: {"session_id": "session-1"}\n\n',
+        'event: done\ndata: {"ok": true}\n\n',
+    ]
 
 
 def test_iter_session_events_filters_stale_decisions_and_emits_network_change(monkeypatch) -> None:
@@ -160,6 +184,87 @@ def test_iter_session_events_filters_stale_decisions_and_emits_network_change(mo
     assert events[2] == 'event: done\ndata: {"session_id": "session-1"}\n\n'
 
 
+def test_iter_session_events_ignores_non_string_messages() -> None:
+    session = types.SimpleNamespace(status=SessionStatus.RUNNING)
+    event_queue = _SequencedQueue(
+        [
+            ["bad-message"],
+            'event: done\ndata: {"session_id": "session-1"}\n\n',
+        ]
+    )
+    orchestrator = types.SimpleNamespace(
+        get_event_queue=lambda session_id: event_queue,
+        check_decision_timeout=lambda session_id: None,
+        get_session=lambda session_id: session,
+    )
+
+    events = list(
+        iter_session_events(
+            orchestrator=orchestrator,
+            backend=object(),
+            session_id="session-1",
+        )
+    )
+
+    assert events == [
+        'event: connected\ndata: {"session_id": "session-1"}\n\n',
+        'event: done\ndata: {"session_id": "session-1"}\n\n',
+    ]
+
+
+def test_iter_session_events_stringifies_non_json_network_payloads(monkeypatch) -> None:
+    session = types.SimpleNamespace(status=SessionStatus.RUNNING)
+    event_queue = _SequencedQueue(
+        [
+            queue.Empty,
+            'event: done\ndata: {"session_id": "session-1"}\n\n',
+        ]
+    )
+    orchestrator = types.SimpleNamespace(
+        get_event_queue=lambda session_id: event_queue,
+        check_decision_timeout=lambda session_id: None,
+        get_session=lambda session_id: session,
+    )
+    snapshots = iter(
+        [
+            {
+                "network_quality": {
+                    "grade": "warn",
+                    "status": "degraded",
+                    "reason": "high_latency",
+                },
+                "network_override": None,
+                "connection_epoch": "epoch-1",
+            },
+            {
+                "network_quality": {
+                    "grade": "block",
+                    "status": "blocked",
+                    "reason": RuntimeError("boom"),
+                },
+                "network_override": None,
+                "connection_epoch": "epoch-2",
+            },
+        ]
+    )
+    monkeypatch.setattr(
+        "diagnostic_platform.runtime.session_streams.get_session_network_snapshot",
+        lambda **kwargs: next(snapshots),
+    )
+
+    events = list(
+        iter_session_events(
+            orchestrator=orchestrator,
+            backend=object(),
+            session_id="session-1",
+        )
+    )
+
+    event_type, payload = _event_payload(events[1])
+    assert event_type == "network_quality_changed"
+    assert payload["network_quality"]["reason"] == "boom"
+
+
 def test_iter_ai_events_clears_bound_ai_session_on_terminal_event() -> None:
     runtime = WorkerRuntime()
     runtime.bind_business_session("session-1")
@@ -214,6 +319,38 @@ def test_iter_scoped_agent_events_emits_keepalive_and_unsubscribes_on_close(monk
     assert unsubscribed == [("session:1", subscribed_queue)]
 
 
+def test_iter_scoped_agent_events_ignores_non_string_messages(monkeypatch) -> None:
+    subscribed_queue = _SequencedQueue(
+        [
+            ["bad-message"],
+            'event: done\ndata: {"ok": true}\n\n',
+        ]
+    )
+
+    monkeypatch.setattr(
+        "diagnostic_platform.sse.subscribe_agent_stream",
+        lambda scope, maxsize=200: subscribed_queue,
+    )
+    monkeypatch.setattr(
+        "diagnostic_platform.sse.unsubscribe_agent_stream",
+        lambda scope, client_queue: None,
+    )
+
+    events = list(
+        iter_scoped_agent_events(
+            scope="session:1",
+            session_id="session-1",
+            timeout_sec=1,
+            on_message=lambda message: message.startswith("event: done\n"),
+        )
+    )
+
+    assert events == [
+        'event: connected\ndata: {"session_id": "session-1", "message": "Connected to stream"}\n\n',
+        'event: done\ndata: {"ok": true}\n\n',
+    ]
+
+
 def test_iter_navigation_events_flushes_residual_events_after_thread_exit(monkeypatch) -> None:
     monkeypatch.setattr(
         "diagnostic_platform.runtime.session_streams.navigation_terminal_payload",
@@ -241,5 +378,101 @@ def test_iter_navigation_events_flushes_residual_events_after_thread_exit(monkey
         'event: connected\ndata: {"session_id": "session-1"}\n\n',
         ": keepalive\n\n",
         'event: progress\ndata: {"type": "progress", "page": "module_list"}\n\n',
+        'event: done\ndata: {"type": "done", "status": "completed", "error": null}\n\n',
+    ]
+
+
+def test_iter_navigation_events_ignores_malformed_residual_events(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "diagnostic_platform.runtime.session_streams.navigation_terminal_payload",
+        lambda runtime, session, nav_session: {
+            "type": "done",
+            "status": "completed",
+            "error": None,
+        },
+    )
+    nav_session = types.SimpleNamespace(
+        event_queue=_ResidualQueue(["bad-event"]),
+        thread=types.SimpleNamespace(is_alive=lambda: False),
+    )
+
+    events = list(
+        iter_navigation_events(
+            runtime=object(),
+            session=object(),
+            session_id="session-1",
+            nav_session=nav_session,
+        )
+    )
+
+    assert events == [
+        'event: connected\ndata: {"session_id": "session-1"}\n\n',
+        ": keepalive\n\n",
+        'event: progress\ndata: {}\n\n',
+        'event: done\ndata: {"type": "done", "status": "completed", "error": null}\n\n',
+    ]
+
+
+def test_iter_navigation_events_stringifies_non_json_event_values() -> None:
+    runtime = WorkerRuntime()
+    session = types.SimpleNamespace(session_id="session-1")
+    nav_session = types.SimpleNamespace(
+        current_page="",
+        status="running",
+        pending_decision_id=None,
+        pending_items=[],
+        error=None,
+        thread=None,
+        event_queue=_SequencedQueue(
+            [
+                {"type": "progress", "page": RuntimeError("boom")},
+                {"type": "error", "error": RuntimeError("bad")},
+            ]
+        ),
+    )
+
+    events = list(
+        iter_navigation_events(
+            runtime=runtime,
+            session=session,
+            session_id="session-1",
+            nav_session=nav_session,
+        )
+    )
+
+    assert events == [
+        'event: connected\ndata: {"session_id": "session-1"}\n\n',
+        'event: progress\ndata: {"type": "progress", "page": "boom"}\n\n',
+        'event: error\ndata: {"type": "error", "error": "bad"}\n\n',
+    ]
+
+
+def test_iter_navigation_events_serializes_non_json_values(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "diagnostic_platform.runtime.session_streams.navigation_terminal_payload",
+        lambda runtime, session, nav_session: {
+            "type": "done",
+            "status": "completed",
+            "error": None,
+        },
+    )
+    nav_session = types.SimpleNamespace(
+        event_queue=_ResidualQueue({"type": "progress", "page": _StableValue()}),
+        thread=types.SimpleNamespace(is_alive=lambda: False),
+    )
+
+    events = list(
+        iter_navigation_events(
+            runtime=object(),
+            session=object(),
+            session_id="session-1",
+            nav_session=nav_session,
+        )
+    )
+
+    assert events == [
+        'event: connected\ndata: {"session_id": "session-1"}\n\n',
+        ": keepalive\n\n",
+        'event: progress\ndata: {"type": "progress", "page": "stable-value"}\n\n',
         'event: done\ndata: {"type": "done", "status": "completed", "error": null}\n\n',
     ]

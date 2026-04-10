@@ -12,7 +12,9 @@ from typing import Any
 
 from flask import Blueprint, Response, jsonify, request
 
+from diagnostic_platform.branch_planning import BranchDecisionRequiredError
 from diagnostic_platform.contracts import BackendCapability, UnsupportedCapabilityError
+from diagnostic_platform.session_models import SessionContext, SessionStatus
 from diagnostic_platform.runtime.session_actions import (
     ensure_session_capability,
     execute_backend_action,
@@ -38,13 +40,13 @@ from diagnostic_platform.runtime.session_preflight import (
 from diagnostic_platform.runtime.session_streams import (
     iter_session_events,
 )
-
-from src.gds2_orchestration.planner import BranchDecisionRequiredError
-from src.gds2_orchestration.session_orchestrator import (
-    SessionContext,
-    SessionStatus,
-)
 from server.api import session_ai_handlers
+from server.api.http_utils import (
+    RequestPayloadError,
+    internal_error_payload,
+    read_text_mapping_field,
+    require_json_object,
+)
 from server.api.session_dependencies import (
     _runtime,
     get_adapter,
@@ -62,6 +64,31 @@ from server.api import session_navigation_handlers
 logger = logging.getLogger(__name__)
 
 session_bp = Blueprint("session", __name__, url_prefix="/api/session")
+
+
+def _read_text_field(
+    data: dict[str, Any],
+    field: str,
+    *,
+    default: str = "",
+) -> str:
+    return read_text_mapping_field(data, field, default=default)
+
+
+def _read_query_text_arg(field: str, *, default: str = "") -> str:
+    return read_text_mapping_field(request.args, field, default=default)
+
+
+def _read_object_field(
+    data: dict[str, Any],
+    field: str,
+) -> dict[str, Any]:
+    value = data.get(field)
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{field} must be an object")
+    return value
 
 
 def _sse_response(stream) -> Response:
@@ -102,18 +129,18 @@ def session_start():
             "workflow": "gds2",        # deprecated alias
         }
     """
-    data = request.json or {}
-    brand = (data.get("brand") or "").strip()
-
-    if not brand:
-        return jsonify({"success": False, "error": "brand is required"}), 400
-
     try:
+        data = require_json_object(request)
+        brand = _read_text_field(data, "brand")
+
+        if not brand:
+            return jsonify({"success": False, "error": "brand is required"}), 400
+
         ctx = SessionContext(
             brand=brand,
-            model=(data.get("model") or "").strip(),
-            vin=(data.get("vin") or "").strip(),
-            backend_name=(data.get("backend_name") or "").strip(),
+            model=_read_text_field(data, "model"),
+            vin=_read_text_field(data, "vin"),
+            backend_name=_read_text_field(data, "backend_name"),
             extra={
                 k: v
                 for k, v in data.items()
@@ -132,10 +159,12 @@ def session_start():
         return jsonify({"success": False, "error": str(exc)}), 400
     except RuntimeError as exc:
         return jsonify({"success": False, "error": str(exc)}), 409
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
 
     except Exception as exc:
         logger.exception("session_start failed")
-        return jsonify({"success": False, "error": str(exc)}), 500
+        return jsonify(internal_error_payload()), 500
 
 
 # ---------------------------------------------------------------------------
@@ -163,13 +192,13 @@ def session_start_diagnostics():
             "result": { ... }  // modules or devices from GDS2
         }
     """
-    data = request.json or {}
-    session_id = (data.get("session_id") or "").strip()
-
-    if not session_id:
-        return jsonify({"success": False, "error": "session_id required"}), 400
-
     try:
+        data = require_json_object(request)
+        session_id = _read_text_field(data, "session_id")
+
+        if not session_id:
+            return jsonify({"success": False, "error": "session_id required"}), 400
+
         payload = run_start_diagnostics(
             _runtime(),
             orchestrator=get_orchestrator(),
@@ -178,12 +207,25 @@ def session_start_diagnostics():
         )
         if payload.get("result"):
             result = payload["result"]
-            logger.info(
-                "SESSION %s diagnostics started modules=%s device=%s",
-                session_id,
-                len(result["modules"]),
-                result.get("device") or '-',
-            )
+            if "modules" in result:
+                logger.info(
+                    "SESSION %s diagnostics started modules=%s device=%s",
+                    session_id,
+                    len(result["modules"]),
+                    result.get("device") or '-',
+                )
+            elif "devices" in result:
+                logger.info(
+                    "SESSION %s diagnostics awaiting device selection devices=%s",
+                    session_id,
+                    len(result["devices"]),
+                )
+            else:
+                logger.info(
+                    "SESSION %s diagnostics started result_keys=%s",
+                    session_id,
+                    sorted(result.keys()),
+                )
         return jsonify(payload)
 
     except KeyError as exc:
@@ -192,9 +234,11 @@ def session_start_diagnostics():
         return jsonify({"success": False, "error": str(exc)}), 409
     except (OperationCancelledError, WorkerBusyError) as exc:
         return jsonify({"success": False, "error": str(exc)}), 409
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
     except Exception as exc:
         logger.exception("session_start_diagnostics failed")
-        return jsonify({"success": False, "error": str(exc)}), 500
+        return jsonify(internal_error_payload()), 500
 
 
 # ---------------------------------------------------------------------------
@@ -217,16 +261,17 @@ def session_execute():
             "timeout_sec": 30.0             // optional
         }
     """
-    data = request.json or {}
-    session_id = (data.get("session_id") or "").strip()
-    action_name = (data.get("action") or "").strip()
-
-    if not session_id:
-        return jsonify({"success": False, "error": "session_id required"}), 400
-    if not action_name:
-        return jsonify({"success": False, "error": "action required"}), 400
-
     try:
+        data = require_json_object(request)
+        session_id = _read_text_field(data, "session_id")
+        action_name = _read_text_field(data, "action")
+        action_args = _read_object_field(data, "args")
+
+        if not session_id:
+            return jsonify({"success": False, "error": "session_id required"}), 400
+        if not action_name:
+            return jsonify({"success": False, "error": "action required"}), 400
+
         orch = get_orchestrator()
         session = orch.get_session(session_id)
         ensure_session_capability(session, BackendCapability.GENERIC_ACTIONS)
@@ -242,7 +287,7 @@ def session_execute():
                 session_id,
                 backend=backend,
                 action_name=action_name,
-                action_args=data.get("args") or {},
+                action_args=action_args,
                 timeout_sec=float(data.get("timeout_sec", 30.0)),
                 emit_progress=lambda message: orch.emit_progress(session_id, message),
             )
@@ -302,9 +347,11 @@ def session_execute():
     except ValueError as exc:
         status = 409 if "Session not running" in str(exc) else 400
         return jsonify({"success": False, "error": str(exc)}), status
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
     except Exception as exc:
         logger.exception("session_execute failed")
-        return jsonify({"success": False, "error": str(exc)}), 500
+        return jsonify(internal_error_payload()), 500
 
 
 # ---------------------------------------------------------------------------
@@ -318,7 +365,10 @@ def session_events():
     Query params:
         session_id (str): required
     """
-    session_id = (request.args.get("session_id") or "").strip()
+    try:
+        session_id = read_text_mapping_field(request.args, "session_id")
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
     if not session_id:
         return jsonify({"success": False, "error": "session_id required"}), 400
 
@@ -350,19 +400,19 @@ def session_decision():
             "option_id": "gds2"
         }
     """
-    data = request.json or {}
-    session_id = (data.get("session_id") or "").strip()
-    decision_id = (data.get("decision_id") or "").strip()
-    option_id = (data.get("option_id") or "").strip()
-
-    if not session_id:
-        return jsonify({"success": False, "error": "session_id required"}), 400
-    if not decision_id:
-        return jsonify({"success": False, "error": "decision_id required"}), 400
-    if not option_id:
-        return jsonify({"success": False, "error": "option_id required"}), 400
-
     try:
+        data = require_json_object(request)
+        session_id = _read_text_field(data, "session_id")
+        decision_id = _read_text_field(data, "decision_id")
+        option_id = _read_text_field(data, "option_id")
+
+        if not session_id:
+            return jsonify({"success": False, "error": "session_id required"}), 400
+        if not decision_id:
+            return jsonify({"success": False, "error": "decision_id required"}), 400
+        if not option_id:
+            return jsonify({"success": False, "error": "option_id required"}), 400
+
         return jsonify(
             submit_session_decision(
                 _runtime(),
@@ -381,10 +431,12 @@ def session_decision():
 
     except ValueError as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
 
     except Exception as exc:
         logger.exception("session_decision failed")
-        return jsonify({"success": False, "error": str(exc)}), 500
+        return jsonify(internal_error_payload()), 500
 
 
 @session_bp.route("/select_module", methods=["POST"])
@@ -394,16 +446,16 @@ def session_select_module():
     If ambiguous, emits decision_required via SessionOrchestrator and returns
     awaiting_decision payload.
     """
-    data = request.json or {}
-    session_id = (data.get("session_id") or "").strip()
-    module = (data.get("module") or "").strip()
-
-    if not session_id:
-        return jsonify({"success": False, "error": "session_id required"}), 400
-    if not module:
-        return jsonify({"success": False, "error": "module required"}), 400
-
     try:
+        data = require_json_object(request)
+        session_id = _read_text_field(data, "session_id")
+        module = _read_text_field(data, "module")
+
+        if not session_id:
+            return jsonify({"success": False, "error": "session_id required"}), 400
+        if not module:
+            return jsonify({"success": False, "error": "module required"}), 400
+
         orch = get_orchestrator()
         session = orch.get_session(session_id)
         if session.status != SessionStatus.RUNNING:
@@ -457,9 +509,11 @@ def session_select_module():
         return jsonify({"success": False, "error": str(exc)}), 404
     except ValueError as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
     except Exception as exc:
         logger.exception("session_select_module failed")
-        return jsonify({"success": False, "error": str(exc)}), 500
+        return jsonify(internal_error_payload()), 500
 
 
 @session_bp.route("/select_data_category", methods=["POST"])
@@ -468,16 +522,16 @@ def session_select_data_category():
 
     If ambiguous, emits decision_required and waits for /decision.
     """
-    data = request.json or {}
-    session_id = (data.get("session_id") or "").strip()
-    data_category = (data.get("data_category") or "").strip()
-
-    if not session_id:
-        return jsonify({"success": False, "error": "session_id required"}), 400
-    if not data_category:
-        return jsonify({"success": False, "error": "data_category required"}), 400
-
     try:
+        data = require_json_object(request)
+        session_id = _read_text_field(data, "session_id")
+        data_category = _read_text_field(data, "data_category")
+
+        if not session_id:
+            return jsonify({"success": False, "error": "session_id required"}), 400
+        if not data_category:
+            return jsonify({"success": False, "error": "data_category required"}), 400
+
         orch = get_orchestrator()
         session = orch.get_session(session_id)
         if session.status != SessionStatus.RUNNING:
@@ -531,23 +585,33 @@ def session_select_data_category():
         return jsonify({"success": False, "error": str(exc)}), 404
     except ValueError as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
     except Exception as exc:
         logger.exception("session_select_data_category failed")
-        return jsonify({"success": False, "error": str(exc)}), 500
+        return jsonify(internal_error_payload()), 500
 
 
 @session_bp.route("/ai_diagnose", methods=["POST"])
 def session_ai_diagnose():
     """Start AI diagnosis through the public session facade."""
-    payload, status = session_ai_handlers.start_ai_diagnose(request.json or {})
+    try:
+        data = require_json_object(request)
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    payload, status = session_ai_handlers.start_ai_diagnose(data)
     return jsonify(payload), status
 
 
 @session_bp.route("/ai_diagnose/events")
 def session_ai_diagnose_events():
     """Stream AI diagnosis SSE events through the business session id."""
+    try:
+        session_id = read_text_mapping_field(request.args, "session_id")
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
     result = session_ai_handlers.stream_ai_diagnose_events(
-        request.args.get("session_id", "").strip(),
+        session_id,
         sse_response=_sse_response,
     )
     if isinstance(result, tuple):
@@ -559,36 +623,56 @@ def session_ai_diagnose_events():
 @session_bp.route("/ai_diagnose/retry", methods=["POST"])
 def session_ai_diagnose_retry():
     """Retry AI diagnosis through the public session facade."""
-    payload, status = session_ai_handlers.retry_ai_diagnose(request.json or {})
+    try:
+        data = require_json_object(request)
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    payload, status = session_ai_handlers.retry_ai_diagnose(data)
     return jsonify(payload), status
 
 
 @session_bp.route("/dtcs", methods=["POST"])
 def session_dtcs():
     """Read DTCs through the public session facade."""
-    payload, status = session_live_data_handlers.read_session_dtcs(request.json or {})
+    try:
+        data = require_json_object(request)
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    payload, status = session_live_data_handlers.read_session_dtcs(data)
     return jsonify(payload), status
 
 
 @session_bp.route("/clear_dtcs", methods=["POST"])
 def session_clear_dtcs():
     """Clear DTCs through the public session facade."""
-    payload, status = session_live_data_handlers.clear_session_dtcs(request.json or {})
+    try:
+        data = require_json_object(request)
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    payload, status = session_live_data_handlers.clear_session_dtcs(data)
     return jsonify(payload), status
 
 
 @session_bp.route("/live_data/start", methods=["POST"])
 def session_live_data_start():
     """Start live data streaming through the public session facade."""
-    payload, status = session_live_data_handlers.start_live_data_session(request.json or {})
+    try:
+        data = require_json_object(request)
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    payload, status = session_live_data_handlers.start_live_data_session(data)
     return jsonify(payload), status
 
 
 @session_bp.route("/live_data/events")
 def session_live_data_events():
     """SSE endpoint for session-scoped live data events."""
+    try:
+        session_id = read_text_mapping_field(request.args, "session_id")
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
     result = session_live_data_handlers.stream_live_data_events(
-        (request.args.get("session_id") or "").strip(),
+        session_id,
         sse_response=_sse_response,
     )
     if isinstance(result, tuple):
@@ -600,22 +684,34 @@ def session_live_data_events():
 @session_bp.route("/live_data/stop", methods=["POST"])
 def session_live_data_stop():
     """Stop live data streaming through the public session facade."""
-    payload, status = session_live_data_handlers.stop_live_data_session(request.json or {})
+    try:
+        data = require_json_object(request)
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    payload, status = session_live_data_handlers.stop_live_data_session(data)
     return jsonify(payload), status
 
 
 @session_bp.route("/navigate/start", methods=["POST"])
 def session_navigate_start():
     """Start guided navigation through the public session facade."""
-    payload, status = session_navigation_handlers.start_navigation_session_for_business(request.json or {})
+    try:
+        data = require_json_object(request)
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    payload, status = session_navigation_handlers.start_navigation_session_for_business(data)
     return jsonify(payload), status
 
 
 @session_bp.route("/navigate/events")
 def session_navigate_events():
     """SSE endpoint for session-scoped navigation events."""
+    try:
+        session_id = read_text_mapping_field(request.args, "session_id")
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
     result = session_navigation_handlers.stream_navigation_events(
-        (request.args.get("session_id") or "").strip(),
+        session_id,
         sse_response=_sse_response,
     )
     if isinstance(result, tuple):
@@ -627,22 +723,34 @@ def session_navigate_events():
 @session_bp.route("/navigate/decision", methods=["POST"])
 def session_navigate_decision():
     """Submit a navigation decision through the public session facade."""
-    payload, status = session_navigation_handlers.submit_navigation_decision_for_business(request.json or {})
+    try:
+        data = require_json_object(request)
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    payload, status = session_navigation_handlers.submit_navigation_decision_for_business(data)
     return jsonify(payload), status
 
 
 @session_bp.route("/navigate/abort", methods=["POST"])
 def session_navigate_abort():
     """Abort the active navigation sub-session for a business session."""
-    payload, status = session_navigation_handlers.abort_navigation_session_for_business(request.json or {})
+    try:
+        data = require_json_object(request)
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    payload, status = session_navigation_handlers.abort_navigation_session_for_business(data)
     return jsonify(payload), status
 
 
 @session_bp.route("/navigate/status")
 def session_navigate_status():
     """Return navigation sub-session status by business session id."""
+    try:
+        session_id = read_text_mapping_field(request.args, "session_id")
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
     payload, status = session_navigation_handlers.build_navigation_status_for_business(
-        (request.args.get("session_id") or "").strip()
+        session_id
     )
     return jsonify(payload), status
 
@@ -662,14 +770,14 @@ def session_abort():
             "reason": "User cancelled"     # optional
         }
     """
-    data = request.json or {}
-    session_id = (data.get("session_id") or "").strip()
-
-    if not session_id:
-        return jsonify({"success": False, "error": "session_id required"}), 400
-
     try:
-        reason = (data.get("reason") or "").strip()
+        data = require_json_object(request)
+        session_id = _read_text_field(data, "session_id")
+
+        if not session_id:
+            return jsonify({"success": False, "error": "session_id required"}), 400
+
+        reason = _read_text_field(data, "reason")
         return jsonify(
             abort_business_session(
                 _runtime(),
@@ -685,10 +793,12 @@ def session_abort():
 
     except ValueError as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
 
     except Exception as exc:
         logger.exception("session_abort failed")
-        return jsonify({"success": False, "error": str(exc)}), 500
+        return jsonify(internal_error_payload()), 500
 
 
 # ---------------------------------------------------------------------------
@@ -702,7 +812,10 @@ def session_status():
     Query params:
         session_id (str): required
     """
-    session_id = (request.args.get("session_id") or "").strip()
+    try:
+        session_id = read_text_mapping_field(request.args, "session_id")
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
     if not session_id:
         return jsonify({"success": False, "error": "session_id required"}), 400
 
@@ -721,4 +834,4 @@ def session_status():
 
     except Exception as exc:
         logger.exception("session_status failed")
-        return jsonify({"success": False, "error": str(exc)}), 500
+        return jsonify(internal_error_payload()), 500

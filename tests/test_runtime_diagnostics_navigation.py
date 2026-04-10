@@ -18,6 +18,7 @@ from diagnostic_platform.runtime.navigation_runtime import (
     NavSessionStatus,
     abort_navigation_session,
     build_navigation_status_payload,
+    iter_navigation_session_events,
     start_navigation_session,
     submit_navigation_decision,
 )
@@ -29,6 +30,11 @@ from diagnostic_platform.sse import (
     unsubscribe_agent_stream,
 )
 from src.navigation import GDS2Page
+
+
+class _StableValue:
+    def __str__(self) -> str:
+        return "stable-value"
 
 
 def test_live_data_stream_reuses_scope_and_stops_cleanly(monkeypatch):
@@ -164,6 +170,97 @@ def test_navigation_runtime_start_registers_session_and_accepts_decision(monkeyp
     assert session.decision_queue.get_nowait() == {"selected_item": "ECM"}
 
 
+def test_navigation_runtime_start_defaults_invalid_goal(monkeypatch):
+    runtime = WorkerRuntime()
+
+    class FakeThread:
+        def __init__(self, target, args, daemon, name):
+            self.target = target
+            self.args = args
+            self.daemon = daemon
+            self.name = name
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr(navigation_runtime.threading, "Thread", FakeThread)
+
+    session = start_navigation_session(runtime, goal=["bad-goal"])
+
+    assert session.goal == "Navigate to Data Display"
+
+
+def test_await_navigation_decision_ignores_non_mapping_payloads():
+    session = NavSession(session_id="nav-1", goal="Navigate to Data Display")
+    session.decision_queue = queue.Queue(maxsize=2)
+    session.decision_queue.put(["bad-payload"])
+    session.decision_queue.put({"selected_item": "ECM"})
+
+    selected_item = navigation_runtime._await_navigation_decision(
+        session,
+        page="module_list",
+        items=["ECM", "TCM"],
+    )
+
+    assert selected_item == "ECM"
+
+
+def test_await_navigation_decision_normalizes_event_items():
+    class DisplayItem:
+        def __str__(self) -> str:
+            return "Engine Control"
+
+    session = NavSession(session_id="nav-1", goal="Navigate to Data Display")
+    session.decision_queue.put({"selected_item": "Engine Control"})
+
+    selected_item = navigation_runtime._await_navigation_decision(
+        session,
+        page="module_list",
+        items=[DisplayItem(), None],
+    )
+    event = session.event_queue.get_nowait()
+
+    assert selected_item == "Engine Control"
+    assert event == {
+        "type": "decision_required",
+        "decision_id": event["decision_id"],
+        "page": "module_list",
+        "items": ["Engine Control"],
+    }
+
+
+def test_run_navigation_page_module_submenu_records_selected_item():
+    class FakeController:
+        def wait_for_list(self):
+            return ["Data Display", "Module Information"]
+
+        def select_list_item(self, item):
+            assert item == "Data Display"
+            return {"success": True, "page": "data_list"}
+
+    session = NavSession(session_id="nav-1", goal="Navigate to Data Display")
+    navigation_history: list[dict[str, object]] = []
+
+    result = navigation_runtime._run_navigation_page(
+        session,
+        controller=FakeController(),
+        current_page="module_submenu",
+        navigation_history=navigation_history,
+        selections={},
+    )
+
+    assert result == "data_list"
+    assert navigation_history == [
+        {
+            "page": "module_submenu",
+            "action": "select_data_display",
+            "selected_item": "Data Display",
+            "to_page": "data_list",
+            "success": True,
+        }
+    ]
+
+
 def test_navigation_status_and_abort_surface_pending_decision_and_terminal_state():
     runtime = WorkerRuntime()
     session = NavSession(session_id="nav-1", goal="Navigate to Data Display")
@@ -183,6 +280,35 @@ def test_navigation_status_and_abort_surface_pending_decision_and_terminal_state
     assert session.error == "Aborted by user"
     assert error_event["type"] == "error"
     assert error_event["error"] == "Aborted by user"
+
+
+def test_build_navigation_status_payload_accepts_string_status():
+    session = NavSession(session_id="nav-1", goal="Navigate to Data Display")
+    session.status = "completed"
+
+    payload = build_navigation_status_payload(session.session_id, session)
+
+    assert payload["status"] == "completed"
+
+
+def test_iter_navigation_session_events_serializes_non_json_values():
+    class StableValue:
+        def __str__(self) -> str:
+            return "stable-value"
+
+    session = NavSession(session_id="nav-1", goal="Navigate to Data Display")
+    session.thread = types.SimpleNamespace(is_alive=lambda: False)
+    session.status = NavSessionStatus.COMPLETED
+    session.event_queue.put({"type": "progress", "page": StableValue()})
+
+    events = list(iter_navigation_session_events(session.session_id, session))
+
+    assert events == [
+        'event: connected\ndata: {"session_id": "nav-1"}\n\n',
+        'event: progress\ndata: {"type": "progress", "page": "stable-value"}\n\n',
+        ": keepalive\n\n",
+        'event: done\ndata: {"type": "done", "status": "completed", "error": null}\n\n',
+    ]
 
 
 def test_abort_navigation_session_sets_cancel_event():
@@ -384,6 +510,28 @@ def test_scoped_agent_streams_do_not_cross_talk():
     assert agent_stream_client_count(scope_b) == 0
 
 
+def test_broadcast_agent_event_stringifies_non_json_payload_values() -> None:
+    scope = "session:test-unsafe"
+    client_queue = subscribe_agent_stream(scope)
+
+    try:
+        delivered = broadcast_agent_event(
+            scope,
+            RuntimeError("snapshot"),
+            {
+                "detail": _StableValue(),
+                "error": RuntimeError("boom"),
+            },
+        )
+
+        assert delivered == 1
+        assert client_queue.get_nowait() == (
+            'event: snapshot\ndata: {"detail": "stable-value", "error": "boom"}\n\n'
+        )
+    finally:
+        unsubscribe_agent_stream(scope, client_queue)
+
+
 def test_connect_device_retries_empty_module_list_before_failing(monkeypatch):
     class FakeController:
         def __init__(self):
@@ -443,6 +591,43 @@ def test_connect_device_checks_cancel_before_enter_click(monkeypatch):
         workflow.connect_device("default")
 
     assert workflow.controller.click_enter_called is False
+
+
+def test_connect_device_treats_sub_data_list_as_connected_page(monkeypatch):
+    class FakeController:
+        def __init__(self):
+            self.current_page = GDS2Page.SUB_DATA_LIST
+            self.current_data_category = None
+            self.nav = object()
+            self.context = {}
+
+        def detect_current_page(self):
+            return self.current_page
+
+        def wait_for_list(self, previous_items=None):
+            return ["[K20] Engine Control Module"]
+
+        def set_context(self, **kwargs):
+            self.context.update(kwargs)
+
+    class FakeMapping:
+        def update_module_list(self, vehicle_id, module_indices):
+            return None
+
+    workflow = DataViewerWorkflow()
+    workflow.controller = FakeController()
+    workflow._mapping = FakeMapping()
+    monkeypatch.setattr(workflow, "_extract_vin", lambda: None)
+    monkeypatch.setattr(
+        workflow,
+        "_navigate_to_module_list",
+        lambda status: setattr(workflow.controller, "current_page", GDS2Page.MODULE_LIST),
+    )
+
+    result = workflow.connect_device("default")
+
+    assert result["modules"] == ["[K20] Engine Control Module"]
+    assert result["device"] == "Connected Device"
 
 
 def test_connect_device_checks_cancel_after_enter_becomes_enabled(monkeypatch):

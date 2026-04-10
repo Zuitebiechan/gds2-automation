@@ -11,7 +11,7 @@ from diagnostic_platform.contracts import (
     BackendDescriptor,
     UnsupportedCapabilityError,
 )
-from src.gds2_orchestration.session_orchestrator import SessionStatus
+from diagnostic_platform.session_models import SessionStatus
 
 from .worker_runtime import WorkerRuntime
 

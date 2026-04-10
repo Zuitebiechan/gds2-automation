@@ -44,6 +44,17 @@ class IoctlCacheConfig:
 
 
 @dataclass(frozen=True)
+class TlsConfig:
+    """Optional TLS transport settings for the reverse tunnel."""
+    enabled: bool = False
+    certfile: Optional[str] = None
+    keyfile: Optional[str] = None
+    ca_file: Optional[str] = None
+    server_name: Optional[str] = None
+    require_client_cert: bool = False
+
+
+@dataclass(frozen=True)
 class ProxyConfig:
     """Aggregate proxy configuration."""
     read_msgs_cache: ReadMsgsCacheConfig = ReadMsgsCacheConfig()
@@ -51,6 +62,7 @@ class ProxyConfig:
     filter_dedup: FilterDeduplicationConfig = FilterDeduplicationConfig()
     vbatt_cache: VbattCacheConfig = VbattCacheConfig()
     ioctl_cache: IoctlCacheConfig = IoctlCacheConfig()
+    tls: TlsConfig = TlsConfig()
 
     @classmethod
     def from_args(cls, **kwargs) -> "ProxyConfig":
@@ -80,10 +92,19 @@ class ProxyConfig:
             enabled=not kwargs.get("no_ioctl_cache", False),
             ttl_s=kwargs.get("ioctl_ttl", 5),
         )
+        tls = TlsConfig(
+            enabled=bool(kwargs.get("tls_enabled", False)),
+            certfile=kwargs.get("tls_certfile"),
+            keyfile=kwargs.get("tls_keyfile"),
+            ca_file=kwargs.get("tls_ca_file"),
+            server_name=kwargs.get("tls_server_name"),
+            require_client_cert=bool(kwargs.get("tls_require_client_cert", False)),
+        )
         return cls(
             read_msgs_cache=read_msgs_cache,
             auth=auth,
             filter_dedup=filter_dedup,
             vbatt_cache=vbatt_cache,
             ioctl_cache=ioctl_cache,
+            tls=tls,
         )

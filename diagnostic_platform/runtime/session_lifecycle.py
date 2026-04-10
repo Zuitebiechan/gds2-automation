@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
-from src.gds2_orchestration.session_orchestrator import SessionContext
+from diagnostic_platform.session_models import SessionContext
 
 from .session_actions import abort_active_execution
 from .session_backends import summarize_backend_state

@@ -69,12 +69,19 @@ Start each component in its own terminal:
 # Terminal A: reverse tunnel listener
 python -m vci_proxy.reverse_server --auth-token <shared-token>
 
-# Terminal B: Flask API
+# Terminal B: Flask API (binds to 127.0.0.1 by default)
 python app.py --port 8080
 
 # Terminal C: OEM diagnostics software runtime
 # For GDS2, keep the Java Agent writing to ~/gds2-data/latest.json
 ```
+
+Operational notes:
+
+- The API now binds to `127.0.0.1` by default. Add `--public` only when you intentionally want remote access.
+- Set `DIAGNOSTIC_API_TOKEN` to require `Authorization: Bearer <token>` or `X-API-Token: <token>` on `/api/*`.
+- Enable `--cors` only for trusted browser clients, and prefer `DIAGNOSTIC_API_CORS_ORIGINS` to scope allowed origins.
+- When the reverse tunnel crosses an untrusted network, enable TLS on both ends. The full flag set and certificate guidance live in `agent_docs/ops/vci_proxy_and_tunnel.md`.
 
 Default ports:
 
@@ -92,6 +99,8 @@ python -m vci_proxy.client_gui
 
 The local tray client now expects an auth token to be configured before it will
 start the reverse tunnel. Use the same shared token on both sides.
+TLS trust settings can also be stored in `%APPDATA%\VCI_Proxy\config.json`
+using `tls_enabled`, `tls_ca_file`, and `tls_server_name`.
 
 Build the Windows client:
 

@@ -23,6 +23,11 @@ from src.diagnosis.ai_engine import (
 )
 
 
+class _StableValue:
+    def __str__(self) -> str:
+        return "stable-value"
+
+
 def _drain_queue(events: queue.Queue[str]) -> list[dict[str, object]]:
     drained: list[dict[str, object]] = []
     while not events.empty():
@@ -41,6 +46,18 @@ def test_sse_event_preserves_unicode_json_payload() -> None:
     event = _sse_event("progress", {"message": "分析中", "ok": True})
 
     assert event == 'event: progress\ndata: {"message": "分析中", "ok": true}\n\n'
+
+
+def test_sse_event_stringifies_non_json_payload_values() -> None:
+    event = _sse_event(
+        RuntimeError("progress"),
+        {
+            "detail": RuntimeError("boom"),
+            "value": _StableValue(),
+        },
+    )
+
+    assert event == 'event: progress\ndata: {"detail": "boom", "value": "stable-value"}\n\n'
 
 
 def test_sampling_quality_grade_and_status_map_contract_enums() -> None:
@@ -278,3 +295,18 @@ def test_retry_with_cached_raises_when_payload_is_missing(monkeypatch) -> None:
         assert "missing" in str(exc)
     else:  # pragma: no cover - defensive assertion
         raise AssertionError("retry_with_cached should fail when cache entry is missing")
+
+
+def test_emit_keeps_essential_ai_events_when_queue_is_full(monkeypatch) -> None:
+    monkeypatch.setattr(ai_engine, "LLMClient", lambda api_key: object())
+    engine = AIEngine(api_key="test")
+    engine._event_queues["session-1"] = queue.Queue(maxsize=1)
+    engine._event_queues["session-1"].put_nowait(
+        'event: progress\ndata: {"phase": "assembling"}\n\n'
+    )
+
+    engine._emit("session-1", "done", {"session_id": "session-1"})
+
+    assert engine.get_event_queue("session-1").get_nowait() == (
+        'event: done\ndata: {"session_id": "session-1"}\n\n'
+    )

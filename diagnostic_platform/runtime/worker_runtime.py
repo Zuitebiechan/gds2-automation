@@ -21,18 +21,14 @@ from diagnostic_platform.contracts import (
     BackendActionRuntime,
     BackendDescriptor,
 )
-from src.gds2_orchestration.session_orchestrator import SessionOrchestrator
+from diagnostic_platform.session_orchestrator import (
+    BusinessSessionOrchestrator,
+    create_session_orchestrator,
+)
+from diagnostic_platform.runtime.errors import OperationCancelledError, WorkerBusyError
 
 if TYPE_CHECKING:
     from src.diagnosis.ai_engine import AIEngine
-
-
-class OperationCancelledError(RuntimeError):
-    """Raised when one in-flight worker operation is cooperatively cancelled."""
-
-
-class WorkerBusyError(RuntimeError):
-    """Raised when one worker-exclusive operation is already in progress."""
 
 
 @dataclass
@@ -113,7 +109,7 @@ class WorkerSessionBinding:
 class WorkerRuntime:
     """Single-process runtime state for one cloud worker."""
 
-    orchestrator: SessionOrchestrator = field(default_factory=SessionOrchestrator)
+    orchestrator: BusinessSessionOrchestrator = field(default_factory=create_session_orchestrator)
     backend: Any | None = None
     active_backend_bundle: ActiveBackendBundle | None = None
     action_runtime: BackendActionRuntime | None = None
@@ -135,7 +131,7 @@ class WorkerRuntime:
     active_operation: WorkerOperation | None = field(default=None, repr=False)
     state_lock: Any = field(default_factory=threading.RLock, repr=False)
 
-    def set_orchestrator(self, orchestrator: SessionOrchestrator) -> None:
+    def set_orchestrator(self, orchestrator: BusinessSessionOrchestrator) -> None:
         with self.state_lock:
             self.orchestrator = orchestrator
 

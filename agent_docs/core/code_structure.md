@@ -40,6 +40,11 @@ Important files:
 It owns:
 
 - shared contract types in `diagnostic_platform/contracts.py`
+- shared deterministic action schema in `diagnostic_platform/action_schema.py`
+- shared deterministic action-runtime primitives in `diagnostic_platform/action_runtime.py`
+- shared business-session models in `diagnostic_platform/session_models.py`
+- shared branch-planning result models in `diagnostic_platform/branch_planning.py`
+- the business-session orchestrator boundary in `diagnostic_platform/session_orchestrator.py`
 - backend-registry bootstrap in `diagnostic_platform/backend_registry.py`
 - runtime state and execution helpers under `diagnostic_platform/runtime/`
 - shared SSE utilities such as `diagnostic_platform/sse.py`
@@ -67,6 +72,9 @@ Today:
 
 - `backends/gds2/backend.py` exposes the GDS2 backend descriptor, capability list, core contract methods, live-data/AI collection, navigation/action bridges, and state adaptation
 - `backends/gds2/controller_runtime.py` bridges the backend facade to the underlying GDS2 workflow/controller stack
+- `backends/gds2/planner.py` owns GDS2-specific constrained branch planning heuristics
+- `backends/gds2/action_adapter.py` owns the deterministic action adapter that bridges executor steps to the GDS2 workflow/controller
+- `backends/gds2/action_runtime.py` owns GDS2-specific UI state, page capability rules, and policy validation for deterministic actions
 
 Future OEM implementations should be added as new siblings under `backends/`, not as branches inside the GDS2 code.
 
@@ -84,9 +92,9 @@ Major areas:
 | `src/navigation/` | page model and navigation controller logic |
 | `src/streaming/` | data collectors and streaming buffers |
 | `src/workflows/` | workflow abstractions such as Data Viewer |
-| `src/gds2_orchestration/` | deterministic GDS2 action schema, executor, planner, adapter, and session orchestrator |
+| `src/gds2_orchestration/` | compatibility exports for legacy deterministic GDS2 orchestration import paths |
 
-The former `src/agentic` namespace has already been removed. The deterministic GDS2 execution stack now lives in `src/gds2_orchestration/`.
+The former `src/agentic` namespace has already been removed. Planner and action-adapter ownership now lives under `backends/gds2/`, while `src/gds2_orchestration/` remains as a legacy compatibility layer.
 
 ## `vci_proxy/`
 
@@ -118,10 +126,8 @@ The codebase is mid-transition from a GDS2-first implementation to a capability-
 
 Because of that, some platform-adjacent modules still depend on GDS2-owned types:
 
-- `diagnostic_platform/runtime/session_actions.py` still imports `ActionStep` and `GDS2Action`
-- `diagnostic_platform/runtime/session_decisions.py` still imports `BranchDecisionRequiredError`
-- `diagnostic_platform/runtime/worker_runtime.py` still owns a `SessionOrchestrator` instance from `src/gds2_orchestration/session_orchestrator.py`
-- the business-session manager itself still lives under `src/gds2_orchestration/`
+- the deterministic action runtime still depends on GDS2-specific `UIState`, page capability rules, and page semantics under `backends/gds2/`
+- constrained planning and action-adapter ownership is GDS2-specific and lives under `backends/gds2/`
 
 Those couplings are important to understand, but they do not change the intended architectural rule: future OEMs should plug in through `diagnostic_platform/` plus `backends/`, not by adding more product logic to `src/`.
 

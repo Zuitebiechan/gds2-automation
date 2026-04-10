@@ -8,7 +8,12 @@ import queue
 from collections.abc import Iterator
 from typing import Any, Callable
 
-from src.gds2_orchestration.session_orchestrator import SessionStatus
+from diagnostic_platform.session_models import SessionStatus
+from diagnostic_platform.safe_utils import (
+    json_dumps_safe as _json_sse_data,
+    mapping_or_empty as _mapping_or_empty,
+    sse_message_or_none as _sse_message_or_none,
+)
 
 from .session_actions import (
     apply_navigation_event,
@@ -32,10 +37,12 @@ def iter_engine_events(
     on_message: Callable[[str], bool] | None = None,
 ) -> Iterator[str]:
     """Yield SSE events from one engine-owned queue."""
-    yield f"event: connected\ndata: {json.dumps({'session_id': session_id})}\n\n"
+    yield f"event: connected\ndata: {_json_sse_data({'session_id': session_id})}\n\n"
     while True:
         try:
-            message = event_queue.get(timeout=60)
+            message = _sse_message_or_none(event_queue.get(timeout=60))
+            if message is None:
+                continue
             handled_terminal = False
             if on_message is not None:
                 handled_terminal = on_message(message)
@@ -61,7 +68,7 @@ def iter_session_events(
     if event_queue is None:
         raise LookupError(f"Session {session_id} not found")
 
-    yield f"event: connected\ndata: {json.dumps({'session_id': session_id})}\n\n"
+    yield f"event: connected\ndata: {_json_sse_data({'session_id': session_id})}\n\n"
 
     last_network_sig: tuple[Any, ...] | None = None
     try:
@@ -82,7 +89,9 @@ def iter_session_events(
             except Exception:
                 pass
 
-            message = event_queue.get(timeout=1)
+            message = _sse_message_or_none(event_queue.get(timeout=1))
+            if message is None:
+                continue
             if message.startswith("event: decision_required\n"):
                 try:
                     session = orchestrator.get_session(session_id)
@@ -114,7 +123,7 @@ def iter_session_events(
                     )
                     yield (
                         "event: network_quality_changed\n"
-                        f"data: {json.dumps({'session_id': session_id, **network_snapshot})}\n\n"
+                        f"data: {_json_sse_data({'session_id': session_id, **network_snapshot})}\n\n"
                     )
                     continue
             except KeyError:
@@ -154,11 +163,13 @@ def iter_scoped_agent_events(
     try:
         yield (
             "event: connected\n"
-            f"data: {json.dumps({'session_id': session_id, 'message': connected_message})}\n\n"
+            f"data: {_json_sse_data({'session_id': session_id, 'message': connected_message})}\n\n"
         )
         while True:
             try:
-                message = client_queue.get(timeout=timeout_sec)
+                message = _sse_message_or_none(client_queue.get(timeout=timeout_sec))
+                if message is None:
+                    continue
                 handled_terminal = False
                 if on_message is not None:
                     handled_terminal = on_message(message)
@@ -183,7 +194,7 @@ def iter_navigation_events(
     nav_session: Any,
 ) -> Iterator[str]:
     """Yield navigation SSE events."""
-    yield f"event: connected\ndata: {json.dumps({'session_id': session_id})}\n\n"
+    yield f"event: connected\ndata: {_json_sse_data({'session_id': session_id})}\n\n"
     while True:
         try:
             event = nav_session.event_queue.get(timeout=1)
@@ -192,18 +203,19 @@ def iter_navigation_events(
             if nav_session.thread and not nav_session.thread.is_alive():
                 while not nav_session.event_queue.empty():
                     try:
-                        event = nav_session.event_queue.get_nowait()
+                        event = _mapping_or_empty(nav_session.event_queue.get_nowait())
                         event_type = event.get("type", "progress")
-                        yield f"event: {event_type}\ndata: {json.dumps(event)}\n\n"
+                        yield f"event: {event_type}\ndata: {_json_sse_data(event)}\n\n"
                     except queue.Empty:
                         break
                 terminal_payload = navigation_terminal_payload(runtime, session, nav_session)
                 if terminal_payload is not None:
-                    yield f"event: done\ndata: {json.dumps(terminal_payload)}\n\n"
+                    yield f"event: done\ndata: {_json_sse_data(terminal_payload)}\n\n"
                     return
             continue
 
+        event = _mapping_or_empty(event)
         event_type = apply_navigation_event(runtime, session, nav_session, event)
-        yield f"event: {event_type}\ndata: {json.dumps(event)}\n\n"
+        yield f"event: {event_type}\ndata: {_json_sse_data(event)}\n\n"
         if event_type in ("done", "error"):
             return

@@ -40,12 +40,22 @@ CONFIG_DIR = Path(os.environ.get("APPDATA", Path.home())) / "VCI_Proxy"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 DEFAULT_CONFIG = {
+    "api_scheme": "http",
     "host": "",
     "port": 9000,
     "api_port": 8080,
+    "api_token": "",
     "auth_token": "",
     "dll_path": "",
+    "tls_enabled": False,
+    "tls_ca_file": "",
+    "tls_server_name": "",
 }
+
+
+def normalize_config(config: dict | None) -> dict:
+    """Merge partial config values with defaults for forward compatibility."""
+    return {**DEFAULT_CONFIG, **(config or {})}
 
 
 def load_config() -> dict:
@@ -54,18 +64,17 @@ def load_config() -> dict:
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 saved = json.load(f)
-            # Merge with defaults for forward-compatibility
-            return {**DEFAULT_CONFIG, **saved}
+            return normalize_config(saved)
         except (json.JSONDecodeError, OSError):
             pass
-    return dict(DEFAULT_CONFIG)
+    return normalize_config(None)
 
 
 def save_config(cfg: dict) -> None:
     """Save config to %APPDATA%/VCI_Proxy/config.json."""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=2)
+        json.dump(normalize_config(cfg), f, indent=2)
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +120,7 @@ class ConfigDialog:
     """Simple tkinter dialog for server connection settings."""
 
     def __init__(self, config: dict, on_save=None):
-        self._config = config
+        self._config = normalize_config(config)
         self._on_save = on_save
         self._result: Optional[dict] = None
 
@@ -123,7 +132,7 @@ class ConfigDialog:
         root.attributes("-topmost", True)
 
         # Center on screen
-        w, h = 420, 340
+        w, h = 420, 420
         x = (root.winfo_screenwidth() - w) // 2
         y = (root.winfo_screenheight() - h) // 2
         root.geometry(f"{w}x{h}+{x}+{y}")
@@ -142,29 +151,47 @@ class ConfigDialog:
         host_entry = ttk.Entry(frame, textvariable=host_var, width=30)
         host_entry.grid(row=1, column=1, columnspan=2, sticky=tk.EW, pady=4, padx=(8, 0))
 
+        # API scheme
+        ttk.Label(frame, text="API Scheme:").grid(row=2, column=0, sticky=tk.W, pady=4)
+        api_scheme_var = tk.StringVar(value=self._config.get("api_scheme", "http"))
+        ttk.Combobox(
+            frame,
+            textvariable=api_scheme_var,
+            values=["http", "https"],
+            width=10,
+            state="readonly",
+        ).grid(row=2, column=1, sticky=tk.W, pady=4, padx=(8, 0))
+
         # Port
-        ttk.Label(frame, text="Port:").grid(row=2, column=0, sticky=tk.W, pady=4)
+        ttk.Label(frame, text="Port:").grid(row=3, column=0, sticky=tk.W, pady=4)
         port_var = tk.StringVar(value=str(self._config.get("port", 9000)))
         ttk.Entry(frame, textvariable=port_var, width=10).grid(
-            row=2, column=1, sticky=tk.W, pady=4, padx=(8, 0)
-        )
-
-        # API Port
-        ttk.Label(frame, text="API Port:").grid(row=3, column=0, sticky=tk.W, pady=4)
-        api_port_var = tk.StringVar(value=str(self._config.get("api_port", 8080)))
-        ttk.Entry(frame, textvariable=api_port_var, width=10).grid(
             row=3, column=1, sticky=tk.W, pady=4, padx=(8, 0)
         )
 
+        # API Port
+        ttk.Label(frame, text="API Port:").grid(row=4, column=0, sticky=tk.W, pady=4)
+        api_port_var = tk.StringVar(value=str(self._config.get("api_port", 8080)))
+        ttk.Entry(frame, textvariable=api_port_var, width=10).grid(
+            row=4, column=1, sticky=tk.W, pady=4, padx=(8, 0)
+        )
+
+        # API token
+        ttk.Label(frame, text="API Token:").grid(row=5, column=0, sticky=tk.W, pady=4)
+        api_token_var = tk.StringVar(value=self._config.get("api_token", ""))
+        ttk.Entry(frame, textvariable=api_token_var, width=30, show="*").grid(
+            row=5, column=1, columnspan=2, sticky=tk.EW, pady=4, padx=(8, 0)
+        )
+
         # Auth token
-        ttk.Label(frame, text="Auth Token:").grid(row=4, column=0, sticky=tk.W, pady=4)
+        ttk.Label(frame, text="Auth Token:").grid(row=6, column=0, sticky=tk.W, pady=4)
         token_var = tk.StringVar(value=self._config.get("auth_token", ""))
         ttk.Entry(frame, textvariable=token_var, width=30, show="*").grid(
-            row=4, column=1, columnspan=2, sticky=tk.EW, pady=4, padx=(8, 0)
+            row=6, column=1, columnspan=2, sticky=tk.EW, pady=4, padx=(8, 0)
         )
 
         # J2534 DLL selection (dropdown with auto-discovered drivers + browse)
-        ttk.Label(frame, text="J2534 Driver:").grid(row=5, column=0, sticky=tk.W, pady=4)
+        ttk.Label(frame, text="J2534 Driver:").grid(row=7, column=0, sticky=tk.W, pady=4)
 
         # Discover installed J2534 drivers from Windows registry
         from vci_proxy.j2534_driver import discover_j2534_drivers
@@ -200,7 +227,7 @@ class ConfigDialog:
             frame, textvariable=dll_var, values=dll_choices,
             width=28, state="readonly",
         )
-        dll_combo.grid(row=5, column=1, sticky=tk.EW, pady=4, padx=(8, 0))
+        dll_combo.grid(row=7, column=1, sticky=tk.EW, pady=4, padx=(8, 0))
 
         def browse_dll():
             path = filedialog.askopenfilename(
@@ -216,7 +243,7 @@ class ConfigDialog:
                 dll_var.set(path)
 
         ttk.Button(frame, text="...", width=3, command=browse_dll).grid(
-            row=5, column=2, pady=4, padx=(4, 0)
+            row=7, column=2, pady=4, padx=(4, 0)
         )
 
         def _resolve_dll_path() -> str:
@@ -233,17 +260,22 @@ class ConfigDialog:
             hint = "No J2534 drivers found. Install a VCI driver or browse manually."
         ttk.Label(
             frame, text=hint, foreground="gray", font=("Segoe UI", 8),
-        ).grid(row=6, column=0, columnspan=3, sticky=tk.W, pady=(0, 10))
+        ).grid(row=8, column=0, columnspan=3, sticky=tk.W, pady=(0, 10))
 
         # Buttons
         btn_frame = ttk.Frame(frame)
-        btn_frame.grid(row=7, column=0, columnspan=3, sticky=tk.E, pady=(10, 0))
+        btn_frame.grid(row=9, column=0, columnspan=3, sticky=tk.E, pady=(10, 0))
 
         def on_connect():
             host = host_var.get().strip()
             if not host:
                 messagebox.showwarning("Missing Field", "Server address is required.")
                 return
+            api_scheme = api_scheme_var.get().strip().lower() or "http"
+            if api_scheme not in {"http", "https"}:
+                messagebox.showwarning("Invalid API Scheme", "API scheme must be http or https.")
+                return
+            api_token = api_token_var.get().strip()
             auth_token = token_var.get().strip()
             if not auth_token:
                 messagebox.showwarning("Missing Field", "Auth token is required.")
@@ -260,9 +292,11 @@ class ConfigDialog:
                 return
 
             self._result = {
+                "api_scheme": api_scheme,
                 "host": host,
                 "port": port,
                 "api_port": api_port,
+                "api_token": api_token,
                 "auth_token": auth_token,
                 "dll_path": _resolve_dll_path(),
             }
@@ -319,8 +353,17 @@ class VCIProxyTrayApp:
 
     def _on_status_change(self, status: str, detail: str = ""):
         """Callback from ReverseProxyClient (called from background thread)."""
+        previous_status = self._status
+        previous_detail = self._status_detail
         self._status = status
         self._status_detail = detail
+        if previous_status != status or previous_detail != detail:
+            logger.info(
+                "[GUI_STATUS] %s -> %s detail=%s",
+                previous_status,
+                status,
+                detail or "-",
+            )
         self._update_tray()
 
     def _update_tray(self):
@@ -345,14 +388,30 @@ class VCIProxyTrayApp:
     def _start_client(self):
         """Start the reverse proxy client in a background thread."""
         if self._client_thread and self._client_thread.is_alive():
+            logger.info("[GUI_CTRL] start skipped because client thread is already alive")
             return
         if not self._has_required_config():
+            logger.info("[GUI_CTRL] start skipped because required config is missing")
             self._on_status_change("idle", "Settings required")
             return
 
         cfg = self._config
+        logger.info(
+            "[GUI_CTRL] starting reverse client pid=%s host=%s port=%s tls=%s api=%s://%s:%s dll_configured=%s",
+            os.getpid(),
+            cfg.get("host"),
+            cfg.get("port"),
+            bool(cfg.get("tls_enabled")),
+            cfg.get("api_scheme") or "http",
+            cfg.get("host"),
+            cfg.get("api_port"),
+            bool(cfg.get("dll_path")),
+        )
         proxy_config = ProxyConfig.from_args(
             auth_token=cfg.get("auth_token") or None,
+            tls_enabled=bool(cfg.get("tls_enabled")),
+            tls_ca_file=cfg.get("tls_ca_file") or None,
+            tls_server_name=cfg.get("tls_server_name") or None,
         )
 
         self._client = ReverseProxyClient(
@@ -372,9 +431,10 @@ class VCIProxyTrayApp:
             try:
                 self._loop.run_until_complete(client.connect_and_serve())
             except Exception as e:
-                logger.error(f"Client thread error: {e}")
+                logger.exception("Client thread error")
                 self._on_status_change("error", str(e))
             finally:
+                logger.info("[GUI_CTRL] client thread exiting")
                 self._loop.close()
                 self._loop = None
 
@@ -383,6 +443,11 @@ class VCIProxyTrayApp:
 
     def _stop_client(self):
         """Stop the reverse proxy client."""
+        logger.info(
+            "[GUI_CTRL] stopping reverse client has_client=%s thread_alive=%s",
+            self._client is not None,
+            bool(self._client_thread and self._client_thread.is_alive()),
+        )
         stop_future = None
         if self._client:
             stop_future = self._client.stop()
@@ -400,9 +465,11 @@ class VCIProxyTrayApp:
         self._client = None
         self._loop = None
         self._on_status_change("idle", "")
+        logger.info("[GUI_CTRL] reverse client stopped")
 
     def _restart_client(self):
         """Stop and restart the client (e.g. after config change)."""
+        logger.info("[GUI_CTRL] restarting reverse client")
         self._stop_client()
         if self._client_thread:
             self._client_thread.join(timeout=5)
@@ -412,15 +479,18 @@ class VCIProxyTrayApp:
 
     def _run_settings_dialog(self) -> None:
         """Open settings dialog outside the tray callback thread."""
+        logger.info("[GUI_CTRL] opening settings dialog")
         self._stop_client()
         try:
             dialog = ConfigDialog(self._config)
             result = dialog.show()
             if result:
-                self._config = result
+                logger.info("[GUI_CTRL] settings updated, restarting client")
+                self._config = normalize_config({**self._config, **result})
                 save_config(self._config)
                 self._start_client()
             elif self._has_required_config():
+                logger.info("[GUI_CTRL] settings dialog cancelled, restoring previous client")
                 # User cancelled but had previous config — restart with old config
                 self._start_client()
         finally:
@@ -429,6 +499,7 @@ class VCIProxyTrayApp:
     def _on_settings(self, icon=None, item=None):
         """Open settings dialog."""
         if self._settings_dialog_thread and self._settings_dialog_thread.is_alive():
+            logger.info("[GUI_CTRL] settings dialog request ignored because one is already open")
             return
         self._settings_dialog_thread = threading.Thread(
             target=self._run_settings_dialog,
@@ -443,15 +514,17 @@ class VCIProxyTrayApp:
             self._show_threadsafe_error("Diagnostics", "Server address is not configured. Open Settings first.")
             return
 
+        scheme = str(self._config.get("api_scheme") or "http").strip().lower() or "http"
         host = self._config["host"]
         port = self._config.get("api_port", 8080)
-        api_base = f"http://{host}:{port}"
+        api_base = f"{scheme}://{host}:{port}"
+        api_token = str(self._config.get("api_token") or "").strip()
 
         def _open():
             try:
                 from vci_proxy.diagnostics_window import DiagnosticsWindow
 
-                win = DiagnosticsWindow(api_base)
+                win = DiagnosticsWindow(api_base, api_token=api_token)
                 win.show()
             except Exception as e:
                 logger.exception("Failed to open diagnostics window")
@@ -481,6 +554,7 @@ class VCIProxyTrayApp:
 
     def _on_quit(self, icon=None, item=None):
         """Quit the application."""
+        logger.info("[GUI_CTRL] quit requested")
         self._stop_client()
         if self._tray:
             self._tray.stop()
@@ -515,7 +589,7 @@ class VCIProxyTrayApp:
             if not result:
                 # User cancelled first-run dialog — exit
                 return
-            self._config = result
+            self._config = normalize_config({**self._config, **result})
             save_config(self._config)
 
         # Create tray icon
@@ -553,6 +627,7 @@ def main():
             logging.FileHandler(str(log_file), encoding='utf-8'),
         ],
     )
+    logger.info("[GUI_CTRL] client_gui starting pid=%s log_file=%s", os.getpid(), log_file)
 
     app = VCIProxyTrayApp()
     app.run()

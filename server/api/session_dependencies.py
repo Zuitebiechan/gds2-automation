@@ -7,8 +7,9 @@ from collections.abc import Callable
 from typing import Any
 
 from diagnostic_platform.backend_registry import get_backend_registry
+from diagnostic_platform.safe_utils import strip_optional_text as _strip_optional_text
+from diagnostic_platform.session_orchestrator import BusinessSessionOrchestrator
 from diagnostic_platform.runtime.worker_runtime import get_worker_runtime
-from src.gds2_orchestration.session_orchestrator import SessionOrchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -17,12 +18,12 @@ def _runtime():
     return get_worker_runtime()
 
 
-def get_orchestrator() -> SessionOrchestrator:
+def get_orchestrator() -> BusinessSessionOrchestrator:
     """Return the shared worker-scoped orchestrator."""
     return _runtime().orchestrator
 
 
-def set_orchestrator(orch: SessionOrchestrator) -> None:
+def set_orchestrator(orch: BusinessSessionOrchestrator) -> None:
     """Replace the shared worker-scoped orchestrator."""
     _runtime().set_orchestrator(orch)
 
@@ -61,7 +62,7 @@ def _resolve_active_backend_descriptor(
     if session is None:
         raise RuntimeError("No active session bound to the worker")
 
-    backend_name = (getattr(session, "backend_name", None) or "").strip()
+    backend_name = _strip_optional_text(getattr(session, "backend_name", None))
     if not backend_name or backend_name == "manual":
         if required:
             raise RuntimeError("Active session does not have a runnable backend")

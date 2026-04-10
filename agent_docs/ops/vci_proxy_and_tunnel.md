@@ -44,6 +44,7 @@ Responsibilities:
 - listen for the local reverse client on port `9000`
 - expose a local proxy listener on `127.0.0.1:9001`
 - authenticate the reverse client when PSK auth is enabled
+- optionally terminate TLS for the reverse-client listener
 - proxy binary protocol requests/responses
 - maintain request sequencing and pending futures
 - apply request-side caches
@@ -58,6 +59,7 @@ Responsibilities:
 
 - establish and maintain the outbound connection to the cloud reverse server
 - perform registration/auth handshake
+- optionally verify the reverse server certificate and hostname over TLS
 - load the real local J2534 driver
 - execute incoming J2534 requests
 - keep reconnecting with backoff when disconnected
@@ -71,6 +73,7 @@ Responsibilities:
 
 - persist config in `%APPDATA%\VCI_Proxy\config.json`
 - collect server address, ports, auth token, and J2534 driver path
+- persist optional reverse-tunnel TLS trust settings
 - auto-discover installed J2534 drivers where possible
 - start the reverse client in the background
 - present connection status through the tray icon
@@ -108,10 +111,89 @@ Current design:
   repeated auth requests seen inside the drift window
 - the local reverse client fails fast when auth is enabled but no token is
   configured, instead of attempting an unauthenticated tunnel
+- PSK auth still runs even when TLS is enabled, so transport encryption and
+  application-level client authentication layer together
 
 Important rule:
 
 - the token is never sent in plaintext
+
+## TLS Transport
+
+TLS for the reverse tunnel is optional and backward-compatible.
+
+Current behavior:
+
+- TLS applies only to the reverse client/server leg on port `9000`
+- the local proxy listener on `127.0.0.1:9001` remains a localhost-only cleartext hop
+- the tunnel now enforces a minimum TLS version of `1.2` when TLS is enabled
+- client certificate verification is optional and disabled by default
+- the client uses the system trust store by default, or a custom CA bundle when configured
+- there is intentionally no insecure "skip certificate verification" mode
+
+### Reverse server flags
+
+Use these on `vci_proxy/reverse_server.py`:
+
+- `--tls`
+- `--tls-cert <server-cert.pem>`
+- `--tls-key <server-key.pem>`
+- `--tls-ca <client-ca.pem>` when mutually authenticated client certificates are required
+- `--tls-require-client-cert` to require a trusted client certificate
+
+Example:
+
+```bash
+python -m vci_proxy.reverse_server ^
+  --auth-token <shared-token> ^
+  --tls ^
+  --tls-cert <server-cert.pem> ^
+  --tls-key <server-key.pem>
+```
+
+For mTLS:
+
+```bash
+python -m vci_proxy.reverse_server ^
+  --auth-token <shared-token> ^
+  --tls ^
+  --tls-cert <server-cert.pem> ^
+  --tls-key <server-key.pem> ^
+  --tls-ca <client-ca.pem> ^
+  --tls-require-client-cert
+```
+
+### Reverse client flags
+
+Use these on `vci_proxy/reverse_client.py`:
+
+- `--tls`
+- `--tls-ca <server-ca.pem>` to trust a private CA bundle instead of relying only on the system trust store
+- `--tls-server-name <dns-name>` to override the hostname used for certificate validation
+
+Example:
+
+```bash
+python -m vci_proxy.reverse_client ^
+  --host <server-host> ^
+  --auth-token <shared-token> ^
+  --tls ^
+  --tls-ca <server-ca.pem> ^
+  --tls-server-name <server-dns-name>
+```
+
+### Tray-client config
+
+`vci_proxy/client_gui.py` persists the local client configuration in `%APPDATA%\VCI_Proxy\config.json`.
+
+TLS-related keys are:
+
+- `tls_enabled`
+- `tls_ca_file`
+- `tls_server_name`
+
+These values are passed through to `vci_proxy.reverse_client.ReverseProxyClient`
+when the tray app starts the local tunnel client.
 
 ## Cache Layers
 

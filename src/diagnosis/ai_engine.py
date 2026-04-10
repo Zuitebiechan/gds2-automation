@@ -19,6 +19,10 @@ import uuid
 from typing import Any, Optional
 
 from diagnostic_platform.contracts import DiagnosticPayload, SamplingQuality
+from diagnostic_platform.safe_utils import (
+    display_text as _display_text,
+    json_dumps_safe as _json_sse_data,
+)
 from .llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -28,16 +32,19 @@ logger = logging.getLogger(__name__)
 _payload_cache: dict[str, dict[str, Any]] = {}
 _cache_lock = threading.Lock()
 CACHE_TTL_SECONDS = 600  # 10 minutes
+_ESSENTIAL_AI_EVENTS = {"result", "error", "done"}
 
 
 def _sse_event(event_type: str, data: dict[str, Any]) -> str:
     """Format an SSE event string."""
-    return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+    normalized_event_type = _display_text(event_type, default="message") or "message"
+    return f"event: {normalized_event_type}\ndata: {_json_sse_data(data)}\n\n"
 
 
 def _cache_payload(payload: dict[str, Any]) -> str:
     """Cache a payload and return its ID."""
     payload_id = str(uuid.uuid4())
+    cached_payload = dict(payload)
     with _cache_lock:
         # Clean expired entries
         now = time.time()
@@ -48,8 +55,8 @@ def _cache_payload(payload: dict[str, Any]) -> str:
         for k in expired:
             del _payload_cache[k]
 
-        payload['_cached_at'] = now
-        _payload_cache[payload_id] = payload
+        cached_payload["_cached_at"] = now
+        _payload_cache[payload_id] = cached_payload
 
     return payload_id
 
@@ -63,7 +70,7 @@ def get_cached_payload(payload_id: str) -> Optional[dict[str, Any]]:
         if time.time() - payload.get('_cached_at', 0) > CACHE_TTL_SECONDS:
             del _payload_cache[payload_id]
             return None
-        return payload
+        return dict(payload)
 
 
 def _sampling_quality_to_grade(sampling_quality: SamplingQuality) -> str:
@@ -300,10 +307,36 @@ class AIEngine:
         q = self._event_queues.get(session_id)
         if q is None:
             return
+        message = _sse_event(event_type, data)
         try:
-            q.put_nowait(_sse_event(event_type, data))
+            q.put_nowait(message)
         except queue.Full:
-            logger.warning(f"Event queue full for session {session_id}")
+            if event_type in _ESSENTIAL_AI_EVENTS:
+                self._enqueue_essential_event(q, message, session_id, event_type)
+                return
+            logger.warning("Event queue full for session %s", session_id)
+
+    @staticmethod
+    def _enqueue_essential_event(
+        event_queue: queue.Queue,
+        message: str,
+        session_id: str,
+        event_type: str,
+    ) -> None:
+        while True:
+            try:
+                event_queue.put_nowait(message)
+                return
+            except queue.Full:
+                try:
+                    event_queue.get_nowait()
+                except queue.Empty:
+                    logger.warning(
+                        "AI event queue cleanup raced empty for %s in session %s",
+                        event_type,
+                        session_id,
+                    )
+                    return
 
     def _retry_worker(
         self,
@@ -402,10 +435,11 @@ class AIEngine:
                 if self._is_cancelled(session_id):
                     logger.info("AI-DIAG %s cancelled during LLM streaming", session_id)
                     return
-                full_response.append(chunk)
+                chunk_text = chunk if isinstance(chunk, str) else str(chunk)
+                full_response.append(chunk_text)
                 chunk_count += 1
                 self._emit(session_id, 'llm_chunk', {
-                    'text': chunk,
+                    'text': chunk_text,
                 })
 
         except Exception as e:

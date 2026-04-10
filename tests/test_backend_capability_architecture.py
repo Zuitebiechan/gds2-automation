@@ -315,6 +315,24 @@ class FakeTelemetryBackend(FakeCoreBackend):
         )
 
 
+class FakeDeviceSelectionBackend(FakeCoreBackend):
+    def __init__(self, *, capabilities: list[Any]) -> None:
+        super().__init__(
+            name="fake-device-selection",
+            display_name="Fake Device Selection",
+            brands=["devicebrand"],
+            capabilities=capabilities,
+        )
+
+    def start(self, *args, **kwargs) -> dict[str, Any]:
+        self.started = True
+        return {
+            "devices": ["VCI Proxy (Remote)", "Bench VCI"],
+            "at_device_explorer": True,
+            "device_connected": False,
+        }
+
+
 def test_backend_registry_resolves_unique_ambiguous_and_unmatched_brands():
     BackendCapability = _require_attr(contracts_module, "BackendCapability")
     BackendResolutionResult = _require_attr(contracts_module, "BackendResolutionResult")
@@ -527,6 +545,49 @@ def test_session_api_runs_fake_backend_core_chain_and_gates_extensions(monkeypat
     finally:
         set_backend_registry(original_registry)
 
+
+def test_session_start_diagnostics_accepts_device_selection_result(monkeypatch):
+    BackendCapability = _require_attr(contracts_module, "BackendCapability")
+    registry_module = _require_module("diagnostic_platform.backend_registry")
+    get_backend_registry = _require_attr(registry_module, "get_backend_registry")
+    set_backend_registry = _require_attr(registry_module, "set_backend_registry")
+
+    original_registry = get_backend_registry()
+    fake_registry = contracts_module.BackendRegistry()
+    fake_registry.register(
+        FakeDeviceSelectionBackend(
+            capabilities=[BackendCapability.CORE_SESSION]
+        )
+    )
+
+    try:
+        set_backend_registry(fake_registry)
+        monkeypatch.setattr(
+            worker_runtime_module,
+            "_WORKER_RUNTIME",
+            worker_runtime_module.WorkerRuntime(),
+        )
+
+        session_api, fake_request = _import_session_api(monkeypatch)
+
+        fake_request.json = {"brand": "devicebrand", "model": "Demo"}
+        start_payload, start_status = _unwrap_response(session_api.session_start())
+        assert start_status == 200
+
+        fake_request.json = {"session_id": start_payload["session_id"]}
+        diagnostics_payload, diagnostics_status = _unwrap_response(
+            session_api.session_start_diagnostics()
+        )
+
+        assert diagnostics_status == 200
+        assert diagnostics_payload["success"] is True
+        assert diagnostics_payload["result"] == {
+            "devices": ["VCI Proxy (Remote)", "Bench VCI"],
+            "at_device_explorer": True,
+            "device_connected": False,
+        }
+    finally:
+        set_backend_registry(original_registry)
 
 def test_session_api_allows_backend_decision_flow_before_backend_binding(monkeypatch):
     BackendCapability = _require_attr(contracts_module, "BackendCapability")
@@ -800,6 +861,45 @@ def test_diagnostics_api_start_uses_registry_backend_name(monkeypatch):
         assert payload["modules"] == ["Engine", "ABS"]
         assert payload["backend_name"] == "fakecore"
         assert "core_session" in payload["capabilities"]
+    finally:
+        set_backend_registry(original_registry)
+
+
+def test_diagnostics_api_start_preserves_device_selection_result(monkeypatch):
+    BackendCapability = _require_attr(contracts_module, "BackendCapability")
+    registry_module = _require_module("diagnostic_platform.backend_registry")
+    get_backend_registry = _require_attr(registry_module, "get_backend_registry")
+    set_backend_registry = _require_attr(registry_module, "set_backend_registry")
+
+    original_registry = get_backend_registry()
+    fake_registry = contracts_module.BackendRegistry()
+    fake_registry.register(
+        FakeDeviceSelectionBackend(
+            capabilities=[BackendCapability.CORE_SESSION],
+        )
+    )
+
+    try:
+        set_backend_registry(fake_registry)
+        monkeypatch.setattr(
+            worker_runtime_module,
+            "_WORKER_RUNTIME",
+            worker_runtime_module.WorkerRuntime(),
+        )
+        diagnostics_api, fake_request = _import_diagnostics_api(monkeypatch)
+
+        fake_request.json = {"backend_name": "fake-device-selection"}
+        payload, status = _unwrap_response(diagnostics_api.diagnose_start())
+
+        assert status == 200
+        assert payload == {
+            "success": True,
+            "devices": ["VCI Proxy (Remote)", "Bench VCI"],
+            "at_device_explorer": True,
+            "device_connected": False,
+            "backend_name": "fake-device-selection",
+            "capabilities": ["core_session"],
+        }
     finally:
         set_backend_registry(original_registry)
 

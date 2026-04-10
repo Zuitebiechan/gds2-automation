@@ -31,12 +31,22 @@ from datetime import datetime
 from typing import Dict, List, Callable, Optional, Any, Tuple
 from dataclasses import dataclass, field
 
+from diagnostic_platform.safe_utils import (
+    json_dumps_safe as _json_dumps_safe,
+    mapping_or_empty as _mapping_or_empty,
+)
+
 logger = logging.getLogger(__name__)
 
 _AGENT_JSON_ENCODINGS: Tuple[str, ...] = ("gbk", "utf-8", "latin-1")
 _AGENT_AVAILABILITY_MAX_AGE_SECONDS = 10.0
 _AGENT_AVAILABILITY_READ_ATTEMPTS = 3
 _AGENT_AVAILABILITY_RETRY_DELAY_SECONDS = 0.05
+
+
+def _guard_event_signature(payload: Any) -> str:
+    """Build one stable guard-event signature without crashing on odd values."""
+    return _json_dumps_safe(_mapping_or_empty(payload), sort_keys=True)
 
 
 @dataclass
@@ -124,81 +134,12 @@ def _parse_agent_json(data: dict) -> AgentSnapshot:
     extraction_duration_ms = data.get('extractionDurationMs', 0)
     page_context = data.get('pageContext', {})
 
-    parameters = []
-    dtcs = []
-    raw_tables = []
     tables = data.get('tables', [])
-
-    for table in tables:
-        table_type = table.get('tableType', 'unknown')
-        columns = table.get('columns', [])
-        rows = table.get('rows', [])
-        raw_tables.append(table)
-
-        if table_type == 'data_display':
-            for row in rows:
-                param = {
-                    'module': _get_row_value(row, columns, ['Module']),
-                    'name': _get_row_value(row, columns, ['Parameter Name']),
-                    'value': _get_row_value(row, columns, ['Value']),
-                    'unit': _get_row_value(row, columns, ['Unit', 'Units']),
-                }
-                if param['name']:
-                    parameters.append(param)
-
-        elif table_type == 'dtc':
-            for row in rows:
-                dtc = DTCInfo(
-                    control_module=_get_row_value(row, columns, ['Control Module']),
-                    dtc_type=_get_row_value(row, columns, ['DTC Type']),
-                    code=_get_row_value(row, columns, ['DTC']),
-                    symptom_byte=_get_row_value(row, columns, ['Symptom Byte']),
-                    description=_get_row_value(row, columns, ['Description']),
-                    symptom_description=_get_row_value(row, columns, ['Symptom Description']),
-                    status=_get_row_value(row, columns, ['Status']),
-                )
-                if dtc.code:
-                    dtcs.append(dtc)
-
-        else:
-            # Unknown table type - skip to avoid false positives
-            pass
-
-    # Fallback: handle v1 format (windows -> controls -> rows)
-    if not tables:
-        windows = data.get('windows', [])
-        for window in windows:
-            controls = window.get('controls', [])
-            for control in controls:
-                if control.get('type') == 'TableView':
-                    ctrl_columns = control.get('columns', [])
-                    ctrl_rows = control.get('rows', [])
-                    table_type = _detect_table_type_from_columns(ctrl_columns)
-
-                    if table_type == 'data_display':
-                        for row in ctrl_rows:
-                            param = {
-                                'module': _get_row_value(row, ctrl_columns, ['Module']),
-                                'name': _get_row_value(row, ctrl_columns, ['Parameter Name']),
-                                'value': _get_row_value(row, ctrl_columns, ['Value']),
-                                'unit': _get_row_value(row, ctrl_columns, ['Unit', 'Units']),
-                            }
-                            if param['name']:
-                                parameters.append(param)
-
-                    elif table_type == 'dtc':
-                        for row in ctrl_rows:
-                            dtc = DTCInfo(
-                                control_module=_get_row_value(row, ctrl_columns, ['Control Module']),
-                                dtc_type=_get_row_value(row, ctrl_columns, ['DTC Type']),
-                                code=_get_row_value(row, ctrl_columns, ['DTC']),
-                                symptom_byte=_get_row_value(row, ctrl_columns, ['Symptom Byte']),
-                                description=_get_row_value(row, ctrl_columns, ['Description']),
-                                symptom_description=_get_row_value(row, ctrl_columns, ['Symptom Description']),
-                                status=_get_row_value(row, ctrl_columns, ['Status']),
-                            )
-                            if dtc.code:
-                                dtcs.append(dtc)
+    if tables:
+        parameters, dtcs, raw_tables = _parse_agent_tables(tables)
+    else:
+        parameters, dtcs = _parse_agent_windows(data.get('windows', []))
+        raw_tables = []
 
     return AgentSnapshot(
         timestamp=timestamp,
@@ -211,6 +152,92 @@ def _parse_agent_json(data: dict) -> AgentSnapshot:
         raw_tables=raw_tables,
         agent_timestamp_s=_normalize_timestamp_seconds(timestamp),
     )
+
+
+def _build_parameter(row: dict, columns: list) -> dict[str, str]:
+    """Build one normalized parameter row."""
+    return {
+        'module': _get_row_value(row, columns, ['Module']),
+        'name': _get_row_value(row, columns, ['Parameter Name']),
+        'value': _get_row_value(row, columns, ['Value']),
+        'unit': _get_row_value(row, columns, ['Unit', 'Units']),
+    }
+
+
+def _build_dtc(row: dict, columns: list) -> DTCInfo:
+    """Build one normalized DTC row."""
+    return DTCInfo(
+        control_module=_get_row_value(row, columns, ['Control Module']),
+        dtc_type=_get_row_value(row, columns, ['DTC Type']),
+        code=_get_row_value(row, columns, ['DTC']),
+        symptom_byte=_get_row_value(row, columns, ['Symptom Byte']),
+        description=_get_row_value(row, columns, ['Description']),
+        symptom_description=_get_row_value(row, columns, ['Symptom Description']),
+        status=_get_row_value(row, columns, ['Status']),
+    )
+
+
+def _append_table_rows(
+    table_type: str,
+    *,
+    columns: list,
+    rows: list,
+    parameters: list[dict[str, str]],
+    dtcs: list[DTCInfo],
+) -> None:
+    """Append parsed rows for one known agent table type."""
+    if table_type == 'data_display':
+        for row in rows:
+            param = _build_parameter(row, columns)
+            if param['name']:
+                parameters.append(param)
+        return
+
+    if table_type == 'dtc':
+        for row in rows:
+            dtc = _build_dtc(row, columns)
+            if dtc.code:
+                dtcs.append(dtc)
+
+
+def _parse_agent_tables(tables: list) -> tuple[list[dict[str, str]], list[DTCInfo], list[dict[str, Any]]]:
+    """Parse v2 agent tables payload."""
+    parameters: list[dict[str, str]] = []
+    dtcs: list[DTCInfo] = []
+    raw_tables: list[dict[str, Any]] = []
+
+    for table in tables:
+        raw_tables.append(table)
+        _append_table_rows(
+            str(table.get('tableType', 'unknown')),
+            columns=table.get('columns', []),
+            rows=table.get('rows', []),
+            parameters=parameters,
+            dtcs=dtcs,
+        )
+
+    return parameters, dtcs, raw_tables
+
+
+def _parse_agent_windows(windows: list) -> tuple[list[dict[str, str]], list[DTCInfo]]:
+    """Parse v1 agent windows/controls fallback payload."""
+    parameters: list[dict[str, str]] = []
+    dtcs: list[DTCInfo] = []
+
+    for window in windows:
+        for control in window.get('controls', []):
+            if control.get('type') != 'TableView':
+                continue
+            ctrl_columns = control.get('columns', [])
+            _append_table_rows(
+                _detect_table_type_from_columns(ctrl_columns),
+                columns=ctrl_columns,
+                rows=control.get('rows', []),
+                parameters=parameters,
+                dtcs=dtcs,
+            )
+
+    return parameters, dtcs
 
 
 def _get_row_value(row: dict, columns: list, possible_keys: list) -> str:
@@ -473,7 +500,7 @@ class AgentDataCollector:
                     guard_result = self._last_guard_result
                     self._last_guard_result = None
                 if guard_result is not None and self.on_guard_event:
-                    signature = json.dumps(guard_result, sort_keys=True, ensure_ascii=False)
+                    signature = _guard_event_signature(guard_result)
                     if signature != self._last_guard_event_signature:
                         self._last_guard_event_signature = signature
                         self.on_guard_event(guard_result)
