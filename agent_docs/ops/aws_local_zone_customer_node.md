@@ -72,6 +72,48 @@ From the customer side:
 3. Set GUI `api_port=443`
 4. Set GUI `api_token` when `DIAGNOSTIC_API_TOKEN` is enabled
 
+## Temporary no-domain debug mode
+
+If you are still proving business behavior and do not yet have a working
+customer DNS name plus trusted `443` edge, use a temporary direct-connect mode
+first:
+
+1. Start Flask with `python app.py --port 8080 --public`
+2. Keep the reverse tunnel on `9000`
+3. Set GUI `api_scheme=http`
+4. Set GUI `host=<public-ip>`
+5. Set GUI `api_port=8080`
+
+This is a debugging shortcut, not the final production shape. It is useful for:
+
+- confirming that session start works end-to-end
+- separating API-entrypoint problems from backend or tunnel problems
+- validating customer workflows before HTTPS and DNS are finished
+
+After that succeeds, move back to the production model:
+
+- Flask on `127.0.0.1:8080`
+- reverse proxy on `443`
+- GUI on `https://<customer-domain>:443`
+
+## 443 prerequisites
+
+Testing `443` is intentionally more involved than testing `8080`.
+
+Before the GUI can use `https://<customer-domain-or-ip>:443`, you need:
+
+1. a reverse proxy such as Caddy or IIS actually listening on `443`
+2. the GUI configured to match that public entrypoint
+3. a certificate chain the client trusts
+
+Practical note:
+
+- `scripts/local_zone/start_edge_proxy.ps1` expects a real `caddy.exe`
+  location or a working `caddy` command on `PATH`
+- the example value `C:\path\to\caddy.exe` is only a placeholder
+- without a domain-backed public certificate, `443` testing may require
+  additional certificate-trust setup on the client
+
 ## Security notes
 
 - Prefer HTTPS for the public diagnostics API.

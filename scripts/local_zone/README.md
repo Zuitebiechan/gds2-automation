@@ -24,6 +24,23 @@ Typical flow:
 3. Start Caddy through `start_edge_proxy.ps1`
 4. Verify `https://<edge-domain>/api/session/start` through `test_edge_health.ps1`
 
+Prerequisites:
+
+- `start_edge_proxy.ps1` expects a working `caddy` command on `PATH`, or a real
+  `caddy.exe` path passed through `-CaddyExe` or `CADDY_EXE`
+- the sample string `C:\path\to\caddy.exe` is only a placeholder
+- the GUI must be configured to match the real public API entrypoint
+  (`https` + `443` for the edge proxy, or `http` + `8080` for temporary
+  direct-connect debugging)
+
+Practical testing advice:
+
+- if DNS, certificates, or `443` are not ready yet, first validate the
+  business flow with `python app.py --port 8080 --public`
+- in that temporary mode, set the GUI to `api_scheme=http` and `api_port=8080`
+- once direct-connect testing succeeds, switch back to the intended production
+  shape with Flask on loopback and the reverse proxy on `443`
+
 Or use the combined deploy helper:
 
 ```powershell

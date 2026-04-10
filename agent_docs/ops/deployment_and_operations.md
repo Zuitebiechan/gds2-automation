@@ -115,6 +115,35 @@ Repository templates for this pattern:
 - `scripts/local_zone/README.md`
 - `agent_docs/ops/aws_local_zone_customer_node.md`
 
+### Temporary public-debug mode
+
+When you need to validate business behavior quickly before the full `443`
+edge is ready, a temporary direct-connect mode is allowed:
+
+```bash
+python app.py --port 8080 --public
+```
+
+Use this only for short-lived testing. In that mode:
+
+- Flask listens on `0.0.0.0:8080`
+- the diagnostics GUI should use `api_scheme=http`
+- the diagnostics GUI should use `api_port=8080`
+- the reverse tunnel still uses `9000`
+
+Important rule:
+
+- the GUI builds its API base URL from `api_scheme`, `host`, and `api_port`
+- those values must match the actual public API entrypoint
+- a common failure mode is leaving the GUI on `https://<host>:443` while the
+  cloud node is only exposing `http://<host>:8080`
+
+Once the direct-connect flow works, switch back to the production shape:
+
+- Flask on `127.0.0.1:8080`
+- reverse proxy on `443`
+- GUI configured for `https` on `443`
+
 ### Local side
 
 Development mode:
@@ -153,6 +182,15 @@ For production customer nodes behind a reverse proxy, prefer:
 - `host=<customer-domain>`
 - `api_port=443`
 - `api_token=<per-node api token>` when `DIAGNOSTIC_API_TOKEN` is enabled
+
+For temporary direct-connect testing, use:
+
+- `api_scheme=http`
+- `host=<public-ip-or-debug-host>`
+- `api_port=8080`
+
+Do not leave the GUI on `https:443` unless a reverse proxy is actually
+listening on `443`.
 
 ### Windows client build
 
