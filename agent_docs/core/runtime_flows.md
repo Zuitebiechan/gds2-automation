@@ -8,7 +8,30 @@ This document does not enumerate every file or route declaration. For those, rea
 
 ## Main Business-Session Flow
 
-### 1. Session creation
+### 1. Bootstrap node allocation
+
+Entries:
+
+- `POST /api/session/bootstrap`
+- `GET /api/session/bootstrap/ready`
+- `POST /api/session/bootstrap/bind`
+- `POST /api/session/bootstrap/release`
+
+Sequence:
+
+1. The client sends vehicle identity and optional preferred zone/metro to `POST /api/session/bootstrap`.
+2. The allocator tries to claim one healthy idle node from inventory.
+3. If an idle node exists, the API returns the assigned node endpoint plus `assignment_id`.
+4. If no idle node exists but a booting node is already pending, the API returns `202 capacity_pending` and tells the client to retry.
+5. If no idle or pending node exists and AWS provisioning is configured:
+   - the provisioner launches a new EC2 instance in the selected Local Zone
+   - inventory records that node as `BOOTING`
+   - the API returns `202 capacity_pending`
+6. The background readiness monitor polls `GET /api/session/bootstrap/ready` on booting nodes until the node API is reachable, then promotes the node from `BOOTING` to `IDLE`.
+7. Once the client successfully starts `/api/session/start` on the assigned node, it calls `POST /api/session/bootstrap/bind`.
+8. If session startup fails or the session later ends, the client calls `POST /api/session/bootstrap/release` to return the node to the pool.
+
+### 2. Session creation
 
 Entry:
 
@@ -34,7 +57,7 @@ Initial response includes:
 - `capabilities`
 - optional `decision`
 
-### 2. Backend decision flow
+### 3. Backend decision flow
 
 Entry:
 
@@ -47,7 +70,7 @@ When the pending decision is backend selection:
 3. The session transitions back to `running`.
 4. The selected `backend_name` becomes the runnable backend for the session.
 
-## 3. Diagnostics start flow
+## 4. Diagnostics start flow
 
 Entry:
 
@@ -77,7 +100,7 @@ If the operation is cancelled:
 - backend startup state is reset when possible
 - the worker operation ends cooperatively
 
-## 4. Network-quality override flow
+## 5. Network-quality override flow
 
 When diagnostics start is blocked by tunnel quality:
 
@@ -91,7 +114,7 @@ When diagnostics start is blocked by tunnel quality:
 
 The override is epoch-bound. If the connection epoch changes, the previous override is invalidated.
 
-## 5. Module selection flow
+## 6. Module selection flow
 
 Entry:
 
@@ -105,7 +128,7 @@ Sequence:
 4. If deterministic selection encounters ambiguity, raise a branch decision gate.
 5. On success, update the session’s selected module.
 
-## 6. Data-category selection flow
+## 7. Data-category selection flow
 
 Entry:
 
@@ -119,7 +142,7 @@ Sequence:
 4. If deterministic selection encounters ambiguity, raise a branch decision gate.
 5. On success, update the session’s selected data category.
 
-## 7. Branch-decision resume flow
+## 8. Branch-decision resume flow
 
 When module/category selection raises a branch ambiguity:
 

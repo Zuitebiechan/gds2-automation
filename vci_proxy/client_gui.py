@@ -18,6 +18,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 from PIL import Image, ImageDraw
 
@@ -348,6 +349,7 @@ class VCIProxyTrayApp:
         self._client_thread: Optional[threading.Thread] = None
         self._settings_dialog_thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._active_node_assignment: Optional[dict[str, Any]] = None
 
     # --- Status management ---
 
@@ -381,7 +383,36 @@ class VCIProxyTrayApp:
 
     def _has_required_config(self) -> bool:
         """Return True when the minimum tunnel settings are configured."""
-        return bool(self._config.get("host") and self._config.get("auth_token"))
+        cfg = self._effective_runtime_config()
+        return bool(cfg.get("host") and cfg.get("auth_token"))
+
+    def _effective_runtime_config(self) -> dict[str, Any]:
+        """Return runtime config with any active assigned-node override applied."""
+        cfg = normalize_config(self._config)
+        assignment = self._active_node_assignment or {}
+        parsed = urlparse(str(assignment.get("api_base_url") or "").strip())
+
+        if parsed.scheme:
+            cfg["api_scheme"] = parsed.scheme
+        if parsed.port is not None:
+            cfg["api_port"] = parsed.port
+        elif parsed.scheme == "https":
+            cfg["api_port"] = 443
+        elif parsed.scheme == "http":
+            cfg["api_port"] = 80
+
+        tunnel_host = str(assignment.get("tunnel_host") or "").strip()
+        if tunnel_host:
+            cfg["host"] = tunnel_host
+        elif parsed.hostname:
+            cfg["host"] = parsed.hostname
+
+        return cfg
+
+    def _on_node_assignment(self, assignment: dict[str, Any] | None) -> None:
+        """Apply one assigned-node override and reconnect the reverse tunnel."""
+        self._active_node_assignment = dict(assignment) if assignment else None
+        self._restart_client()
 
     # --- Client lifecycle ---
 
@@ -395,7 +426,7 @@ class VCIProxyTrayApp:
             self._on_status_change("idle", "Settings required")
             return
 
-        cfg = self._config
+        cfg = self._effective_runtime_config()
         logger.info(
             "[GUI_CTRL] starting reverse client pid=%s host=%s port=%s tls=%s api=%s://%s:%s dll_configured=%s",
             os.getpid(),
@@ -524,7 +555,12 @@ class VCIProxyTrayApp:
             try:
                 from vci_proxy.diagnostics_window import DiagnosticsWindow
 
-                win = DiagnosticsWindow(api_base, api_token=api_token)
+                win = DiagnosticsWindow(
+                    api_base,
+                    api_token=api_token,
+                    use_session_bootstrap=True,
+                    node_assignment_callback=self._on_node_assignment,
+                )
                 win.show()
             except Exception as e:
                 logger.exception("Failed to open diagnostics window")

@@ -20,6 +20,13 @@ from flask_cors import CORS
 from server.api.diagnostics import diagnostics_bp
 from server.api.navigate import navigate_bp
 from server.api.session import session_bp
+from server.api.session_dependencies import (
+    configure_node_allocator_from_env,
+    configure_node_readiness_from_env,
+    configure_node_provisioning_from_env,
+    start_node_readiness_monitor,
+    stop_node_readiness_monitor,
+)
 
 _bootstrap_logs: list[tuple[str, str]] = []
 _TRUTHY_VALUES = {"1", "true", "yes", "on"}
@@ -160,6 +167,9 @@ def _install_api_token_guard(app: Flask, settings: ServerRuntimeSettings) -> Non
 def create_app(settings: ServerRuntimeSettings | None = None) -> Flask:
     resolved_settings = settings or resolve_server_settings([])
     app = Flask(__name__)
+    configure_node_allocator_from_env()
+    configure_node_provisioning_from_env()
+    configure_node_readiness_from_env()
     _apply_cors(app, resolved_settings)
     _install_api_token_guard(app, resolved_settings)
     app.register_blueprint(diagnostics_bp)
@@ -189,6 +199,7 @@ def main(argv: list[str] | None = None) -> int:
     _disable_windows_quick_edit()
     settings = resolve_server_settings(argv)
     runtime_app = create_app(settings)
+    readiness_started = start_node_readiness_monitor()
 
     local_ip = "127.0.0.1"
     try:
@@ -214,14 +225,19 @@ def main(argv: list[str] | None = None) -> int:
     else:
         logger.info("API endpoint http://localhost:%s", settings.port)
     logger.info("API routes /api/diagnose/* /api/navigate/* /api/session/*")
+    if readiness_started:
+        logger.info("Booting-node readiness monitor started")
 
-    runtime_app.run(
-        debug=settings.debug,
-        host=settings.host,
-        port=settings.port,
-        use_reloader=False,
-        threaded=True,
-    )
+    try:
+        runtime_app.run(
+            debug=settings.debug,
+            host=settings.host,
+            port=settings.port,
+            use_reloader=False,
+            threaded=True,
+        )
+    finally:
+        stop_node_readiness_monitor()
     return 0
 
 

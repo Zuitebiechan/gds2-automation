@@ -30,6 +30,11 @@ from diagnostic_platform.runtime.session_lifecycle import (
     build_session_status_payload,
     start_business_session,
 )
+from diagnostic_platform.runtime.session_bootstrap import (
+    bind_session_node_assignment,
+    bootstrap_session_node_assignment,
+    release_session_node_assignment,
+)
 from diagnostic_platform.runtime.worker_runtime import (
     OperationCancelledError,
     WorkerBusyError,
@@ -53,6 +58,10 @@ from server.api.session_dependencies import (
     get_backend as _get_backend,
     get_data_viewer as _get_data_viewer,
     get_executor,
+    get_launch_spec_resolver,
+    get_node_allocator,
+    get_node_provisioner,
+    get_node_route_resolver,
     get_orchestrator,
     get_ai_engine as _get_ai_engine,
     reset_executor,
@@ -91,6 +100,38 @@ def _read_object_field(
     return value
 
 
+def _resolve_bootstrap_route_preferences(
+    data: dict[str, Any],
+) -> tuple[str, str]:
+    preferred_zone = _read_text_field(data, "preferred_zone")
+    preferred_metro = _read_text_field(data, "preferred_metro")
+    resolver = get_node_route_resolver()
+    if not callable(resolver):
+        return preferred_zone, preferred_metro
+
+    try:
+        resolved_route = resolver(data=data) or {}
+    except Exception:
+        logger.exception("session bootstrap route inference failed")
+        return preferred_zone, preferred_metro
+
+    if not isinstance(resolved_route, dict):
+        return preferred_zone, preferred_metro
+
+    route_source = _read_text_field(resolved_route, "source")
+    route_zone = _read_text_field(resolved_route, "preferred_zone")
+    route_metro = _read_text_field(resolved_route, "preferred_metro")
+
+    if route_zone and (not preferred_zone or route_source == "preferred_zone"):
+        preferred_zone = route_zone
+    if route_metro and (
+        not preferred_metro
+        or route_source in {"preferred_zone", "preferred_metro"}
+    ):
+        preferred_metro = route_metro
+    return preferred_zone, preferred_metro
+
+
 def _sse_response(stream) -> Response:
     return Response(
         stream,
@@ -101,6 +142,160 @@ def _sse_response(stream) -> Response:
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /api/session/bootstrap
+# ---------------------------------------------------------------------------
+
+@session_bp.route("/bootstrap/ready")
+def session_bootstrap_ready():
+    """Return one lightweight readiness signal for booting-node probes."""
+    return jsonify(
+        {
+            "success": True,
+            "ready": True,
+            "status": "worker_ready",
+        }
+    )
+
+
+@session_bp.route("/bootstrap", methods=["POST"])
+def session_bootstrap():
+    """Assign a new diagnostics session to a remote worker node."""
+    try:
+        allocator = get_node_allocator()
+        if allocator is None:
+            return jsonify(
+                {
+                    "success": False,
+                    "error": "Node allocator is not configured",
+                }
+            ), 503
+
+        data = require_json_object(request)
+        brand = _read_text_field(data, "brand")
+
+        if not brand:
+            return jsonify({"success": False, "error": "brand is required"}), 400
+
+        preferred_zone, preferred_metro = _resolve_bootstrap_route_preferences(data)
+
+        ctx = SessionContext(
+            brand=brand,
+            model=_read_text_field(data, "model"),
+            vin=_read_text_field(data, "vin"),
+            backend_name=_read_text_field(data, "backend_name"),
+            extra={
+                k: v
+                for k, v in data.items()
+                if k
+                not in (
+                    "brand",
+                    "model",
+                    "vin",
+                    "backend_name",
+                    "preferred_zone",
+                    "preferred_metro",
+                )
+            },
+        )
+        payload = bootstrap_session_node_assignment(
+            allocator=allocator,
+            context=ctx,
+            preferred_zone=preferred_zone,
+            preferred_metro=preferred_metro,
+            provisioner=get_node_provisioner(),
+            launch_spec_resolver=get_launch_spec_resolver(),
+        )
+        status = 202 if payload.get("pending_capacity") else 200
+        return jsonify(payload), status
+
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except RuntimeError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 503
+    except Exception:
+        logger.exception("session_bootstrap failed")
+        return jsonify(internal_error_payload()), 500
+
+
+# ---------------------------------------------------------------------------
+# POST /api/session/bootstrap/bind
+# ---------------------------------------------------------------------------
+
+@session_bp.route("/bootstrap/bind", methods=["POST"])
+def session_bootstrap_bind():
+    """Bind an existing bootstrap assignment to a real session id."""
+    try:
+        allocator = get_node_allocator()
+        if allocator is None:
+            return jsonify({"success": False, "error": "Node allocator is not configured"}), 503
+
+        data = require_json_object(request)
+        assignment_id = _read_text_field(data, "assignment_id")
+        session_id = _read_text_field(data, "session_id")
+        if not assignment_id:
+            return jsonify({"success": False, "error": "assignment_id is required"}), 400
+        if not session_id:
+            return jsonify({"success": False, "error": "session_id is required"}), 400
+
+        return jsonify(
+            bind_session_node_assignment(
+                allocator=allocator,
+                assignment_id=assignment_id,
+                session_id=session_id,
+            )
+        )
+    except KeyError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except RuntimeError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 409
+    except Exception:
+        logger.exception("session_bootstrap_bind failed")
+        return jsonify(internal_error_payload()), 500
+
+
+# ---------------------------------------------------------------------------
+# POST /api/session/bootstrap/release
+# ---------------------------------------------------------------------------
+
+@session_bp.route("/bootstrap/release", methods=["POST"])
+def session_bootstrap_release():
+    """Release one bootstrap assignment after session failure or completion."""
+    try:
+        allocator = get_node_allocator()
+        if allocator is None:
+            return jsonify({"success": False, "error": "Node allocator is not configured"}), 503
+
+        data = require_json_object(request)
+        assignment_id = _read_text_field(data, "assignment_id")
+        if not assignment_id:
+            return jsonify({"success": False, "error": "assignment_id is required"}), 400
+
+        return jsonify(
+            release_session_node_assignment(
+                allocator=allocator,
+                assignment_id=assignment_id,
+            )
+        )
+    except KeyError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except RuntimeError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 409
+    except Exception:
+        logger.exception("session_bootstrap_release failed")
+        return jsonify(internal_error_payload()), 500
 
 
 # ---------------------------------------------------------------------------

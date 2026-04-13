@@ -106,6 +106,7 @@ Local reverse client -> tls://customer-node.example.com:9000 -> reverse_server
 Repository templates for this pattern:
 
 - `scripts/local_zone/Caddyfile.example`
+- `scripts/local_zone/aws_launch_smoke_test.py`
 - `scripts/local_zone/start_edge_proxy.ps1`
 - `scripts/local_zone/test_edge_health.ps1`
 - `scripts/local_zone/deploy_customer_node.ps1`
@@ -114,6 +115,76 @@ Repository templates for this pattern:
 - `scripts/local_zone/customer_node.env.example`
 - `scripts/local_zone/README.md`
 - `agent_docs/ops/aws_local_zone_customer_node.md`
+
+### Node allocation and readiness env
+
+When running the automated Local Zone node-allocation MVP, configure these env vars on the control-plane API process:
+
+- `DIAGNOSTIC_NODE_INVENTORY_FILE`: shared JSON inventory path for node state
+- `DIAGNOSTIC_NODE_LEASE_FILE`: shared JSON lease path for assignment state
+- `DIAGNOSTIC_AWS_REGION`: AWS region used to create the EC2 client
+- `DIAGNOSTIC_NODE_LAUNCH_TEMPLATE`: EC2 launch template name for one worker node
+- `DIAGNOSTIC_NODE_INSTANCE_TYPE`: instance type for cold-start launches
+- `DIAGNOSTIC_NODE_SUBNET_ID`: subnet id for the target Local Zone
+- `DIAGNOSTIC_NODE_SECURITY_GROUP_IDS`: optional comma-separated security group ids
+- `DIAGNOSTIC_NODE_DEFAULT_ZONE`: default Local Zone placement such as `us-west-2-lax-1a`
+- `DIAGNOSTIC_NODE_DEFAULT_METRO`: default metro label such as `los-angeles`
+- `DIAGNOSTIC_NODE_DEFAULT_API_BASE`: default node API base used in returned assignments and readiness checks
+- `DIAGNOSTIC_NODE_DEFAULT_TUNNEL_HOST`: default reverse-tunnel host for the assigned node
+- `DIAGNOSTIC_NODE_READINESS_ENABLED`: set to `1` to enable background polling for booting nodes
+- `DIAGNOSTIC_NODE_READINESS_INTERVAL_SEC`: optional polling interval in seconds
+- `DIAGNOSTIC_NODE_READINESS_TIMEOUT_SEC`: optional HTTP timeout for the readiness probe
+- `DIAGNOSTIC_NODE_READINESS_PATH`: optional probe path, defaults to `/api/session/bootstrap/ready`
+- `DIAGNOSTIC_NODE_READINESS_API_TOKEN`: optional API token sent only by the readiness probe; if omitted, the monitor falls back to `DIAGNOSTIC_API_TOKEN`
+- `DIAGNOSTIC_NODE_ZONE_CATALOG_JSON`: optional multi-zone routing catalog as JSON
+- `DIAGNOSTIC_NODE_ZONE_CATALOG_FILE`: optional path to a JSON catalog file such as `scripts/local_zone/zone_catalog.example.json`
+
+Single-zone mode:
+
+- use `DIAGNOSTIC_NODE_SUBNET_ID`, `DIAGNOSTIC_NODE_DEFAULT_ZONE`, `DIAGNOSTIC_NODE_DEFAULT_METRO`, `DIAGNOSTIC_NODE_DEFAULT_API_BASE`, and `DIAGNOSTIC_NODE_DEFAULT_TUNNEL_HOST`
+
+Multi-zone mode:
+
+- keep `DIAGNOSTIC_AWS_REGION`, `DIAGNOSTIC_NODE_LAUNCH_TEMPLATE`, and usually `DIAGNOSTIC_NODE_INSTANCE_TYPE` as shared defaults
+- put per-zone fields in the zone catalog
+- each catalog entry can override:
+  - `zone`
+  - `metro`
+  - `subnet_id`
+  - `api_base_url`
+  - `tunnel_host`
+  - optional `instance_type`
+  - optional `launch_template_name`
+  - optional `security_group_ids`
+- each catalog entry can also carry routing hints such as `time_zones` and `cities`
+
+Resolver behavior:
+
+- exact `preferred_zone` match first
+- then exact `preferred_metro`
+- when explicit route input is missing, infer `preferred_metro` from client hints such as `client_time_zone` or `client_city`
+- then `DIAGNOSTIC_NODE_DEFAULT_ZONE`
+- then `DIAGNOSTIC_NODE_DEFAULT_METRO`
+- otherwise the first catalog entry
+
+Current MVP behavior:
+
+- the control-plane API allocates or launches nodes through `/api/session/bootstrap`
+- new nodes stay `BOOTING` until the background readiness monitor can reach `/api/session/bootstrap/ready`
+- once the probe succeeds, the node is promoted to healthy idle capacity and becomes allocatable on the next bootstrap retry
+
+For pre-production AWS validation, use:
+
+```bash
+python scripts/local_zone/aws_launch_smoke_test.py
+```
+
+Behavior:
+
+- default mode uses EC2 `DryRun` and confirms credentials plus launch permissions
+- when a zone catalog is configured, the smoke test can validate route inference with flags such as `--client-time-zone "America/Chicago"` before the EC2 call
+- `--live` performs a real `RunInstances` call
+- live mode terminates the created instance immediately unless `--keep-instance` is passed
 
 ### Temporary public-debug mode
 

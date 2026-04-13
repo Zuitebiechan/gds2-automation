@@ -410,9 +410,18 @@ def test_on_diagnostics_opens_window_with_expected_api_base(monkeypatch, tmp_pat
     fake_diagnostics_module = types.ModuleType("vci_proxy.diagnostics_window")
 
     class _FakeDiagnosticsWindow:
-        def __init__(self, api_base: str, *, api_token: str = ""):
+        def __init__(
+            self,
+            api_base: str,
+            *,
+            api_token: str = "",
+            use_session_bootstrap: bool = False,
+            node_assignment_callback=None,
+        ):
             opened["api_base"] = api_base
             opened["api_token"] = api_token
+            opened["use_session_bootstrap"] = use_session_bootstrap
+            opened["has_node_assignment_callback"] = callable(node_assignment_callback)
 
         def show(self) -> None:
             opened["shown"] = True
@@ -442,6 +451,8 @@ def test_on_diagnostics_opens_window_with_expected_api_base(monkeypatch, tmp_pat
     assert opened == {
         "api_base": "http://127.0.0.1:8080",
         "api_token": "",
+        "use_session_bootstrap": True,
+        "has_node_assignment_callback": True,
         "shown": True,
     }
 
@@ -453,9 +464,18 @@ def test_on_diagnostics_supports_https_and_api_token(monkeypatch, tmp_path) -> N
     fake_diagnostics_module = types.ModuleType("vci_proxy.diagnostics_window")
 
     class _FakeDiagnosticsWindow:
-        def __init__(self, api_base: str, *, api_token: str = ""):
+        def __init__(
+            self,
+            api_base: str,
+            *,
+            api_token: str = "",
+            use_session_bootstrap: bool = False,
+            node_assignment_callback=None,
+        ):
             opened["api_base"] = api_base
             opened["api_token"] = api_token
+            opened["use_session_bootstrap"] = use_session_bootstrap
+            opened["has_node_assignment_callback"] = callable(node_assignment_callback)
 
         def show(self) -> None:
             opened["shown"] = True
@@ -490,5 +510,89 @@ def test_on_diagnostics_supports_https_and_api_token(monkeypatch, tmp_path) -> N
     assert opened == {
         "api_base": "https://cust001.diag.example.com:443",
         "api_token": "api-secret",
+        "use_session_bootstrap": True,
+        "has_node_assignment_callback": True,
         "shown": True,
     }
+
+
+def test_start_client_prefers_active_assigned_host(monkeypatch, tmp_path) -> None:
+    client_gui = _import_client_gui(monkeypatch, tmp_path)
+    observed: dict[str, object] = {}
+
+    class _FakeClient:
+        def __init__(self, server_host, server_port, dll_path, config, on_status_change):
+            observed["server_host"] = server_host
+            observed["server_port"] = server_port
+            observed["dll_path"] = dll_path
+            observed["config"] = config
+            observed["on_status_change"] = on_status_change
+
+        async def connect_and_serve(self):
+            observed["served"] = True
+
+        def stop(self):
+            return None
+
+    class _FakeProxyConfig:
+        @classmethod
+        def from_args(cls, **kwargs):
+            observed["proxy_config_kwargs"] = kwargs
+            return {"proxy_config": kwargs}
+
+    class _ImmediateThread:
+        def __init__(self, target=None, daemon=None, name=None):
+            self.target = target
+            self.daemon = daemon
+            self.name = name
+
+        def is_alive(self) -> bool:
+            return False
+
+        def start(self):
+            if self.target is not None:
+                self.target()
+
+    monkeypatch.setattr(client_gui, "ReverseProxyClient", _FakeClient)
+    monkeypatch.setattr(client_gui, "ProxyConfig", _FakeProxyConfig)
+    monkeypatch.setattr(client_gui.threading, "Thread", _ImmediateThread)
+
+    app = client_gui.VCIProxyTrayApp()
+    app._config = {
+        "host": "bootstrap.diag.example.com",
+        "port": 9000,
+        "api_scheme": "https",
+        "api_port": 443,
+        "api_token": "api-secret",
+        "auth_token": "shared-secret",
+        "dll_path": "",
+        "tls_enabled": False,
+        "tls_ca_file": "",
+        "tls_server_name": "",
+    }
+    app._active_node_assignment = {
+        "tunnel_host": "lax-1.diag.example.com",
+        "api_base_url": "https://lax-1.diag.example.com:443",
+    }
+
+    app._start_client()
+
+    assert observed["server_host"] == "lax-1.diag.example.com"
+    assert observed["server_port"] == 9000
+
+
+def test_on_node_assignment_none_clears_active_assignment_and_restarts(monkeypatch, tmp_path) -> None:
+    client_gui = _import_client_gui(monkeypatch, tmp_path)
+    restarted: list[bool] = []
+
+    app = client_gui.VCIProxyTrayApp()
+    app._active_node_assignment = {
+        "tunnel_host": "lax-1.diag.example.com",
+        "api_base_url": "https://lax-1.diag.example.com:443",
+    }
+    app._restart_client = lambda: restarted.append(True)
+
+    app._on_node_assignment(None)
+
+    assert app._active_node_assignment is None
+    assert restarted == [True]

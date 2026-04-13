@@ -10,6 +10,8 @@ customer node where:
 Files:
 
 - `Caddyfile.example`: sample Caddy reverse-proxy config for `EDGE_DOMAIN`
+- `aws_launch_smoke_test.py`: validates AWS identity and tests one Local Zone EC2 launch request
+- `zone_catalog.example.json`: example multi-zone routing catalog for Dallas, Atlanta, and Los Angeles
 - `start_edge_proxy.ps1`: starts Caddy with the sample config
 - `test_edge_health.ps1`: checks both loopback Flask and the public HTTPS edge
 - `deploy_customer_node.ps1`: starts cloud services, starts the edge proxy, and runs health checks
@@ -54,4 +56,66 @@ Example:
 $env:EDGE_DOMAIN = "cust001.diag.example.com"
 .\scripts\local_zone\start_edge_proxy.ps1 -Background
 .\scripts\local_zone\test_edge_health.ps1
+```
+
+AWS launch smoke test:
+
+```powershell
+pip install -r requirements-cloud.txt
+$env:DIAGNOSTIC_AWS_REGION = "us-west-2"
+$env:DIAGNOSTIC_NODE_LAUNCH_TEMPLATE = "diag-local-zone-worker"
+$env:DIAGNOSTIC_NODE_INSTANCE_TYPE = "m6i.xlarge"
+$env:DIAGNOSTIC_NODE_SUBNET_ID = "subnet-12345"
+$env:DIAGNOSTIC_NODE_DEFAULT_ZONE = "us-west-2-lax-1a"
+$env:DIAGNOSTIC_NODE_DEFAULT_METRO = "los-angeles"
+$env:DIAGNOSTIC_NODE_DEFAULT_API_BASE = "https://lax-1.diag.example.com"
+$env:DIAGNOSTIC_NODE_DEFAULT_TUNNEL_HOST = "lax-1.diag.example.com"
+python .\scripts\local_zone\aws_launch_smoke_test.py
+```
+
+Default behavior is EC2 `DryRun`.
+
+For multi-zone allocation, prefer a catalog file instead of one global subnet:
+
+```powershell
+$env:DIAGNOSTIC_NODE_ZONE_CATALOG_FILE = "$PWD\\scripts\\local_zone\\zone_catalog.example.json"
+```
+
+Each zone entry can point at a different:
+
+- `subnet_id`
+- `api_base_url`
+- `tunnel_host`
+- optional `instance_type`
+- optional `security_group_ids`
+- optional routing hints such as `time_zones` and `cities`
+
+You can now validate route selection before a real launch by passing user hints:
+
+```powershell
+$env:DIAGNOSTIC_NODE_ZONE_CATALOG_FILE = "$PWD\\scripts\\local_zone\\zone_catalog.example.json"
+python .\scripts\local_zone\aws_launch_smoke_test.py --client-time-zone "America/Chicago"
+```
+
+That command will print the resolved metro and zone before the EC2 request.
+
+To do a real launch and automatically terminate the instance right after the launch call succeeds:
+
+```powershell
+python .\scripts\local_zone\aws_launch_smoke_test.py --live
+```
+
+To keep the launched instance for inspection:
+
+```powershell
+python .\scripts\local_zone\aws_launch_smoke_test.py --live --keep-instance
+```
+
+You can also combine both modes:
+
+```powershell
+python .\scripts\local_zone\aws_launch_smoke_test.py `
+  --zone-catalog-file .\scripts\local_zone\zone_catalog.example.json `
+  --client-time-zone "America/Chicago" `
+  --live
 ```

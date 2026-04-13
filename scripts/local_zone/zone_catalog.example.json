@@ -1,0 +1,54 @@
+{
+  "zones": [
+    {
+      "zone": "us-east-1-dfw-2a",
+      "metro": "dallas",
+      "subnet_id": "subnet-replace-dallas",
+      "api_base_url": "https://dfw.diag.example.com",
+      "tunnel_host": "dfw.diag.example.com",
+      "time_zones": [
+        "America/Chicago"
+      ],
+      "cities": [
+        "Dallas",
+        "Fort Worth"
+      ],
+      "security_group_ids": [
+        "sg-replace-dallas"
+      ]
+    },
+    {
+      "zone": "us-east-1-atl-2a",
+      "metro": "atlanta",
+      "subnet_id": "subnet-replace-atlanta",
+      "api_base_url": "https://atl.diag.example.com",
+      "tunnel_host": "atl.diag.example.com",
+      "time_zones": [
+        "America/New_York"
+      ],
+      "cities": [
+        "Atlanta"
+      ],
+      "security_group_ids": [
+        "sg-replace-atlanta"
+      ]
+    },
+    {
+      "zone": "us-west-2-lax-1a",
+      "metro": "los-angeles",
+      "subnet_id": "subnet-replace-los-angeles",
+      "api_base_url": "https://lax.diag.example.com",
+      "tunnel_host": "lax.diag.example.com",
+      "time_zones": [
+        "America/Los_Angeles"
+      ],
+      "cities": [
+        "Los Angeles",
+        "Long Beach"
+      ],
+      "security_group_ids": [
+        "sg-replace-los-angeles"
+      ]
+    }
+  ]
+}

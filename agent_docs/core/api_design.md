@@ -87,6 +87,10 @@ This is the business-session API.
 
 Current routes:
 
+- `GET /api/session/bootstrap/ready`
+- `POST /api/session/bootstrap`
+- `POST /api/session/bootstrap/bind`
+- `POST /api/session/bootstrap/release`
 - `POST /api/session/start`
 - `POST /api/session/start_diagnostics`
 - `POST /api/session/execute`
@@ -112,6 +116,10 @@ Current routes:
 
 ### Key semantics
 
+- `/bootstrap/ready` is the lightweight readiness probe used by booting-node monitors
+- `/bootstrap` allocates one existing hot-pool node or returns `202 capacity_pending` while cold-start capacity is still booting
+- `/bootstrap/bind` associates one earlier node assignment with the concrete business session id after `/start` succeeds on the assigned node
+- `/bootstrap/release` returns one unused or completed assignment back to the idle pool
 - `/start` creates the business session and may return `awaiting_decision`
 - `/start_diagnostics` performs backend startup and tunnel-quality preflight
 - `/decision` is shared by backend-selection, network-override, and branch-resolution gates

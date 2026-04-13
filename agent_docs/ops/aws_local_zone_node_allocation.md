@@ -195,6 +195,15 @@ Recommended inputs for the allocator:
 - supported instance types in that Local Zone
 - business rules such as "prefer same metro during business hours"
 
+Implementation note for this repository:
+
+- do not model subnet, node API base, or tunnel host as one global value for every customer
+- keep a per-zone catalog instead
+- the current code supports a zone catalog through `DIAGNOSTIC_NODE_ZONE_CATALOG_JSON` or `DIAGNOSTIC_NODE_ZONE_CATALOG_FILE`
+- each catalog entry should describe one Local Zone's `zone`, `metro`, `subnet_id`, `api_base_url`, `tunnel_host`, and any per-zone overrides such as `instance_type`
+- catalog entries can also include routing hints such as `time_zones` and `cities`, so the control plane can infer the nearest metro from client-side hints like `client_time_zone` or `client_city`
+- the AWS smoke-test helper can now validate this route inference before launch by passing `--client-time-zone` or `--client-city`
+
 Useful AWS discovery mechanisms:
 
 - list Local Zones for an account:

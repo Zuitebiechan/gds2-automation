@@ -163,6 +163,283 @@ def test_request_headers_omit_api_token_when_missing() -> None:
     assert window._request_headers() == {}
 
 
+def test_on_session_start_clicked_uses_bootstrap_when_enabled() -> None:
+    window = DiagnosticsWindow.__new__(DiagnosticsWindow)
+    calls: list[tuple[str, str, dict[str, object]]] = []
+    messages: list[tuple[str, str]] = []
+    window._session_brand = _Var("Chevrolet")
+    window._session_start_button = _Widget()
+    window._start_button = _Widget()
+    window._session_status_var = _Var("")
+    window._use_session_bootstrap = True
+    window._append_agent_message = lambda role, message: messages.append((role, message))
+    window._build_session_start_payload = lambda brand: {
+        "brand": brand,
+        "client_time_zone": "America/Chicago",
+    }
+    window._api_call = lambda method, endpoint, **kwargs: calls.append((method, endpoint, kwargs))
+
+    window._on_session_start_clicked()
+
+    assert window._session_status_var.get() == "Starting session..."
+    assert calls == [
+        (
+            "POST",
+            "/api/session/bootstrap",
+            {
+                "json_data": {
+                    "brand": "Chevrolet",
+                    "client_time_zone": "America/Chicago",
+                },
+                "callback_event": "session_bootstrap_result",
+            },
+        )
+    ]
+
+
+def test_build_session_start_payload_includes_client_time_zone_hint_when_available(monkeypatch) -> None:
+    window = DiagnosticsWindow.__new__(DiagnosticsWindow)
+    monkeypatch.setattr(window, "_client_time_zone_hint", lambda: "America/Chicago")
+
+    payload = window._build_session_start_payload("Chevrolet")
+
+    assert payload == {
+        "brand": "Chevrolet",
+        "client_time_zone": "America/Chicago",
+    }
+
+
+def test_handle_session_bootstrap_result_switches_api_base_and_starts_session() -> None:
+    window = DiagnosticsWindow.__new__(DiagnosticsWindow)
+    calls: list[tuple[str, str, dict[str, object]]] = []
+    assignments: list[dict[str, object]] = []
+    messages: list[tuple[str, str]] = []
+    window._api_base = "https://entry.diag.example.com"
+    window._server_display = "entry.diag.example.com"
+    window._server_state_text = _Var("Server: entry.diag.example.com")
+    window._session_brand = _Var("Chevrolet")
+    window._session_start_button = _Widget()
+    window._start_button = _Widget()
+    window._session_status_var = _Var("")
+    window._node_assignment_callback = lambda assignment: assignments.append(assignment)
+    window._append_agent_message = lambda role, message: messages.append((role, message))
+    window._api_call = lambda method, endpoint, **kwargs: calls.append((method, endpoint, kwargs))
+
+    payload = {
+        "success": True,
+        "assignment": {
+            "assignment_id": "assign-123",
+            "node_id": "node-lax-1",
+            "zone": "us-west-2-lax-1a",
+            "metro": "los-angeles",
+            "api_base_url": "https://lax-1.diag.example.com",
+            "tunnel_host": "lax-1.diag.example.com",
+            "selection_reason": "preferred_zone",
+        },
+        "session_context": {
+            "brand": "Chevrolet",
+            "model": "Malibu",
+            "vin": "VIN123",
+            "backend_name": "",
+            "extra": {},
+        },
+        "next_action": "start_session_on_assigned_node",
+    }
+
+    window._handle_session_bootstrap_result(payload)
+
+    assert window._api_base == "https://lax-1.diag.example.com"
+    assert window._server_display == "lax-1.diag.example.com"
+    assert window._server_state_text.get() == "Server: lax-1.diag.example.com"
+    assert assignments == [payload["assignment"]]
+    assert calls == [
+        (
+            "POST",
+            "/api/session/start",
+            {
+                "json_data": {
+                    "brand": "Chevrolet",
+                    "model": "Malibu",
+                    "vin": "VIN123",
+                    "backend_name": "",
+                },
+                "callback_event": "session_start_result",
+            },
+        )
+    ]
+
+
+def test_handle_session_start_result_binds_active_assignment_via_bootstrap_api() -> None:
+    window = DiagnosticsWindow.__new__(DiagnosticsWindow)
+    bootstrap_calls: list[tuple[str, str, dict[str, object]]] = []
+    window._session_start_button = _Widget()
+    window._session_abort_button = _Widget()
+    window._start_button = _Widget()
+    window._select_data_category_button = _Widget()
+    window._session_status_var = _Var("")
+    window._session_hint_var = _Var("")
+    window._server_state_text = _Var("Server: lax-1.diag.example.com")
+    window._agent_messages = []
+    window._append_agent_message = lambda role, message: window._agent_messages.append((role, message))
+    window._set_current_page = lambda page: setattr(window, "_current_page", page)
+    window._set_agent_prompt = lambda *args, **kwargs: None
+    window._refresh_action_buttons = lambda: None
+    window._prompt_decision = lambda decision: False
+    window._show_decision_modal = lambda decision: None
+    window._start_session_sse_thread = lambda session_id: setattr(window, "_session_sse_started", session_id)
+    window._request_session_status_refresh = lambda: setattr(window, "_status_refresh_requested", True)
+    window._bootstrap_api_base = "https://entry.diag.example.com"
+    window._active_assignment = {
+        "assignment_id": "assign-123",
+        "api_base_url": "https://lax-1.diag.example.com",
+        "tunnel_host": "lax-1.diag.example.com",
+    }
+    window._api_call_to_base = lambda base_url, method, endpoint, **kwargs: bootstrap_calls.append(
+        (base_url, endpoint, kwargs)
+    )
+
+    window._handle_session_start_result(
+        {
+            "success": True,
+            "session_id": "session-123",
+            "status": "running",
+            "workflow": "gds2",
+        }
+    )
+
+    assert bootstrap_calls == [
+        (
+            "https://entry.diag.example.com",
+            "/api/session/bootstrap/bind",
+            {
+                "json_data": {
+                    "assignment_id": "assign-123",
+                    "session_id": "session-123",
+                },
+                "callback_event": "session_bootstrap_bind_result",
+            },
+        )
+    ]
+
+
+def test_handle_session_done_releases_assignment_and_restores_bootstrap_base() -> None:
+    window = DiagnosticsWindow.__new__(DiagnosticsWindow)
+    release_calls: list[tuple[str, str, dict[str, object]]] = []
+    assignment_events: list[object] = []
+    window._session_start_button = _Widget()
+    window._session_abort_button = _Widget()
+    window._start_button = _Widget()
+    window._select_data_category_button = _Widget()
+    window._session_status_var = _Var("")
+    window._session_hint_var = _Var("")
+    window._server_state_text = _Var("Server: lax-1.diag.example.com")
+    window._append_agent_message = lambda role, message: None
+    window._stop_session_sse_thread = lambda: None
+    window._close_decision_modal = lambda: None
+    window._set_agent_prompt = lambda *args, **kwargs: None
+    window._set_current_page = lambda page: setattr(window, "_current_page", page)
+    window._refresh_action_buttons = lambda: None
+    window._node_assignment_callback = lambda assignment: assignment_events.append(assignment)
+    window._api_base = "https://lax-1.diag.example.com"
+    window._server_display = "lax-1.diag.example.com"
+    window._bootstrap_api_base = "https://entry.diag.example.com"
+    window._active_assignment = {
+        "assignment_id": "assign-123",
+        "api_base_url": "https://lax-1.diag.example.com",
+        "tunnel_host": "lax-1.diag.example.com",
+    }
+    window._api_call_to_base = lambda base_url, method, endpoint, **kwargs: release_calls.append(
+        (base_url, endpoint, kwargs)
+    )
+
+    window._handle_session_done({"success": True})
+
+    assert release_calls == [
+        (
+            "https://entry.diag.example.com",
+            "/api/session/bootstrap/release",
+            {
+                "json_data": {"assignment_id": "assign-123"},
+                "callback_event": "session_bootstrap_release_result",
+            },
+        )
+    ]
+    assert window._api_base == "https://entry.diag.example.com"
+    assert window._server_display == "entry.diag.example.com"
+    assert window._server_state_text.get() == "Server: entry.diag.example.com"
+    assert assignment_events == [None]
+
+
+def test_handle_session_bootstrap_result_falls_back_to_direct_start_when_bootstrap_is_unavailable() -> None:
+    window = DiagnosticsWindow.__new__(DiagnosticsWindow)
+    calls: list[tuple[str, str, dict[str, object]]] = []
+    messages: list[tuple[str, str]] = []
+    window._api_base = "https://direct-node.diag.example.com"
+    window._session_brand = _Var("Chevrolet")
+    window._session_start_button = _Widget()
+    window._start_button = _Widget()
+    window._session_status_var = _Var("")
+    window._use_session_bootstrap = True
+    window._append_agent_message = lambda role, message: messages.append((role, message))
+    window._api_call = lambda method, endpoint, **kwargs: calls.append((method, endpoint, kwargs))
+    window._handle_session_start_result = lambda payload: calls.append(("HANDLER", "session_start_result", {"payload": payload}))
+
+    window._handle_session_bootstrap_result(
+        {
+            "success": False,
+            "error": "Node allocator is not configured",
+        }
+    )
+
+    assert window._use_session_bootstrap is False
+    assert calls == [
+        (
+            "POST",
+            "/api/session/start",
+            {
+                "json_data": {"brand": "Chevrolet"},
+                "callback_event": "session_start_result",
+            },
+        )
+    ]
+
+
+def test_handle_session_bootstrap_result_handles_capacity_pending_without_fallback() -> None:
+    window = DiagnosticsWindow.__new__(DiagnosticsWindow)
+    calls: list[tuple[str, str, dict[str, object]]] = []
+    messages: list[tuple[str, str]] = []
+    window._session_start_button = _Widget()
+    window._start_button = _Widget()
+    window._session_status_var = _Var("")
+    window._session_hint_var = _Var("")
+    window._use_session_bootstrap = True
+    window._append_agent_message = lambda role, message: messages.append((role, message))
+    window._api_call = lambda method, endpoint, **kwargs: calls.append((method, endpoint, kwargs))
+    window._set_session_hint = lambda message: window._session_hint_var.set(message)
+
+    window._handle_session_bootstrap_result(
+        {
+            "success": True,
+            "pending_capacity": True,
+            "status": "capacity_pending",
+            "retry_after_sec": 30,
+            "next_action": "retry_session_bootstrap",
+            "provisioning": {
+                "node_id": "i-0abc123",
+                "zone": "us-west-2-lax-1a",
+                "metro": "los-angeles",
+                "state": "booting",
+            },
+        }
+    )
+
+    assert window._session_start_button.state == tk.NORMAL
+    assert window._start_button.state == tk.DISABLED
+    assert window._session_status_var.get() == "Capacity is starting in the target zone. Please retry shortly."
+    assert "retry" in window._session_hint_var.get().lower()
+    assert calls == []
+
+
 def test_api_call_sends_api_token_header(monkeypatch) -> None:
     captured: dict[str, object] = {}
     window = DiagnosticsWindow.__new__(DiagnosticsWindow)

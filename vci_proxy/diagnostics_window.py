@@ -15,8 +15,9 @@ import queue
 import re
 import threading
 import tkinter as tk
+from datetime import datetime
 from tkinter import ttk, messagebox
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from urllib.parse import urlparse
 
 import requests
@@ -28,11 +29,22 @@ class DiagnosticsWindow:
     POLL_INTERVAL_MS = 100
     SESSION_STATUS_POLL_INTERVAL_MS = 1500
 
-    def __init__(self, api_base_url: str, *, api_token: str = ""):
+    def __init__(
+        self,
+        api_base_url: str,
+        *,
+        api_token: str = "",
+        use_session_bootstrap: bool = False,
+        node_assignment_callback: Callable[[dict[str, Any]], None] | None = None,
+    ):
         self._api_base = api_base_url.rstrip("/")
         self._api_token = str(api_token or "").strip()
         parsed = urlparse(self._api_base)
         self._server_display = parsed.netloc or self._api_base
+        self._use_session_bootstrap = bool(use_session_bootstrap)
+        self._node_assignment_callback = node_assignment_callback
+        self._bootstrap_api_base = self._api_base
+        self._active_assignment: dict[str, Any] | None = None
 
         self._queue: queue.Queue[tuple[str, dict[str, Any]]] = queue.Queue()
 
@@ -106,6 +118,35 @@ class DiagnosticsWindow:
         if not self._api_token:
             return {}
         return {"X-API-Token": self._api_token}
+
+    def _client_time_zone_hint(self) -> str:
+        """Return one best-effort client time zone hint for bootstrap routing."""
+        try:
+            local_now = datetime.now().astimezone()
+        except Exception:
+            return ""
+
+        tzinfo = local_now.tzinfo
+        if tzinfo is None:
+            return ""
+
+        for attr_name in ("key", "zone"):
+            value = str(getattr(tzinfo, attr_name, "") or "").strip()
+            if value:
+                return value
+
+        try:
+            value = str(local_now.tzname() or "").strip()
+        except Exception:
+            value = ""
+        return value
+
+    def _build_session_start_payload(self, brand: str) -> dict[str, Any]:
+        payload: dict[str, Any] = {"brand": brand}
+        client_time_zone = self._client_time_zone_hint()
+        if client_time_zone:
+            payload["client_time_zone"] = client_time_zone
+        return payload
 
     # ------------------------------------------------------------------
     # Window lifecycle
@@ -523,9 +564,28 @@ class DiagnosticsWindow:
         callback_event: str = "api_result",
     ) -> None:
         """Make API call in background thread and post result to queue."""
+        self._api_call_to_base(
+            self._api_base,
+            method,
+            endpoint,
+            json_data=json_data,
+            query_params=query_params,
+            callback_event=callback_event,
+        )
+
+    def _api_call_to_base(
+        self,
+        base_url: str,
+        method: str,
+        endpoint: str,
+        json_data: Optional[dict[str, Any]] = None,
+        query_params: Optional[dict[str, Any]] = None,
+        callback_event: str = "api_result",
+    ) -> None:
+        """Make one API call against an explicit base URL."""
 
         def _worker() -> None:
-            url = f"{self._api_base}/{endpoint.lstrip('/')}"
+            url = f"{base_url.rstrip('/')}/{endpoint.lstrip('/')}"
             try:
                 headers = self._request_headers() or None
                 if method.upper() == "POST":
@@ -615,6 +675,8 @@ class DiagnosticsWindow:
             self._handle_ai_error(data)
         elif event == "ai_done":
             self._handle_ai_done(data)
+        elif event == "session_bootstrap_result":
+            self._handle_session_bootstrap_result(data)
         elif event == "session_start_result":
             self._handle_session_start_result(data)
         elif event == "session_start_exec_result":
@@ -2111,11 +2173,18 @@ class DiagnosticsWindow:
         self._start_button.configure(state=tk.DISABLED)
         self._session_status_var.set("Starting session...")
         self._append_agent_message("user", f"Start Session (brand={brand})")
+        endpoint = "/api/session/start"
+        callback_event = "session_start_result"
+        payload = {"brand": brand}
+        if getattr(self, "_use_session_bootstrap", False):
+            endpoint = "/api/session/bootstrap"
+            callback_event = "session_bootstrap_result"
+            payload = self._build_session_start_payload(brand)
         self._api_call(
             "POST",
-            "/api/session/start",
-            json_data={"brand": brand},
-            callback_event="session_start_result",
+            endpoint,
+            json_data=payload,
+            callback_event=callback_event,
         )
 
     def _on_session_abort_clicked(self) -> None:
@@ -2136,8 +2205,147 @@ class DiagnosticsWindow:
     # Session flow: event handlers
     # ------------------------------------------------------------------
 
+    def _switch_api_base(self, api_base_url: str) -> None:
+        self._api_base = api_base_url.rstrip("/")
+        parsed = urlparse(self._api_base)
+        self._server_display = parsed.netloc or self._api_base
+        if hasattr(self, "_server_state_text"):
+            self._server_state_text.set(f"Server: {self._server_display}")
+
+    def _restore_bootstrap_base(self) -> None:
+        bootstrap_api_base = str(getattr(self, "_bootstrap_api_base", "") or "").strip()
+        if not bootstrap_api_base:
+            return
+        self._switch_api_base(bootstrap_api_base)
+
+    def _should_fallback_to_direct_start(self, payload: dict[str, Any]) -> bool:
+        if getattr(self, "_active_assignment", None):
+            return False
+        error_text = str(payload.get("error") or "").lower()
+        return any(
+            marker in error_text
+            for marker in (
+                "node allocator is not configured",
+                "http 404",
+                "http 405",
+                "non-json response (http 404)",
+                "non-json response (http 405)",
+            )
+        )
+
+    def _start_session_direct(self) -> None:
+        brand = self._session_brand.get().strip()
+        self._api_call(
+            "POST",
+            "/api/session/start",
+            json_data={"brand": brand},
+            callback_event="session_start_result",
+        )
+
+    def _bind_active_assignment(self, session_id: str) -> None:
+        assignment = getattr(self, "_active_assignment", None) or {}
+        bootstrap_api_base = str(getattr(self, "_bootstrap_api_base", "") or "").strip()
+        assignment_id = str(assignment.get("assignment_id") or "").strip()
+        if not assignment_id or not bootstrap_api_base:
+            return
+        self._api_call_to_base(
+            bootstrap_api_base,
+            "POST",
+            "/api/session/bootstrap/bind",
+            json_data={
+                "assignment_id": assignment_id,
+                "session_id": session_id,
+            },
+            callback_event="session_bootstrap_bind_result",
+        )
+
+    def _release_active_assignment(self) -> None:
+        assignment = getattr(self, "_active_assignment", None) or {}
+        bootstrap_api_base = str(getattr(self, "_bootstrap_api_base", "") or "").strip()
+        assignment_id = str(assignment.get("assignment_id") or "").strip()
+        if assignment_id and bootstrap_api_base:
+            self._api_call_to_base(
+                bootstrap_api_base,
+                "POST",
+                "/api/session/bootstrap/release",
+                json_data={"assignment_id": assignment_id},
+                callback_event="session_bootstrap_release_result",
+            )
+        self._active_assignment = None
+        callback = getattr(self, "_node_assignment_callback", None)
+        if callable(callback):
+            callback(None)
+        self._restore_bootstrap_base()
+
+    def _handle_session_bootstrap_result(self, payload: dict[str, Any]) -> None:
+        if not payload.get("success"):
+            if self._should_fallback_to_direct_start(payload):
+                self._use_session_bootstrap = False
+                self._start_session_direct()
+                return
+            self._handle_session_start_result(payload)
+            return
+
+        if payload.get("pending_capacity"):
+            retry_after = int(payload.get("retry_after_sec") or 30)
+            self._session_start_button.configure(state=tk.NORMAL)
+            self._start_button.configure(state=tk.DISABLED)
+            self._session_status_var.set(
+                "Capacity is starting in the target zone. Please retry shortly."
+            )
+            self._set_session_hint(
+                f"Target capacity is booting. Retry Start Session in about {retry_after} seconds."
+            )
+            provisioning = payload.get("provisioning") or {}
+            node_id = str(provisioning.get("node_id") or "").strip()
+            if node_id:
+                self._append_agent_message(
+                    "agent",
+                    f"Capacity is starting on node {node_id}. Please retry shortly.",
+                )
+            return
+
+        assignment = payload.get("assignment") or {}
+        api_base_url = str(assignment.get("api_base_url") or "").strip()
+        if not api_base_url:
+            self._handle_session_start_result(
+                {
+                    "success": False,
+                    "error": "Bootstrap response did not include api_base_url",
+                }
+            )
+            return
+
+        self._bootstrap_api_base = self._api_base
+        self._active_assignment = dict(assignment)
+        self._switch_api_base(api_base_url)
+        callback = getattr(self, "_node_assignment_callback", None)
+        if callable(callback):
+            callback(dict(assignment))
+
+        session_context = payload.get("session_context") or {}
+        start_payload = {
+            "brand": str(session_context.get("brand") or "").strip(),
+            "model": str(session_context.get("model") or "").strip(),
+            "vin": str(session_context.get("vin") or "").strip(),
+            "backend_name": str(session_context.get("backend_name") or "").strip(),
+        }
+        extra = session_context.get("extra") or {}
+        if isinstance(extra, dict):
+            start_payload.update(extra)
+
+        self._session_status_var.set("Node assigned. Starting session...")
+        self._api_call(
+            "POST",
+            "/api/session/start",
+            json_data=start_payload,
+            callback_event="session_start_result",
+        )
+
     def _handle_session_start_result(self, payload: dict[str, Any]) -> None:
         if not payload.get("success"):
+            if getattr(self, "_active_assignment", None):
+                self._release_active_assignment()
             self._session_start_button.configure(state=tk.NORMAL)
             self._start_button.configure(state=tk.DISABLED)
             self._session_status_var.set(
@@ -2185,6 +2393,7 @@ class DiagnosticsWindow:
 
         # Start SSE listener
         if self._session_id:
+            self._bind_active_assignment(self._session_id)
             self._start_session_sse_thread(self._session_id)
             self._request_session_status_refresh()
 
@@ -2238,6 +2447,8 @@ class DiagnosticsWindow:
         self._stop_session_sse_thread()
         self._close_decision_modal()
         self._set_agent_prompt(None, "", [])
+        if getattr(self, "_active_assignment", None):
+            self._release_active_assignment()
         aborted = payload.get("aborted", False)
         if aborted:
             reason = payload.get("reason", "")
