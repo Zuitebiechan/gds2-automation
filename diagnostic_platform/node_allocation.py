@@ -615,9 +615,34 @@ def build_zone_catalog_route_resolver(
                 return entry
         return None
 
+    def _resolve_default_route() -> dict[str, str]:
+        selected = _match_entry(default_zone, entry_key="zone_keys")
+        if selected is not None:
+            return {
+                "preferred_zone": str(selected["zone"]),
+                "preferred_metro": str(selected["metro"]),
+                "source": "default_zone",
+            }
+
+        selected = _match_entry(default_metro, entry_key="metro_keys")
+        if selected is not None:
+            return {
+                "preferred_zone": "",
+                "preferred_metro": str(selected["metro"]),
+                "source": "default_metro",
+            }
+
+        selected = normalized_entries[0]
+        return {
+            "preferred_zone": str(selected["zone"]),
+            "preferred_metro": str(selected["metro"]),
+            "source": "catalog_first",
+        }
+
     def _resolve(
         *,
         data: dict[str, Any],
+        include_fallbacks: bool = True,
     ) -> dict[str, str]:
         if not isinstance(data, dict):
             return {}
@@ -639,10 +664,10 @@ def build_zone_catalog_route_resolver(
             }
 
         for field_name, entry_key, is_time_zone in (
-            ("client_time_zone", "time_zone_keys", True),
-            ("organization_time_zone", "time_zone_keys", True),
             ("client_city", "city_keys", False),
+            ("client_time_zone", "time_zone_keys", True),
             ("organization_city", "city_keys", False),
+            ("organization_time_zone", "time_zone_keys", True),
         ):
             entry = _match_entry(
                 data.get(field_name),
@@ -656,7 +681,9 @@ def build_zone_catalog_route_resolver(
                     "source": field_name,
                 }
 
-        return {}
+        if not include_fallbacks:
+            return {}
+        return _resolve_default_route()
 
     return _resolve
 

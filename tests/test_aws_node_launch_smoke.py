@@ -232,3 +232,99 @@ def test_resolve_smoke_test_inputs_accepts_windows_time_zone_alias_for_catalog_r
         "preferred_metro": "dallas",
         "source": "client_time_zone",
     }
+
+
+def test_resolve_smoke_test_inputs_prefers_client_city_over_client_time_zone():
+    from diagnostic_platform.aws_node_launch_smoke import resolve_smoke_test_inputs
+
+    _region, spec, route = resolve_smoke_test_inputs(
+        environ={
+            "DIAGNOSTIC_AWS_REGION": "us-east-1",
+            "DIAGNOSTIC_NODE_LAUNCH_TEMPLATE": "diag-local-zone-worker",
+            "DIAGNOSTIC_NODE_INSTANCE_TYPE": "c6i.xlarge",
+            "DIAGNOSTIC_NODE_DEFAULT_ZONE": "us-east-1-dfw-2a",
+            "DIAGNOSTIC_NODE_DEFAULT_METRO": "dallas",
+            "DIAGNOSTIC_NODE_DEFAULT_API_BASE": "https://dfw.diag.example.com",
+            "DIAGNOSTIC_NODE_DEFAULT_TUNNEL_HOST": "dfw.diag.example.com",
+            "DIAGNOSTIC_NODE_ZONE_CATALOG_JSON": json.dumps(
+                {
+                    "zones": [
+                        {
+                            "zone": "us-east-1-dfw-2a",
+                            "metro": "dallas",
+                            "subnet_id": "subnet-dfw",
+                            "api_base_url": "https://dfw.diag.example.com",
+                            "tunnel_host": "dfw.diag.example.com",
+                            "time_zones": ["America/Chicago"],
+                        },
+                        {
+                            "zone": "us-east-1-atl-2a",
+                            "metro": "atlanta",
+                            "subnet_id": "subnet-atl",
+                            "api_base_url": "https://atl.diag.example.com",
+                            "tunnel_host": "atl.diag.example.com",
+                            "cities": ["Atlanta"],
+                        },
+                    ]
+                }
+            ),
+        },
+        overrides={
+            "client_city": "Atlanta",
+            "client_time_zone": "America/Chicago",
+        },
+    )
+
+    assert spec.zone == "us-east-1-atl-2a"
+    assert spec.metro == "atlanta"
+    assert route == {
+        "preferred_zone": "",
+        "preferred_metro": "atlanta",
+        "source": "client_city",
+    }
+
+
+def test_resolve_smoke_test_inputs_falls_back_to_default_zone_when_no_geo_signal_matches():
+    from diagnostic_platform.aws_node_launch_smoke import resolve_smoke_test_inputs
+
+    _region, spec, route = resolve_smoke_test_inputs(
+        environ={
+            "DIAGNOSTIC_AWS_REGION": "us-east-1",
+            "DIAGNOSTIC_NODE_LAUNCH_TEMPLATE": "diag-local-zone-worker",
+            "DIAGNOSTIC_NODE_INSTANCE_TYPE": "c6i.xlarge",
+            "DIAGNOSTIC_NODE_DEFAULT_ZONE": "us-east-1-dfw-2a",
+            "DIAGNOSTIC_NODE_DEFAULT_METRO": "dallas",
+            "DIAGNOSTIC_NODE_DEFAULT_API_BASE": "https://dfw.diag.example.com",
+            "DIAGNOSTIC_NODE_DEFAULT_TUNNEL_HOST": "dfw.diag.example.com",
+            "DIAGNOSTIC_NODE_ZONE_CATALOG_JSON": json.dumps(
+                {
+                    "zones": [
+                        {
+                            "zone": "us-east-1-atl-2a",
+                            "metro": "atlanta",
+                            "subnet_id": "subnet-atl",
+                            "api_base_url": "https://atl.diag.example.com",
+                            "tunnel_host": "atl.diag.example.com",
+                            "cities": ["Atlanta"],
+                        },
+                        {
+                            "zone": "us-east-1-dfw-2a",
+                            "metro": "dallas",
+                            "subnet_id": "subnet-dfw",
+                            "api_base_url": "https://dfw.diag.example.com",
+                            "tunnel_host": "dfw.diag.example.com",
+                        },
+                    ]
+                }
+            ),
+        },
+        overrides={},
+    )
+
+    assert spec.zone == "us-east-1-dfw-2a"
+    assert spec.metro == "dallas"
+    assert route == {
+        "preferred_zone": "us-east-1-dfw-2a",
+        "preferred_metro": "dallas",
+        "source": "default_zone",
+    }

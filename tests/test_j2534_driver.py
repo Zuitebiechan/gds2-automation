@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import struct
 import sys
 import types
 
 import pytest
 
 import vci_proxy.j2534_driver as driver_module
-from vci_proxy.j2534_driver import J2534Driver, PASSTHRU_MSG, discover_j2534_drivers
+from vci_proxy.j2534_driver import (
+    J2534Driver,
+    PASSTHRU_MSG,
+    discover_j2534_drivers,
+    get_dll_architecture,
+)
 
 
 def test_passthru_msg_round_trip_preserves_fields() -> None:
@@ -96,6 +102,24 @@ def test_discover_j2534_drivers_deduplicates_paths_and_prefers_scanmatik(monkeyp
     assert drivers[0]["name"] == "SM3"
 
 
+def test_get_dll_architecture_reports_x86_and_x64(tmp_path) -> None:
+    def _write_pe(path, machine: int) -> None:
+        data = bytearray(256)
+        data[:2] = b"MZ"
+        struct.pack_into("<I", data, 0x3C, 0x80)
+        data[0x80:0x84] = b"PE\0\0"
+        struct.pack_into("<H", data, 0x84, machine)
+        path.write_bytes(data)
+
+    x86_path = tmp_path / "driver32.dll"
+    x64_path = tmp_path / "driver64.dll"
+    _write_pe(x86_path, 0x014C)
+    _write_pe(x64_path, 0x8664)
+
+    assert get_dll_architecture(str(x86_path)) == "x86"
+    assert get_dll_architecture(str(x64_path)) == "x64"
+
+
 def test_j2534_driver_prefers_discovered_path_before_fallback(monkeypatch) -> None:
     class _FakeFn:
         def __call__(self, *args, **kwargs):
@@ -132,3 +156,19 @@ def test_j2534_driver_raises_when_no_driver_path_can_be_loaded(monkeypatch) -> N
 
     with pytest.raises(RuntimeError, match="J2534 DLL"):
         J2534Driver()
+
+
+def test_j2534_driver_reports_bitness_mismatch_for_explicit_dll(monkeypatch) -> None:
+    dll_path = r"C:\drivers\scanmatik.dll"
+
+    monkeypatch.setattr(driver_module.os.path, "exists", lambda path: path == dll_path)
+    monkeypatch.setattr(driver_module, "get_python_architecture", lambda: "x64")
+    monkeypatch.setattr(driver_module, "get_dll_architecture", lambda path: "x86")
+    monkeypatch.setattr(
+        driver_module.ctypes,
+        "WinDLL",
+        lambda path: (_ for _ in ()).throw(AssertionError("WinDLL should not run for an incompatible DLL")),
+    )
+
+    with pytest.raises(RuntimeError, match="x86.*x64"):
+        J2534Driver(dll_path)

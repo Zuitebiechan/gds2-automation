@@ -93,6 +93,22 @@ def test_save_config_persists_json(monkeypatch, tmp_path) -> None:
     assert json.loads(client_gui.CONFIG_FILE.read_text(encoding="utf-8")) == config
 
 
+def test_format_driver_label_marks_incompatible_architecture(monkeypatch, tmp_path) -> None:
+    client_gui = _import_client_gui(monkeypatch, tmp_path)
+
+    label = client_gui.format_driver_label(
+        {
+            "name": "SM2 USB",
+            "vendor": "Scanmatik",
+            "architecture": "x86",
+            "compatible": False,
+        },
+        python_arch="x64",
+    )
+
+    assert label == "SM2 USB (Scanmatik) [x86] - incompatible with Python x64"
+
+
 def test_update_tray_sets_icon_and_title(monkeypatch, tmp_path) -> None:
     client_gui = _import_client_gui(monkeypatch, tmp_path)
     app = client_gui.VCIProxyTrayApp()

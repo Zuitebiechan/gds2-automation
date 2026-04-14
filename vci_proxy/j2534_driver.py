@@ -179,14 +179,45 @@ class SCONFIG_LIST(Structure):
 J2534_REGISTRY_KEY = r"SOFTWARE\PassThruSupport.04.04"
 
 
-def discover_j2534_drivers() -> list[dict[str, str]]:
+def get_python_architecture() -> str:
+    """Return the current Python process architecture."""
+    return "x64" if struct.calcsize("P") * 8 == 64 else "x86"
+
+
+def get_dll_architecture(dll_path: str) -> Optional[str]:
+    """Best-effort PE architecture detection for a J2534 DLL."""
+    try:
+        with open(dll_path, "rb") as fh:
+            header = fh.read(4096)
+    except OSError:
+        return None
+
+    if len(header) < 64 or header[:2] != b"MZ":
+        return None
+
+    pe_offset = struct.unpack_from("<I", header, 0x3C)[0]
+    if pe_offset + 6 > len(header):
+        return None
+    if header[pe_offset:pe_offset + 4] != b"PE\0\0":
+        return None
+
+    machine = struct.unpack_from("<H", header, pe_offset + 4)[0]
+    if machine == 0x014C:
+        return "x86"
+    if machine == 0x8664:
+        return "x64"
+    return None
+
+
+def discover_j2534_drivers() -> list[dict[str, object]]:
     """Discover installed J2534 drivers from Windows registry.
 
     Reads HKLM\\SOFTWARE\\PassThruSupport.04.04 which is the standard
     location where SAE J2534-compliant drivers register themselves.
 
     Returns:
-        List of dicts with keys: 'name', 'dll_path', 'vendor'
+        List of dicts with keys such as 'name', 'dll_path', 'vendor',
+        'architecture', and 'compatible'
         Sorted by name. Empty list on non-Windows or if no drivers found.
     """
     if sys.platform != 'win32':
@@ -194,6 +225,7 @@ def discover_j2534_drivers() -> list[dict[str, str]]:
 
     import winreg
     drivers = []
+    python_arch = get_python_architecture()
 
     for hive_flag in (winreg.KEY_READ, winreg.KEY_READ | winreg.KEY_WOW64_32KEY):
         try:
@@ -229,10 +261,13 @@ def discover_j2534_drivers() -> list[dict[str, str]]:
                         if dll_path and os.path.exists(dll_path):
                             # Avoid duplicates (same DLL from 32/64-bit views)
                             if not any(d['dll_path'] == dll_path for d in drivers):
+                                dll_arch = get_dll_architecture(dll_path)
                                 drivers.append({
                                     'name': name,
                                     'dll_path': dll_path,
                                     'vendor': vendor,
+                                    'architecture': dll_arch or "unknown",
+                                    'compatible': dll_arch in (None, python_arch),
                                 })
                     finally:
                         winreg.CloseKey(subkey)
@@ -275,6 +310,8 @@ class J2534Driver:
         self.dll_path = None
         self._device_id: Optional[int] = None
         self._channels: dict = {}  # channel_id -> info
+        python_arch = get_python_architecture()
+        load_failures: List[Tuple[str, str]] = []
 
         if dll_path:
             # Explicit path provided (from config/GUI)
@@ -291,19 +328,42 @@ class J2534Driver:
                 logger.info(f"Found {len(discovered)} J2534 driver(s) in registry: {names}")
 
         for path in paths_to_try:
-            if path and os.path.exists(path):
-                try:
-                    self.dll = ctypes.WinDLL(path)
-                    self.dll_path = path
-                    break
-                except OSError:
-                    continue
+            if not path:
+                continue
+            if not os.path.exists(path):
+                load_failures.append((path, "path does not exist"))
+                continue
+
+            dll_arch = get_dll_architecture(path)
+            if dll_arch is not None and dll_arch != python_arch:
+                load_failures.append(
+                    (path, f"incompatible architecture: DLL is {dll_arch}, Python is {python_arch}")
+                )
+                logger.warning(
+                    "Skipping J2534 DLL due to architecture mismatch path=%s dll_arch=%s python_arch=%s",
+                    path,
+                    dll_arch,
+                    python_arch,
+                )
+                continue
+
+            try:
+                self.dll = ctypes.WinDLL(path)
+                self.dll_path = path
+                break
+            except OSError as exc:
+                load_failures.append((path, str(exc)))
+                logger.warning("Failed to load J2534 DLL path=%s error=%s", path, exc)
+                continue
 
         if not self.dll:
+            detail = "; ".join(f"{path} -> {reason}" for path, reason in load_failures)
             raise RuntimeError(
                 "无法加载 J2534 DLL. "
                 "Please install a J2534-compatible VCI driver, "
-                "or specify the DLL path in client settings."
+                "or specify the DLL path in client settings. "
+                f"Python architecture: {python_arch}. "
+                f"Tried: {detail or 'no valid DLL paths'}"
             )
 
         self._setup_functions()

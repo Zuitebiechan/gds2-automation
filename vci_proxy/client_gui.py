@@ -54,6 +54,24 @@ DEFAULT_CONFIG = {
 }
 
 
+def format_driver_label(driver: dict[str, Any], *, python_arch: str | None = None) -> str:
+    """Build one user-facing label for a discovered J2534 driver."""
+    label = str(driver.get("name") or driver.get("dll_path") or "Unknown driver")
+    vendor = str(driver.get("vendor") or "").strip()
+    if vendor:
+        label += f" ({vendor})"
+
+    architecture = str(driver.get("architecture") or "").strip().lower()
+    if architecture and architecture != "unknown":
+        label += f" [{architecture}]"
+
+    if driver.get("compatible") is False:
+        current_arch = python_arch or "current"
+        label += f" - incompatible with Python {current_arch}"
+
+    return label
+
+
 def normalize_config(config: dict | None) -> dict:
     """Merge partial config values with defaults for forward compatibility."""
     return {**DEFAULT_CONFIG, **(config or {})}
@@ -195,16 +213,15 @@ class ConfigDialog:
         ttk.Label(frame, text="J2534 Driver:").grid(row=7, column=0, sticky=tk.W, pady=4)
 
         # Discover installed J2534 drivers from Windows registry
-        from vci_proxy.j2534_driver import discover_j2534_drivers
+        from vci_proxy.j2534_driver import discover_j2534_drivers, get_python_architecture
         discovered_drivers = discover_j2534_drivers()
+        python_arch = get_python_architecture()
 
         # Build combobox values: "Auto-detect" + discovered drivers
         dll_choices = ["Auto-detect (recommended)"]
         dll_path_map: dict[str, str] = {}  # display_name -> dll_path
         for drv in discovered_drivers:
-            label = f"{drv['name']}"
-            if drv['vendor']:
-                label += f" ({drv['vendor']})"
+            label = format_driver_label(drv, python_arch=python_arch)
             dll_choices.append(label)
             dll_path_map[label] = drv['dll_path']
 
@@ -256,7 +273,9 @@ class ConfigDialog:
 
         # Driver count hint
         if discovered_drivers:
-            hint = f"{len(discovered_drivers)} J2534 driver(s) found on this system."
+            hint = f"{len(discovered_drivers)} J2534 driver(s) found on this system. Python: {python_arch}."
+            if any(drv.get("compatible") is False for drv in discovered_drivers):
+                hint += " Incompatible entries require a different Python architecture."
         else:
             hint = "No J2534 drivers found. Install a VCI driver or browse manually."
         ttk.Label(

@@ -29,6 +29,8 @@ _NODE_PROVISIONER: Any | None = None
 _NODE_LAUNCH_SPEC_RESOLVER: Any | None = None
 _NODE_ROUTE_RESOLVER: Any | None = None
 _NODE_READINESS_MONITOR: Any | None = None
+_NODE_GEO_ROUTING_ENABLED = False
+_TRUST_CLOUDFRONT_HEADERS = False
 _TRUTHY_VALUES = {"1", "true", "yes", "on"}
 _WINDOWS_TIME_ZONE_ALIASES = {
     "alaskan standard time": "america/anchorage",
@@ -196,6 +198,28 @@ def set_node_route_resolver(resolver: Any | None) -> None:
     _NODE_ROUTE_RESOLVER = resolver
 
 
+def get_node_geo_routing_enabled() -> bool:
+    """Return whether geo-aware bootstrap routing is enabled."""
+    return bool(_NODE_GEO_ROUTING_ENABLED)
+
+
+def set_node_geo_routing_enabled(enabled: bool) -> None:
+    """Enable or disable geo-aware bootstrap routing."""
+    global _NODE_GEO_ROUTING_ENABLED
+    _NODE_GEO_ROUTING_ENABLED = bool(enabled)
+
+
+def get_trust_cloudfront_headers() -> bool:
+    """Return whether CloudFront viewer headers are trusted."""
+    return bool(_TRUST_CLOUDFRONT_HEADERS)
+
+
+def set_trust_cloudfront_headers(enabled: bool) -> None:
+    """Enable or disable trusting CloudFront viewer headers."""
+    global _TRUST_CLOUDFRONT_HEADERS
+    _TRUST_CLOUDFRONT_HEADERS = bool(enabled)
+
+
 def set_node_readiness_monitor(monitor: Any | None) -> None:
     """Replace the shared readiness monitor for booting nodes."""
     global _NODE_READINESS_MONITOR
@@ -225,6 +249,13 @@ def _read_env_text(
     key: str,
 ) -> str:
     return str(env.get(key) or "").strip()
+
+
+def _read_env_bool(
+    env: dict[str, str],
+    key: str,
+) -> bool:
+    return _read_env_text(env, key).lower() in _TRUTHY_VALUES
 
 
 def _read_env_csv(
@@ -342,6 +373,45 @@ def _load_zone_catalog_from_env(
     if isinstance(payload, list):
         return [item for item in payload if isinstance(item, dict)]
     return []
+
+
+def _warn_duplicate_zone_catalog_route_hints(
+    normalized_entries: list[dict[str, Any]],
+) -> None:
+    seen_cities: dict[str, str] = {}
+    seen_time_zones: dict[str, str] = {}
+
+    for entry in normalized_entries:
+        metro = str(entry.get("metro") or "").strip()
+        for city in entry.get("city_keys", ()):
+            city_key = str(city or "").strip()
+            if not city_key:
+                continue
+            previous_metro = seen_cities.get(city_key)
+            if previous_metro and previous_metro != metro:
+                logger.warning(
+                    "Duplicate node zone catalog city hint city=%s existing_metro=%s new_metro=%s",
+                    city_key,
+                    previous_metro,
+                    metro,
+                )
+                continue
+            seen_cities[city_key] = metro
+
+        for time_zone in entry.get("time_zone_keys", ()):
+            time_zone_key = str(time_zone or "").strip()
+            if not time_zone_key:
+                continue
+            previous_metro = seen_time_zones.get(time_zone_key)
+            if previous_metro and previous_metro != metro:
+                logger.warning(
+                    "Duplicate node zone catalog time-zone hint time_zone=%s existing_metro=%s new_metro=%s",
+                    time_zone_key,
+                    previous_metro,
+                    metro,
+                )
+                continue
+            seen_time_zones[time_zone_key] = metro
 
 
 def _build_zone_catalog_launch_spec_resolver(
@@ -528,9 +598,34 @@ def _build_zone_catalog_route_resolver(
                 return entry
         return None
 
+    def _resolve_default_route() -> dict[str, str]:
+        selected = _match_entry(default_zone, entry_key="zone_keys")
+        if selected is not None:
+            return {
+                "preferred_zone": str(selected["zone"]),
+                "preferred_metro": str(selected["metro"]),
+                "source": "default_zone",
+            }
+
+        selected = _match_entry(default_metro, entry_key="metro_keys")
+        if selected is not None:
+            return {
+                "preferred_zone": "",
+                "preferred_metro": str(selected["metro"]),
+                "source": "default_metro",
+            }
+
+        selected = normalized_entries[0]
+        return {
+            "preferred_zone": str(selected["zone"]),
+            "preferred_metro": str(selected["metro"]),
+            "source": "catalog_first",
+        }
+
     def _resolve(
         *,
         data: dict[str, Any],
+        include_fallbacks: bool = True,
     ) -> dict[str, str]:
         if not isinstance(data, dict):
             return {}
@@ -552,10 +647,10 @@ def _build_zone_catalog_route_resolver(
             }
 
         for field_name, entry_key, is_time_zone in (
-            ("client_time_zone", "time_zone_keys", True),
-            ("organization_time_zone", "time_zone_keys", True),
             ("client_city", "city_keys", False),
+            ("client_time_zone", "time_zone_keys", True),
             ("organization_city", "city_keys", False),
+            ("organization_time_zone", "time_zone_keys", True),
         ):
             entry = _match_entry(
                 data.get(field_name),
@@ -569,7 +664,9 @@ def _build_zone_catalog_route_resolver(
                     "source": field_name,
                 }
 
-        return {}
+        if not include_fallbacks:
+            return {}
+        return _resolve_default_route()
 
     return _resolve
 
@@ -615,6 +712,12 @@ def configure_node_provisioning_from_env(
 ) -> tuple[Any | None, Any | None]:
     """Configure AWS-based node provisioning and launch-spec resolution from env."""
     env = os.environ if environ is None else environ
+    set_node_geo_routing_enabled(
+        _read_env_bool(env, "DIAGNOSTIC_NODE_GEO_ROUTING_ENABLED")
+    )
+    set_trust_cloudfront_headers(
+        _read_env_bool(env, "DIAGNOSTIC_NODE_TRUST_CLOUDFRONT_HEADERS")
+    )
     region = _read_env_text(env, "DIAGNOSTIC_AWS_REGION")
     launch_template_name = _read_env_text(env, "DIAGNOSTIC_NODE_LAUNCH_TEMPLATE")
     instance_type = _read_env_text(env, "DIAGNOSTIC_NODE_INSTANCE_TYPE")
@@ -655,6 +758,10 @@ def configure_node_provisioning_from_env(
         subnet_id=subnet_id,
         security_group_ids=security_group_ids,
     )
+    if catalog_resolver is not None:
+        _warn_duplicate_zone_catalog_route_hints(
+            getattr(catalog_resolver, "_normalized_entries", None) or []
+        )
     catalog_route_resolver = _build_zone_catalog_route_resolver(
         zone_catalog=zone_catalog,
         default_zone=default_zone,

@@ -24,7 +24,7 @@ def _install_fake_flask_stack(monkeypatch):
 
             return decorator
 
-    fake_request = types.SimpleNamespace(args={}, json=None)
+    fake_request = types.SimpleNamespace(args={}, json=None, headers={})
     fake_flask = types.ModuleType("flask")
     fake_flask.Blueprint = FakeBlueprint
     fake_flask.Response = object
@@ -155,6 +155,330 @@ def test_session_bootstrap_can_infer_preferred_metro_from_location_hints(monkeyp
     assert status == 200
     assert payload["assignment"]["node_id"] == "node-dfw-1"
     assert payload["assignment"]["selection_reason"] == "preferred_metro"
+
+
+def test_session_bootstrap_can_use_trusted_cloudfront_city_when_client_hint_is_missing(
+    monkeypatch,
+):
+    from diagnostic_platform.node_allocation import (
+        HotPoolAllocator,
+        InMemoryNodeInventory,
+        NodeRecord,
+        NodeState,
+    )
+
+    session_api, session_dependencies, fake_request = _import_session_api(monkeypatch)
+    allocator = HotPoolAllocator(
+        InMemoryNodeInventory(
+            nodes=[
+                NodeRecord(
+                    node_id="node-atl-1",
+                    zone="us-east-1-atl-2a",
+                    metro="atlanta",
+                    api_base_url="https://atl-1.example.com",
+                    tunnel_host="atl-1.example.com",
+                    state=NodeState.IDLE,
+                    healthy=True,
+                ),
+                NodeRecord(
+                    node_id="node-dfw-1",
+                    zone="us-east-1-dfw-2a",
+                    metro="dallas",
+                    api_base_url="https://dfw-1.example.com",
+                    tunnel_host="dfw-1.example.com",
+                    state=NodeState.IDLE,
+                    healthy=True,
+                ),
+            ]
+        )
+    )
+    session_dependencies.set_node_allocator(allocator)
+    session_dependencies.set_node_geo_routing_enabled(True)
+    session_dependencies.set_trust_cloudfront_headers(True)
+    session_dependencies.set_node_route_resolver(
+        lambda *, data: {
+            "preferred_zone": "",
+            "preferred_metro": "dallas"
+            if str(data.get("client_city") or "").strip() == "Dallas"
+            else "",
+            "source": "client_city"
+            if str(data.get("client_city") or "").strip() == "Dallas"
+            else "",
+        }
+    )
+    fake_request.json = {
+        "brand": "Chevrolet",
+    }
+    fake_request.headers = {
+        "CloudFront-Viewer-City": "Dallas",
+    }
+
+    payload, status = _unwrap_response(session_api.session_bootstrap())
+
+    assert status == 200
+    assert payload["assignment"]["node_id"] == "node-dfw-1"
+    assert payload["assignment"]["selection_reason"] == "preferred_metro"
+
+
+def test_session_bootstrap_can_use_trusted_cloudfront_time_zone_when_city_is_missing(
+    monkeypatch,
+):
+    from diagnostic_platform.node_allocation import (
+        HotPoolAllocator,
+        InMemoryNodeInventory,
+        NodeRecord,
+        NodeState,
+    )
+
+    session_api, session_dependencies, fake_request = _import_session_api(monkeypatch)
+    allocator = HotPoolAllocator(
+        InMemoryNodeInventory(
+            nodes=[
+                NodeRecord(
+                    node_id="node-atl-1",
+                    zone="us-east-1-atl-2a",
+                    metro="atlanta",
+                    api_base_url="https://atl-1.example.com",
+                    tunnel_host="atl-1.example.com",
+                    state=NodeState.IDLE,
+                    healthy=True,
+                ),
+                NodeRecord(
+                    node_id="node-dfw-1",
+                    zone="us-east-1-dfw-2a",
+                    metro="dallas",
+                    api_base_url="https://dfw-1.example.com",
+                    tunnel_host="dfw-1.example.com",
+                    state=NodeState.IDLE,
+                    healthy=True,
+                ),
+            ]
+        )
+    )
+    session_dependencies.set_node_allocator(allocator)
+    session_dependencies.set_node_geo_routing_enabled(True)
+    session_dependencies.set_trust_cloudfront_headers(True)
+    session_dependencies.set_node_route_resolver(
+        lambda *, data: {
+            "preferred_zone": "",
+            "preferred_metro": "dallas"
+            if str(data.get("client_time_zone") or "").strip() == "America/Chicago"
+            else "",
+            "source": "client_time_zone"
+            if str(data.get("client_time_zone") or "").strip() == "America/Chicago"
+            else "",
+        }
+    )
+    fake_request.json = {
+        "brand": "Chevrolet",
+    }
+    fake_request.headers = {
+        "CloudFront-Viewer-Time-Zone": "America/Chicago",
+    }
+
+    payload, status = _unwrap_response(session_api.session_bootstrap())
+
+    assert status == 200
+    assert payload["assignment"]["node_id"] == "node-dfw-1"
+    assert payload["assignment"]["selection_reason"] == "preferred_metro"
+
+
+def test_session_bootstrap_logs_route_decision_metadata(
+    monkeypatch,
+    caplog,
+):
+    from diagnostic_platform.node_allocation import (
+        HotPoolAllocator,
+        InMemoryNodeInventory,
+        NodeRecord,
+        NodeState,
+    )
+
+    session_api, session_dependencies, fake_request = _import_session_api(monkeypatch)
+    allocator = HotPoolAllocator(
+        InMemoryNodeInventory(
+            nodes=[
+                NodeRecord(
+                    node_id="node-dfw-1",
+                    zone="us-east-1-dfw-2a",
+                    metro="dallas",
+                    api_base_url="https://dfw-1.example.com",
+                    tunnel_host="dfw-1.example.com",
+                    state=NodeState.IDLE,
+                    healthy=True,
+                ),
+            ]
+        )
+    )
+    session_dependencies.set_node_allocator(allocator)
+    session_dependencies.set_node_geo_routing_enabled(True)
+    session_dependencies.set_trust_cloudfront_headers(True)
+    session_dependencies.set_node_route_resolver(
+        lambda *, data: {
+            "preferred_zone": "",
+            "preferred_metro": "dallas"
+            if str(data.get("client_city") or "").strip() == "Dallas"
+            else "",
+            "source": "client_city"
+            if str(data.get("client_city") or "").strip() == "Dallas"
+            else "",
+        }
+    )
+    fake_request.json = {
+        "brand": "Chevrolet",
+    }
+    fake_request.headers = {
+        "CloudFront-Viewer-City": "Dallas",
+    }
+
+    with caplog.at_level("INFO"):
+        payload, status = _unwrap_response(session_api.session_bootstrap())
+
+    assert status == 200
+    assert payload["assignment"]["node_id"] == "node-dfw-1"
+    assert "selected_zone=us-east-1-dfw-2a" in caplog.text
+    assert "selected_metro=dallas" in caplog.text
+    assert "route_source=cloudfront_viewer_city" in caplog.text
+    assert "fallback_used=true" in caplog.text
+    assert "signal_conflict=false" in caplog.text
+
+
+def test_session_bootstrap_ignores_cloudfront_headers_when_trust_is_disabled(
+    monkeypatch,
+):
+    from diagnostic_platform.node_allocation import (
+        HotPoolAllocator,
+        InMemoryNodeInventory,
+        NodeRecord,
+        NodeState,
+    )
+
+    session_api, session_dependencies, fake_request = _import_session_api(monkeypatch)
+    allocator = HotPoolAllocator(
+        InMemoryNodeInventory(
+            nodes=[
+                NodeRecord(
+                    node_id="node-atl-1",
+                    zone="us-east-1-atl-2a",
+                    metro="atlanta",
+                    api_base_url="https://atl-1.example.com",
+                    tunnel_host="atl-1.example.com",
+                    state=NodeState.IDLE,
+                    healthy=True,
+                ),
+                NodeRecord(
+                    node_id="node-dfw-1",
+                    zone="us-east-1-dfw-2a",
+                    metro="dallas",
+                    api_base_url="https://dfw-1.example.com",
+                    tunnel_host="dfw-1.example.com",
+                    state=NodeState.IDLE,
+                    healthy=True,
+                ),
+            ]
+        )
+    )
+    session_dependencies.set_node_allocator(allocator)
+    session_dependencies.set_node_geo_routing_enabled(True)
+    session_dependencies.set_trust_cloudfront_headers(False)
+    session_dependencies.set_node_route_resolver(
+        lambda *, data: {
+            "preferred_zone": "",
+            "preferred_metro": "dallas"
+            if str(data.get("client_city") or "").strip() == "Dallas"
+            else "",
+            "source": "client_city"
+            if str(data.get("client_city") or "").strip() == "Dallas"
+            else "",
+        }
+    )
+    fake_request.json = {
+        "brand": "Chevrolet",
+    }
+    fake_request.headers = {
+        "CloudFront-Viewer-City": "Dallas",
+    }
+
+    payload, status = _unwrap_response(session_api.session_bootstrap())
+
+    assert status == 200
+    assert payload["assignment"]["node_id"] == "node-atl-1"
+    assert payload["assignment"]["selection_reason"] == "any_healthy_idle"
+
+
+def test_session_bootstrap_prefers_client_hint_over_conflicting_cloudfront_signal(
+    monkeypatch,
+    caplog,
+):
+    from diagnostic_platform.node_allocation import (
+        HotPoolAllocator,
+        InMemoryNodeInventory,
+        NodeRecord,
+        NodeState,
+    )
+
+    session_api, session_dependencies, fake_request = _import_session_api(monkeypatch)
+    allocator = HotPoolAllocator(
+        InMemoryNodeInventory(
+            nodes=[
+                NodeRecord(
+                    node_id="node-atl-1",
+                    zone="us-east-1-atl-2a",
+                    metro="atlanta",
+                    api_base_url="https://atl-1.example.com",
+                    tunnel_host="atl-1.example.com",
+                    state=NodeState.IDLE,
+                    healthy=True,
+                ),
+                NodeRecord(
+                    node_id="node-dfw-1",
+                    zone="us-east-1-dfw-2a",
+                    metro="dallas",
+                    api_base_url="https://dfw-1.example.com",
+                    tunnel_host="dfw-1.example.com",
+                    state=NodeState.IDLE,
+                    healthy=True,
+                ),
+            ]
+        )
+    )
+    session_dependencies.set_node_allocator(allocator)
+    session_dependencies.set_node_geo_routing_enabled(True)
+    session_dependencies.set_trust_cloudfront_headers(True)
+    session_dependencies.set_node_route_resolver(
+        lambda *, data: {
+            "preferred_zone": "",
+            "preferred_metro": (
+                "atlanta"
+                if str(data.get("client_time_zone") or "").strip() == "America/New_York"
+                else "dallas"
+                if str(data.get("client_time_zone") or "").strip() == "America/Chicago"
+                else ""
+            ),
+            "source": "client_time_zone"
+            if str(data.get("client_time_zone") or "").strip() in {
+                "America/New_York",
+                "America/Chicago",
+            }
+            else "",
+        }
+    )
+    fake_request.json = {
+        "brand": "Chevrolet",
+        "client_time_zone": "America/New_York",
+    }
+    fake_request.headers = {
+        "CloudFront-Viewer-Time-Zone": "America/Chicago",
+    }
+
+    with caplog.at_level("WARNING"):
+        payload, status = _unwrap_response(session_api.session_bootstrap())
+
+    assert status == 200
+    assert payload["assignment"]["node_id"] == "node-atl-1"
+    assert payload["assignment"]["selection_reason"] == "preferred_metro"
+    assert "source_client=client_time_zone" in caplog.text
+    assert "source_cloudfront=cloudfront_viewer_time_zone" in caplog.text
 
 
 def test_session_bootstrap_ready_reports_worker_is_reachable(monkeypatch):

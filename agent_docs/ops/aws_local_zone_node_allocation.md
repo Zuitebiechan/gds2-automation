@@ -204,6 +204,45 @@ Implementation note for this repository:
 - catalog entries can also include routing hints such as `time_zones` and `cities`, so the control plane can infer the nearest metro from client-side hints like `client_time_zone` or `client_city`
 - the AWS smoke-test helper can now validate this route inference before launch by passing `--client-time-zone` or `--client-city`
 
+### Current bootstrap geo-routing behavior
+
+The current implementation adds a CloudFront-based fallback only at the control-plane bootstrap entrypoint:
+
+- `POST /api/session/bootstrap` can now read trusted CloudFront viewer headers
+- this is gated by both `DIAGNOSTIC_NODE_GEO_ROUTING_ENABLED=1` and `DIAGNOSTIC_NODE_TRUST_CLOUDFRONT_HEADERS=1`
+- when trust is off, the API ignores `CloudFront-*` headers completely so direct requests cannot spoof routing
+- CloudFront is only for the bootstrap hostname; worker nodes still keep the existing per-node API and tunnel exposure model
+
+Current routing priority:
+
+1. `preferred_zone`
+2. `preferred_metro`
+3. `client_city`
+4. `client_time_zone`
+5. `organization_city`
+6. `organization_time_zone`
+7. `CloudFront-Viewer-City`
+8. `CloudFront-Viewer-Time-Zone`
+9. `DIAGNOSTIC_NODE_DEFAULT_ZONE`
+10. `DIAGNOSTIC_NODE_DEFAULT_METRO`
+11. first zone-catalog entry
+
+Current rollout rules:
+
+- route only at metro granularity for now
+- exact `cities` match is checked before `time_zones`
+- if client hints and CloudFront hints disagree, the client hint wins
+- if the zone catalog maps the same `city` or `time_zone` to multiple metros, startup logs a warning and catalog order remains the tiebreaker
+- bootstrap decision logs include `selected_zone`, `selected_metro`, `route_source`, `fallback_used`, and `signal_conflict`
+- raw public client IP addresses are not written to routing logs
+
+Recommended deployment sequence:
+
+- first enable the two geo-routing env flags in test
+- put CloudFront only in front of the bootstrap domain and forward `CloudFront-Viewer-City` plus `CloudFront-Viewer-Time-Zone`
+- start with a small metro set in the zone catalog
+- keep direct-debug mode available for environments that have not yet been moved behind CloudFront
+
 Useful AWS discovery mechanisms:
 
 - list Local Zones for an account:

@@ -7,6 +7,7 @@ SessionOrchestrator and does not touch existing diagnostics routes.
 
 # pyright: reportMissingImports=false
 
+import inspect
 import logging
 from typing import Any
 
@@ -60,9 +61,11 @@ from server.api.session_dependencies import (
     get_executor,
     get_launch_spec_resolver,
     get_node_allocator,
+    get_node_geo_routing_enabled,
     get_node_provisioner,
     get_node_route_resolver,
     get_orchestrator,
+    get_trust_cloudfront_headers,
     get_ai_engine as _get_ai_engine,
     reset_executor,
     set_data_viewer_getter,
@@ -102,34 +105,189 @@ def _read_object_field(
 
 def _resolve_bootstrap_route_preferences(
     data: dict[str, Any],
-) -> tuple[str, str]:
+) -> dict[str, Any]:
+    def _route_has_preference(route: dict[str, Any]) -> bool:
+        return bool(
+            _read_text_field(route, "preferred_zone")
+            or _read_text_field(route, "preferred_metro")
+        )
+
+    def _apply_route_preferences(
+        *,
+        requested_zone: str,
+        requested_metro: str,
+        route: dict[str, Any],
+    ) -> tuple[str, str]:
+        preferred_zone = requested_zone
+        preferred_metro = requested_metro
+        route_source = _read_text_field(route, "source")
+        route_zone = _read_text_field(route, "preferred_zone")
+        route_metro = _read_text_field(route, "preferred_metro")
+
+        if route_zone and (not preferred_zone or route_source == "preferred_zone"):
+            preferred_zone = route_zone
+        if route_metro and (
+            not preferred_metro
+            or route_source in {"preferred_zone", "preferred_metro"}
+        ):
+            preferred_metro = route_metro
+        return preferred_zone, preferred_metro
+
+    def _call_route_resolver(
+        resolver: Any,
+        *,
+        payload: dict[str, Any],
+        include_fallbacks: bool,
+    ) -> dict[str, Any]:
+        if not callable(resolver):
+            return {}
+
+        try:
+            signature = inspect.signature(resolver)
+            supports_include_fallbacks = "include_fallbacks" in signature.parameters
+        except (TypeError, ValueError):
+            supports_include_fallbacks = False
+
+        try:
+            if supports_include_fallbacks:
+                resolved_route = resolver(
+                    data=payload,
+                    include_fallbacks=include_fallbacks,
+                ) or {}
+            else:
+                resolved_route = resolver(data=payload) or {}
+        except Exception:
+            logger.exception("session bootstrap route inference failed")
+            return {}
+
+        if not isinstance(resolved_route, dict):
+            return {}
+        return resolved_route
+
+    def _extract_cloudfront_route_input() -> dict[str, str]:
+        if not (
+            get_node_geo_routing_enabled() and get_trust_cloudfront_headers()
+        ):
+            return {}
+
+        headers = getattr(request, "headers", {}) or {}
+        cloudfront_city = read_text_mapping_field(
+            headers,
+            "CloudFront-Viewer-City",
+            default="",
+        )
+        cloudfront_time_zone = read_text_mapping_field(
+            headers,
+            "CloudFront-Viewer-Time-Zone",
+            default="",
+        )
+        route_input = {}
+        if cloudfront_city:
+            route_input["client_city"] = cloudfront_city
+        if cloudfront_time_zone:
+            route_input["client_time_zone"] = cloudfront_time_zone
+        return route_input
+
+    def _translate_cloudfront_route(route: dict[str, Any]) -> dict[str, Any]:
+        if not route:
+            return {}
+
+        translated = dict(route)
+        source = _read_text_field(route, "source")
+        translated["source"] = {
+            "client_city": "cloudfront_viewer_city",
+            "client_time_zone": "cloudfront_viewer_time_zone",
+        }.get(source, source)
+        return translated
+
     preferred_zone = _read_text_field(data, "preferred_zone")
     preferred_metro = _read_text_field(data, "preferred_metro")
+    route_source = "preferred_zone" if preferred_zone else "preferred_metro" if preferred_metro else ""
+    fallback_used = False
+    signal_conflict = False
     resolver = get_node_route_resolver()
     if not callable(resolver):
-        return preferred_zone, preferred_metro
+        return {
+            "preferred_zone": preferred_zone,
+            "preferred_metro": preferred_metro,
+            "route_source": route_source,
+            "fallback_used": fallback_used,
+            "signal_conflict": signal_conflict,
+        }
 
-    try:
-        resolved_route = resolver(data=data) or {}
-    except Exception:
-        logger.exception("session bootstrap route inference failed")
-        return preferred_zone, preferred_metro
+    client_signal_source = route_source
+    client_signal_zone = preferred_zone
+    client_signal_metro = preferred_metro
+    client_route = _call_route_resolver(
+        resolver,
+        payload=data,
+        include_fallbacks=False,
+    )
+    if _route_has_preference(client_route):
+        client_signal_zone, client_signal_metro = _apply_route_preferences(
+            requested_zone=preferred_zone,
+            requested_metro=preferred_metro,
+            route=client_route,
+        )
+        if not client_signal_source:
+            client_signal_source = _read_text_field(client_route, "source")
 
-    if not isinstance(resolved_route, dict):
-        return preferred_zone, preferred_metro
+    cloudfront_route = _translate_cloudfront_route(
+        _call_route_resolver(
+            resolver,
+            payload=_extract_cloudfront_route_input(),
+            include_fallbacks=False,
+        )
+    )
 
-    route_source = _read_text_field(resolved_route, "source")
-    route_zone = _read_text_field(resolved_route, "preferred_zone")
-    route_metro = _read_text_field(resolved_route, "preferred_metro")
-
-    if route_zone and (not preferred_zone or route_source == "preferred_zone"):
-        preferred_zone = route_zone
-    if route_metro and (
-        not preferred_metro
-        or route_source in {"preferred_zone", "preferred_metro"}
+    if (
+        client_signal_source
+        and client_signal_metro
+        and _route_has_preference(cloudfront_route)
+        and client_signal_metro != _read_text_field(cloudfront_route, "preferred_metro")
     ):
-        preferred_metro = route_metro
-    return preferred_zone, preferred_metro
+        signal_conflict = True
+        logger.warning(
+            "session bootstrap route signal conflict source_client=%s source_cloudfront=%s selected_metro=%s",
+            client_signal_source,
+            _read_text_field(cloudfront_route, "source"),
+            client_signal_metro,
+        )
+
+    if client_signal_source:
+        preferred_zone = client_signal_zone
+        preferred_metro = client_signal_metro
+        route_source = client_signal_source
+    elif _route_has_preference(cloudfront_route):
+        preferred_zone, preferred_metro = _apply_route_preferences(
+            requested_zone=preferred_zone,
+            requested_metro=preferred_metro,
+            route=cloudfront_route,
+        )
+        route_source = _read_text_field(cloudfront_route, "source")
+        fallback_used = True
+    else:
+        default_route = _call_route_resolver(
+            resolver,
+            payload={},
+            include_fallbacks=True,
+        )
+        if _route_has_preference(default_route):
+            preferred_zone, preferred_metro = _apply_route_preferences(
+                requested_zone=preferred_zone,
+                requested_metro=preferred_metro,
+                route=default_route,
+            )
+            route_source = _read_text_field(default_route, "source")
+            fallback_used = True
+
+    return {
+        "preferred_zone": preferred_zone,
+        "preferred_metro": preferred_metro,
+        "route_source": route_source,
+        "fallback_used": fallback_used,
+        "signal_conflict": signal_conflict,
+    }
 
 
 def _sse_response(stream) -> Response:
@@ -179,7 +337,9 @@ def session_bootstrap():
         if not brand:
             return jsonify({"success": False, "error": "brand is required"}), 400
 
-        preferred_zone, preferred_metro = _resolve_bootstrap_route_preferences(data)
+        route_decision = _resolve_bootstrap_route_preferences(data)
+        preferred_zone = _read_text_field(route_decision, "preferred_zone")
+        preferred_metro = _read_text_field(route_decision, "preferred_metro")
 
         ctx = SessionContext(
             brand=brand,
@@ -207,6 +367,22 @@ def session_bootstrap():
             preferred_metro=preferred_metro,
             provisioner=get_node_provisioner(),
             launch_spec_resolver=get_launch_spec_resolver(),
+        )
+        selected_zone = _read_text_field(payload.get("assignment", {}), "zone") or _read_text_field(
+            payload.get("provisioning", {}),
+            "zone",
+        ) or preferred_zone
+        selected_metro = _read_text_field(payload.get("assignment", {}), "metro") or _read_text_field(
+            payload.get("provisioning", {}),
+            "metro",
+        ) or preferred_metro
+        logger.info(
+            "session bootstrap route decision selected_zone=%s selected_metro=%s route_source=%s fallback_used=%s signal_conflict=%s",
+            selected_zone,
+            selected_metro,
+            _read_text_field(route_decision, "route_source") or "none",
+            str(bool(route_decision.get("fallback_used"))).lower(),
+            str(bool(route_decision.get("signal_conflict"))).lower(),
         )
         status = 202 if payload.get("pending_capacity") else 200
         return jsonify(payload), status

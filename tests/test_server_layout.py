@@ -1,6 +1,7 @@
 import importlib
 import ast
 import json
+import logging
 import sys
 import types
 from pathlib import Path
@@ -530,6 +531,74 @@ def test_server_app_factory_zone_catalog_configures_route_resolver_for_client_ti
     }
 
 
+def test_server_app_factory_zone_catalog_route_resolver_prefers_city_over_time_zone(
+    monkeypatch,
+    tmp_path,
+):
+    _install_fake_flask_stack(monkeypatch)
+    fake_boto3 = types.ModuleType("boto3")
+    fake_boto3.client = lambda name, region_name=None: {
+        "service": name,
+        "region_name": region_name,
+    }
+    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+    monkeypatch.setenv("DIAGNOSTIC_NODE_INVENTORY_FILE", str(tmp_path / "inventory.json"))
+    monkeypatch.setenv("DIAGNOSTIC_NODE_LEASE_FILE", str(tmp_path / "leases.json"))
+    monkeypatch.setenv("DIAGNOSTIC_AWS_REGION", "us-east-1")
+    monkeypatch.setenv("DIAGNOSTIC_NODE_LAUNCH_TEMPLATE", "diag-local-zone-worker")
+    monkeypatch.setenv("DIAGNOSTIC_NODE_INSTANCE_TYPE", "c6i.xlarge")
+    monkeypatch.setenv("DIAGNOSTIC_NODE_DEFAULT_ZONE", "us-east-1-dfw-2a")
+    monkeypatch.setenv(
+        "DIAGNOSTIC_NODE_ZONE_CATALOG_JSON",
+        json.dumps(
+            {
+                "zones": [
+                    {
+                        "zone": "us-east-1-dfw-2a",
+                        "metro": "dallas",
+                        "subnet_id": "subnet-dfw",
+                        "api_base_url": "https://dfw.diag.example.com",
+                        "tunnel_host": "dfw.diag.example.com",
+                        "time_zones": ["America/Chicago"],
+                    },
+                    {
+                        "zone": "us-east-1-atl-2a",
+                        "metro": "atlanta",
+                        "subnet_id": "subnet-atl",
+                        "api_base_url": "https://atl.diag.example.com",
+                        "tunnel_host": "atl.diag.example.com",
+                        "cities": ["Atlanta"],
+                    },
+                ]
+            }
+        ),
+    )
+
+    server_app = importlib.import_module("server.app")
+    session_dependencies = importlib.import_module("server.api.session_dependencies")
+    session_dependencies.set_node_allocator(None)
+    session_dependencies.set_node_provisioner(None)
+    session_dependencies.set_launch_spec_resolver(None)
+    session_dependencies.set_node_route_resolver(None)
+
+    server_app.create_app()
+
+    resolver = session_dependencies.get_node_route_resolver()
+    route = resolver(
+        data={
+            "brand": "Chevrolet",
+            "client_city": "Atlanta",
+            "client_time_zone": "America/Chicago",
+        }
+    )
+
+    assert route == {
+        "preferred_zone": "",
+        "preferred_metro": "atlanta",
+        "source": "client_city",
+    }
+
+
 def test_server_app_factory_route_resolver_accepts_windows_time_zone_aliases(
     monkeypatch,
     tmp_path,
@@ -587,6 +656,99 @@ def test_server_app_factory_route_resolver_accepts_windows_time_zone_aliases(
         "preferred_metro": "dallas",
         "source": "client_time_zone",
     }
+
+
+def test_server_app_factory_configures_cloudfront_geo_flags_from_env(
+    monkeypatch,
+    tmp_path,
+):
+    _install_fake_flask_stack(monkeypatch)
+    fake_boto3 = types.ModuleType("boto3")
+    fake_boto3.client = lambda name, region_name=None: {
+        "service": name,
+        "region_name": region_name,
+    }
+    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+    monkeypatch.setenv("DIAGNOSTIC_NODE_INVENTORY_FILE", str(tmp_path / "inventory.json"))
+    monkeypatch.setenv("DIAGNOSTIC_NODE_LEASE_FILE", str(tmp_path / "leases.json"))
+    monkeypatch.setenv("DIAGNOSTIC_AWS_REGION", "us-east-1")
+    monkeypatch.setenv("DIAGNOSTIC_NODE_LAUNCH_TEMPLATE", "diag-local-zone-worker")
+    monkeypatch.setenv("DIAGNOSTIC_NODE_INSTANCE_TYPE", "c6i.xlarge")
+    monkeypatch.setenv("DIAGNOSTIC_NODE_DEFAULT_ZONE", "us-east-1-dfw-2a")
+    monkeypatch.setenv("DIAGNOSTIC_NODE_DEFAULT_METRO", "dallas")
+    monkeypatch.setenv("DIAGNOSTIC_NODE_DEFAULT_API_BASE", "https://dfw.diag.example.com")
+    monkeypatch.setenv("DIAGNOSTIC_NODE_DEFAULT_TUNNEL_HOST", "dfw.diag.example.com")
+    monkeypatch.setenv("DIAGNOSTIC_NODE_SUBNET_ID", "subnet-dfw")
+    monkeypatch.setenv("DIAGNOSTIC_NODE_GEO_ROUTING_ENABLED", "1")
+    monkeypatch.setenv("DIAGNOSTIC_NODE_TRUST_CLOUDFRONT_HEADERS", "1")
+
+    server_app = importlib.import_module("server.app")
+    session_dependencies = importlib.import_module("server.api.session_dependencies")
+
+    server_app.create_app()
+
+    assert session_dependencies.get_node_geo_routing_enabled() is True
+    assert session_dependencies.get_trust_cloudfront_headers() is True
+
+
+def test_server_app_factory_warns_when_zone_catalog_contains_duplicate_route_hints(
+    monkeypatch,
+    tmp_path,
+    caplog,
+):
+    _install_fake_flask_stack(monkeypatch)
+    fake_boto3 = types.ModuleType("boto3")
+    fake_boto3.client = lambda name, region_name=None: {
+        "service": name,
+        "region_name": region_name,
+    }
+    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+    monkeypatch.setenv("DIAGNOSTIC_NODE_INVENTORY_FILE", str(tmp_path / "inventory.json"))
+    monkeypatch.setenv("DIAGNOSTIC_NODE_LEASE_FILE", str(tmp_path / "leases.json"))
+    monkeypatch.setenv("DIAGNOSTIC_AWS_REGION", "us-east-1")
+    monkeypatch.setenv("DIAGNOSTIC_NODE_LAUNCH_TEMPLATE", "diag-local-zone-worker")
+    monkeypatch.setenv("DIAGNOSTIC_NODE_INSTANCE_TYPE", "c6i.xlarge")
+    monkeypatch.setenv("DIAGNOSTIC_NODE_DEFAULT_ZONE", "us-east-1-dfw-2a")
+    monkeypatch.setenv(
+        "DIAGNOSTIC_NODE_ZONE_CATALOG_JSON",
+        json.dumps(
+            {
+                "zones": [
+                    {
+                        "zone": "us-east-1-dfw-2a",
+                        "metro": "dallas",
+                        "subnet_id": "subnet-dfw",
+                        "api_base_url": "https://dfw.diag.example.com",
+                        "tunnel_host": "dfw.diag.example.com",
+                        "time_zones": ["America/Chicago"],
+                        "cities": ["Springfield"],
+                    },
+                    {
+                        "zone": "us-east-1-atl-2a",
+                        "metro": "atlanta",
+                        "subnet_id": "subnet-atl",
+                        "api_base_url": "https://atl.diag.example.com",
+                        "tunnel_host": "atl.diag.example.com",
+                        "time_zones": ["America/Chicago"],
+                        "cities": ["Springfield"],
+                    },
+                ]
+            }
+        ),
+    )
+
+    server_app = importlib.import_module("server.app")
+    session_dependencies = importlib.import_module("server.api.session_dependencies")
+    session_dependencies.set_node_allocator(None)
+    session_dependencies.set_node_provisioner(None)
+    session_dependencies.set_launch_spec_resolver(None)
+    session_dependencies.set_node_route_resolver(None)
+
+    with caplog.at_level(logging.WARNING):
+        server_app.create_app()
+
+    assert "Duplicate node zone catalog city hint" in caplog.text
+    assert "Duplicate node zone catalog time-zone hint" in caplog.text
 
 
 def _imported_modules(path: str) -> set[str]:

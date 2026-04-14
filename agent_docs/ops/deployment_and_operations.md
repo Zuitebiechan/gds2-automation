@@ -138,6 +138,8 @@ When running the automated Local Zone node-allocation MVP, configure these env v
 - `DIAGNOSTIC_NODE_READINESS_API_TOKEN`: optional API token sent only by the readiness probe; if omitted, the monitor falls back to `DIAGNOSTIC_API_TOKEN`
 - `DIAGNOSTIC_NODE_ZONE_CATALOG_JSON`: optional multi-zone routing catalog as JSON
 - `DIAGNOSTIC_NODE_ZONE_CATALOG_FILE`: optional path to a JSON catalog file such as `scripts/local_zone/zone_catalog.example.json`
+- `DIAGNOSTIC_NODE_GEO_ROUTING_ENABLED`: set to `1` to enable geo-aware bootstrap routing
+- `DIAGNOSTIC_NODE_TRUST_CLOUDFRONT_HEADERS`: set to `1` to trust CloudFront viewer location headers on the bootstrap API
 
 Single-zone mode:
 
@@ -158,18 +160,35 @@ Multi-zone mode:
   - optional `security_group_ids`
 - each catalog entry can also carry routing hints such as `time_zones` and `cities`
 
+CloudFront bootstrap entry:
+
+- put CloudFront only in front of the control-plane bootstrap hostname, not in front of every worker node
+- forward `CloudFront-Viewer-City` and `CloudFront-Viewer-Time-Zone` to the origin
+- only enable header trust when requests are expected to arrive through CloudFront
+- if direct debug traffic bypasses CloudFront, the API ignores missing CloudFront headers and continues to use client hints plus default routing
+
 Resolver behavior:
 
 - exact `preferred_zone` match first
 - then exact `preferred_metro`
-- when explicit route input is missing, infer `preferred_metro` from client hints such as `client_time_zone` or `client_city`
+- then `client_city`
+- then `client_time_zone`
+- then `organization_city`
+- then `organization_time_zone`
+- then trusted `CloudFront-Viewer-City`
+- then trusted `CloudFront-Viewer-Time-Zone`
 - then `DIAGNOSTIC_NODE_DEFAULT_ZONE`
 - then `DIAGNOSTIC_NODE_DEFAULT_METRO`
 - otherwise the first catalog entry
+- when a `city` hint and a `time_zone` hint disagree, city wins because routing is metro-first in this rollout
+- when client hints and CloudFront hints disagree, the client hint wins and the API records a conflict warning
+- when the zone catalog contains duplicate `city` or `time_zone` mappings across metros, startup logs a warning and the resolver keeps a deterministic catalog-order result
 
 Current MVP behavior:
 
 - the control-plane API allocates or launches nodes through `/api/session/bootstrap`
+- bootstrap routing decisions now log `selected_zone`, `selected_metro`, `route_source`, `fallback_used`, and `signal_conflict`
+- bootstrap routing logs do not store raw public client IPs
 - new nodes stay `BOOTING` until the background readiness monitor can reach `/api/session/bootstrap/ready`
 - once the probe succeeds, the node is promoted to healthy idle capacity and becomes allocatable on the next bootstrap retry
 
@@ -183,6 +202,7 @@ Behavior:
 
 - default mode uses EC2 `DryRun` and confirms credentials plus launch permissions
 - when a zone catalog is configured, the smoke test can validate route inference with flags such as `--client-time-zone "America/Chicago"` before the EC2 call
+- the smoke test validates the same zone-catalog routing precedence used by bootstrap for client hints; CloudFront header simulation is covered by server-side tests
 - `--live` performs a real `RunInstances` call
 - live mode terminates the created instance immediately unless `--keep-instance` is passed
 
