@@ -47,6 +47,21 @@ MAX_FRAME_BODY_BYTES = 1_000_000
 DEFAULT_FRAME_BODY_READ_TIMEOUT_S = 10.0
 
 
+def _disable_windows_quick_edit() -> None:
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-10)
+        mode = ctypes.c_ulong()
+        if kernel32.GetConsoleMode(handle, ctypes.byref(mode)) == 0:
+            return
+        new_mode = (mode.value | 0x0080) & ~0x0040
+        kernel32.SetConsoleMode(handle, new_mode)
+    except Exception:
+        pass
+
+
 def _validated_body_length(length: int) -> int:
     if length < HEADER_SIZE:
         raise ValueError(f"Invalid frame length: {length} < {HEADER_SIZE}")
@@ -803,6 +818,7 @@ class ReverseProxyServer:
 
 
 def main():
+    _disable_windows_quick_edit()
     parser = argparse.ArgumentParser(description='VCI Proxy 反向连接服务器')
     parser.add_argument('--listen-port', type=int, default=9000,
                        help='VCI Proxy 连接端口 (默认: 9000)')

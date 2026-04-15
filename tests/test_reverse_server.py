@@ -326,3 +326,49 @@ def test_invalidate_caches_clears_channel_and_filter_entries() -> None:
     server._invalidate_caches(MsgType.STOP_FILTER_REQ, struct.pack(">II", 33, 88))
 
     assert events == [("read", 33), ("filter", 33), ("ioctl", 33), ("stop", 88)]
+
+
+def test_main_disables_windows_quick_edit_before_starting_server(monkeypatch) -> None:
+    events: list[str] = []
+
+    monkeypatch.setattr(
+        reverse_server_module,
+        "_disable_windows_quick_edit",
+        lambda: events.append("quick-edit"),
+        raising=False,
+    )
+
+    monkeypatch.setattr(
+        reverse_server_module.argparse.ArgumentParser,
+        "parse_args",
+        lambda self: types.SimpleNamespace(
+            listen_port=9000,
+            proxy_port=9001,
+            auth_token="secret",
+            tls=False,
+            tls_cert=None,
+            tls_key=None,
+            tls_ca=None,
+            tls_require_client_cert=False,
+            no_read_cache=False,
+            read_cache_ttl=150,
+            no_filter_dedup=False,
+            no_vbatt_cache=False,
+            vbatt_ttl=5,
+            no_ioctl_cache=False,
+            ioctl_ttl=5,
+            benchmark_log=None,
+            benchmark_label="proxy_run",
+        ),
+    )
+
+    def _fake_asyncio_run(coro):
+        events.append("run")
+        coro.close()
+        return None
+
+    monkeypatch.setattr(reverse_server_module.asyncio, "run", _fake_asyncio_run)
+
+    reverse_server_module.main()
+
+    assert events[:2] == ["quick-edit", "run"]
