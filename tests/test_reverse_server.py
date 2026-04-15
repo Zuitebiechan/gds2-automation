@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import ssl
 import struct
 import types
@@ -254,6 +255,60 @@ def test_run_probe_records_network_time_from_duration_minus_hw(monkeypatch) -> N
         assert server._tunnel_quality.recorded == [pytest.approx(42.5)]
 
     asyncio.run(_run())
+
+
+def test_write_tunnel_quality_snapshot_skips_healthy_logs(monkeypatch, caplog) -> None:
+    server = ReverseProxyServer()
+    server._tunnel_quality = types.SimpleNamespace(
+        snapshot=lambda: {
+            "connection_epoch": "epoch-1",
+            "connected": True,
+            "fresh": True,
+            "updated_at": "2026-04-15T00:00:00Z",
+            "source": "probe",
+            "sample_count": 5,
+            "network_ms": {"last": 20.0, "p50": 20.0, "p95": 30.0},
+            "grade": "good",
+            "status": "healthy",
+            "reason": "p95 within good threshold",
+            "probe_failures": 0,
+        }
+    )
+    monkeypatch.setattr(reverse_server_module, "write_tunnel_quality_snapshot", lambda snapshot: None)
+
+    with caplog.at_level(logging.INFO, logger="vci_proxy.reverse_server"):
+        server._write_tunnel_quality_snapshot()
+
+    assert "[TUNNEL_QUALITY]" not in caplog.text
+
+
+def test_write_tunnel_quality_snapshot_logs_blocked_state_once(monkeypatch, caplog) -> None:
+    server = ReverseProxyServer()
+    server._tunnel_quality = types.SimpleNamespace(
+        snapshot=lambda: {
+            "connection_epoch": "epoch-2",
+            "connected": False,
+            "fresh": False,
+            "updated_at": "2026-04-15T00:00:00Z",
+            "source": "probe",
+            "sample_count": 0,
+            "network_ms": {"last": None, "p50": None, "p95": None},
+            "grade": "block",
+            "status": "blocked",
+            "reason": "tunnel_disconnected",
+            "probe_failures": 0,
+        }
+    )
+    monkeypatch.setattr(reverse_server_module, "write_tunnel_quality_snapshot", lambda snapshot: None)
+
+    with caplog.at_level(logging.WARNING, logger="vci_proxy.reverse_server"):
+        server._write_tunnel_quality_snapshot()
+        server._write_tunnel_quality_snapshot()
+
+    tunnel_logs = [record.message for record in caplog.records if "TUNNEL_QUALITY" in record.message]
+    assert tunnel_logs == [
+        "[TUNNEL_QUALITY] status=blocked connected=False reason=tunnel_disconnected"
+    ]
 
 
 def test_invalidate_caches_clears_channel_and_filter_entries() -> None:

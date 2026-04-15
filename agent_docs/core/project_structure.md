@@ -31,6 +31,7 @@ This document does not explain runtime behavior or HTTP semantics. For those, re
 | `AGENTS.md` | Lightweight working guide for coding agents |
 | `app.py` | Backward-compatible thin entrypoint that delegates to `server/app.py` |
 | `pyinstaller_client.spec` | Windows client packaging spec |
+| `pyinstaller_j2534_worker.spec` | Standalone J2534 worker packaging spec |
 | `requirements-cloud.txt` | Cloud/server Python dependency set |
 | `requirements-client.txt` | Local/client Python dependency set |
 | `setup_windows.bat` | Windows environment bootstrap convenience script |

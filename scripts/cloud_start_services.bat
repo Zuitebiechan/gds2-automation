@@ -1,51 +1,80 @@
 @echo off
 REM ============================================================
 REM  Cloud Services Startup Script
-REM  Starts all required services for the diagnostics platform:
-REM    1. VCI Proxy reverse server (port 9000/9001)
-REM    2. Flask API server (port 8080)
-REM    3. GDS2 with Java Agent
+REM  Starts the required cloud-side services for the diagnostics
+REM  platform:
+REM    1. VCI Proxy reverse server
+REM    2. Flask API server
+REM    3. Optional GDS2 + Java Agent launcher
 REM
 REM  Usage:
-REM    scripts\cloud_start_services.bat           - Start all services
-REM    scripts\cloud_start_services.bat --no-gds2 - Skip GDS2 launch
+REM    scripts\cloud_start_services.bat
+REM    scripts\cloud_start_services.bat --no-gds2
+REM
+REM  Secrets/config:
+REM    - optional local config: scripts\cloud_service_config.cmd
+REM    - required after config/env load: VCI_PROXY_AUTH_TOKEN
 REM ============================================================
 
 setlocal EnableExtensions
 
 for %%I in ("%~dp0..") do set "DEFAULT_PROJECT_DIR=%%~fI"
 if not defined PROJECT_DIR set "PROJECT_DIR=%DEFAULT_PROJECT_DIR%"
+
+set "CONFIG_FILE=%~dp0cloud_service_config.cmd"
+if exist "%CONFIG_FILE%" (
+    call "%CONFIG_FILE%"
+    if errorlevel 1 (
+        echo [ERROR] Failed to load config file: %CONFIG_FILE%
+        exit /b 1
+    )
+)
+
+if not defined PROJECT_DIR set "PROJECT_DIR=%DEFAULT_PROJECT_DIR%"
 if not defined GDS2_AGENT_DIR set "GDS2_AGENT_DIR=C:\tools\gds2-agent"
 if not defined LOG_DIR set "LOG_DIR=%PROJECT_DIR%\logs"
-set "SKIP_GDS2=0"
-set "PYTHON_EXE="
+if not defined DIAGNOSTIC_API_PORT set "DIAGNOSTIC_API_PORT=8080"
+if not defined VCI_PROXY_PORT set "VCI_PROXY_PORT=9000"
+if not defined VCI_PROXY_LOCAL_PROXY_PORT set "VCI_PROXY_LOCAL_PROXY_PORT=9001"
+if not defined DIAGNOSTIC_API_PUBLIC set "DIAGNOSTIC_API_PUBLIC=0"
+if not defined DIAGNOSTIC_API_ENABLE_CORS set "DIAGNOSTIC_API_ENABLE_CORS=0"
+if not defined VCI_PROXY_TLS_ENABLED set "VCI_PROXY_TLS_ENABLED=0"
+if not defined VCI_PROXY_TLS_REQUIRE_CLIENT_CERT set "VCI_PROXY_TLS_REQUIRE_CLIENT_CERT=0"
 
-call :resolve_python
+set "SKIP_GDS2=0"
+if not defined PYTHON_EXE set "PYTHON_EXE="
 
 if /I "%~1"=="--no-gds2" set "SKIP_GDS2=1"
+
 REM Detect Session 0 (scheduled task / SYSTEM context).
-REM %SESSIONNAME% is empty string in Session 0, NOT "Services" —
-REM "Services" is only the Task Manager column label, not the env var value.
 if not defined SESSIONNAME set "SKIP_GDS2=1"
 if "%SESSIONNAME%"=="" set "SKIP_GDS2=1"
 if /I "%SESSIONNAME%"=="Services" set "SKIP_GDS2=1"
+
+call :resolve_python
 
 echo ============================================================
 echo  Diagnostic Platform - Cloud Services
 echo ============================================================
 echo.
 echo  Project dir: %PROJECT_DIR%
-if defined PYTHON_EXE goto :print_python
-echo  Python:      [not found]
-goto :after_python
-
-:print_python
-echo  Python:      %PYTHON_EXE%
-
-:after_python
+if exist "%CONFIG_FILE%" (
+    echo  Config:      %CONFIG_FILE%
+) else (
+    echo  Config:      [not found, using current environment]
+)
+if defined PYTHON_EXE (
+    echo  Python:      %PYTHON_EXE%
+) else (
+    echo  Python:      [not found]
+)
 echo.
 
 if not defined PYTHON_EXE goto :python_missing
+if not defined VCI_PROXY_AUTH_TOKEN goto :auth_missing
+if /I "%VCI_PROXY_TLS_ENABLED%"=="1" if not defined VCI_PROXY_TLS_CERT goto :tls_cert_missing
+if /I "%VCI_PROXY_TLS_ENABLED%"=="1" if not defined VCI_PROXY_TLS_KEY goto :tls_key_missing
+
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 
 call :start_proxy_server
@@ -57,8 +86,8 @@ echo ============================================================
 echo  All services started!
 echo ============================================================
 echo.
-echo  VCI Proxy:  ports 9000/9001  (log: %LOG_DIR%\vci_proxy.log)
-echo  Flask API:  port 8080        (log: %LOG_DIR%\flask_api.log)
+echo  VCI Proxy:  ports %VCI_PROXY_PORT%/%VCI_PROXY_LOCAL_PROXY_PORT%  (log: %LOG_DIR%\vci_proxy.log)
+echo  Flask API:  port %DIAGNOSTIC_API_PORT%  (log: %LOG_DIR%\flask_api.log)
 if "%SKIP_GDS2%"=="0" echo  GDS2:       running with agent
 echo.
 echo  To stop all services:
@@ -71,14 +100,32 @@ exit /b 0
 echo [ERROR] Python not found.
 echo Checked:
 echo   - %%PYTHON%% env var
+echo   - %%PYTHON_EXE%% env var
 echo   - %PROJECT_DIR%\venv32\Scripts\python.exe
 echo   - %PROJECT_DIR%\venv\Scripts\python.exe
 echo   - py -3 ^(resolved to sys.executable^)
 echo   - python on PATH ^(resolved to sys.executable^)
 exit /b 1
 
+:auth_missing
+echo [ERROR] VCI_PROXY_AUTH_TOKEN is not configured.
+echo Create scripts\cloud_service_config.cmd from
+echo scripts\cloud_service_config.example.cmd, then fill in the shared token.
+echo You can also export VCI_PROXY_AUTH_TOKEN in the environment before running this script.
+exit /b 1
+
+:tls_cert_missing
+echo [ERROR] VCI_PROXY_TLS_ENABLED=1 but VCI_PROXY_TLS_CERT is not set.
+exit /b 1
+
+:tls_key_missing
+echo [ERROR] VCI_PROXY_TLS_ENABLED=1 but VCI_PROXY_TLS_KEY is not set.
+exit /b 1
+
 :resolve_python
-if defined PYTHON if exist "%PYTHON%" set "PYTHON_EXE=%PYTHON%"
+if defined PYTHON_EXE if exist "%PYTHON_EXE%" goto :eof
+if defined PYTHON_EXE set "PYTHON_EXE="
+if not defined PYTHON_EXE if defined PYTHON if exist "%PYTHON%" set "PYTHON_EXE=%PYTHON%"
 if defined PYTHON_EXE goto :eof
 if exist "%PROJECT_DIR%\venv32\Scripts\python.exe" set "PYTHON_EXE=%PROJECT_DIR%\venv32\Scripts\python.exe"
 if defined PYTHON_EXE goto :eof
@@ -94,35 +141,48 @@ for /f "usebackq delims=" %%I in (`python -c "import sys; print(sys.executable)"
 goto :eof
 
 :start_proxy_server
-powershell -NoProfile -Command "$ready = Test-NetConnection -ComputerName '127.0.0.1' -Port 9000 -InformationLevel Quiet -WarningAction SilentlyContinue; if ($ready) { exit 0 } else { exit 1 }" >nul 2>&1
+powershell -NoProfile -Command "$ready = Test-NetConnection -ComputerName '127.0.0.1' -Port %VCI_PROXY_PORT% -InformationLevel Quiet -WarningAction SilentlyContinue; if ($ready) { exit 0 } else { exit 1 }" >nul 2>&1
 if not errorlevel 1 (
-    echo [1/3] VCI Proxy reverse server already listening on port 9000, skipping start.
+    echo [1/3] VCI Proxy reverse server already listening on port %VCI_PROXY_PORT%, skipping start.
     goto :eof
 )
+
+set "VCI_PROXY_TLS_ARGS="
+if /I "%VCI_PROXY_TLS_ENABLED%"=="1" set "VCI_PROXY_TLS_ARGS=%VCI_PROXY_TLS_ARGS% --tls"
+if /I "%VCI_PROXY_TLS_ENABLED%"=="1" if defined VCI_PROXY_TLS_CERT set "VCI_PROXY_TLS_ARGS=%VCI_PROXY_TLS_ARGS% --tls-cert ""%VCI_PROXY_TLS_CERT%"""
+if /I "%VCI_PROXY_TLS_ENABLED%"=="1" if defined VCI_PROXY_TLS_KEY set "VCI_PROXY_TLS_ARGS=%VCI_PROXY_TLS_ARGS% --tls-key ""%VCI_PROXY_TLS_KEY%"""
+if /I "%VCI_PROXY_TLS_ENABLED%"=="1" if defined VCI_PROXY_TLS_CA set "VCI_PROXY_TLS_ARGS=%VCI_PROXY_TLS_ARGS% --tls-ca ""%VCI_PROXY_TLS_CA%"""
+if /I "%VCI_PROXY_TLS_ENABLED%"=="1" if /I "%VCI_PROXY_TLS_REQUIRE_CLIENT_CERT%"=="1" set "VCI_PROXY_TLS_ARGS=%VCI_PROXY_TLS_ARGS% --tls-require-client-cert"
+
 echo [1/3] Starting VCI Proxy reverse server...
-start "VCI-Proxy-Server" /D "%PROJECT_DIR%" /MIN "%ComSpec%" /c ""%PYTHON_EXE%" -m vci_proxy.reverse_server > "%LOG_DIR%\vci_proxy.log" 2>&1"
-call :wait_for_port 127.0.0.1 9000 15
+start "VCI-Proxy-Server" /D "%PROJECT_DIR%" /MIN "%ComSpec%" /c ""%PYTHON_EXE%" -m vci_proxy.reverse_server --vci-port %VCI_PROXY_PORT% --proxy-port %VCI_PROXY_LOCAL_PROXY_PORT% --auth-token "%VCI_PROXY_AUTH_TOKEN%"%VCI_PROXY_TLS_ARGS% > "%LOG_DIR%\vci_proxy.log" 2>&1"
+call :wait_for_port 127.0.0.1 %VCI_PROXY_PORT% 15
 if errorlevel 1 (
-    echo       [WARN] Port 9000 did not become ready in time. Check %LOG_DIR%\vci_proxy.log
+    echo       [WARN] Port %VCI_PROXY_PORT% did not become ready in time. Check %LOG_DIR%\vci_proxy.log
     goto :eof
 )
-echo       Listening on ports 9000 (VCI) and 9001 (proxy)
+echo       Listening on ports %VCI_PROXY_PORT% (VCI) and %VCI_PROXY_LOCAL_PROXY_PORT% (proxy)
 goto :eof
 
 :start_flask_api
-powershell -NoProfile -Command "$ready = Test-NetConnection -ComputerName '127.0.0.1' -Port 8080 -InformationLevel Quiet -WarningAction SilentlyContinue; if ($ready) { exit 0 } else { exit 1 }" >nul 2>&1
+powershell -NoProfile -Command "$ready = Test-NetConnection -ComputerName '127.0.0.1' -Port %DIAGNOSTIC_API_PORT% -InformationLevel Quiet -WarningAction SilentlyContinue; if ($ready) { exit 0 } else { exit 1 }" >nul 2>&1
 if not errorlevel 1 (
-    echo [2/3] Flask API server already listening on port 8080, skipping start.
+    echo [2/3] Flask API server already listening on port %DIAGNOSTIC_API_PORT%, skipping start.
     goto :eof
 )
+
+set "FLASK_ARGS=app.py --port %DIAGNOSTIC_API_PORT%"
+if /I "%DIAGNOSTIC_API_PUBLIC%"=="1" set "FLASK_ARGS=%FLASK_ARGS% --public"
+if /I "%DIAGNOSTIC_API_ENABLE_CORS%"=="1" set "FLASK_ARGS=%FLASK_ARGS% --cors"
+
 echo [2/3] Starting Flask API server...
-start "Flask-API" /D "%PROJECT_DIR%" /MIN "%ComSpec%" /c ""%PYTHON_EXE%" app.py --port 8080 > "%LOG_DIR%\flask_api.log" 2>&1"
-call :wait_for_port 127.0.0.1 8080 15
+start "Flask-API" /D "%PROJECT_DIR%" /MIN "%ComSpec%" /c ""%PYTHON_EXE%" %FLASK_ARGS% > "%LOG_DIR%\flask_api.log" 2>&1"
+call :wait_for_port 127.0.0.1 %DIAGNOSTIC_API_PORT% 15
 if errorlevel 1 (
-    echo       [WARN] Port 8080 did not become ready in time. Check %LOG_DIR%\flask_api.log
+    echo       [WARN] Port %DIAGNOSTIC_API_PORT% did not become ready in time. Check %LOG_DIR%\flask_api.log
     goto :eof
 )
-echo       Listening on port 8080
+echo       Listening on port %DIAGNOSTIC_API_PORT%
 goto :eof
 
 :start_gds2

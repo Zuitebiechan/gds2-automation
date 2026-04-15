@@ -22,6 +22,8 @@ echo ============================================================
 echo.
 
 set "SCRIPT_PATH=%PROJECT_DIR%\scripts\cloud_start_services.bat"
+set "CONFIG_PATH=%PROJECT_DIR%\scripts\cloud_service_config.cmd"
+set "CONFIG_EXAMPLE=%PROJECT_DIR%\scripts\cloud_service_config.example.cmd"
 set "TASK_CMD=%ComSpec% /c \"\"%SCRIPT_PATH%\"\""
 
 REM Check if running as admin
@@ -36,6 +38,14 @@ if errorlevel 1 (
 REM Check if startup script exists
 if not exist "%SCRIPT_PATH%" (
     echo [ERROR] Startup script not found: %SCRIPT_PATH%
+    pause
+    exit /b 1
+)
+
+REM Check if local config exists
+if not exist "%CONFIG_PATH%" (
+    echo [ERROR] Cloud service config not found: %CONFIG_PATH%
+    echo Copy %CONFIG_EXAMPLE% to %CONFIG_PATH% and fill in VCI_PROXY_AUTH_TOKEN first.
     pause
     exit /b 1
 )
@@ -61,6 +71,7 @@ echo  Run as:     SYSTEM (highest privileges)
 echo.
 echo  Note:       Session 0 startup only launches headless services.
 echo              GDS2 is skipped automatically in this context.
+echo              Secrets are loaded from %CONFIG_PATH%
 echo.
 echo  To verify:  schtasks /query /tn "%TASK_NAME%"
 echo  To remove:  schtasks /delete /tn "%TASK_NAME%" /f

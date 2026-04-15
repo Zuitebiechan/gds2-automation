@@ -65,10 +65,6 @@ def format_driver_label(driver: dict[str, Any], *, python_arch: str | None = Non
     if architecture and architecture != "unknown":
         label += f" [{architecture}]"
 
-    if driver.get("compatible") is False:
-        current_arch = python_arch or "current"
-        label += f" - incompatible with Python {current_arch}"
-
     return label
 
 
@@ -129,6 +125,12 @@ STATUS_LABELS = {
     "error": "Error",
     "idle": "Not started",
 }
+
+STARTUP_NOTIFICATION_TITLE = "VCI Proxy"
+STARTUP_NOTIFICATION_MESSAGE = (
+    "VCI Proxy is running in the system tray. "
+    "Right-click the tray icon to open Settings or Diagnostics."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -213,15 +215,14 @@ class ConfigDialog:
         ttk.Label(frame, text="J2534 Driver:").grid(row=7, column=0, sticky=tk.W, pady=4)
 
         # Discover installed J2534 drivers from Windows registry
-        from vci_proxy.j2534_driver import discover_j2534_drivers, get_python_architecture
+        from vci_proxy.j2534_driver import discover_j2534_drivers
         discovered_drivers = discover_j2534_drivers()
-        python_arch = get_python_architecture()
 
         # Build combobox values: "Auto-detect" + discovered drivers
         dll_choices = ["Auto-detect (recommended)"]
         dll_path_map: dict[str, str] = {}  # display_name -> dll_path
         for drv in discovered_drivers:
-            label = format_driver_label(drv, python_arch=python_arch)
+            label = format_driver_label(drv)
             dll_choices.append(label)
             dll_path_map[label] = drv['dll_path']
 
@@ -273,9 +274,10 @@ class ConfigDialog:
 
         # Driver count hint
         if discovered_drivers:
-            hint = f"{len(discovered_drivers)} J2534 driver(s) found on this system. Python: {python_arch}."
-            if any(drv.get("compatible") is False for drv in discovered_drivers):
-                hint += " Incompatible entries require a different Python architecture."
+            hint = (
+                f"{len(discovered_drivers)} J2534 driver(s) found on this system. "
+                "The client will choose the matching worker automatically."
+            )
         else:
             hint = "No J2534 drivers found. Install a VCI driver or browse manually."
         ttk.Label(
@@ -633,6 +635,22 @@ class VCIProxyTrayApp:
             pystray.MenuItem("Quit", self._on_quit),
         )
 
+    def _on_tray_setup(self, icon: Any) -> None:
+        """Mark the tray icon visible and show one startup notification."""
+        try:
+            icon.visible = True
+        except Exception:
+            logger.debug("failed to mark tray icon visible", exc_info=True)
+
+        notify = getattr(icon, "notify", None)
+        if not callable(notify):
+            return
+
+        try:
+            notify(STARTUP_NOTIFICATION_MESSAGE, STARTUP_NOTIFICATION_TITLE)
+        except Exception:
+            logger.debug("failed to show tray startup notification", exc_info=True)
+
     # --- Main entry ---
 
     def run(self):
@@ -661,7 +679,7 @@ class VCIProxyTrayApp:
 
         # pystray.run() blocks — this is the main loop
         if tray is not None:
-            tray.run()
+            tray.run(setup=self._on_tray_setup)
 
 
 # ---------------------------------------------------------------------------

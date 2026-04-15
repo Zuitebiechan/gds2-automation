@@ -23,12 +23,21 @@ def _import_client_gui(monkeypatch, tmp_path):
             self.menu = menu
             self.ran = False
             self.stopped = False
+            self.visible = False
+            self.notifications: list[tuple[str, str | None]] = []
 
-        def run(self) -> None:
+        def run(self, setup=None) -> None:
             self.ran = True
+            if setup is not None:
+                setup(self)
+            else:
+                self.visible = True
 
         def stop(self) -> None:
             self.stopped = True
+
+        def notify(self, message, title=None) -> None:
+            self.notifications.append((message, title))
 
     fake_pystray = types.SimpleNamespace(
         Menu=_FakeMenu,
@@ -93,7 +102,7 @@ def test_save_config_persists_json(monkeypatch, tmp_path) -> None:
     assert json.loads(client_gui.CONFIG_FILE.read_text(encoding="utf-8")) == config
 
 
-def test_format_driver_label_marks_incompatible_architecture(monkeypatch, tmp_path) -> None:
+def test_format_driver_label_shows_driver_architecture_without_python_warning(monkeypatch, tmp_path) -> None:
     client_gui = _import_client_gui(monkeypatch, tmp_path)
 
     label = client_gui.format_driver_label(
@@ -106,7 +115,7 @@ def test_format_driver_label_marks_incompatible_architecture(monkeypatch, tmp_pa
         python_arch="x64",
     )
 
-    assert label == "SM2 USB (Scanmatik) [x86] - incompatible with Python x64"
+    assert label == "SM2 USB (Scanmatik) [x86]"
 
 
 def test_update_tray_sets_icon_and_title(monkeypatch, tmp_path) -> None:
@@ -403,6 +412,46 @@ def test_run_prompts_for_settings_when_auth_token_is_missing(monkeypatch, tmp_pa
     assert observed["started"] is True
     assert app._tray is not None
     assert app._tray.ran is True
+    assert app._tray.visible is True
+    assert app._tray.notifications == [
+        (
+            "VCI Proxy is running in the system tray. Right-click the tray icon to open Settings or Diagnostics.",
+            "VCI Proxy",
+        )
+    ]
+
+
+def test_run_shows_startup_tray_notification_when_config_is_ready(monkeypatch, tmp_path) -> None:
+    client_gui = _import_client_gui(monkeypatch, tmp_path)
+    observed: dict[str, object] = {}
+
+    app = client_gui.VCIProxyTrayApp()
+    app._config = {
+        "api_scheme": "http",
+        "host": "diag.example",
+        "port": 9000,
+        "api_port": 8080,
+        "api_token": "",
+        "auth_token": "secret",
+        "dll_path": "",
+        "tls_enabled": False,
+        "tls_ca_file": "",
+        "tls_server_name": "",
+    }
+    monkeypatch.setattr(app, "_start_client", lambda: observed.setdefault("started", True))
+
+    app.run()
+
+    assert observed["started"] is True
+    assert app._tray is not None
+    assert app._tray.ran is True
+    assert app._tray.visible is True
+    assert app._tray.notifications == [
+        (
+            "VCI Proxy is running in the system tray. Right-click the tray icon to open Settings or Diagnostics.",
+            "VCI Proxy",
+        )
+    ]
 
 
 def test_on_diagnostics_without_host_shows_error(monkeypatch, tmp_path) -> None:

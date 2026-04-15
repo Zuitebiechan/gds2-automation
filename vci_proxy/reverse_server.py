@@ -342,26 +342,23 @@ class ReverseProxyServer:
         """处理 VCI Proxy 的连接"""
         addr = writer.get_extra_info('peername')
         disconnect_reason = "handler_exit"
-        logger.info(f"VCI Proxy 已连接: {addr}")
+        logger.info("VCI tunnel connected: %s", addr)
 
         # Disable Nagle algorithm for lower latency
         sock = writer.get_extra_info('socket')
         if sock is not None:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        logger.info(f"VCI Proxy 已连接: {addr}")
 
         # Authenticate before accepting the connection
         if not await self._authenticate_vci(reader, writer):
-            logger.warning(f"VCI Proxy authentication failed, closing: {addr}")
-            logger.info("[TUNNEL_CONN] auth_failed addr=%s", addr)
+            logger.warning("VCI tunnel authentication failed: %s", addr)
             writer.close()
             return
 
         # 关闭已有的 VCI 连接
         if self.vci_writer is not None:
-            logger.warning(f"替换已有 VCI 连接，新连接: {addr}")
-            logger.info(
-                "[TUNNEL_CONN] replacing existing connection old_epoch=%s new_addr=%s",
+            logger.warning(
+                "Replacing existing VCI tunnel: old_epoch=%s new_addr=%s",
                 self._connection_epoch,
                 addr,
             )
@@ -383,12 +380,6 @@ class ReverseProxyServer:
         self._connection_counter += 1
         self._connection_epoch = f"epoch-{int(time.time() * 1000)}-{self._connection_counter:03d}"
         self._tunnel_quality.mark_connected(self._connection_epoch)
-        logger.info(
-            "[TUNNEL_CONN] connected addr=%s epoch=%s connection_count=%s",
-            addr,
-            self._connection_epoch,
-            self._connection_counter,
-        )
         self._write_tunnel_quality_snapshot()
         self.vci_connected.set()
         self._probe_task = asyncio.create_task(self._probe_loop(self._connection_epoch))
@@ -435,7 +426,6 @@ class ReverseProxyServer:
 
         except asyncio.IncompleteReadError as exc:
             disconnect_reason = f"eof expected={exc.expected} partial={len(exc.partial)}"
-            logger.info(f"VCI Proxy 断开连接: {addr}")
         except Exception as e:
             disconnect_reason = f"exception:{type(e).__name__}:{e}"
             logger.exception(f"VCI 连接错误: {e}")
@@ -444,8 +434,9 @@ class ReverseProxyServer:
             self._cancel_probe_task()
             self._cancel_pending_futures()
             self._tunnel_quality.mark_disconnected(self._connection_epoch)
-            logger.info(
-                "[TUNNEL_CONN] disconnected addr=%s epoch=%s reason=%s",
+            logger.log(
+                logging.ERROR if disconnect_reason.startswith("exception:") else logging.WARNING,
+                "VCI tunnel disconnected: addr=%s epoch=%s reason=%s",
                 addr,
                 self._connection_epoch,
                 disconnect_reason,
@@ -561,33 +552,43 @@ class ReverseProxyServer:
         snapshot = self._tunnel_quality.snapshot()
         write_tunnel_quality_snapshot(snapshot)
         signature = self._quality_signature(snapshot)
-        if signature != self._last_quality_signature:
-            self._last_quality_signature = signature
-            logger.info(
-                "[TUNNEL_QUALITY] epoch=%s grade=%s status=%s connected=%s fresh=%s "
-                "samples=%s p95=%s reason=%s probe_failures=%s",
-                snapshot.get("connection_epoch"),
-                snapshot.get("grade"),
-                snapshot.get("status"),
-                snapshot.get("connected"),
-                snapshot.get("fresh"),
-                snapshot.get("sample_count"),
-                self._format_ms(snapshot.get("network_ms", {}).get("p95")),
-                snapshot.get("reason"),
-                snapshot.get("probe_failures"),
-            )
+        if signature == self._last_quality_signature:
+            return
+        self._last_quality_signature = signature
+        if not self._should_log_tunnel_quality(snapshot):
+            return
+
+        level = logging.INFO
+        if (
+            not snapshot.get("connected")
+            or snapshot.get("probe_failures")
+            or snapshot.get("reason") in {"snapshot_stale", "tunnel_disconnected"}
+        ):
+            level = logging.WARNING
+        logger.log(
+            level,
+            "[TUNNEL_QUALITY] status=%s connected=%s reason=%s",
+            snapshot.get("status"),
+            snapshot.get("connected"),
+            snapshot.get("reason"),
+        )
+
+    @staticmethod
+    def _should_log_tunnel_quality(snapshot: dict) -> bool:
+        if not snapshot.get("connected"):
+            return True
+        if snapshot.get("probe_failures"):
+            return True
+        return snapshot.get("status") != "healthy"
 
     @staticmethod
     def _quality_signature(snapshot: dict) -> tuple:
-        metrics = snapshot.get("network_ms") or {}
         return (
             snapshot.get("connection_epoch"),
             snapshot.get("grade"),
             snapshot.get("status"),
             snapshot.get("connected"),
             snapshot.get("fresh"),
-            snapshot.get("sample_count"),
-            metrics.get("p95"),
             snapshot.get("reason"),
             snapshot.get("probe_failures"),
         )
@@ -604,7 +605,6 @@ class ReverseProxyServer:
             self._probe_task = None
 
     async def _probe_loop(self, connection_epoch: str) -> None:
-        logger.info("[TUNNEL_PROBE] loop_started epoch=%s interval=3.0s", connection_epoch)
         try:
             while (
                 self.vci_connected.is_set()
@@ -614,7 +614,6 @@ class ReverseProxyServer:
                 await self._run_probe(connection_epoch)
                 await asyncio.sleep(3.0)
         except asyncio.CancelledError:
-            logger.info("[TUNNEL_PROBE] loop_cancelled epoch=%s", connection_epoch)
             raise
         except Exception as exc:
             logger.warning("[TUNNEL_PROBE] loop_stopped epoch=%s error=%s", connection_epoch, exc)
@@ -642,7 +641,7 @@ class ReverseProxyServer:
             duration_ms = (time.monotonic() - started_at) * 1000.0
             network_ms = max(0.0, duration_ms - float(hw_ms or 0.0))
             self._tunnel_quality.record_probe(network_ms)
-            logger.info(
+            logger.debug(
                 "[TUNNEL_PROBE] success epoch=%s seq=%s duration=%s hw=%s network=%s",
                 connection_epoch,
                 sequence,
@@ -670,7 +669,7 @@ class ReverseProxyServer:
                                        writer: asyncio.StreamWriter):
         """处理本地代理连接"""
         addr = writer.get_extra_info('peername')
-        logger.info(f"代理客户端连接: {addr}")
+        logger.debug("Proxy client connected: %s", addr)
 
         # Disable Nagle algorithm for lower latency
         sock = writer.get_extra_info('socket')
@@ -681,11 +680,11 @@ class ReverseProxyServer:
             while True:
                 # 等待 VCI 连接
                 if not self.vci_connected.is_set():
-                    logger.info("等待 VCI Proxy 连接...")
+                    logger.debug("Waiting for VCI tunnel before serving proxy client")
                     await self.vci_connected.wait()
 
                 if self.vci_writer is None:
-                    logger.error("VCI writer 无效")
+                    logger.error("VCI tunnel unavailable while serving proxy client")
                     break
 
                 # 读取请求
@@ -770,8 +769,13 @@ class ReverseProxyServer:
                     writer.write(resp_header + resp_body)
                     await writer.drain()
 
-                    if msg_type != MsgType.READ_MSGS_REQ or fwd_ms > 200:
-                        logger.info(f"[PROXY] {msg_name} seq={sequence} -> {fwd_ms:.1f}ms")
+                    if fwd_ms > 1000:
+                        logger.warning(
+                            "Slow proxy request: %s seq=%s duration=%.1fms",
+                            msg_name,
+                            sequence,
+                            fwd_ms,
+                        )
 
                 except (asyncio.TimeoutError, ConnectionError) as e:
                     self.response_futures.pop(new_seq, None)
@@ -791,7 +795,7 @@ class ReverseProxyServer:
                     break
 
         except asyncio.IncompleteReadError:
-            logger.info(f"代理客户端断开: {addr}")
+            logger.debug("Proxy client disconnected: %s", addr)
         except Exception as e:
             logger.error(f"代理连接错误: {e}")
         finally:

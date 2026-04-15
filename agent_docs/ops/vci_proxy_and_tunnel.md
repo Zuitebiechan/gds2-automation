@@ -75,6 +75,7 @@ Responsibilities:
 - collect server address, ports, auth token, and J2534 driver path
 - persist optional reverse-tunnel TLS trust settings
 - auto-discover installed J2534 drivers where possible
+- launch the architecture-matched local J2534 worker executable
 - start the reverse client in the background
 - present connection status through the tray icon
 

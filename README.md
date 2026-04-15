@@ -63,7 +63,7 @@ pip install -r requirements-client.txt
 
 ## Running the Cloud Side
 
-Start each component in its own terminal:
+You can still start each component in its own terminal:
 
 ```bash
 # Terminal A: reverse tunnel listener
@@ -74,6 +74,26 @@ python app.py --port 8080
 
 # Terminal C: OEM diagnostics software runtime
 # For GDS2, keep the Java Agent writing to ~/gds2-data/latest.json
+```
+
+For Windows cloud nodes, there is now a simpler one-click path:
+
+```bash
+copy scripts\cloud_service_config.example.cmd scripts\cloud_service_config.cmd
+scripts\cloud_start_services.bat
+```
+
+That startup script:
+
+- loads `scripts\cloud_service_config.cmd` when present
+- requires `VCI_PROXY_AUTH_TOKEN`
+- starts the reverse server and Flask API with logs under `logs\`
+- skips GDS2 automatically when run in Session 0
+
+To register boot auto-start on the cloud server, run once as Administrator:
+
+```bash
+scripts\cloud_register_autostart.bat
 ```
 
 Operational notes:
@@ -105,8 +125,18 @@ using `tls_enabled`, `tls_ca_file`, and `tls_server_name`.
 Build the Windows client:
 
 ```bash
-pyinstaller --clean --noconfirm pyinstaller_client.spec
+powershell -ExecutionPolicy Bypass -File scripts/build_vci_proxy_client.ps1
 ```
+
+The packaged client now ships as:
+
+- `VCI_Proxy_Client.exe`
+- `workers/VCI_Proxy_J2534_Worker_x86.exe`
+- `workers/VCI_Proxy_J2534_Worker_x64.exe`
+
+The tray client selects the matching worker executable automatically based on
+the chosen J2534 DLL architecture, so customers do not need to install a
+matching Python runtime.
 
 ## Key Runtime Paths
 

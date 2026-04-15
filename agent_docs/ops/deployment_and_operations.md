@@ -54,6 +54,39 @@ python -m vci_proxy.reverse_server --auth-token <shared-token>
 python app.py --port 8080
 ```
 
+For Windows cloud nodes, the repository also includes a one-click startup flow:
+
+```bash
+copy scripts\cloud_service_config.example.cmd scripts\cloud_service_config.cmd
+scripts\cloud_start_services.bat
+```
+
+Expected config handling:
+
+- put the shared reverse-tunnel token in `scripts\cloud_service_config.cmd` as `VCI_PROXY_AUTH_TOKEN`
+- optionally set `DIAGNOSTIC_API_TOKEN` there for API auth
+- optionally set `DIAGNOSTIC_API_PUBLIC=1` only for temporary direct-connect debugging
+- optionally set `VCI_PROXY_TLS_ENABLED=1` plus `VCI_PROXY_TLS_CERT` and `VCI_PROXY_TLS_KEY`
+- keep `scripts\cloud_service_config.cmd` local to the server and out of source control
+
+The startup script:
+
+- loads `scripts\cloud_service_config.cmd` if it exists
+- refuses to start unless `VCI_PROXY_AUTH_TOKEN` is defined after config/env load
+- starts `python -m vci_proxy.reverse_server --auth-token ...`
+- starts `python app.py --port 8080`
+- writes logs to `logs\vci_proxy.log` and `logs\flask_api.log`
+- skips GDS2 automatically in Session 0 such as Windows Scheduled Task startup
+
+For boot auto-start on a Windows cloud server, run once as Administrator:
+
+```bash
+scripts\cloud_register_autostart.bat
+```
+
+That scheduled task runs `scripts\cloud_start_services.bat` at system startup and
+expects `scripts\cloud_service_config.cmd` to already exist on the server.
+
 Security defaults:
 
 - `python app.py` binds to `127.0.0.1` by default. Add `--public` only when the API must be reachable remotely.
@@ -286,8 +319,17 @@ listening on `443`.
 ### Windows client build
 
 ```bash
-pyinstaller --clean --noconfirm pyinstaller_client.spec
+powershell -ExecutionPolicy Bypass -File scripts/build_vci_proxy_client.ps1
 ```
+
+The final packaged layout is:
+
+- `dist/VCI_Proxy_Client/VCI_Proxy_Client.exe`
+- `dist/VCI_Proxy_Client/workers/VCI_Proxy_J2534_Worker_x86.exe`
+- `dist/VCI_Proxy_Client/workers/VCI_Proxy_J2534_Worker_x64.exe`
+
+The tray client selects the matching worker executable automatically from the
+packaged `workers/` directory based on the detected J2534 DLL architecture.
 
 ## Ports
 

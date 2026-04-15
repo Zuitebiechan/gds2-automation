@@ -4,6 +4,8 @@ import asyncio
 import ssl
 import types
 
+import pytest
+
 from vci_proxy.config import ProxyConfig
 from vci_proxy.protocol import HEADER_SIZE, Message, MsgType, ProtocolDecoder, ProtocolEncoder
 from vci_proxy.reverse_client import ReverseProxyClient
@@ -46,13 +48,48 @@ class _FakeReader:
 
 def test_ensure_driver_notifies_error_when_driver_load_fails(monkeypatch) -> None:
     observed: list[tuple[str, str]] = []
-    client = ReverseProxyClient("example.com", 9000, dll_path="C:/bad.dll")
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        dll_path="C:/bad.dll",
+        driver_loader=lambda _path: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
     client._on_status_change = lambda status, detail: observed.append((status, detail))
-
-    monkeypatch.setattr("vci_proxy.reverse_client.J2534Driver", lambda _path: (_ for _ in ()).throw(RuntimeError("boom")))
 
     assert client._ensure_driver() is False
     assert observed == [("error", "Failed to load J2534 driver: boom")]
+
+
+def test_ensure_driver_uses_injected_driver_loader() -> None:
+    sentinel_driver = object()
+    cleanup_called: list[str] = []
+    observed: list[tuple[str, str]] = []
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        dll_path="C:/driver.dll",
+        driver_loader=lambda dll_path: (
+            sentinel_driver,
+            (lambda: cleanup_called.append("done")) if dll_path == "C:/driver.dll" else None,
+        ),
+    )
+    client._on_status_change = lambda status, detail: observed.append((status, detail))
+
+    assert client._ensure_driver() is True
+    assert client.driver is sentinel_driver
+    assert observed == []
+
+
+def test_shutdown_invokes_driver_runtime_cleanup() -> None:
+    cleaned: list[str] = []
+    client = ReverseProxyClient("example.com", 9000, config=ProxyConfig.from_args(auth_token="secret"))
+    client.running = True
+    client._ioctl_cache = types.SimpleNamespace(invalidate=lambda: None)
+    client._driver_cleanup = lambda: cleaned.append("done")
+
+    asyncio.run(client.shutdown())
+
+    assert cleaned == ["done"]
 
 
 def test_send_registration_auth_mode_accepts_auth_response(monkeypatch) -> None:
@@ -201,6 +238,47 @@ def test_connect_and_serve_passes_tls_context_to_open_connection(monkeypatch) ->
         "ssl": "tls-context",
         "server_hostname": "diag.example",
     }
+
+
+def test_handle_requests_raises_connection_error_with_reason_on_server_eof() -> None:
+    client = ReverseProxyClient("example.com", 9000, config=ProxyConfig.from_args(auth_token="secret"))
+    client.running = True
+
+    with pytest.raises(ConnectionError, match="reverse server disconnected"):
+        asyncio.run(client._handle_requests(_FakeReader(), _FakeWriter(), attempt_label="attempt=1"))
+
+
+def test_connect_and_serve_reports_clear_disconnect_reason(monkeypatch) -> None:
+    observed: list[tuple[str, str]] = []
+    fake_writer = _FakeWriter()
+    client = ReverseProxyClient("diag.example", 9000, config=ProxyConfig.from_args(auth_token="secret"))
+    client._on_status_change = lambda status, detail: observed.append((status, detail))
+
+    async def _fake_open_connection(*_args, **_kwargs):
+        return _FakeReader(), fake_writer
+
+    async def _fake_send_registration(reader, writer, **_kwargs):
+        return True
+
+    async def _fake_handle_requests(reader, writer, **_kwargs):
+        raise ConnectionError("reverse server disconnected: EOF while waiting for messages")
+
+    async def _fake_sleep(_seconds):
+        client.running = False
+        return None
+
+    monkeypatch.setattr(client, "_ensure_driver", lambda: True)
+    monkeypatch.setattr(client, "_send_registration", _fake_send_registration)
+    monkeypatch.setattr(client, "_handle_requests", _fake_handle_requests)
+    monkeypatch.setattr("vci_proxy.reverse_client.asyncio.open_connection", _fake_open_connection)
+    monkeypatch.setattr("vci_proxy.reverse_client.asyncio.sleep", _fake_sleep)
+
+    asyncio.run(client.connect_and_serve())
+
+    assert (
+        "disconnected",
+        "Reverse server disconnected: EOF while waiting for messages, retrying in 5s",
+    ) in observed
 
 
 def test_shutdown_closes_active_writer_and_cancels_prewarm_task() -> None:
