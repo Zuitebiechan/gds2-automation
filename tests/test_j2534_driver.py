@@ -12,6 +12,7 @@ from vci_proxy.j2534_driver import (
     PASSTHRU_MSG,
     discover_j2534_drivers,
     get_dll_architecture,
+    select_best_j2534_driver,
 )
 
 
@@ -100,6 +101,32 @@ def test_discover_j2534_drivers_deduplicates_paths_and_prefers_scanmatik(monkeyp
         r"C:\drivers\bosch.dll",
     ]
     assert drivers[0]["name"] == "SM3"
+
+
+def test_select_best_j2534_driver_prefers_known_architecture_over_unknown() -> None:
+    selected = select_best_j2534_driver(
+        [
+            {
+                "name": "SM2 USB",
+                "vendor": "Scanmatik",
+                "dll_path": r"C:\drivers\sm2_unknown.dll",
+                "architecture": "unknown",
+            },
+            {
+                "name": "SM2 USB",
+                "vendor": "Scanmatik",
+                "dll_path": r"C:\drivers\sm2_x86.dll",
+                "architecture": "x86",
+            },
+        ]
+    )
+
+    assert selected is not None
+    assert selected["dll_path"] == r"C:\drivers\sm2_x86.dll"
+
+
+def test_select_best_j2534_driver_returns_none_for_empty_input() -> None:
+    assert select_best_j2534_driver([]) is None
 
 
 def test_get_dll_architecture_reports_x86_and_x64(tmp_path) -> None:

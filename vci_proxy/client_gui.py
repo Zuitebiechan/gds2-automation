@@ -54,7 +54,12 @@ DEFAULT_CONFIG = {
 }
 
 
-def format_driver_label(driver: dict[str, Any], *, python_arch: str | None = None) -> str:
+def format_driver_label(
+    driver: dict[str, Any],
+    *,
+    python_arch: str | None = None,
+    include_path: bool = False,
+) -> str:
     """Build one user-facing label for a discovered J2534 driver."""
     label = str(driver.get("name") or driver.get("dll_path") or "Unknown driver")
     vendor = str(driver.get("vendor") or "").strip()
@@ -64,6 +69,10 @@ def format_driver_label(driver: dict[str, Any], *, python_arch: str | None = Non
     architecture = str(driver.get("architecture") or "").strip().lower()
     if architecture and architecture != "unknown":
         label += f" [{architecture}]"
+
+    dll_path = str(driver.get("dll_path") or "").strip()
+    if include_path and dll_path:
+        label += f" - {dll_path}"
 
     return label
 
@@ -215,14 +224,14 @@ class ConfigDialog:
         ttk.Label(frame, text="J2534 Driver:").grid(row=7, column=0, sticky=tk.W, pady=4)
 
         # Discover installed J2534 drivers from Windows registry
-        from vci_proxy.j2534_driver import discover_j2534_drivers
+        from vci_proxy.j2534_driver import discover_j2534_drivers, normalize_dll_path
         discovered_drivers = discover_j2534_drivers()
 
         # Build combobox values: "Auto-detect" + discovered drivers
         dll_choices = ["Auto-detect (recommended)"]
         dll_path_map: dict[str, str] = {}  # display_name -> dll_path
         for drv in discovered_drivers:
-            label = format_driver_label(drv)
+            label = format_driver_label(drv, include_path=True)
             dll_choices.append(label)
             dll_path_map[label] = drv['dll_path']
 
@@ -231,8 +240,9 @@ class ConfigDialog:
         initial_value = "Auto-detect (recommended)"
         if saved_dll:
             # Check if saved path matches any discovered driver
+            normalized_saved_dll = normalize_dll_path(saved_dll)
             for label, path in dll_path_map.items():
-                if os.path.normcase(path) == os.path.normcase(saved_dll):
+                if normalize_dll_path(path) == normalized_saved_dll:
                     initial_value = label
                     break
             else:
@@ -244,7 +254,7 @@ class ConfigDialog:
         dll_var = tk.StringVar(value=initial_value)
         dll_combo = ttk.Combobox(
             frame, textvariable=dll_var, values=dll_choices,
-            width=28, state="readonly",
+            width=52, state="readonly",
         )
         dll_combo.grid(row=7, column=1, sticky=tk.EW, pady=4, padx=(8, 0))
 
@@ -255,6 +265,17 @@ class ConfigDialog:
             )
             if path:
                 # Add custom path to choices and select it
+                normalized_path = normalize_dll_path(path)
+                existing_choice = next(
+                    (
+                        choice for choice, choice_path in dll_path_map.items()
+                        if normalize_dll_path(choice_path) == normalized_path
+                    ),
+                    None,
+                )
+                if existing_choice is not None:
+                    dll_var.set(existing_choice)
+                    return
                 if path not in dll_path_map:
                     dll_choices.append(path)
                     dll_path_map[path] = path

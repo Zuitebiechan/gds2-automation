@@ -19,6 +19,16 @@ def _utc_iso(ts: float | None = None) -> str:
     return datetime.fromtimestamp(value, tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _parse_utc_iso(value: object) -> float | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
 def _percentile(values: list[float], ratio: float) -> float | None:
     if not values:
         return None
@@ -59,7 +69,13 @@ def default_tunnel_quality_snapshot(
     }
 
 
-def normalize_tunnel_quality_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any]:
+def normalize_tunnel_quality_snapshot(
+    snapshot: dict[str, Any] | None,
+    *,
+    now: float | None = None,
+    freshness_seconds: float = DEFAULT_FRESHNESS_SECONDS,
+    recompute_freshness: bool = False,
+) -> dict[str, Any]:
     if not isinstance(snapshot, dict):
         return default_tunnel_quality_snapshot()
 
@@ -87,10 +103,29 @@ def normalize_tunnel_quality_snapshot(snapshot: dict[str, Any] | None) -> dict[s
     normalized["grade"] = str(normalized.get("grade") or "block")
     normalized["status"] = str(normalized.get("status") or "blocked")
     normalized["reason"] = str(normalized.get("reason") or "unknown")
+
+    if recompute_freshness:
+        updated_at_s = _parse_utc_iso(normalized["updated_at"])
+        now_s = time.time() if now is None else now
+        fresh = (
+            normalized["connected"]
+            and updated_at_s is not None
+            and (now_s - updated_at_s) <= freshness_seconds
+        )
+        normalized["fresh"] = fresh
+        if normalized["connected"] and not fresh:
+            normalized["grade"] = "block"
+            normalized["status"] = "blocked"
+            normalized["reason"] = "snapshot_stale"
     return normalized
 
 
-def read_tunnel_quality_snapshot(path: str | Path | None = None) -> dict[str, Any]:
+def read_tunnel_quality_snapshot(
+    path: str | Path | None = None,
+    *,
+    now: float | None = None,
+    freshness_seconds: float = DEFAULT_FRESHNESS_SECONDS,
+) -> dict[str, Any]:
     snapshot_path = Path(path) if path is not None else get_tunnel_quality_snapshot_path()
     try:
         raw = json.loads(snapshot_path.read_text(encoding="utf-8"))
@@ -100,7 +135,12 @@ def read_tunnel_quality_snapshot(path: str | Path | None = None) -> dict[str, An
         return default_tunnel_quality_snapshot(reason="snapshot_invalid")
     except OSError:
         return default_tunnel_quality_snapshot(reason="snapshot_unreadable")
-    return normalize_tunnel_quality_snapshot(raw)
+    return normalize_tunnel_quality_snapshot(
+        raw,
+        now=now,
+        freshness_seconds=freshness_seconds,
+        recompute_freshness=True,
+    )
 
 
 def write_tunnel_quality_snapshot(snapshot: dict[str, Any], path: str | Path | None = None) -> Path:

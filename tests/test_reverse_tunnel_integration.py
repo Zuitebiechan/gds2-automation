@@ -35,12 +35,15 @@ async def _start_reverse_tunnel(monkeypatch, fake_driver):
     vci_port = vci_server.sockets[0].getsockname()[1]
     proxy_port = proxy_server.sockets[0].getsockname()[1]
 
-    monkeypatch.setattr(
-        "vci_proxy.reverse_client.J2534Driver",
-        lambda _path: fake_driver,
-    )
+    def _fake_driver_loader(_dll_path):
+        return fake_driver, None
 
-    client = ReverseProxyClient("127.0.0.1", vci_port, config=config)
+    client = ReverseProxyClient(
+        "127.0.0.1",
+        vci_port,
+        config=config,
+        driver_loader=_fake_driver_loader,
+    )
     client_task = asyncio.create_task(client.connect_and_serve())
     await asyncio.sleep(0.1)
     await asyncio.wait_for(server.vci_connected.wait(), timeout=5.0)

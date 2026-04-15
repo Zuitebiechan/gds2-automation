@@ -118,6 +118,33 @@ def test_format_driver_label_shows_driver_architecture_without_python_warning(mo
     assert label == "SM2 USB (Scanmatik) [x86]"
 
 
+def test_format_driver_label_can_include_path_to_disambiguate_duplicate_drivers(monkeypatch, tmp_path) -> None:
+    client_gui = _import_client_gui(monkeypatch, tmp_path)
+
+    first = client_gui.format_driver_label(
+        {
+            "name": "SM2 USB",
+            "vendor": "Scanmatik",
+            "architecture": "x86",
+            "dll_path": r"C:\Program Files (x86)\Scanmatik\smj2534.dll",
+        },
+        include_path=True,
+    )
+    second = client_gui.format_driver_label(
+        {
+            "name": "SM2 USB",
+            "vendor": "Scanmatik",
+            "architecture": "x86",
+            "dll_path": r"D:\OEM\Scanmatik\smj2534.dll",
+        },
+        include_path=True,
+    )
+
+    assert first != second
+    assert r"C:\Program Files (x86)\Scanmatik\smj2534.dll" in first
+    assert r"D:\OEM\Scanmatik\smj2534.dll" in second
+
+
 def test_update_tray_sets_icon_and_title(monkeypatch, tmp_path) -> None:
     client_gui = _import_client_gui(monkeypatch, tmp_path)
     app = client_gui.VCIProxyTrayApp()

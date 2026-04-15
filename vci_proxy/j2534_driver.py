@@ -19,6 +19,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+_SUPPORTED_ARCHITECTURES = ("x86", "x64")
+
 
 # ============================================================================
 # J2534 常量
@@ -184,6 +186,23 @@ def get_python_architecture() -> str:
     return "x64" if struct.calcsize("P") * 8 == 64 else "x86"
 
 
+def normalize_architecture(value: object) -> Optional[str]:
+    """Normalize architecture values to x86/x64/None."""
+    text = str(value or "").strip().lower()
+    if text in _SUPPORTED_ARCHITECTURES:
+        return text
+    if text in {"32", "32-bit", "win32", "x32", "i386", "i686"}:
+        return "x86"
+    if text in {"64", "64-bit", "amd64", "x86_64"}:
+        return "x64"
+    return None
+
+
+def normalize_dll_path(dll_path: str) -> str:
+    """Return a normalized DLL path used for stable identity comparisons."""
+    return os.path.normcase(os.path.abspath(str(dll_path)))
+
+
 def get_dll_architecture(dll_path: str) -> Optional[str]:
     """Best-effort PE architecture detection for a J2534 DLL."""
     try:
@@ -209,6 +228,33 @@ def get_dll_architecture(dll_path: str) -> Optional[str]:
     return None
 
 
+def _driver_preference_key(driver: dict[str, object]) -> tuple:
+    name = str(driver.get("name") or "")
+    vendor = str(driver.get("vendor") or "")
+    dll_path = str(driver.get("dll_path") or "")
+    name_lower = name.lower()
+    vendor_lower = vendor.lower()
+    is_scanmatik = "scanmatik" in name_lower or "scanmatik" in vendor_lower
+    is_sm = name_lower.startswith("sm2") or name_lower.startswith("sm3")
+    architecture = normalize_architecture(driver.get("architecture"))
+    known_arch_priority = 0 if architecture is not None else 1
+    vendor_priority = 0 if (is_scanmatik or is_sm) else 1
+    return (
+        vendor_priority,
+        known_arch_priority,
+        name_lower,
+        vendor_lower,
+        normalize_dll_path(dll_path) if dll_path else "",
+    )
+
+
+def select_best_j2534_driver(drivers: list[dict[str, object]] | None) -> Optional[dict[str, object]]:
+    """Select the most deterministic auto-detect candidate from discovered drivers."""
+    if not drivers:
+        return None
+    return sorted(drivers, key=_driver_preference_key)[0]
+
+
 def discover_j2534_drivers() -> list[dict[str, object]]:
     """Discover installed J2534 drivers from Windows registry.
 
@@ -225,6 +271,7 @@ def discover_j2534_drivers() -> list[dict[str, object]]:
 
     import winreg
     drivers = []
+    seen_paths: set[str] = set()
     python_arch = get_python_architecture()
 
     for hive_flag in (winreg.KEY_READ, winreg.KEY_READ | winreg.KEY_WOW64_32KEY):
@@ -259,16 +306,19 @@ def discover_j2534_drivers() -> list[dict[str, object]]:
                             pass
 
                         if dll_path and os.path.exists(dll_path):
+                            normalized_path = normalize_dll_path(dll_path)
                             # Avoid duplicates (same DLL from 32/64-bit views)
-                            if not any(d['dll_path'] == dll_path for d in drivers):
+                            if normalized_path not in seen_paths:
                                 dll_arch = get_dll_architecture(dll_path)
+                                architecture = normalize_architecture(dll_arch)
                                 drivers.append({
                                     'name': name,
                                     'dll_path': dll_path,
                                     'vendor': vendor,
-                                    'architecture': dll_arch or "unknown",
-                                    'compatible': dll_arch in (None, python_arch),
+                                    'architecture': architecture,
+                                    'compatible': architecture in (None, python_arch),
                                 })
+                                seen_paths.add(normalized_path)
                     finally:
                         winreg.CloseKey(subkey)
                 except OSError:
@@ -276,19 +326,7 @@ def discover_j2534_drivers() -> list[dict[str, object]]:
         finally:
             winreg.CloseKey(root)
 
-    # Sort: prefer Scanmatik drivers (our primary supported hardware),
-    # then alphabetical. This ensures SM2/SM3 are tried before MDI/others
-    # when no explicit DLL path is configured.
-    def _sort_key(d: dict) -> tuple:
-        name_lower = d['name'].lower()
-        vendor_lower = d.get('vendor', '').lower()
-        is_scanmatik = 'scanmatik' in name_lower or 'scanmatik' in vendor_lower
-        is_sm = name_lower.startswith('sm2') or name_lower.startswith('sm3')
-        # 0 = preferred (Scanmatik), 1 = others
-        priority = 0 if (is_scanmatik or is_sm) else 1
-        return (priority, d['name'])
-
-    drivers.sort(key=_sort_key)
+    drivers.sort(key=_driver_preference_key)
     return drivers
 
 

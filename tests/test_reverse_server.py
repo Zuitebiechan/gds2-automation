@@ -15,14 +15,29 @@ from vci_proxy.reverse_server import ReverseProxyServer
 
 
 class _FakeWriter:
-    def __init__(self) -> None:
+    def __init__(self, *, peername=None, closing: bool = False) -> None:
         self.writes: list[bytes] = []
+        self._peername = peername
+        self._closing = closing
+        self.closed = False
 
     def write(self, data: bytes) -> None:
         self.writes.append(data)
 
     async def drain(self) -> None:
         return None
+
+    def get_extra_info(self, name: str):
+        if name == "peername":
+            return self._peername
+        return None
+
+    def is_closing(self) -> bool:
+        return self._closing
+
+    def close(self) -> None:
+        self.closed = True
+        self._closing = True
 
 
 class _FakeReader:
@@ -372,3 +387,47 @@ def test_main_disables_windows_quick_edit_before_starting_server(monkeypatch) ->
     reverse_server_module.main()
 
     assert events[:2] == ["quick-edit", "run"]
+
+
+def test_new_vci_connection_is_rejected_when_existing_tunnel_is_healthy() -> None:
+    server = ReverseProxyServer()
+    server.vci_writer = _FakeWriter(peername=("1.1.1.1", 1111))
+    server._connection_epoch = "epoch-1"
+    server.vci_connected.set()
+    server._tunnel_quality = types.SimpleNamespace(
+        snapshot=lambda: {
+            "connection_epoch": "epoch-1",
+            "connected": True,
+            "fresh": True,
+            "status": "healthy",
+            "reason": "p95 within good threshold",
+        }
+    )
+
+    accepted, reason, existing_addr = server._should_accept_new_vci_connection(("2.2.2.2", 2222))
+
+    assert accepted is False
+    assert reason == "existing_tunnel_healthy"
+    assert existing_addr == ("1.1.1.1", 1111)
+
+
+def test_new_vci_connection_can_replace_stale_existing_tunnel() -> None:
+    server = ReverseProxyServer()
+    server.vci_writer = _FakeWriter(peername=("1.1.1.1", 1111))
+    server._connection_epoch = "epoch-1"
+    server.vci_connected.set()
+    server._tunnel_quality = types.SimpleNamespace(
+        snapshot=lambda: {
+            "connection_epoch": "epoch-1",
+            "connected": True,
+            "fresh": False,
+            "status": "blocked",
+            "reason": "snapshot_stale",
+        }
+    )
+
+    accepted, reason, existing_addr = server._should_accept_new_vci_connection(("2.2.2.2", 2222))
+
+    assert accepted is True
+    assert reason == "existing_tunnel_stale"
+    assert existing_addr == ("1.1.1.1", 1111)

@@ -352,11 +352,32 @@ class ReverseProxyServer:
         self._seen_auth_signatures[cache_key] = now
         return False
 
+    def _should_accept_new_vci_connection(
+        self,
+        new_addr: tuple[str, int] | None,
+    ) -> tuple[bool, str, tuple[str, int] | None]:
+        existing_writer = self.vci_writer
+        if existing_writer is None:
+            return True, "no_existing_tunnel", None
+
+        existing_addr = existing_writer.get_extra_info("peername")
+        is_closing = getattr(existing_writer, "is_closing", None)
+        if callable(is_closing) and is_closing():
+            return True, "existing_writer_closing", existing_addr
+        if not self.vci_connected.is_set():
+            return True, "existing_tunnel_inactive", existing_addr
+
+        snapshot = self._tunnel_quality.snapshot()
+        if snapshot.get("connected") and snapshot.get("fresh"):
+            return False, "existing_tunnel_healthy", existing_addr
+        return True, "existing_tunnel_stale", existing_addr
+
     async def _handle_vci_connection(self, reader: asyncio.StreamReader,
                                      writer: asyncio.StreamWriter):
         """处理 VCI Proxy 的连接"""
         addr = writer.get_extra_info('peername')
         disconnect_reason = "handler_exit"
+        local_epoch: str | None = None
         logger.info("VCI tunnel connected: %s", addr)
 
         # Disable Nagle algorithm for lower latency
@@ -370,12 +391,26 @@ class ReverseProxyServer:
             writer.close()
             return
 
+        accept_new, decision_reason, existing_addr = self._should_accept_new_vci_connection(addr)
+        if not accept_new:
+            logger.warning(
+                "Rejecting additional VCI tunnel: existing_epoch=%s existing_addr=%s new_addr=%s reason=%s",
+                self._connection_epoch,
+                existing_addr,
+                addr,
+                decision_reason,
+            )
+            writer.close()
+            return
+
         # 关闭已有的 VCI 连接
         if self.vci_writer is not None:
             logger.warning(
-                "Replacing existing VCI tunnel: old_epoch=%s new_addr=%s",
+                "Replacing inactive VCI tunnel: old_epoch=%s old_addr=%s new_addr=%s reason=%s",
                 self._connection_epoch,
+                existing_addr,
                 addr,
+                decision_reason,
             )
             old_writer = self.vci_writer
             self.vci_connected.clear()
@@ -393,11 +428,12 @@ class ReverseProxyServer:
         self.vci_reader = reader
         self.vci_writer = writer
         self._connection_counter += 1
-        self._connection_epoch = f"epoch-{int(time.time() * 1000)}-{self._connection_counter:03d}"
-        self._tunnel_quality.mark_connected(self._connection_epoch)
+        local_epoch = f"epoch-{int(time.time() * 1000)}-{self._connection_counter:03d}"
+        self._connection_epoch = local_epoch
+        self._tunnel_quality.mark_connected(local_epoch)
         self._write_tunnel_quality_snapshot()
         self.vci_connected.set()
-        self._probe_task = asyncio.create_task(self._probe_loop(self._connection_epoch))
+        self._probe_task = asyncio.create_task(self._probe_loop(local_epoch))
 
         try:
             while True:
@@ -445,22 +481,32 @@ class ReverseProxyServer:
             disconnect_reason = f"exception:{type(e).__name__}:{e}"
             logger.exception(f"VCI 连接错误: {e}")
         finally:
-            self.vci_connected.clear()
-            self._cancel_probe_task()
-            self._cancel_pending_futures()
-            self._tunnel_quality.mark_disconnected(self._connection_epoch)
+            owns_current_tunnel = self.vci_writer is writer
+            if owns_current_tunnel:
+                self.vci_connected.clear()
+                self._cancel_probe_task()
+                self._cancel_pending_futures()
+                self._tunnel_quality.mark_disconnected(local_epoch)
+                self._write_tunnel_quality_snapshot()
+                self.vci_reader = None
+                self.vci_writer = None
+            else:
+                logger.info(
+                    "VCI tunnel handler exited after ownership changed: addr=%s epoch=%s current_epoch=%s",
+                    addr,
+                    local_epoch,
+                    self._connection_epoch,
+                )
             logger.log(
                 logging.ERROR if disconnect_reason.startswith("exception:") else logging.WARNING,
                 "VCI tunnel disconnected: addr=%s epoch=%s reason=%s",
                 addr,
-                self._connection_epoch,
+                local_epoch,
                 disconnect_reason,
             )
-            self._write_tunnel_quality_snapshot()
-            self.vci_reader = None
-            self.vci_writer = None
             writer.close()
-            print(f"\n*** VCI Proxy 已断开 ***\n")
+            if owns_current_tunnel:
+                print(f"\n*** VCI Proxy 已断开 ***\n")
 
     def _try_serve_cached(self, msg_type: int, body: bytes,
                           sequence: int) -> tuple[Optional[bytes], Optional[int]]:
