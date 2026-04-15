@@ -533,22 +533,32 @@ def serve_worker(host: str, port: int, authkey: bytes, dll_path: str, *, log_fil
         listener = Listener((host, port), authkey=authkey)
         conn = listener.accept()
         while True:
-            request = conn.recv()
+            try:
+                request = conn.recv()
+            except (EOFError, ConnectionResetError, BrokenPipeError, OSError) as exc:
+                logger.info("J2534 worker parent disconnected while waiting for requests: %s", exc)
+                break
             method = str(request.get("method") or "")
             args = tuple(request.get("args") or ())
             if method == "__shutdown__":
-                conn.send({"ok": True, "result": None})
+                try:
+                    conn.send({"ok": True, "result": None})
+                except (EOFError, ConnectionResetError, BrokenPipeError, OSError) as exc:
+                    logger.info("J2534 worker parent disconnected during shutdown ack: %s", exc)
                 break
             try:
                 result = getattr(driver, method)(*args)
-                conn.send({"ok": True, "result": result})
+                response = {"ok": True, "result": result}
             except Exception as exc:
-                conn.send(
-                    {
-                        "ok": False,
-                        "error": f"{type(exc).__name__}: {exc}",
-                    }
-                )
+                response = {
+                    "ok": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            try:
+                conn.send(response)
+            except (EOFError, ConnectionResetError, BrokenPipeError, OSError) as exc:
+                logger.info("J2534 worker parent disconnected while sending response: %s", exc)
+                break
     except Exception:
         logger.exception("J2534 worker fatal error")
         raise

@@ -12,12 +12,13 @@ import asyncio
 import json
 import logging
 import os
+import queue
 import sys
 import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from urllib.parse import urlparse
 
 from PIL import Image, ImageDraw
@@ -140,6 +141,8 @@ STARTUP_NOTIFICATION_MESSAGE = (
     "VCI Proxy is running in the system tray. "
     "Right-click the tray icon to open Settings or Diagnostics."
 )
+_REAL_THREAD = threading.Thread
+_UI_THREAD_STOP = object()
 
 
 # ---------------------------------------------------------------------------
@@ -392,6 +395,75 @@ class VCIProxyTrayApp:
         self._settings_dialog_thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._active_node_assignment: Optional[dict[str, Any]] = None
+        self._ui_thread: Optional[threading.Thread] = None
+        self._ui_queue: queue.Queue[object] | None = None
+        self._ui_thread_lock = threading.Lock()
+
+    def _ensure_ui_thread(self) -> None:
+        """Start one dedicated Tk UI thread on first use."""
+        with self._ui_thread_lock:
+            if self._ui_thread and self._ui_thread.is_alive() and self._ui_queue is not None:
+                return
+            self._ui_queue = queue.Queue()
+            self._ui_thread = _REAL_THREAD(
+                target=self._ui_thread_main,
+                daemon=True,
+                name="vci-proxy-ui",
+            )
+            self._ui_thread.start()
+
+    def _ui_thread_main(self) -> None:
+        """Run all Tk work on a single thread to avoid Tcl cross-thread crashes."""
+        ui_queue = self._ui_queue
+        if ui_queue is None:
+            return
+
+        while True:
+            task = ui_queue.get()
+            if task is _UI_THREAD_STOP:
+                return
+
+            callback, done, state = task
+            try:
+                state["result"] = callback()
+            except BaseException as exc:  # pragma: no cover - surfaced to caller
+                state["error"] = exc
+            finally:
+                done.set()
+
+    def _run_on_ui_thread(self, callback: Callable[[], Any], timeout: float | None = None) -> Any:
+        """Execute one callback on the dedicated UI thread and return its result."""
+        if self._ui_thread and threading.current_thread() is self._ui_thread:
+            return callback()
+
+        self._ensure_ui_thread()
+        if self._ui_queue is None:
+            raise RuntimeError("UI thread queue is not available")
+
+        done = threading.Event()
+        state: dict[str, Any] = {}
+        self._ui_queue.put((callback, done, state))
+        if not done.wait(timeout):
+            raise TimeoutError("Timed out waiting for UI thread")
+        if "error" in state:
+            raise state["error"]
+        return state.get("result")
+
+    def _stop_ui_thread(self, timeout: float = 1.0) -> None:
+        """Best-effort shutdown for the dedicated UI thread."""
+        ui_thread = self._ui_thread
+        ui_queue = self._ui_queue
+        if ui_thread is None or ui_queue is None:
+            return
+        if threading.current_thread() is ui_thread:
+            return
+
+        if ui_thread.is_alive():
+            ui_queue.put(_UI_THREAD_STOP)
+            ui_thread.join(timeout=timeout)
+        if not ui_thread.is_alive():
+            self._ui_thread = None
+            self._ui_queue = None
 
     # --- Status management ---
 
@@ -555,8 +627,7 @@ class VCIProxyTrayApp:
         logger.info("[GUI_CTRL] opening settings dialog")
         self._stop_client()
         try:
-            dialog = ConfigDialog(self._config)
-            result = dialog.show()
+            result = self._run_on_ui_thread(lambda: ConfigDialog(self._config).show())
             if result:
                 logger.info("[GUI_CTRL] settings updated, restarting client")
                 self._config = normalize_config({**self._config, **result})
@@ -597,13 +668,16 @@ class VCIProxyTrayApp:
             try:
                 from vci_proxy.diagnostics_window import DiagnosticsWindow
 
-                win = DiagnosticsWindow(
-                    api_base,
-                    api_token=api_token,
-                    use_session_bootstrap=True,
-                    node_assignment_callback=self._on_node_assignment,
-                )
-                win.show()
+                def _show_window() -> None:
+                    win = DiagnosticsWindow(
+                        api_base,
+                        api_token=api_token,
+                        use_session_bootstrap=True,
+                        node_assignment_callback=self._on_node_assignment,
+                    )
+                    win.show()
+
+                self._run_on_ui_thread(_show_window)
             except Exception as e:
                 logger.exception("Failed to open diagnostics window")
                 self._show_threadsafe_error(
@@ -625,7 +699,7 @@ class VCIProxyTrayApp:
                 root.destroy()
 
         try:
-            _show()
+            self._run_on_ui_thread(_show)
         except Exception:
             # Last resort: keep a log entry even if dialog cannot be shown.
             logger.error("%s: %s", title, message)
@@ -634,6 +708,7 @@ class VCIProxyTrayApp:
         """Quit the application."""
         logger.info("[GUI_CTRL] quit requested")
         self._stop_client()
+        self._stop_ui_thread()
         if self._tray:
             self._tray.stop()
 
@@ -676,31 +751,33 @@ class VCIProxyTrayApp:
 
     def run(self):
         """Main entry point — show config dialog if needed, then start tray."""
-        # If required settings are missing, show settings dialog first.
-        if not self._has_required_config():
-            dialog = ConfigDialog(self._config)
-            result = dialog.show()
-            if not result:
-                # User cancelled first-run dialog — exit
-                return
-            self._config = normalize_config({**self._config, **result})
-            save_config(self._config)
+        try:
+            # If required settings are missing, show settings dialog first.
+            if not self._has_required_config():
+                result = self._run_on_ui_thread(lambda: ConfigDialog(self._config).show())
+                if not result:
+                    # User cancelled first-run dialog — exit
+                    return
+                self._config = normalize_config({**self._config, **result})
+                save_config(self._config)
 
-        # Create tray icon
-        self._tray = pystray.Icon(
-            name="VCI Proxy Client",
-            icon=ICONS["idle"],
-            title="VCI Proxy — Starting...",
-            menu=self._build_menu(),
-        )
-        tray = self._tray
+            # Create tray icon
+            self._tray = pystray.Icon(
+                name="VCI Proxy Client",
+                icon=ICONS["idle"],
+                title="VCI Proxy — Starting...",
+                menu=self._build_menu(),
+            )
+            tray = self._tray
 
-        # Start client before entering tray loop
-        self._start_client()
+            # Start client before entering tray loop
+            self._start_client()
 
-        # pystray.run() blocks — this is the main loop
-        if tray is not None:
-            tray.run(setup=self._on_tray_setup)
+            # pystray.run() blocks — this is the main loop
+            if tray is not None:
+                tray.run(setup=self._on_tray_setup)
+        finally:
+            self._stop_ui_thread()
 
 
 # ---------------------------------------------------------------------------
@@ -720,6 +797,7 @@ def main():
             logging.StreamHandler(),
             logging.FileHandler(str(log_file), encoding='utf-8'),
         ],
+        force=True,
     )
     logger.info("[GUI_CTRL] client_gui starting pid=%s log_file=%s", os.getpid(), log_file)
 

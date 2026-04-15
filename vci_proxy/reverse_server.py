@@ -226,13 +226,17 @@ class ReverseProxyServer:
 
         Returns True if authenticated, False otherwise.
         """
+        peer = writer.get_extra_info("peername")
         try:
             header = await asyncio.wait_for(
                 reader.readexactly(HEADER_SIZE),
                 timeout=self.config.auth.auth_timeout_s,
             )
         except (asyncio.TimeoutError, asyncio.IncompleteReadError):
-            logger.warning("VCI client did not send registration message in time")
+            logger.warning("VCI client did not send registration message in time: %s", peer)
+            return False
+        except (ConnectionResetError, BrokenPipeError, OSError) as exc:
+            logger.warning("VCI client disconnected during auth: %s error=%s", peer, exc)
             return False
 
         magic, length, msg_type, sequence = struct.unpack('>IIHI', header)
@@ -249,20 +253,39 @@ class ReverseProxyServer:
         except (ValueError, TimeoutError, ConnectionError) as exc:
             logger.warning("Invalid auth frame from VCI client: %s", exc)
             return False
+        except (ConnectionResetError, BrokenPipeError, OSError) as exc:
+            logger.warning("VCI client disconnected while sending auth frame: %s error=%s", peer, exc)
+            return False
 
         if msg_type == MsgType.AUTH_REQ:
             if self.config.auth.enabled and not self.config.auth.token:
                 logger.error("Auth enabled but no server token is configured")
                 rsp = ProtocolEncoder.encode_auth_rsp(False, "server auth token not configured", sequence)
-                writer.write(rsp)
-                await writer.drain()
+                try:
+                    writer.write(rsp)
+                    await writer.drain()
+                except (ConnectionResetError, BrokenPipeError, OSError) as exc:
+                    logger.warning(
+                        "VCI client disconnected before auth response could be sent: %s error=%s",
+                        peer,
+                        exc,
+                    )
+                    return False
                 return False
             if not self.config.auth.enabled:
                 # Auth not required, but client sent AUTH_REQ -- accept it
                 logger.info("Auth not required, accepting AUTH_REQ")
                 rsp = ProtocolEncoder.encode_auth_rsp(True, "ok", sequence)
-                writer.write(rsp)
-                await writer.drain()
+                try:
+                    writer.write(rsp)
+                    await writer.drain()
+                except (ConnectionResetError, BrokenPipeError, OSError) as exc:
+                    logger.warning(
+                        "VCI client disconnected before auth response could be sent: %s error=%s",
+                        peer,
+                        exc,
+                    )
+                    return False
                 return True
 
             timestamp, signature = ProtocolDecoder.decode_auth_req(body)
@@ -273,8 +296,16 @@ class ReverseProxyServer:
                 success = False
                 reason = "replay detected"
             rsp = ProtocolEncoder.encode_auth_rsp(success, reason, sequence)
-            writer.write(rsp)
-            await writer.drain()
+            try:
+                writer.write(rsp)
+                await writer.drain()
+            except (ConnectionResetError, BrokenPipeError, OSError) as exc:
+                logger.warning(
+                    "VCI client disconnected before auth response could be sent: %s error=%s",
+                    peer,
+                    exc,
+                )
+                return False
 
             if success:
                 logger.info("VCI client authenticated successfully")
@@ -293,8 +324,16 @@ class ReverseProxyServer:
             ack_header = struct.pack(
                 '>IIHI', MAGIC, HEADER_SIZE, MsgType.HEARTBEAT_ACK, sequence
             )
-            writer.write(ack_header)
-            await writer.drain()
+            try:
+                writer.write(ack_header)
+                await writer.drain()
+            except (ConnectionResetError, BrokenPipeError, OSError) as exc:
+                logger.warning(
+                    "VCI client disconnected before handshake ACK could be sent: %s error=%s",
+                    peer,
+                    exc,
+                )
+                return False
 
             # Phase 2: require a second heartbeat within 5 seconds.
             # Real VCI clients will respond; port scanners won't.
@@ -305,6 +344,13 @@ class ReverseProxyServer:
             except (asyncio.TimeoutError, asyncio.IncompleteReadError):
                 logger.warning(
                     "VCI client did not complete two-phase handshake (no 2nd heartbeat)"
+                )
+                return False
+            except (ConnectionResetError, BrokenPipeError, OSError) as exc:
+                logger.warning(
+                    "VCI client disconnected during handshake phase 2: %s error=%s",
+                    peer,
+                    exc,
                 )
                 return False
 
@@ -318,6 +364,13 @@ class ReverseProxyServer:
             except (ValueError, TimeoutError, ConnectionError) as exc:
                 logger.warning("Invalid handshake frame in phase 2: %s", exc)
                 return False
+            except (ConnectionResetError, BrokenPipeError, OSError) as exc:
+                logger.warning(
+                    "VCI client disconnected while finishing handshake phase 2: %s error=%s",
+                    peer,
+                    exc,
+                )
+                return False
 
             if msg_type2 not in (MsgType.HEARTBEAT, MsgType.HEARTBEAT_ACK):
                 logger.warning(
@@ -329,8 +382,16 @@ class ReverseProxyServer:
             ack2 = struct.pack(
                 '>IIHI', MAGIC, HEADER_SIZE, MsgType.HEARTBEAT_ACK, seq2
             )
-            writer.write(ack2)
-            await writer.drain()
+            try:
+                writer.write(ack2)
+                await writer.drain()
+            except (ConnectionResetError, BrokenPipeError, OSError) as exc:
+                logger.warning(
+                    "VCI client disconnected before handshake completion ACK could be sent: %s error=%s",
+                    peer,
+                    exc,
+                )
+                return False
 
             logger.info("VCI client registered via two-phase heartbeat handshake")
             return True
@@ -477,6 +538,9 @@ class ReverseProxyServer:
 
         except asyncio.IncompleteReadError as exc:
             disconnect_reason = f"eof expected={exc.expected} partial={len(exc.partial)}"
+        except (ConnectionResetError, BrokenPipeError, OSError) as exc:
+            disconnect_reason = f"connection_lost:{type(exc).__name__}:{exc}"
+            logger.warning("VCI tunnel lost connection: addr=%s error=%s", addr, exc)
         except Exception as e:
             disconnect_reason = f"exception:{type(e).__name__}:{e}"
             logger.exception(f"VCI 连接错误: {e}")

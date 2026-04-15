@@ -53,6 +53,30 @@ class _FakeReader:
         return chunk
 
 
+class _ResettingReader:
+    def __init__(self, exc: BaseException | None = None) -> None:
+        self._exc = exc or ConnectionResetError(64, "指定的网络名不再可用。")
+
+    async def readexactly(self, n: int) -> bytes:
+        raise self._exc
+
+
+class _StepReader:
+    def __init__(self, *steps: object) -> None:
+        self._steps = list(steps)
+
+    async def readexactly(self, n: int) -> bytes:
+        if not self._steps:
+            raise AssertionError("unexpected read")
+        step = self._steps.pop(0)
+        if isinstance(step, BaseException):
+            raise step
+        data = bytes(step)
+        if len(data) != n:
+            raise AssertionError(f"expected {n} bytes, got {len(data)}")
+        return data
+
+
 def test_authenticate_vci_accepts_valid_auth_request(monkeypatch) -> None:
     server = ReverseProxyServer(config=ProxyConfig.from_args(auth_token="secret"))
     reader = _FakeReader(ProtocolEncoder.encode_auth_req(123, b"x" * 32, sequence=7))
@@ -130,6 +154,85 @@ def test_authenticate_vci_rejects_oversized_frame_length() -> None:
 
     assert accepted is False
     assert writer.writes == []
+
+
+def test_authenticate_vci_handles_connection_reset_during_initial_read(caplog) -> None:
+    server = ReverseProxyServer(config=ProxyConfig.from_args(auth_token="secret"))
+    reader = _ResettingReader()
+    writer = _FakeWriter(peername=("80.94.95.221", 64154))
+
+    with caplog.at_level(logging.WARNING):
+        accepted = asyncio.run(server._authenticate_vci(reader, writer))
+
+    assert accepted is False
+    assert "VCI client disconnected during auth" in caplog.text
+    assert "80.94.95.221" in caplog.text
+
+
+def test_handle_vci_connection_ignores_auth_stage_connection_reset(caplog) -> None:
+    async def _run() -> None:
+        server = ReverseProxyServer(config=ProxyConfig.from_args(auth_token="secret"))
+        current_writer = _FakeWriter(peername=("61.173.158.139", 6481))
+        server.vci_writer = current_writer
+        server.vci_connected.set()
+        server._connection_epoch = "epoch-existing"
+        server._tunnel_quality = types.SimpleNamespace(
+            snapshot=lambda: {"connected": True, "fresh": True}
+        )
+
+        incoming_writer = _FakeWriter(peername=("80.94.95.221", 64154))
+
+        with caplog.at_level(logging.WARNING):
+            await server._handle_vci_connection(_ResettingReader(), incoming_writer)
+
+        assert server.vci_writer is current_writer
+        assert current_writer.closed is False
+        assert incoming_writer.closed is True
+
+    asyncio.run(_run())
+
+    assert "VCI client disconnected during auth" in caplog.text
+    assert "VCI tunnel authentication failed" in caplog.text
+    assert "Unhandled exception in client_connected_cb" not in caplog.text
+
+
+def test_handle_vci_connection_treats_midstream_connection_reset_as_clean_disconnect(
+    monkeypatch,
+    caplog,
+) -> None:
+    async def _run() -> None:
+        server = ReverseProxyServer(config=ProxyConfig.from_args(auth_token="secret"))
+        auth_frame = ProtocolEncoder.encode_auth_req(123, b"x" * 32, sequence=7)
+        reader = _StepReader(
+            auth_frame[:HEADER_SIZE],
+            auth_frame[HEADER_SIZE:],
+            ConnectionResetError(64, "指定的网络名不再可用。"),
+        )
+        writer = _FakeWriter(peername=("61.173.158.139", 6535))
+
+        monkeypatch.setattr(
+            "vci_proxy.reverse_server.verify_signature",
+            lambda token, timestamp, signature: (True, "ok"),
+        )
+
+        async def _probe_loop(epoch: str) -> None:
+            return None
+
+        server._probe_loop = _probe_loop
+        server._write_tunnel_quality_snapshot = lambda: None
+
+        with caplog.at_level(logging.WARNING):
+            await server._handle_vci_connection(reader, writer)
+
+        assert writer.closed is True
+        assert server.vci_writer is None
+        assert server.vci_connected.is_set() is False
+
+    asyncio.run(_run())
+
+    assert "VCI tunnel lost connection" in caplog.text
+    assert "VCI tunnel disconnected" in caplog.text
+    assert not any(record.exc_info for record in caplog.records)
 
 
 def test_build_server_tls_context_loads_cert_chain_and_optional_client_ca(monkeypatch) -> None:

@@ -379,6 +379,7 @@ def test_run_settings_dialog_preserves_existing_tls_config(monkeypatch, tmp_path
     monkeypatch.setattr(client_gui, "save_config", lambda cfg: observed.setdefault("saved", dict(cfg)))
     monkeypatch.setattr(app, "_start_client", lambda: observed.setdefault("started", True))
     monkeypatch.setattr(app, "_stop_client", lambda: observed.setdefault("stopped", True))
+    monkeypatch.setattr(app, "_run_on_ui_thread", lambda callback, timeout=None: callback())
 
     app._run_settings_dialog()
 
@@ -426,9 +427,15 @@ def test_run_prompts_for_settings_when_auth_token_is_missing(monkeypatch, tmp_pa
     monkeypatch.setattr(client_gui, "ConfigDialog", _FakeDialog)
     monkeypatch.setattr(client_gui, "save_config", lambda cfg: observed.setdefault("saved", dict(cfg)))
     monkeypatch.setattr(app, "_start_client", lambda: observed.setdefault("started", True))
+    monkeypatch.setattr(
+        app,
+        "_run_on_ui_thread",
+        lambda callback, timeout=None: observed.setdefault("ui_calls", []).append(True) or callback(),
+    )
 
     app.run()
 
+    assert observed["ui_calls"] == [True]
     assert observed["dialog_config"]["auth_token"] == ""
     assert observed["saved"]["auth_token"] == "secret"
     assert observed["saved"]["tls_enabled"] is True
@@ -537,6 +544,7 @@ def test_on_diagnostics_opens_window_with_expected_api_base(monkeypatch, tmp_pat
     app = client_gui.VCIProxyTrayApp()
     app._config = {"api_scheme": "http", "host": "127.0.0.1", "api_port": 8080, "api_token": ""}
     app._show_threadsafe_error = lambda title, message: pytest.fail(f"unexpected error dialog: {title}: {message}")
+    app._run_on_ui_thread = lambda callback, timeout=None: callback()
 
     app._on_diagnostics()
 
@@ -596,6 +604,7 @@ def test_on_diagnostics_supports_https_and_api_token(monkeypatch, tmp_path) -> N
         "api_token": "api-secret",
     }
     app._show_threadsafe_error = lambda title, message: pytest.fail(f"unexpected error dialog: {title}: {message}")
+    app._run_on_ui_thread = lambda callback, timeout=None: callback()
 
     app._on_diagnostics()
 
@@ -688,3 +697,44 @@ def test_on_node_assignment_none_clears_active_assignment_and_restarts(monkeypat
 
     assert app._active_node_assignment is None
     assert restarted == [True]
+
+
+def test_show_threadsafe_error_uses_single_ui_executor(monkeypatch, tmp_path) -> None:
+    client_gui = _import_client_gui(monkeypatch, tmp_path)
+    app = client_gui.VCIProxyTrayApp()
+    observed: dict[str, object] = {"ui_calls": 0}
+
+    def _run_on_ui_thread(callback, timeout=None):
+        observed["ui_calls"] = int(observed["ui_calls"]) + 1
+        return callback()
+
+    monkeypatch.setattr(app, "_run_on_ui_thread", _run_on_ui_thread)
+    monkeypatch.setattr(client_gui.messagebox, "showerror", lambda title, message: observed.setdefault("dialog", (title, message)))
+    monkeypatch.setattr(
+        client_gui.tk,
+        "Tk",
+        lambda: types.SimpleNamespace(withdraw=lambda: None, destroy=lambda: None),
+    )
+
+    app._show_threadsafe_error("Diagnostics Error", "boom")
+
+    assert observed["ui_calls"] == 1
+    assert observed["dialog"] == ("Diagnostics Error", "boom")
+
+
+def test_main_forces_logging_configuration(monkeypatch, tmp_path) -> None:
+    client_gui = _import_client_gui(monkeypatch, tmp_path)
+    observed: dict[str, object] = {}
+
+    monkeypatch.setattr(client_gui.logging, "basicConfig", lambda **kwargs: observed.update(kwargs))
+    monkeypatch.setattr(
+        client_gui,
+        "VCIProxyTrayApp",
+        lambda: types.SimpleNamespace(run=lambda: observed.setdefault("ran", True)),
+    )
+
+    client_gui.main()
+
+    assert observed["force"] is True
+    assert observed["ran"] is True
+    assert len(observed["handlers"]) == 2
