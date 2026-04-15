@@ -103,6 +103,33 @@ def _read_object_field(
     return value
 
 
+def _active_session_conflict_payload(exc: RuntimeError) -> dict[str, Any]:
+    """Build one machine-readable payload for an already-active session conflict."""
+    payload = {
+        "success": False,
+        "error": str(exc),
+    }
+    error_text = str(exc).lower()
+    if "already active" not in error_text:
+        return payload
+
+    active_session = get_orchestrator().get_active_session()
+    if active_session is None:
+        return payload
+
+    payload.update(
+        {
+            "error_code": "active_session_exists",
+            "active_session_id": active_session.session_id,
+            "active_session_status": active_session.status.value,
+            "active_backend_name": active_session.backend_name,
+        }
+    )
+    if active_session.pending_decision is not None:
+        payload["decision"] = active_session.pending_decision.to_dict()
+    return payload
+
+
 def _resolve_bootstrap_route_preferences(
     data: dict[str, Any],
 ) -> dict[str, Any]:
@@ -529,7 +556,7 @@ def session_start():
     except ValueError as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
     except RuntimeError as exc:
-        return jsonify({"success": False, "error": str(exc)}), 409
+        return jsonify(_active_session_conflict_payload(exc)), 409
     except RequestPayloadError as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
 

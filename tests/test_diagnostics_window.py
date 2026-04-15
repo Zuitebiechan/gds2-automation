@@ -149,6 +149,35 @@ def test_handle_session_status_result_disables_clear_dtcs_while_session_ai_activ
     assert window._clear_dtc_button.state == tk.DISABLED
 
 
+def test_handle_session_status_result_surfaces_pending_decision() -> None:
+    window = _build_window(current_page="")
+    prompted: list[dict[str, object]] = []
+    decision = {
+        "decision_id": "decision-1",
+        "prompt": "Choose a backend",
+        "options": [
+            {"option_id": "backend:gds2", "label": "GDS2", "description": "GM"},
+        ],
+    }
+    window._prompt_decision = lambda payload: prompted.append(payload) or True
+    window._show_decision_modal = lambda payload: prompted.append({"modal": payload})
+
+    window._handle_session_status_result(
+        {
+            "success": True,
+            "active_ai_session_id": "",
+            "active_navigation_session_id": "",
+            "live_data_active": False,
+            "pending_decision": decision,
+            "backend_state_summary": {
+                "current_page": "vehicle_selection",
+            },
+        }
+    )
+
+    assert prompted == [decision]
+
+
 def test_request_headers_include_api_token_when_configured() -> None:
     window = DiagnosticsWindow.__new__(DiagnosticsWindow)
     window._api_token = "api-secret"
@@ -320,6 +349,60 @@ def test_handle_session_start_result_binds_active_assignment_via_bootstrap_api()
             },
         )
     ]
+
+
+def test_handle_session_start_result_recovers_existing_active_session() -> None:
+    window = DiagnosticsWindow.__new__(DiagnosticsWindow)
+    bind_calls: list[str] = []
+    prompted: list[dict[str, object]] = []
+    messages: list[tuple[str, str]] = []
+    decision = {
+        "decision_id": "decision-1",
+        "prompt": "Choose a backend",
+        "options": [
+            {"option_id": "backend:gds2", "label": "GDS2", "description": "GM"},
+        ],
+    }
+    window._session_start_button = _Widget()
+    window._session_abort_button = _Widget()
+    window._start_button = _Widget()
+    window._select_data_category_button = _Widget()
+    window._session_status_var = _Var("")
+    window._session_hint_var = _Var("")
+    window._active_assignment = {"assignment_id": "assign-123"}
+    window._append_agent_message = lambda role, message: messages.append((role, message))
+    window._set_current_page = lambda page: setattr(window, "_current_page", page)
+    window._set_agent_prompt = lambda *args, **kwargs: None
+    window._refresh_action_buttons = lambda: None
+    window._prompt_decision = lambda payload: prompted.append(payload) or True
+    window._show_decision_modal = lambda payload: prompted.append({"modal": payload})
+    window._bind_active_assignment = lambda session_id: bind_calls.append(session_id)
+    window._start_session_sse_thread = lambda session_id: setattr(window, "_session_sse_started", session_id)
+    window._request_session_status_refresh = lambda: setattr(window, "_status_refresh_requested", True)
+    window._release_active_assignment = lambda: bind_calls.append("released")
+
+    window._handle_session_start_result(
+        {
+            "success": False,
+            "error": "Another session is already active (session_id=session-123, status=running)",
+            "error_code": "active_session_exists",
+            "active_session_id": "session-123",
+            "active_session_status": "running",
+            "active_backend_name": "gds2",
+            "decision": decision,
+        }
+    )
+
+    assert window._session_id == "session-123"
+    assert window._session_start_button.state == tk.DISABLED
+    assert window._session_abort_button.state == tk.NORMAL
+    assert window._start_button.state == tk.NORMAL
+    assert window._session_sse_started == "session-123"
+    assert window._status_refresh_requested is True
+    assert bind_calls == ["session-123"]
+    assert prompted == [decision]
+    assert "Recovered session" in window._session_status_var.get()
+    assert any("Recovered existing session" in message for _, message in messages)
 
 
 def test_handle_session_done_releases_assignment_and_restores_bootstrap_base() -> None:

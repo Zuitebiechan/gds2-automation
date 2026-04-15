@@ -82,6 +82,44 @@ def test_session_start_rejects_non_string_brand(monkeypatch):
     }
 
 
+def test_session_start_returns_active_session_metadata_on_conflict(monkeypatch):
+    _install_fake_flask_stack(monkeypatch, {"brand": "GM"})
+    session_api = _fresh_import(monkeypatch, "server.api.session")
+    active_session = types.SimpleNamespace(
+        session_id="session-123",
+        status=types.SimpleNamespace(value="running"),
+        backend_name="gds2",
+        pending_decision=None,
+    )
+    monkeypatch.setattr(session_api, "_runtime", lambda: None)
+    monkeypatch.setattr(
+        session_api,
+        "start_business_session",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError(
+                "Another session is already active (session_id=session-123, status=running)"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        session_api,
+        "get_orchestrator",
+        lambda: types.SimpleNamespace(get_active_session=lambda: active_session),
+    )
+
+    payload, status = session_api.session_start()
+
+    assert status == 409
+    assert payload == {
+        "success": False,
+        "error": "Another session is already active (session_id=session-123, status=running)",
+        "error_code": "active_session_exists",
+        "active_session_id": "session-123",
+        "active_session_status": "running",
+        "active_backend_name": "gds2",
+    }
+
+
 def test_session_execute_rejects_non_object_args(monkeypatch):
     _install_fake_flask_stack(monkeypatch, {"session_id": "sess-1", "action": "go_back", "args": ["bad"]})
     session_api = _fresh_import(monkeypatch, "server.api.session")

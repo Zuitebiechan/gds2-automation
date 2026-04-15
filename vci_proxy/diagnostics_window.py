@@ -850,6 +850,112 @@ class DiagnosticsWindow:
         value = payload.get("error") if isinstance(payload, dict) else None
         return str(value).strip() if value else fallback
 
+    def _active_session_id_from_payload(self, payload: dict[str, Any]) -> str:
+        session_id = str(payload.get("active_session_id") or "").strip()
+        if session_id:
+            return session_id
+
+        error_text = self._error_message(payload, "")
+        match = re.search(r"session_id=([A-Za-z0-9_-]+)", error_text)
+        if match:
+            return match.group(1)
+        return ""
+
+    def _activate_session(
+        self,
+        *,
+        session_id: str,
+        status: str,
+        workflow: str = "",
+        decision: dict[str, Any] | None = None,
+        recovered: bool = False,
+    ) -> None:
+        self._session_id = session_id
+        sid_preview = (self._session_id or "")[:8]
+
+        self._session_start_button.configure(state=tk.DISABLED)
+        self._session_abort_button.configure(state=tk.NORMAL)
+        self._session_category_confirmed = False
+        self._set_current_page("")
+        self._set_agent_prompt(None, "", [])
+        self._refresh_action_buttons()
+
+        label = "Recovered session" if recovered else "Session"
+        self._session_status_var.set(
+            f"{label} {sid_preview}... status={status}"
+            + (f" workflow={workflow}" if workflow else "")
+        )
+
+        is_running = str(status).lower() == "running"
+        self._start_button.configure(state=tk.NORMAL if is_running else tk.DISABLED)
+        if is_running:
+            if recovered:
+                self._set_session_hint(
+                    "Recovered the existing session after reconnect. Continue with Start Agent Diagnostics."
+                )
+                self._append_agent_message(
+                    "agent",
+                    f"Recovered existing session (ID={sid_preview}...). Continue with Start Agent Diagnostics.",
+                )
+            else:
+                self._set_session_hint("Session started. Continue with Start Agent Diagnostics.")
+                self._append_agent_message(
+                    "agent",
+                    f"Session started (ID={sid_preview}...). Continue with Start Agent Diagnostics.",
+                )
+        else:
+            if recovered:
+                self._set_session_hint(
+                    "Recovered an existing session that is awaiting a decision. Please choose an option below."
+                )
+                self._append_agent_message(
+                    "agent",
+                    "Recovered an existing session that is awaiting a decision. Please choose an option below.",
+                )
+            else:
+                self._set_session_hint(
+                    "Session is awaiting a decision before diagnostics can continue."
+                )
+                self._append_agent_message(
+                    "agent",
+                    "Session is awaiting a decision. Please choose an option below.",
+                )
+
+        if decision:
+            if not self._prompt_decision(decision):
+                self._show_decision_modal(decision)
+
+        if self._session_id:
+            if getattr(self, "_active_assignment", None):
+                self._bind_active_assignment(self._session_id)
+            self._start_session_sse_thread(self._session_id)
+            self._request_session_status_refresh()
+
+    def _recover_existing_session(self, payload: dict[str, Any]) -> bool:
+        if str(payload.get("error_code") or "").strip() != "active_session_exists":
+            return False
+
+        session_id = self._active_session_id_from_payload(payload)
+        if not session_id:
+            return False
+
+        status = str(payload.get("active_session_status") or "").strip() or "running"
+        workflow = str(
+            payload.get("active_backend_name")
+            or payload.get("backend_name")
+            or payload.get("workflow")
+            or ""
+        ).strip()
+        decision = payload.get("decision")
+        self._activate_session(
+            session_id=session_id,
+            status=status,
+            workflow=workflow,
+            decision=decision if isinstance(decision, dict) else None,
+            recovered=True,
+        )
+        return True
+
     def _append_agent_message(self, role: str, message: str) -> None:
         """Append one dialogue line to chat-like agent panel."""
         if not hasattr(self, "_agent_dialog_text"):
@@ -1586,6 +1692,10 @@ class DiagnosticsWindow:
         self._session_ai_active = bool(payload.get("active_ai_session_id"))
         self._session_navigation_active = bool(payload.get("active_navigation_session_id"))
         self._set_current_page(self._extract_current_page(payload))
+        decision = payload.get("pending_decision")
+        if isinstance(decision, dict):
+            if not self._prompt_decision(decision):
+                self._show_decision_modal(decision)
         self._refresh_action_buttons()
 
     def _handle_select_module_result(self, payload: dict[str, Any]) -> None:
@@ -2344,58 +2454,24 @@ class DiagnosticsWindow:
 
     def _handle_session_start_result(self, payload: dict[str, Any]) -> None:
         if not payload.get("success"):
+            if self._recover_existing_session(payload):
+                return
             if getattr(self, "_active_assignment", None):
                 self._release_active_assignment()
+            error_text = self._error_message(payload, "Could not start session.")
             self._session_start_button.configure(state=tk.NORMAL)
             self._start_button.configure(state=tk.DISABLED)
-            self._session_status_var.set(
-                f"Failed: {self._error_message(payload, 'Could not start session.')}"
-            )
-            self._set_session_hint("Hint: 请输入车辆品牌（例如 Chevrolet / GM China）后重试 Start Session。")
-            self._append_agent_message("agent", "Session 启动失败，请检查品牌和后端状态。")
+            self._session_status_var.set(f"Failed: {error_text}")
+            self._set_session_hint(f"Start Session failed: {error_text}")
+            self._append_agent_message("agent", f"Session start failed: {error_text}")
             return
 
-        self._session_id = payload.get("session_id", "")
-        status = payload.get("status", "")
-        workflow = payload.get("workflow")
-        sid_preview = (self._session_id or "")[:8]
-
-        self._session_start_button.configure(state=tk.DISABLED)
-        self._session_abort_button.configure(state=tk.NORMAL)
-        self._session_category_confirmed = False
-        self._set_current_page("")
-        self._set_agent_prompt(None, "", [])
-        self._refresh_action_buttons()
-        self._session_status_var.set(
-            f"Session {sid_preview}... status={status}"
-            + (f" workflow={workflow}" if workflow else "")
+        self._activate_session(
+            session_id=str(payload.get("session_id") or "").strip(),
+            status=str(payload.get("status") or "").strip(),
+            workflow=str(payload.get("workflow") or "").strip(),
+            decision=payload.get("decision") if isinstance(payload.get("decision"), dict) else None,
         )
-        is_running = str(status).lower() == "running"
-        self._start_button.configure(state=tk.NORMAL if is_running else tk.DISABLED)
-        if is_running:
-            self._set_session_hint("Session 已启动：下一步点击 Start Agent Diagnostics。")
-            self._append_agent_message(
-                "agent",
-                f"Session 已启动 (ID={sid_preview}...)。请点击 Start Agent Diagnostics。",
-            )
-        else:
-            self._set_session_hint("Session 需要先完成决策选择，然后才能启动诊断。")
-            self._append_agent_message(
-                "agent",
-                "Session 当前处于待决策状态。请先在下方下拉框里完成选择。",
-            )
-
-        # If the start response already includes a decision, show it
-        decision = payload.get("decision")
-        if decision:
-            if not self._prompt_decision(decision):
-                self._show_decision_modal(decision)
-
-        # Start SSE listener
-        if self._session_id:
-            self._bind_active_assignment(self._session_id)
-            self._start_session_sse_thread(self._session_id)
-            self._request_session_status_refresh()
 
     def _handle_session_progress(self, payload: dict[str, Any]) -> None:
         message = payload.get("message", "Processing...")
