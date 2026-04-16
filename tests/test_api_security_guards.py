@@ -516,6 +516,11 @@ def test_load_zhipu_api_key_ignores_non_string_config_value(monkeypatch, tmp_pat
 
 def test_load_openai_config_reads_appdata_config(monkeypatch, tmp_path):
     _install_fake_flask_stack(monkeypatch, None)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
+    monkeypatch.delenv("OPENAI_REASONING_EFFORT", raising=False)
     config_dir = tmp_path / "VCI_Proxy"
     config_dir.mkdir()
     (config_dir / "config.json").write_text(
