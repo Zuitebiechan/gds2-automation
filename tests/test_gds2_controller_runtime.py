@@ -798,3 +798,74 @@ def test_navigation_controller_recover_data_display_connection_backtracks_when_o
     assert result.success is True
     assert result.page == GDS2Page.DATA_DISPLAY
     assert result.context["recovery_method"] == "backtrack"
+
+
+def test_navigation_controller_recover_data_display_connection_accepts_direct_data_display_after_back() -> None:
+    controller = NavigationController(nav=MagicMock())
+    controller.detect_current_page = lambda retries=0: GDS2Page.J2534_DISCONNECT
+    controller.get_available_buttons = lambda: {"OK": False}
+
+    back_calls: list[str] = []
+
+    def _go_back() -> NavigationResult:
+        back_calls.append("back")
+        return NavigationResult(success=True, page=GDS2Page.DATA_DISPLAY, context={})
+
+    controller.go_back = _go_back
+    controller.select_data_category = MagicMock()
+
+    result = controller.recover_data_display_connection(
+        data_category="Engine Data",
+        allow_backtrack=True,
+        backtrack_attempts=1,
+    )
+
+    assert back_calls == ["back"]
+    controller.select_data_category.assert_not_called()
+    assert result.success is True
+    assert result.page == GDS2Page.DATA_DISPLAY
+    assert result.context["recovery_method"] == "backtrack"
+
+
+def test_navigation_controller_recover_data_display_connection_waits_out_loading_after_back() -> None:
+    controller = NavigationController(nav=MagicMock())
+    controller.detect_current_page = lambda retries=0: GDS2Page.J2534_DISCONNECT
+    controller.get_available_buttons = lambda: {"OK": False}
+
+    back_calls: list[str] = []
+    select_calls: list[str] = []
+
+    def _go_back() -> NavigationResult:
+        back_calls.append("back")
+        return NavigationResult(success=True, page=GDS2Page.LOADING, context={})
+
+    def _select_data_category(category: str) -> NavigationResult:
+        select_calls.append(category)
+        return NavigationResult(
+            success=True,
+            page=GDS2Page.DATA_DISPLAY,
+            selected=category,
+            context={"data_category": category},
+        )
+
+    controller.go_back = _go_back
+    controller.select_data_category = _select_data_category
+    controller._wait_for_transition_or_detect = MagicMock(return_value=GDS2Page.DATA_LIST)
+
+    result = controller.recover_data_display_connection(
+        data_category="Engine Data",
+        allow_backtrack=True,
+        backtrack_attempts=1,
+    )
+
+    assert back_calls == ["back"]
+    controller._wait_for_transition_or_detect.assert_called_once_with(
+        GDS2Page.LOADING,
+        timeout=10.0,
+        timeout_message="Loading page did not settle during reconnect backtrack",
+        detect_retries=0,
+    )
+    assert select_calls == ["Engine Data"]
+    assert result.success is True
+    assert result.page == GDS2Page.DATA_DISPLAY
+    assert result.context["recovery_method"] == "backtrack"

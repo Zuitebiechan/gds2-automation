@@ -1206,6 +1206,23 @@ class NavigationController:
             )
         return self.select_sub_category(target_sub_category)
 
+    def _settle_recovery_page(
+        self,
+        page: GDS2Page,
+        *,
+        timeout: float = 10.0,
+        timeout_message: str,
+    ) -> GDS2Page:
+        """Wait out transient recovery/loading pages before deciding next action."""
+        if page != GDS2Page.LOADING:
+            return page
+        return self._wait_for_transition_or_detect(
+            GDS2Page.LOADING,
+            timeout=timeout,
+            timeout_message=timeout_message,
+            detect_retries=0,
+        )
+
     def _recover_data_display_by_backtrack(
         self,
         *,
@@ -1216,7 +1233,7 @@ class NavigationController:
         last_failure: Optional[NavigationResult] = None
         for _ in range(max(1, backtrack_attempts)):
             back_result = self.go_back()
-            if not back_result.success or back_result.page != GDS2Page.DATA_LIST:
+            if not back_result.success:
                 return NavigationResult(
                     success=False,
                     page=back_result.page,
@@ -1224,10 +1241,45 @@ class NavigationController:
                     context=self._context.copy(),
                 )
 
+            settled_back_page = self._settle_recovery_page(
+                back_result.page,
+                timeout_message="Loading page did not settle during reconnect backtrack",
+            )
+            if settled_back_page == GDS2Page.DATA_DISPLAY:
+                return NavigationResult(
+                    success=True,
+                    page=GDS2Page.DATA_DISPLAY,
+                    context={**self._context.copy(), "recovery_method": "backtrack"},
+                )
+            if settled_back_page == GDS2Page.SUB_DATA_LIST:
+                resumed = self._resume_recovery_sub_category(
+                    NavigationResult(
+                        success=True,
+                        page=GDS2Page.SUB_DATA_LIST,
+                        context=self._context.copy(),
+                    )
+                )
+                if resumed.success and resumed.page == GDS2Page.DATA_DISPLAY:
+                    resumed.context["recovery_method"] = "backtrack"
+                    return resumed
+                return resumed
+            if settled_back_page != GDS2Page.DATA_LIST:
+                last_failure = NavigationResult(
+                    success=False,
+                    page=settled_back_page,
+                    error=back_result.error or "Failed to return to Data List after disconnect.",
+                    context=self._context.copy(),
+                )
+                continue
+
             reenter = self.select_data_category(target_category)
             if not reenter.success:
                 return reenter
 
+            reenter.page = self._settle_recovery_page(
+                reenter.page,
+                timeout_message="Loading page did not settle after reconnect category re-entry",
+            )
             reenter = self._resume_recovery_sub_category(reenter)
             if reenter.success and reenter.page == GDS2Page.DATA_DISPLAY:
                 reenter.context["recovery_method"] = "backtrack"
