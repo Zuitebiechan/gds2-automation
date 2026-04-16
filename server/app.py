@@ -164,6 +164,27 @@ def _install_api_token_guard(app: Flask, settings: ServerRuntimeSettings) -> Non
         return None
 
 
+def _install_api_failure_logger(app: Flask) -> None:
+    @app.after_request
+    def _log_api_failure(response):
+        status_code = int(getattr(response, "status_code", 200) or 200)
+        request_path = str(getattr(request, "path", "") or "")
+        if status_code < 400 or not request_path.startswith("/api/"):
+            return response
+
+        level = logging.ERROR if status_code >= 500 else logging.WARNING
+        logger.log(
+            level,
+            "API %s %s -> %s endpoint=%s remote=%s",
+            str(getattr(request, "method", "GET") or "GET"),
+            request_path,
+            status_code,
+            str(getattr(request, "endpoint", "") or "-"),
+            str(getattr(request, "remote_addr", "") or "-"),
+        )
+        return response
+
+
 def create_app(settings: ServerRuntimeSettings | None = None) -> Flask:
     resolved_settings = settings or resolve_server_settings([])
     app = Flask(__name__)
@@ -172,6 +193,7 @@ def create_app(settings: ServerRuntimeSettings | None = None) -> Flask:
     configure_node_readiness_from_env()
     _apply_cors(app, resolved_settings)
     _install_api_token_guard(app, resolved_settings)
+    _install_api_failure_logger(app)
     app.register_blueprint(diagnostics_bp)
     app.register_blueprint(session_bp)
     app.register_blueprint(navigate_bp)

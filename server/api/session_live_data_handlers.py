@@ -68,7 +68,7 @@ def read_session_dtcs(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
             backend=get_backend(),
             emit_progress=lambda message: orch.emit_progress(session_id, message),
         )
-        logger.info(
+        logger.debug(
             "SESSION %s dtcs read count=%s page=%s",
             session_id,
             result["dtc_count"],
@@ -108,7 +108,7 @@ def clear_session_dtcs(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
             backend=get_backend(),
             emit_progress=lambda message: orch.emit_progress(session_id, message),
         )
-        logger.info(
+        logger.debug(
             "SESSION %s clear_dtcs cleared=%s page=%s",
             session_id,
             result["cleared_count"],
@@ -157,7 +157,7 @@ def start_live_data_session(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
             stream_scope=session_agent_stream_scope(session_id),
             emit_progress=lambda message: orch.emit_progress(session_id, message),
         )
-        logger.info(
+        logger.debug(
             "SESSION %s live_data started category=%s interval=%sms",
             session_id,
             data_category,
@@ -230,7 +230,7 @@ def stop_live_data_session(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
             backend=get_backend(),
             emit_progress=lambda message: orch.emit_progress(session_id, message),
         )
-        logger.info("SESSION %s live_data stopped", session_id)
+        logger.debug("SESSION %s live_data stopped", session_id)
         return {
             "success": True,
             "session_id": session_id,

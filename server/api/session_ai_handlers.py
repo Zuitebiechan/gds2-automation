@@ -89,7 +89,7 @@ def start_ai_diagnose(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
             diagnostic_payload=diagnostic_payload,
             emit_progress=lambda message: orch.emit_progress(session_id, message),
         )
-        logger.info(
+        logger.debug(
             "SESSION %s ai_diagnose started ai_session=%s module=%s category=%s",
             session_id,
             ai_session_id,
@@ -129,7 +129,7 @@ def stream_ai_diagnose_events(session_id: str, *, sse_response):
             engine=get_ai_engine(),
         )
 
-        logger.info(
+        logger.debug(
             "SESSION %s ai_diagnose events bound ai_session=%s",
             session_id,
             ai_session_id,
@@ -184,7 +184,7 @@ def retry_ai_diagnose(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
             engine=engine,
             emit_progress=lambda message: orch.emit_progress(session_id, message),
         )
-        logger.info(
+        logger.debug(
             "SESSION %s ai_diagnose retry started ai_session=%s payload=%s",
             session_id,
             ai_session_id,

@@ -202,22 +202,22 @@ def diagnose_start():
             backend=_get_backend(_resolve_backend_name(data)),
         )
         if "modules" in payload:
-            logger.info(
+            logger.debug(
                 "DIAG start ready modules=%s device=%s",
                 len(payload["modules"]),
                 payload.get("device") or "-",
             )
         elif "devices" in payload:
-            logger.info(
+            logger.debug(
                 "DIAG start awaiting device selection devices=%s",
                 len(payload["devices"]),
             )
         else:
-            logger.info("DIAG start ready payload_keys=%s", sorted(payload.keys()))
+            logger.debug("DIAG start ready payload_keys=%s", sorted(payload.keys()))
         return jsonify(payload)
 
     except WorkflowRecoveryError as e:
-        logger.info(f"diagnose_start recovered: {e}")
+        logger.warning("diagnose_start recovered target=%s error=%s", e.target_page, e)
         return jsonify({
             "success": False,
             "recovered": True,
@@ -249,7 +249,7 @@ def diagnose_dtcs():
             module_name=module_name,
             data_category=data_category,
         )
-        logger.info(
+        logger.debug(
             "DIAG DTC read count=%s page=%s",
             payload["dtc_count"],
             payload["page_context"],
@@ -257,7 +257,7 @@ def diagnose_dtcs():
         return jsonify(payload)
 
     except WorkflowRecoveryError as e:
-        logger.info(f"diagnose_dtcs recovered: {e}")
+        logger.warning("diagnose_dtcs recovered target=%s error=%s", e.target_page, e)
         return jsonify({
             "success": False,
             "recovered": True,
@@ -271,7 +271,7 @@ def diagnose_dtcs():
         return jsonify({"success": False, "error": str(e), "dtcs": []}), 501
 
     except RuntimeError as e:
-        logger.info(f"diagnose_dtcs invalid state: {e}")
+        logger.warning("diagnose_dtcs invalid state: %s", e)
         return jsonify({"success": False, "error": str(e), "dtcs": []}), 400
     except ValueError as exc:
         return jsonify({"success": False, "error": str(exc), "dtcs": []}), 400
@@ -295,7 +295,7 @@ def diagnose_clear_dtcs():
             module_name=_read_text_field(data, 'module'),
             data_category=_read_text_field(data, 'data_category'),
         )
-        logger.info(
+        logger.debug(
             "DIAG clear_dtcs cleared=%s page=%s",
             payload["cleared_count"],
             payload["page_context"],
@@ -305,7 +305,7 @@ def diagnose_clear_dtcs():
     except UnsupportedCapabilityError as e:
         return jsonify({"success": False, "error": str(e)}), 501
     except RuntimeError as e:
-        logger.info(f"diagnose_clear_dtcs invalid state: {e}")
+        logger.warning("diagnose_clear_dtcs invalid state: %s", e)
         return jsonify({"success": False, "error": str(e)}), 400
     except RequestPayloadError as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
@@ -328,11 +328,11 @@ def diagnose_select_module():
 
         backend = _get_backend(_resolve_backend_name(data))
         payload = select_diagnostic_module(backend=backend, module=module)
-        logger.info("DIAG module=%s categories=%s", module, len(payload["data_categories"]))
+        logger.debug("DIAG module=%s categories=%s", module, len(payload["data_categories"]))
         return jsonify(payload)
 
     except WorkflowRecoveryError as e:
-        logger.info(f"diagnose_select_module recovered: {e}")
+        logger.warning("diagnose_select_module recovered target=%s error=%s", e.target_page, e)
         return jsonify({
             "success": False,
             "recovered": True,
@@ -370,7 +370,7 @@ def diagnose_live_data_start():
         )
 
     except WorkflowRecoveryError as e:
-        logger.info(f"diagnose_live_data_start recovered: {e}")
+        logger.warning("diagnose_live_data_start recovered target=%s error=%s", e.target_page, e)
         return jsonify({
             "success": False,
             "recovered": True,
@@ -451,7 +451,7 @@ def diagnose_ai_start():
             vehicle_context=vehicle_context,
             data_category=data_category,
         )
-        logger.info(
+        logger.debug(
             "AI-DIAG %s requested module=%s category=%s",
             session_id,
             vehicle_context.get('module') or '-',
@@ -464,7 +464,7 @@ def diagnose_ai_start():
         })
 
     except WorkflowRecoveryError as e:
-        logger.info(f"diagnose_ai_start recovered: {e}")
+        logger.warning("diagnose_ai_start recovered target=%s error=%s", e.target_page, e)
         return jsonify({
             "success": False,
             "recovered": True,
@@ -542,7 +542,7 @@ def diagnose_ai_retry():
             cached_payload_id=cached_payload_id,
             vehicle_context=vehicle_context,
         )
-        logger.info("AI-DIAG %s retry requested payload=%s", session_id, cached_payload_id)
+        logger.debug("AI-DIAG %s retry requested payload=%s", session_id, cached_payload_id)
         return jsonify({
             "success": True,
             "session_id": session_id,

@@ -618,20 +618,20 @@ def session_start_diagnostics():
         if payload.get("result"):
             result = payload["result"]
             if "modules" in result:
-                logger.info(
+                logger.debug(
                     "SESSION %s diagnostics started modules=%s device=%s",
                     session_id,
                     len(result["modules"]),
                     result.get("device") or '-',
                 )
             elif "devices" in result:
-                logger.info(
+                logger.debug(
                     "SESSION %s diagnostics awaiting device selection devices=%s",
                     session_id,
                     len(result["devices"]),
                 )
             else:
-                logger.info(
+                logger.debug(
                     "SESSION %s diagnostics started result_keys=%s",
                     session_id,
                     sorted(result.keys()),
@@ -686,7 +686,7 @@ def session_execute():
         session = orch.get_session(session_id)
         ensure_session_capability(session, BackendCapability.GENERIC_ACTIONS)
 
-        logger.info("SESSION %s action=%s start", session_id, action_name)
+        logger.debug("SESSION %s action=%s start", session_id, action_name)
 
         try:
             try:
@@ -734,7 +734,7 @@ def session_execute():
                 "elapsed_time": outcome["elapsed_time"],
             }), 500
 
-        logger.info(
+        logger.debug(
             "SESSION %s action=%s completed attempts=%s elapsed=%.1fs",
             session_id,
             action_name,
@@ -908,7 +908,7 @@ def session_select_module():
                 "error": outcome["error"],
             }), 500
 
-        logger.info("SESSION %s module=%s selected", session_id, module)
+        logger.debug("SESSION %s module=%s selected", session_id, module)
         return jsonify({
             "success": True,
             "session_id": session_id,
@@ -984,7 +984,7 @@ def session_select_data_category():
                 "error": outcome["error"],
             }), 500
 
-        logger.info("SESSION %s data_category=%s selected", session_id, data_category)
+        logger.debug("SESSION %s data_category=%s selected", session_id, data_category)
         return jsonify({
             "success": True,
             "session_id": session_id,

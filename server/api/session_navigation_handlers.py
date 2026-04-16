@@ -57,7 +57,7 @@ def start_navigation_session_for_business(data: dict[str, object]) -> tuple[dict
             emit_progress=lambda message: orch.emit_progress(session_id, message),
         )
         session.updated_at = time.time()
-        logger.info(
+        logger.debug(
             "SESSION %s navigation started nav_session=%s goal=%s",
             session_id,
             nav_session.session_id,
@@ -130,7 +130,7 @@ def submit_navigation_decision_for_business(data: dict[str, object]) -> tuple[di
             decision_id=decision_id,
             selected_item=selected_item,
         )
-        logger.info(
+        logger.debug(
             "SESSION %s navigation decision submitted nav_session=%s selected=%s",
             session_id,
             nav_session_id,

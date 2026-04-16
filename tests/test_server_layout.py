@@ -14,6 +14,7 @@ def _install_fake_flask_stack(monkeypatch):
             self.blueprints = {}
             self._rules = []
             self._before_request_handlers = []
+            self._after_request_handlers = []
             self.url_map = types.SimpleNamespace(iter_rules=lambda: list(self._rules))
 
         def register_blueprint(self, blueprint):
@@ -25,6 +26,10 @@ def _install_fake_flask_stack(monkeypatch):
 
         def before_request(self, fn):
             self._before_request_handlers.append(fn)
+            return fn
+
+        def after_request(self, fn):
+            self._after_request_handlers.append(fn)
             return fn
 
     class FakeBlueprint:
@@ -73,6 +78,42 @@ def test_server_app_factory_registers_supported_blueprints(monkeypatch):
     assert "/api/session/clear_dtcs" in routes
     assert "/api/session/bootstrap/ready" in routes
     assert "/api/navigate/start" in routes
+
+
+def test_server_app_factory_installs_api_failure_logger(monkeypatch):
+    _install_fake_flask_stack(monkeypatch)
+    server_app = importlib.import_module("server.app")
+
+    app = server_app.create_app()
+
+    assert len(app._after_request_handlers) == 1
+
+
+def test_api_failure_logger_emits_only_for_api_error_responses(monkeypatch, caplog):
+    _install_fake_flask_stack(monkeypatch)
+    server_app = importlib.import_module("server.app")
+    fake_flask = sys.modules["flask"]
+    app = server_app.create_app()
+    handler = app._after_request_handlers[0]
+
+    fake_flask.request.path = "/api/session/start"
+    fake_flask.request.method = "POST"
+    fake_flask.request.endpoint = "session_start"
+    fake_flask.request.remote_addr = "10.0.0.5"
+
+    ok_response = types.SimpleNamespace(status_code=200)
+    with caplog.at_level(logging.WARNING):
+        returned = handler(ok_response)
+
+    assert returned is ok_response
+    assert caplog.text == ""
+
+    error_response = types.SimpleNamespace(status_code=502)
+    with caplog.at_level(logging.ERROR):
+        returned = handler(error_response)
+
+    assert returned is error_response
+    assert "API POST /api/session/start -> 502 endpoint=session_start remote=10.0.0.5" in caplog.text
 
 
 def test_root_app_delegates_to_server_package(monkeypatch):
