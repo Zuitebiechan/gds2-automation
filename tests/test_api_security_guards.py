@@ -502,7 +502,6 @@ def test_diagnose_ai_events_rejects_non_string_session_id(monkeypatch):
 
 def test_load_zhipu_api_key_ignores_non_string_config_value(monkeypatch, tmp_path):
     _install_fake_flask_stack(monkeypatch, None)
-    diagnostics_api = _fresh_import(monkeypatch, "server.api.diagnostics")
     config_dir = tmp_path / "VCI_Proxy"
     config_dir.mkdir()
     (config_dir / "config.json").write_text(
@@ -510,5 +509,70 @@ def test_load_zhipu_api_key_ignores_non_string_config_value(monkeypatch, tmp_pat
         encoding="utf-8",
     )
     monkeypatch.setenv("APPDATA", str(tmp_path))
+    diagnostics_api = _fresh_import(monkeypatch, "server.api.diagnostics")
 
     assert diagnostics_api._load_zhipu_api_key() is None
+
+
+def test_load_openai_config_reads_appdata_config(monkeypatch, tmp_path):
+    _install_fake_flask_stack(monkeypatch, None)
+    config_dir = tmp_path / "VCI_Proxy"
+    config_dir.mkdir()
+    (config_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "openai_api_key": "team-key",
+                "openai_base_url": "https://moacode.org/team/v1",
+                "openai_model": "gpt-5.4",
+                "openai_reasoning_effort": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    diagnostics_api = _fresh_import(monkeypatch, "server.api.diagnostics")
+
+    assert diagnostics_api._load_openai_api_key() == "team-key"
+    assert diagnostics_api._load_openai_base_url() == "https://moacode.org/team/v1"
+    assert diagnostics_api._load_openai_model() == "gpt-5.4"
+    assert diagnostics_api._load_openai_reasoning_effort() == "none"
+
+
+def test_build_ai_engine_prefers_openai_env_over_config(monkeypatch, tmp_path):
+    _install_fake_flask_stack(monkeypatch, None)
+    config_dir = tmp_path / "VCI_Proxy"
+    config_dir.mkdir()
+    (config_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "openai_api_key": "config-key",
+                "openai_base_url": "https://config.example/v1",
+                "openai_model": "gpt-4.1",
+                "openai_reasoning_effort": "low",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://env.example/v1")
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-5.4")
+    monkeypatch.setenv("OPENAI_REASONING_EFFORT", "none")
+    diagnostics_api = _fresh_import(monkeypatch, "server.api.diagnostics")
+
+    captured = {}
+
+    class _FakeAIEngine:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(diagnostics_api, "AIEngine", _FakeAIEngine)
+
+    diagnostics_api._build_ai_engine()
+
+    assert captured == {
+        "api_key": "env-key",
+        "model": "gpt-5.4",
+        "base_url": "https://env.example/v1",
+        "reasoning_effort": "none",
+    }

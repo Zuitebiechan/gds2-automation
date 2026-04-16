@@ -107,7 +107,12 @@ def test_diagnose_stream_falls_back_to_non_stream_when_stream_is_empty(monkeypat
 
     fake_completions = _FakeCompletions()
     fake_client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=fake_completions))
-    client = LLMClient(api_key="test-key", model="glm-test")
+    client = LLMClient(
+        api_key="test-key",
+        model="gpt-5.4",
+        base_url="https://moacode.org/team/v1",
+        reasoning_effort="none",
+    )
     monkeypatch.setattr(client, "_get_client", lambda: fake_client)
 
     chunks = list(
@@ -122,5 +127,8 @@ def test_diagnose_stream_falls_back_to_non_stream_when_stream_is_empty(monkeypat
     assert chunks == ['{"verdict":"monitor","confidence":55}']
     assert fake_completions.calls[0]["stream"] is True
     assert fake_completions.calls[1]["stream"] is False
+    assert fake_completions.calls[0]["model"] == "gpt-5.4"
+    assert fake_completions.calls[0]["reasoning_effort"] == "none"
+    assert fake_completions.calls[0]["verbosity"] == "low"
     assert "Honda" in fake_completions.calls[0]["messages"][0]["content"]
     assert "HDS" in fake_completions.calls[0]["messages"][0]["content"]

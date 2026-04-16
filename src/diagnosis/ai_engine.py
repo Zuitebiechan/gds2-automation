@@ -4,7 +4,7 @@ AI Diagnosis Engine analyzes backend-collected diagnostic payloads.
 Flow:
 1. Receive one standardized DiagnosticPayload
 2. Convert it into the shared delta payload shape
-3. Call ZhipuAI LLM (streaming)
+3. Call the configured LLM (streaming)
 4. Stream progress + result via SSE queue
 
 Thread-safe. One active session at a time (enforced by caller).
@@ -186,8 +186,24 @@ class AIEngine:
         # Events: progress, llm_chunk, result, error
     """
 
-    def __init__(self, api_key: str, collection_seconds: int = 30):
-        self._llm_client = LLMClient(api_key=api_key)
+    def __init__(
+        self,
+        api_key: str,
+        collection_seconds: int = 30,
+        *,
+        model: str = "gpt-5.4",
+        base_url: str | None = None,
+        reasoning_effort: str = "none",
+    ):
+        llm_client_kwargs: dict[str, Any] = {}
+        if model != "gpt-5.4":
+            llm_client_kwargs["model"] = model
+        if base_url:
+            llm_client_kwargs["base_url"] = base_url
+        if reasoning_effort != "none":
+            llm_client_kwargs["reasoning_effort"] = reasoning_effort
+
+        self._llm_client = LLMClient(api_key=api_key, **llm_client_kwargs)
         self._collection_seconds = collection_seconds
 
         # Active session state

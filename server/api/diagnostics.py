@@ -86,15 +86,86 @@ def _read_int_field(
         raise ValueError(f"{field} must be an integer") from None
 
 
+def _vci_proxy_config_path() -> str:
+    config_dir = os.path.join(
+        os.environ.get("APPDATA", os.path.expanduser("~")),
+        "VCI_Proxy",
+    )
+    return os.path.join(config_dir, "config.json")
+
+
+def _load_vci_proxy_config() -> dict[str, object]:
+    config_path = _vci_proxy_config_path()
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        return payload if isinstance(payload, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _load_openai_api_key() -> str | None:
+    env_key = str(os.environ.get("OPENAI_API_KEY") or "").strip()
+    if env_key:
+        return env_key
+    try:
+        config = _load_vci_proxy_config()
+        return read_text_mapping_field(config, "openai_api_key") or None
+    except ValueError:
+        return None
+
+
+def _load_openai_base_url() -> str | None:
+    env_base_url = str(
+        os.environ.get("OPENAI_BASE_URL")
+        or os.environ.get("OPENAI_API_BASE")
+        or ""
+    ).strip()
+    if env_base_url:
+        return env_base_url
+    try:
+        config = _load_vci_proxy_config()
+        return read_text_mapping_field(config, "openai_base_url") or None
+    except ValueError:
+        return None
+
+
+def _load_openai_model() -> str:
+    env_model = str(os.environ.get("OPENAI_MODEL") or "").strip()
+    if env_model:
+        return env_model
+    try:
+        config = _load_vci_proxy_config()
+        return read_text_mapping_field(config, "openai_model", default="gpt-5.4") or "gpt-5.4"
+    except ValueError:
+        return "gpt-5.4"
+
+
+def _load_openai_reasoning_effort() -> str:
+    env_reasoning = str(os.environ.get("OPENAI_REASONING_EFFORT") or "").strip()
+    if env_reasoning:
+        return env_reasoning
+    try:
+        config = _load_vci_proxy_config()
+        return read_text_mapping_field(config, "openai_reasoning_effort", default="none") or "none"
+    except ValueError:
+        return "none"
+
+
 def _build_ai_engine() -> AIEngine:
     """Build the worker-scoped AI engine from persisted config."""
-    api_key = _load_zhipu_api_key()
+    api_key = _load_openai_api_key()
     if not api_key:
         raise RuntimeError(
-            "ZhipuAI API key not configured. "
-            "Set it in %APPDATA%/VCI_Proxy/config.json under 'zhipu_api_key'."
+            "OpenAI API key not configured. "
+            "Set OPENAI_API_KEY or %APPDATA%/VCI_Proxy/config.json under 'openai_api_key'."
         )
-    return AIEngine(api_key=api_key)
+    return AIEngine(
+        api_key=api_key,
+        model=_load_openai_model(),
+        base_url=_load_openai_base_url(),
+        reasoning_effort=_load_openai_reasoning_effort(),
+    )
 
 
 def _get_ai_engine() -> AIEngine:
@@ -103,18 +174,10 @@ def _get_ai_engine() -> AIEngine:
 
 
 def _load_zhipu_api_key() -> str | None:
-    """Load ZhipuAI API key from config file."""
-    config_dir = os.path.join(
-        os.environ.get("APPDATA", os.path.expanduser("~")),
-        "VCI_Proxy",
-    )
-    config_path = os.path.join(config_dir, "config.json")
+    """Legacy compatibility shim kept for older tests and tooling."""
     try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
+        config = _load_vci_proxy_config()
         return read_text_mapping_field(config, "zhipu_api_key") or None
-    except (FileNotFoundError, json.JSONDecodeError):
-        return None
     except ValueError:
         return None
 

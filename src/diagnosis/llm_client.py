@@ -1,12 +1,13 @@
 """
-ZhipuAI LLM client for vehicle diagnosis.
+OpenAI-compatible LLM client for vehicle diagnosis.
 
-Wraps the ZhipuAI glm-4.7 API with:
+Wraps a chat-completions compatible API with:
 - Streaming response support with per-chunk and total timeout protection
 - Diagnostic prompt assembly
 - Structured JSON response parsing
 
-Uses OpenAI-compatible API via the zhipuai SDK.
+The default target model is GPT-5.4 and the client can be pointed at one
+OpenAI-compatible relay through ``base_url``.
 """
 
 import ast
@@ -189,43 +190,105 @@ def _build_user_message(
 
 
 class LLMClient:
-    """
-    ZhipuAI LLM client for vehicle diagnosis.
-
-    Supports both blocking and streaming responses.
-    API key is loaded from config, never hardcoded.
-    """
+    """OpenAI-compatible LLM client for vehicle diagnosis."""
 
     # Timeout constants
     STREAM_CHUNK_TIMEOUT = 60   # Max seconds to wait for a single chunk
     STREAM_TOTAL_TIMEOUT = 180  # Max total seconds for the entire stream
 
-    def __init__(self, api_key: str, model: str = "glm-4.7"):
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "gpt-5.4",
+        *,
+        base_url: Optional[str] = None,
+        reasoning_effort: str = "none",
+        verbosity: str = "low",
+    ):
         self._api_key = api_key
         self._model = model
+        self._base_url = str(base_url or "").strip() or None
+        self._reasoning_effort = str(reasoning_effort or "").strip() or "none"
+        self._verbosity = str(verbosity or "").strip() or "low"
         self._client = None
 
     def _get_client(self):
-        """Lazy-init the ZhipuAI client."""
+        """Lazy-init the OpenAI-compatible client."""
         if self._client is None:
             try:
                 import httpx
-                from zhipuai import ZhipuAI
+                from openai import OpenAI
                 # Set httpx read timeout to match our chunk timeout
                 # Default is 300s which is too long for streaming
                 timeout = httpx.Timeout(
                     timeout=float(self.STREAM_CHUNK_TIMEOUT),
                     connect=8.0,
                 )
-                self._client = ZhipuAI(
+                self._client = OpenAI(
                     api_key=self._api_key,
+                    base_url=self._base_url,
                     timeout=timeout,
                 )
             except ImportError:
                 raise RuntimeError(
-                    "zhipuai package not installed. Run: pip install zhipuai"
+                    "openai package not installed. Run: pip install openai"
                 )
         return self._client
+
+    @staticmethod
+    def _coerce_message_text(content: Any) -> str:
+        """Best-effort conversion for provider message content variants."""
+        if content is None:
+            return ""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, dict):
+                    text = item.get("text") or item.get("content") or ""
+                    if text:
+                        parts.append(str(text))
+                else:
+                    text = getattr(item, "text", "") or getattr(item, "content", "")
+                    if text:
+                        parts.append(str(text))
+            return "".join(parts)
+        return str(content)
+
+    def _request_messages(
+        self,
+        *,
+        system_prompt: str,
+        user_message: str,
+    ) -> list[dict[str, str]]:
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ]
+
+    def _request_kwargs(
+        self,
+        *,
+        system_prompt: str,
+        user_message: str,
+        stream: bool,
+    ) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {
+            "model": self._model,
+            "messages": self._request_messages(
+                system_prompt=system_prompt,
+                user_message=user_message,
+            ),
+            "stream": stream,
+            "temperature": 0.3,
+            "max_tokens": 4096,
+        }
+        if self._reasoning_effort:
+            kwargs["reasoning_effort"] = self._reasoning_effort
+        if self._verbosity:
+            kwargs["verbosity"] = self._verbosity
+        return kwargs
 
     def diagnose_stream(
         self,
@@ -235,7 +298,7 @@ class LLMClient:
         software: str = "GDS2",
     ) -> Generator[str, None, None]:
         """
-        Call ZhipuAI with diagnostic data and stream the response.
+        Call the OpenAI-compatible model with diagnostic data and stream the response.
 
         Yields chunks of the LLM response text as they arrive.
 
@@ -253,21 +316,19 @@ class LLMClient:
         system_prompt = _build_system_prompt(brand, software)
 
         logger.info(
-            f"Calling ZhipuAI {self._model} with "
-            f"{len(delta_payload.get('timeline', []))} timeline events, "
-            f"{len(delta_payload.get('dtcs', []))} DTCs"
+            "Calling OpenAI-compatible model=%s base_url=%s timeline_events=%s dtcs=%s",
+            self._model,
+            self._base_url or "default",
+            len(delta_payload.get('timeline', [])),
+            len(delta_payload.get('dtcs', [])),
         )
 
         response = client.chat.completions.create(
-            model=self._model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ],
-            stream=True,
-            max_tokens=4096,
-            temperature=0.3,  # Low temperature for factual analysis
-            thinking={"type": "disabled"},  # Disable reasoning to get direct content output
+            **self._request_kwargs(
+                system_prompt=system_prompt,
+                user_message=user_message,
+                stream=True,
+            )
         )
 
         chunk_count = 0
@@ -292,9 +353,14 @@ class LLMClient:
             if total_chunks <= 3:
                 logger.info(f"LLM chunk #{total_chunks}: {chunk}")
             chunk_choices = getattr(chunk, 'choices', None)
-            if chunk_choices and chunk_choices[0].delta.content:
+            if chunk_choices:
+                delta = getattr(chunk_choices[0], "delta", None)
+                chunk_text = self._coerce_message_text(getattr(delta, "content", None))
+            else:
+                chunk_text = ""
+            if chunk_text:
                 chunk_count += 1
-                yield chunk_choices[0].delta.content
+                yield chunk_text
 
         elapsed = time.monotonic() - stream_start
         logger.info(
@@ -308,19 +374,18 @@ class LLMClient:
                 client = self._get_client()
                 user_message = _build_user_message(vehicle_context, delta_payload)
                 blocking_resp = client.chat.completions.create(
-                    model=self._model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_message},
-                    ],
-                    stream=False,
-                    max_tokens=4096,
-                    temperature=0.3,
-                    thinking={"type": "disabled"},  # Must match streaming call
+                    **self._request_kwargs(
+                        system_prompt=system_prompt,
+                        user_message=user_message,
+                        stream=False,
+                    )
                 )
                 blocking_choices = getattr(blocking_resp, 'choices', None)
-                if blocking_choices and blocking_choices[0].message.content:
-                    text = blocking_choices[0].message.content
+                if blocking_choices:
+                    text = self._coerce_message_text(blocking_choices[0].message.content)
+                else:
+                    text = ""
+                if text:
                     logger.info(f"Non-stream fallback returned {len(text)} chars")
                     yield text
                 else:
@@ -334,7 +399,7 @@ class LLMClient:
         delta_payload: dict[str, Any],
     ) -> str:
         """
-        Call ZhipuAI and return the full response (non-streaming).
+        Call the configured model and return the full response (non-streaming).
 
         Used for retry or when streaming isn't needed.
         """
