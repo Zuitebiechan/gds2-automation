@@ -479,13 +479,25 @@ def session_bootstrap_release():
 
         data = require_json_object(request)
         assignment_id = _read_text_field(data, "assignment_id")
+        recovery_action = _read_text_field(data, "recovery_action") or "idle"
         if not assignment_id:
             return jsonify({"success": False, "error": "assignment_id is required"}), 400
+        if recovery_action not in {"idle", "reprobe"}:
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": "recovery_action must be one of: idle, reprobe",
+                    }
+                ),
+                400,
+            )
 
         return jsonify(
             release_session_node_assignment(
                 allocator=allocator,
                 assignment_id=assignment_id,
+                recovery_action=recovery_action,
             )
         )
     except KeyError as exc:

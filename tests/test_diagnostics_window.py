@@ -442,7 +442,10 @@ def test_handle_session_done_releases_assignment_and_restores_bootstrap_base() -
             "https://entry.diag.example.com",
             "/api/session/bootstrap/release",
             {
-                "json_data": {"assignment_id": "assign-123"},
+                "json_data": {
+                    "assignment_id": "assign-123",
+                    "recovery_action": "idle",
+                },
                 "callback_event": "session_bootstrap_release_result",
             },
         )
@@ -521,6 +524,113 @@ def test_handle_session_bootstrap_result_handles_capacity_pending_without_fallba
     assert window._session_status_var.get() == "Capacity is starting in the target zone. Please retry shortly."
     assert "retry" in window._session_hint_var.get().lower()
     assert calls == []
+
+
+def test_handle_session_start_result_retries_bootstrap_when_assigned_node_returns_gateway_error() -> None:
+    window = DiagnosticsWindow.__new__(DiagnosticsWindow)
+    release_calls: list[tuple[str, str, dict[str, object]]] = []
+    api_calls: list[tuple[str, str, dict[str, object]]] = []
+    assignment_events: list[object] = []
+    messages: list[tuple[str, str]] = []
+    window._session_brand = _Var("gds2")
+    window._session_start_button = _Widget()
+    window._session_abort_button = _Widget()
+    window._start_button = _Widget()
+    window._session_status_var = _Var("")
+    window._session_hint_var = _Var("")
+    window._server_state_text = _Var("Server: node-1.diag.example.com")
+    window._api_base = "https://node-1.diag.example.com"
+    window._server_display = "node-1.diag.example.com"
+    window._bootstrap_api_base = "https://entry.diag.example.com"
+    window._active_assignment = {
+        "assignment_id": "assign-123",
+        "api_base_url": "https://node-1.diag.example.com",
+        "tunnel_host": "node-1.diag.example.com",
+    }
+    window._append_agent_message = lambda role, message: messages.append((role, message))
+    window._node_assignment_callback = lambda assignment: assignment_events.append(assignment)
+    window._api_call = lambda method, endpoint, **kwargs: api_calls.append((method, endpoint, kwargs))
+    window._api_call_to_base = lambda base_url, method, endpoint, **kwargs: release_calls.append(
+        (base_url, endpoint, kwargs)
+    )
+    window._build_session_start_payload = lambda brand: {
+        "brand": brand,
+        "client_time_zone": "Asia/Shanghai",
+    }
+    window._set_session_hint = lambda message: window._session_hint_var.set(message)
+    window._bootstrap_assignment_retry_count = 0
+
+    window._handle_session_start_result(
+        {
+            "success": False,
+            "error": "Server returned non-JSON response (HTTP 502 Bad Gateway).",
+            "http_status": 502,
+        }
+    )
+
+    assert release_calls == [
+        (
+            "https://entry.diag.example.com",
+            "/api/session/bootstrap/release",
+            {
+                "json_data": {
+                    "assignment_id": "assign-123",
+                    "recovery_action": "reprobe",
+                },
+                "callback_event": "session_bootstrap_release_result",
+            },
+        )
+    ]
+    assert api_calls == [
+        (
+            "POST",
+            "/api/session/bootstrap",
+            {
+                "json_data": {
+                    "brand": "gds2",
+                    "client_time_zone": "Asia/Shanghai",
+                },
+                "callback_event": "session_bootstrap_result",
+            },
+        )
+    ]
+    assert assignment_events == [None]
+    assert window._api_base == "https://entry.diag.example.com"
+    assert window._session_start_button.state == tk.DISABLED
+    assert window._start_button.state == tk.DISABLED
+    assert "Retrying session bootstrap" in window._session_status_var.get()
+    assert any("Retrying session bootstrap automatically" in message for _, message in messages)
+
+
+def test_handle_session_start_result_does_not_loop_after_retry_limit_is_hit() -> None:
+    window = DiagnosticsWindow.__new__(DiagnosticsWindow)
+    release_calls: list[tuple[str, str, dict[str, object]]] = []
+    messages: list[tuple[str, str]] = []
+    window._session_start_button = _Widget()
+    window._session_abort_button = _Widget()
+    window._start_button = _Widget()
+    window._session_status_var = _Var("")
+    window._session_hint_var = _Var("")
+    window._active_assignment = {"assignment_id": "assign-123"}
+    window._append_agent_message = lambda role, message: messages.append((role, message))
+    window._set_session_hint = lambda message: window._session_hint_var.set(message)
+    window._recover_existing_session = lambda payload: False
+    window._api_call = lambda *args, **kwargs: release_calls.append(("retry", "", {}))
+    window._api_call_to_base = lambda *args, **kwargs: release_calls.append(("release", "", {}))
+    window._bootstrap_assignment_retry_count = DiagnosticsWindow.BOOTSTRAP_ASSIGNMENT_RETRY_LIMIT
+
+    window._handle_session_start_result(
+        {
+            "success": False,
+            "error": "Server returned non-JSON response (HTTP 502 Bad Gateway).",
+            "http_status": 502,
+        }
+    )
+
+    assert window._session_start_button.state == tk.NORMAL
+    assert window._start_button.state == tk.DISABLED
+    assert "Failed:" in window._session_status_var.get()
+    assert any("Session start failed" in message for _, message in messages)
 
 
 def test_api_call_sends_api_token_header(monkeypatch) -> None:

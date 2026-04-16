@@ -185,9 +185,16 @@ class InMemoryNodeInventory:
         node.current_session_id = session_id
         return node
 
-    def release(self, node_id: str) -> NodeRecord:
+    def release(
+        self,
+        node_id: str,
+        *,
+        next_state: NodeState = NodeState.IDLE,
+        healthy: bool = True,
+    ) -> NodeRecord:
         node = self.get(node_id)
-        node.state = NodeState.IDLE
+        node.state = next_state
+        node.healthy = bool(healthy)
         node.current_session_id = None
         return node
 
@@ -233,8 +240,14 @@ class JsonFileNodeInventory(InMemoryNodeInventory):
         self._persist()
         return node
 
-    def release(self, node_id: str) -> NodeRecord:
-        node = super().release(node_id)
+    def release(
+        self,
+        node_id: str,
+        *,
+        next_state: NodeState = NodeState.IDLE,
+        healthy: bool = True,
+    ) -> NodeRecord:
+        node = super().release(node_id, next_state=next_state, healthy=healthy)
         self._persist()
         return node
 
@@ -896,10 +909,20 @@ class HotPoolAllocator:
         self._lease_store.put(bound)
         return bound
 
-    def release(self, lease: NodeLease | str) -> NodeRecord:
+    def release(
+        self,
+        lease: NodeLease | str,
+        *,
+        next_state: NodeState = NodeState.IDLE,
+        healthy: bool = True,
+    ) -> NodeRecord:
         assignment_id = lease.assignment_id if isinstance(lease, NodeLease) else lease
         stored_lease_payload = self._lease_store.get(assignment_id)
         if stored_lease_payload is None:
             raise KeyError(assignment_id)
         self._lease_store.delete(assignment_id)
-        return self._inventory.release(str(stored_lease_payload["node_id"]))
+        return self._inventory.release(
+            str(stored_lease_payload["node_id"]),
+            next_state=next_state,
+            healthy=healthy,
+        )

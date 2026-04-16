@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from diagnostic_platform.node_allocation import NoCapacityError
+from diagnostic_platform.node_allocation import NoCapacityError, NodeState
 from diagnostic_platform.session_models import SessionContext
 
 
@@ -94,13 +94,28 @@ def release_session_node_assignment(
     *,
     allocator: Any,
     assignment_id: str,
+    recovery_action: str = "idle",
 ) -> dict[str, Any]:
     """Release one existing node assignment back into the hot pool."""
+    normalized_action = str(recovery_action or "idle").strip().lower()
+    if normalized_action == "reprobe":
+        next_state = NodeState.BOOTING
+        healthy = False
+    else:
+        normalized_action = "idle"
+        next_state = NodeState.IDLE
+        healthy = True
 
-    node = allocator.release(assignment_id)
+    node = allocator.release(
+        assignment_id,
+        next_state=next_state,
+        healthy=healthy,
+    )
     return {
         "success": True,
         "assignment_id": assignment_id,
         "released": True,
         "node_id": node.node_id,
+        "recovery_action": normalized_action,
+        "node_state": node.state.value,
     }

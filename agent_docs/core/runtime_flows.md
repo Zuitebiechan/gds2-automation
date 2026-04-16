@@ -30,6 +30,7 @@ Sequence:
 6. The background readiness monitor polls `GET /api/session/bootstrap/ready` on booting nodes until the node API is reachable, then promotes the node from `BOOTING` to `IDLE`.
 7. Once the client successfully starts `/api/session/start` on the assigned node, it calls `POST /api/session/bootstrap/bind`.
 8. If session startup fails or the session later ends, the client calls `POST /api/session/bootstrap/release` to return the node to the pool.
+9. If the assigned node returns a gateway/startup failure before `/start` succeeds, the client may release it with `reprobe` so the control plane moves that node back to readiness probing instead of handing it out again immediately.
 
 ### 2. Session creation
 

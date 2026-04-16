@@ -28,6 +28,7 @@ class DiagnosticsWindow:
 
     POLL_INTERVAL_MS = 100
     SESSION_STATUS_POLL_INTERVAL_MS = 1500
+    BOOTSTRAP_ASSIGNMENT_RETRY_LIMIT = 1
 
     def __init__(
         self,
@@ -45,6 +46,7 @@ class DiagnosticsWindow:
         self._node_assignment_callback = node_assignment_callback
         self._bootstrap_api_base = self._api_base
         self._active_assignment: dict[str, Any] | None = None
+        self._bootstrap_assignment_retry_count = 0
 
         self._queue: queue.Queue[tuple[str, dict[str, Any]]] = queue.Queue()
 
@@ -609,7 +611,12 @@ class DiagnosticsWindow:
                 except ValueError:
                     data = {
                         "success": False,
-                        "error": f"Server returned non-JSON response (HTTP {resp.status_code}).",
+                        "error": (
+                            f"Server returned non-JSON response "
+                            f"(HTTP {resp.status_code} {resp.reason})."
+                        ),
+                        "http_status": resp.status_code,
+                        "http_reason": resp.reason,
                     }
 
                 if not resp.ok and "success" not in data:
@@ -2281,6 +2288,7 @@ class DiagnosticsWindow:
 
         self._session_start_button.configure(state=tk.DISABLED)
         self._start_button.configure(state=tk.DISABLED)
+        self._bootstrap_assignment_retry_count = 0
         self._session_status_var.set("Starting session...")
         self._append_agent_message("user", f"Start Session (brand={brand})")
         endpoint = "/api/session/start"
@@ -2343,6 +2351,74 @@ class DiagnosticsWindow:
             )
         )
 
+    def _http_status_from_payload(self, payload: dict[str, Any]) -> int | None:
+        raw_status = payload.get("http_status")
+        try:
+            if raw_status is not None and str(raw_status).strip():
+                return int(raw_status)
+        except (TypeError, ValueError):
+            pass
+
+        match = re.search(r"http\s+(\d{3})", str(payload.get("error") or ""), re.IGNORECASE)
+        if match:
+            try:
+                return int(match.group(1))
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    def _should_retry_bootstrap_assignment(self, payload: dict[str, Any]) -> bool:
+        assignment = getattr(self, "_active_assignment", None) or {}
+        if not assignment:
+            return False
+
+        retry_count = int(getattr(self, "_bootstrap_assignment_retry_count", 0) or 0)
+        if retry_count >= self.BOOTSTRAP_ASSIGNMENT_RETRY_LIMIT:
+            return False
+
+        status = self._http_status_from_payload(payload)
+        if status in {502, 503, 504}:
+            return True
+
+        error_text = str(payload.get("error") or "").lower()
+        return any(
+            marker in error_text
+            for marker in (
+                "bad gateway",
+                "gateway timeout",
+                "service unavailable",
+                "max retries exceeded",
+                "failed to establish a new connection",
+                "connection refused",
+            )
+        )
+
+    def _retry_bootstrap_after_assignment_failure(self, payload: dict[str, Any]) -> bool:
+        if not self._should_retry_bootstrap_assignment(payload):
+            return False
+
+        self._bootstrap_assignment_retry_count = (
+            int(getattr(self, "_bootstrap_assignment_retry_count", 0) or 0) + 1
+        )
+        self._release_active_assignment(recovery_action="reprobe")
+        self._session_start_button.configure(state=tk.DISABLED)
+        self._start_button.configure(state=tk.DISABLED)
+        self._session_status_var.set("Assigned node did not respond. Retrying session bootstrap...")
+        self._set_session_hint(
+            "Assigned node API was not ready. Retrying session bootstrap with a healthy node."
+        )
+        self._append_agent_message(
+            "agent",
+            "Assigned node API was not ready. Retrying session bootstrap automatically.",
+        )
+        self._api_call(
+            "POST",
+            "/api/session/bootstrap",
+            json_data=self._build_session_start_payload(self._session_brand.get().strip()),
+            callback_event="session_bootstrap_result",
+        )
+        return True
+
     def _start_session_direct(self) -> None:
         brand = self._session_brand.get().strip()
         self._api_call(
@@ -2369,7 +2445,7 @@ class DiagnosticsWindow:
             callback_event="session_bootstrap_bind_result",
         )
 
-    def _release_active_assignment(self) -> None:
+    def _release_active_assignment(self, *, recovery_action: str = "idle") -> None:
         assignment = getattr(self, "_active_assignment", None) or {}
         bootstrap_api_base = str(getattr(self, "_bootstrap_api_base", "") or "").strip()
         assignment_id = str(assignment.get("assignment_id") or "").strip()
@@ -2378,7 +2454,10 @@ class DiagnosticsWindow:
                 bootstrap_api_base,
                 "POST",
                 "/api/session/bootstrap/release",
-                json_data={"assignment_id": assignment_id},
+                json_data={
+                    "assignment_id": assignment_id,
+                    "recovery_action": str(recovery_action or "idle").strip() or "idle",
+                },
                 callback_event="session_bootstrap_release_result",
             )
         self._active_assignment = None
@@ -2455,6 +2534,8 @@ class DiagnosticsWindow:
     def _handle_session_start_result(self, payload: dict[str, Any]) -> None:
         if not payload.get("success"):
             if self._recover_existing_session(payload):
+                return
+            if self._retry_bootstrap_after_assignment_failure(payload):
                 return
             if getattr(self, "_active_assignment", None):
                 self._release_active_assignment()

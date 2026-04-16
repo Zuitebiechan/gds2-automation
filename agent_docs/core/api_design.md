@@ -119,7 +119,7 @@ Current routes:
 - `/bootstrap/ready` is the lightweight readiness probe used by booting-node monitors
 - `/bootstrap` allocates one existing hot-pool node or returns `202 capacity_pending` while cold-start capacity is still booting
 - `/bootstrap/bind` associates one earlier node assignment with the concrete business session id after `/start` succeeds on the assigned node
-- `/bootstrap/release` returns one unused or completed assignment back to the idle pool
+- `/bootstrap/release` returns one unused or completed assignment back to the pool; callers may request `reprobe` so one failing node goes back through readiness checks instead of returning directly to `IDLE`
 - `/start` creates the business session and may return `awaiting_decision`
 - `/start_diagnostics` performs backend startup and tunnel-quality preflight
 - `/decision` is shared by backend-selection, network-override, and branch-resolution gates

@@ -566,6 +566,8 @@ def test_session_bootstrap_bind_and_release_manage_assignment_lifecycle(monkeypa
         "assignment_id": assignment_id,
         "released": True,
         "node_id": "node-lax-1",
+        "recovery_action": "idle",
+        "node_state": "idle",
     }
 
 
@@ -632,6 +634,61 @@ def test_session_bootstrap_triggers_provisioning_when_hot_pool_is_empty(monkeypa
             "extra": {},
         },
     }
+
+
+def test_session_bootstrap_release_can_mark_node_for_reprobe(monkeypatch):
+    from diagnostic_platform.node_allocation import (
+        HotPoolAllocator,
+        InMemoryNodeInventory,
+        NodeRecord,
+        NodeState,
+    )
+
+    session_api, session_dependencies, fake_request = _import_session_api(monkeypatch)
+    allocator = HotPoolAllocator(
+        InMemoryNodeInventory(
+            nodes=[
+                NodeRecord(
+                    node_id="node-lax-1",
+                    zone="us-west-2-lax-1a",
+                    metro="los-angeles",
+                    api_base_url="https://lax-1.example.com",
+                    tunnel_host="lax-1.example.com",
+                    state=NodeState.IDLE,
+                    healthy=True,
+                )
+            ]
+        )
+    )
+    session_dependencies.set_node_allocator(allocator)
+
+    fake_request.json = {
+        "brand": "Chevrolet",
+        "preferred_zone": "us-west-2-lax-1a",
+        "preferred_metro": "los-angeles",
+    }
+    bootstrap_payload, bootstrap_status = _unwrap_response(session_api.session_bootstrap())
+    assignment_id = bootstrap_payload["assignment"]["assignment_id"]
+
+    fake_request.json = {
+        "assignment_id": assignment_id,
+        "recovery_action": "reprobe",
+    }
+    release_payload, release_status = _unwrap_response(session_api.session_bootstrap_release())
+
+    assert bootstrap_status == 200
+    assert release_status == 200
+    assert release_payload == {
+        "success": True,
+        "assignment_id": assignment_id,
+        "released": True,
+        "node_id": "node-lax-1",
+        "recovery_action": "reprobe",
+        "node_state": "booting",
+    }
+    released = allocator.inventory.get("node-lax-1")
+    assert released.state == NodeState.BOOTING
+    assert released.healthy is False
 
 
 def test_session_bootstrap_reuses_existing_booting_capacity_before_launching_another_node(monkeypatch):

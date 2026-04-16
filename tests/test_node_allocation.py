@@ -106,6 +106,42 @@ def test_allocator_release_returns_node_to_idle_pool():
     assert second_lease.node.node_id == "node-lax-1"
 
 
+def test_allocator_release_can_move_node_back_to_booting_for_reprobe():
+    module = _load_node_allocation_module()
+
+    inventory = module.InMemoryNodeInventory(
+        nodes=[
+            module.NodeRecord(
+                node_id="node-lax-1",
+                zone="us-west-2-lax-1a",
+                metro="los-angeles",
+                api_base_url="https://lax-1.example.com",
+                tunnel_host="lax-1.example.com",
+                state=module.NodeState.IDLE,
+                healthy=True,
+            )
+        ]
+    )
+    allocator = module.HotPoolAllocator(inventory)
+
+    lease = allocator.allocate(
+        preferred_zone="us-west-2-lax-1a",
+        preferred_metro="los-angeles",
+        session_id="bootstrap-pending",
+    )
+
+    allocator.release(
+        lease.assignment_id,
+        next_state=module.NodeState.BOOTING,
+        healthy=False,
+    )
+
+    released = inventory.get("node-lax-1")
+    assert released.state == module.NodeState.BOOTING
+    assert released.healthy is False
+    assert released.current_session_id is None
+
+
 def test_allocator_reports_fallback_reason_when_zone_is_unavailable():
     module = _load_node_allocation_module()
 
