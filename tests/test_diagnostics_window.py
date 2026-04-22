@@ -50,12 +50,18 @@ def _build_window(*, current_page: str = "") -> DiagnosticsWindow:
     window._dtc_count_text = _Var("")
     window._select_module_button = _Widget()
     window._select_data_category_button = _Widget()
+    window._start_button = _Widget()
+    window._vehicle_diagnostics_button = _Widget()
     window._read_dtc_button = _Widget()
+    window._vehicle_dtc_button = _Widget()
     window._clear_dtc_button = _Widget()
     window._start_stream_button = _Widget()
     window._ai_diagnose_button = _Widget()
     window._module_combo = _Widget()
     window._data_combo = _Widget()
+    window._workflow_goal = "none"
+    window._last_workflow_intent = ""
+    window._navigation_goal_available = lambda goal: goal in {"vehicle diagnostics", "vehicle dtcs"}
     window._agent_messages = []
     window._append_agent_message = lambda role, message: window._agent_messages.append((role, message))
     window._set_status_text = lambda message: window._status_message.set(message)
@@ -70,6 +76,16 @@ def test_refresh_action_buttons_keeps_clear_dtcs_disabled_off_data_display() -> 
 
     assert window._read_dtc_button.state == tk.NORMAL
     assert window._clear_dtc_button.state == tk.DISABLED
+
+
+def test_refresh_action_buttons_enables_branch_buttons_when_session_ready() -> None:
+    window = _build_window(current_page="module_list")
+
+    window._refresh_action_buttons()
+
+    assert window._start_button.state == tk.NORMAL
+    assert window._vehicle_diagnostics_button.state == tk.NORMAL
+    assert window._vehicle_dtc_button.state == tk.NORMAL
 
 
 def test_refresh_action_buttons_enables_clear_dtcs_on_data_display() -> None:
@@ -128,6 +144,28 @@ def test_refresh_action_buttons_disables_clear_dtcs_while_ai_pending() -> None:
     window._refresh_action_buttons()
 
     assert window._clear_dtc_button.state == tk.DISABLED
+
+
+def test_schedule_auto_ai_start_only_surfaces_guidance() -> None:
+    window = _build_window(current_page="data_display")
+    window._on_ai_diagnose_clicked = lambda: (_ for _ in ()).throw(AssertionError("must not auto-run"))
+
+    window._schedule_auto_ai_start("AI Diagnosis is ready when you choose it.")
+
+    assert window._session_hint_var.get() == "AI Diagnosis is ready when you choose it."
+    assert window._agent_messages[-1] == ("agent", "AI Diagnosis is ready when you choose it.")
+
+
+def test_on_start_clicked_routes_through_module_guided_intent() -> None:
+    window = _build_window(current_page="module_list")
+    observed: list[str] = []
+    window._start_module_diagnostics_flow = lambda: observed.append("module")
+
+    window._on_start_clicked()
+
+    assert observed == ["module"]
+    assert window._workflow_goal == "module_guided"
+    assert window._last_workflow_intent == "start_module_guided"
 
 
 def test_handle_session_status_result_disables_clear_dtcs_while_session_ai_active() -> None:
