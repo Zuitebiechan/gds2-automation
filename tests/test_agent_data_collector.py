@@ -1,6 +1,8 @@
 import json
 import os
+from pathlib import Path
 
+from diagnostic_platform.observability import ActiveSessionSnapshotStore, flush_product_log_writers
 from src.streaming import agent_data_collector as collector_module
 from src.streaming.agent_data_collector import (
     AgentDataCollector,
@@ -25,6 +27,19 @@ def _write_latest_json(path, *, extraction_count=1, version="2.0"):
         ),
         encoding="gbk",
     )
+
+
+def _read_cloud_events(tmp_path: Path) -> list[dict[str, object]]:
+    flush_product_log_writers()
+    raw_dir = tmp_path / "RPA_Diagnostic" / "observability" / "cloud" / "raw"
+    records: list[dict[str, object]] = []
+    for path in sorted(raw_dir.glob("*.jsonl")):
+        records.extend(
+            json.loads(line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        )
+    return records
 
 
 def test_check_agent_available_retries_transient_json_error(tmp_path, monkeypatch):
@@ -86,6 +101,7 @@ def test_check_agent_available_reports_error_after_retry_exhaustion(tmp_path, mo
 
 
 def test_check_agent_available_still_rejects_stale_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
     json_path = tmp_path / "latest.json"
     _write_latest_json(json_path, extraction_count=9)
 
@@ -101,6 +117,42 @@ def test_check_agent_available_still_rejects_stale_file(tmp_path, monkeypatch):
     assert result["available"] is False
     assert result["age_seconds"] == 12.0
     assert result["extraction_count"] == 9
+    assert "agent.collector.availability" in [event["event_type"] for event in _read_cloud_events(tmp_path)]
+
+
+def test_run_page_guard_emits_guard_failed_event(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+    ActiveSessionSnapshotStore().write(
+        {
+            "session_id": "session-collector-1",
+            "backend_name": "gds2",
+            "operation_kind": "live_data.start",
+            "selected_module": "Engine Control Module",
+            "selected_data_category": "Engine Data",
+            "current_page": "data_display",
+            "navigation_session_id": None,
+            "ai_session_id": None,
+            "live_data_active": True,
+            "connection_epoch": "epoch-collector-1",
+        }
+    )
+    collector = AgentDataCollector(
+        page_guard=lambda: {"ok": False, "error": "Data Display guard failed."},
+        on_error=lambda _message: None,
+        json_path=tmp_path / "latest.json",
+    )
+    collector._running = True
+
+    result = collector._run_page_guard()
+
+    assert result == {"ok": False, "error": "Data Display guard failed."}
+    assert collector.fatal_error == "Data Display guard failed."
+    events = _read_cloud_events(tmp_path)
+    guard_failed = next(event for event in events if event["event_type"] == "agent.collector.guard_failed")
+    assert guard_failed["session_id"] == "session-collector-1"
+    assert guard_failed["connection_epoch"] == "epoch-collector-1"
+    assert guard_failed["module"] == "Engine Control Module"
+    assert guard_failed["data_category"] == "Engine Data"
 
 
 def test_guard_event_signature_stringifies_non_json_values() -> None:

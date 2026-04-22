@@ -1,0 +1,62 @@
+{
+  "label": "explore_session_manager_open",
+  "timestamp": "2026-04-17T11:31:55",
+  "page": {
+    "page_id": "unknown",
+    "list_item_count": 0,
+    "buttons": [
+      "Delete",
+      "Back",
+      "Review"
+    ],
+    "evidence": "no matching rule",
+    "has_modal": false,
+    "confidence": "low",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "Delete",
+      "enabled": true
+    },
+    {
+      "text": "Review",
+      "enabled": true
+    },
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Back",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Delete",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Review",
+      "enabled": true
+    }
+  ],
+  "raw_page_id": "unknown",
+  "effective_page_id": "unknown",
+  "node_id": "866942450b2aed12",
+  "transition_error": "Transition did not settle from diagnostics_menu within 8.0s"
+}

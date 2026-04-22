@@ -1,0 +1,82 @@
+{
+  "label": "control_subitem_ignition_timing_ignition_timing_retard_recover_back",
+  "timestamp": "2026-04-17T15:14:31",
+  "page": {
+    "page_id": "data_list",
+    "list_item_count": 1,
+    "buttons": [
+      "Vehicle Menu",
+      "Back",
+      "Enter",
+      "Home"
+    ],
+    "evidence": "has list items + Back button, no specific markers",
+    "has_modal": false,
+    "confidence": "medium",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "Home",
+      "enabled": true
+    },
+    {
+      "text": "Vehicle Menu",
+      "enabled": true
+    },
+    {
+      "text": "Enter",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [
+    "Ignition Timing Retard"
+  ],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Back",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Enter",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Home",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Vehicle Menu",
+      "enabled": true
+    },
+    {
+      "kind": "list_item",
+      "label": "Ignition Timing Retard",
+      "list_index": 0
+    }
+  ],
+  "raw_page_id": "data_list",
+  "effective_page_id": "data_list",
+  "node_id": "3f8d545302f5ab36"
+}

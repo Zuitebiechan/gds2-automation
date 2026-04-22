@@ -1,0 +1,5815 @@
+{
+  "version": 1,
+  "created_at": "merged",
+  "nodes": {
+    "e7ffb5a50e9077e6": {
+      "node_id": "e7ffb5a50e9077e6",
+      "page_id": "main_menu",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Close Application",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Diagnostics",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Language",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Manage Diagnostic Packages",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Preferences",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Release Notes",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Review Stored Data",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Update",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "navigation_path": [],
+      "raw_page_id": "main_menu",
+      "raw_page_ids": [
+        "main_menu"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "0c9acf157a30bdc3",
+        "0d7a31cfa67e626d",
+        "9ae38d362b4e8a8a"
+      ],
+      "first_seen_label": "live_snapshot"
+    },
+    "55634db00b41f7a8": {
+      "node_id": "55634db00b41f7a8",
+      "page_id": "vehicle_selection",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Clear Vehicle Selection",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Copy VIN",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Disconnect",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Read VIN",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "navigation_path": [],
+      "raw_page_id": "vehicle_selection",
+      "raw_page_ids": [
+        "vehicle_selection"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "18395bbc1da1ca8a",
+        "b45227ef942fd20b"
+      ],
+      "first_seen_label": "after_click_diagnostics"
+    },
+    "9fbd40baf261ca93": {
+      "node_id": "9fbd40baf261ca93",
+      "page_id": "diagnostics_menu",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Session Manager",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Vehicle Diagnostics",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Module Diagnostics",
+        "Session Manager",
+        "Vehicle Diagnostics"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "diagnostics_menu",
+      "raw_page_ids": [
+        "diagnostics_menu"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "5abe0cee33f3efd9",
+        "a6f0f2ddfbe76e61"
+      ],
+      "first_seen_label": "unknown"
+    },
+    "59e2f52784742dba": {
+      "node_id": "59e2f52784742dba",
+      "page_id": "module_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "[A11] Radio",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[A22] Radio Controls",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[A26] HVAC Controls",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[B119] Multi-Axis Acceleration Sensor Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[B218L] Left Side Object Detection Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[B218R] Right Side Object Detection Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[B233B] Long Range Radar Sensor Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[B99] Steering Wheel Angle Sensor Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K109] Frontview Camera Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K124] Active Safety Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K157] Video Processing Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K17] Electronic Brake Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K182] Parking Assist Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K19] Suspension Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K20] Engine Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K26] Headlamp Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K33] HVAC Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K36] Inflatable Restraint Sensing and Diagnostic Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K39] Liftgate Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K40D] Seat Memory Control Module - Driver",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K43] Power Steering Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K47] Rear Differential Clutch Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K56] Serial Data Gateway Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K60] Steering Column Lock Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K71] Transmission Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K73] Telematics Communication Interface Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K74] Human Machine Interface Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K84] Keyless Entry Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K9] Body Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[P16] Instrument Cluster",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[T1] Accessory DC/AC Power Inverter Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[T3] Amplifier",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "[A11] Radio",
+        "[A22] Radio Controls",
+        "[A26] HVAC Controls",
+        "[B119] Multi-Axis Acceleration Sensor Module",
+        "[B218L] Left Side Object Detection Control Module",
+        "[B218R] Right Side Object Detection Control Module",
+        "[B233B] Long Range Radar Sensor Module",
+        "[B99] Steering Wheel Angle Sensor Module",
+        "[K109] Frontview Camera Module",
+        "[K124] Active Safety Control Module",
+        "[K157] Video Processing Control Module",
+        "[K17] Electronic Brake Control Module",
+        "[K182] Parking Assist Control Module",
+        "[K19] Suspension Control Module",
+        "[K20] Engine Control Module",
+        "[K26] Headlamp Control Module",
+        "[K33] HVAC Control Module",
+        "[K36] Inflatable Restraint Sensing and Diagnostic Module",
+        "[K39] Liftgate Control Module",
+        "[K40D] Seat Memory Control Module - Driver",
+        "[K43] Power Steering Control Module",
+        "[K47] Rear Differential Clutch Control Module",
+        "[K56] Serial Data Gateway Module",
+        "[K60] Steering Column Lock Control Module",
+        "[K71] Transmission Control Module",
+        "[K73] Telematics Communication Interface Control Module",
+        "[K74] Human Machine Interface Control Module",
+        "[K84] Keyless Entry Control Module",
+        "[K9] Body Control Module",
+        "[P16] Instrument Cluster",
+        "[T1] Accessory DC/AC Power Inverter Module",
+        "[T3] Amplifier"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "module_list",
+      "raw_page_ids": [
+        "module_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "e0aa2bc3de8c725e",
+        "f445d3d86846748a"
+      ],
+      "first_seen_label": "after_module_diagnostics"
+    },
+    "0dd2d0fb091389d0": {
+      "node_id": "0dd2d0fb091389d0",
+      "page_id": "module_submenu",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Configuration/Reset Functions",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Control Functions",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Data Display",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Diagnostic Trouble Codes (DTC)",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Event Information",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Identification Information",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Inspection/Maintenance System Information",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Configuration/Reset Functions",
+        "Control Functions",
+        "Data Display",
+        "Diagnostic Trouble Codes (DTC)",
+        "Event Information",
+        "Identification Information",
+        "Inspection/Maintenance System Information"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "module_submenu",
+      "raw_page_ids": [
+        "module_submenu"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "1805ef52ad0e78d2",
+        "d422c2dba7595d24"
+      ],
+      "first_seen_label": "after_module_selection"
+    },
+    "7035947f3988c201": {
+      "node_id": "7035947f3988c201",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Automatic Transmission Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "CMP Actuator Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Cruise Control, PTO and Traction Control Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "EVAP Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Electrical and Immobilizer Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Cooling and HVAC Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Mechanical Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Exhaust Aftertreatment Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Alcohol Content Event Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Injector Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel System Data - High Pressure",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel System Data - Low Pressure",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Trim Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "HO2S Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Ignition Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Induction Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Instrument Cluster Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Misfire Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Stop/Start System Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "TAC Data",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Automatic Transmission Data",
+        "CMP Actuator Data",
+        "Cruise Control, PTO and Traction Control Data",
+        "EVAP Data",
+        "Electrical and Immobilizer Data",
+        "Engine Cooling and HVAC Data",
+        "Engine Data",
+        "Engine Mechanical Data",
+        "Exhaust Aftertreatment Data",
+        "Fuel Alcohol Content Event Data",
+        "Fuel Injector Data",
+        "Fuel System Data - High Pressure",
+        "Fuel System Data - Low Pressure",
+        "Fuel Trim Data",
+        "HO2S Data",
+        "Ignition Data",
+        "Induction Data",
+        "Instrument Cluster Data",
+        "Misfire Data",
+        "Stop/Start System Data",
+        "TAC Data"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "591fc220c5983ac9",
+        "de81603db47bfa82"
+      ],
+      "first_seen_label": "after_submenu_selection"
+    },
+    "e2bd8cfaee93ad7f": {
+      "node_id": "e2bd8cfaee93ad7f",
+      "page_id": "data_display",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Clear DTCs",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Create Report",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Custom Order",
+        "Display Name",
+        "ECU",
+        "Units",
+        "authored"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_display",
+      "raw_page_ids": [
+        "data_display"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "3e873d68520c35c8",
+        "fa790c308eac35c4"
+      ],
+      "first_seen_label": "after_data_selection"
+    },
+    "076526591125909f": {
+      "node_id": "076526591125909f",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "DTC Display",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Diagnostic Test Status: Since DTC Clear",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Diagnostic Test Status: This Ignition Cycle",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Freeze Frame/Failure Records",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Specific DTC",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "DTC Display",
+        "Diagnostic Test Status: Since DTC Clear",
+        "Diagnostic Test Status: This Ignition Cycle",
+        "Freeze Frame/Failure Records",
+        "Specific DTC"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "810f0f26d245cdb5",
+        "9517de34acd212f0"
+      ],
+      "first_seen_label": "safe_submenu_01_diagnostic_trouble_codes_dtc"
+    },
+    "4bc92f91302b5182": {
+      "node_id": "4bc92f91302b5182",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Oil Level Warning Event Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Overspeed Event Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Alcohol Content Event Data",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Engine Oil Level Warning Event Data",
+        "Engine Overspeed Event Data",
+        "Fuel Alcohol Content Event Data"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "94ed613bf0e26cec",
+        "978f6de18b3b0a60"
+      ],
+      "first_seen_label": "safe_submenu_02_event_information"
+    },
+    "66b64bacd95a6ace": {
+      "node_id": "66b64bacd95a6ace",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Calibration History",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Identification Information",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Calibration History",
+        "Identification Information"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "435da6c8f2850f3e",
+        "a6f3da83a6884b95"
+      ],
+      "first_seen_label": "safe_submenu_03_identification_information"
+    },
+    "b0b43df36ccd3441": {
+      "node_id": "b0b43df36ccd3441",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Inspection/Maintenance Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Inspection/Maintenance System Status Data",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Inspection/Maintenance Data",
+        "Inspection/Maintenance System Status Data"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "09639fadfcb3eee7",
+        "fea3c33eb0c3e420"
+      ],
+      "first_seen_label": "safe_submenu_04_inspection_maintenance_system_information"
+    },
+    "b16649d8f1d9df8c": {
+      "node_id": "b16649d8f1d9df8c",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Vehicle DTC Information",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Vehicle DTC and ID Information",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Vehicle Data Capture",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Vehicle DTC Information",
+        "Vehicle DTC and ID Information",
+        "Vehicle Data Capture"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "13b5b8c65fca7d10",
+        "c358eb1c21df60e1"
+      ],
+      "first_seen_label": "diagnostics_menu_01_vehicle_diagnostics"
+    },
+    "69bcde8eb9994464": {
+      "node_id": "69bcde8eb9994464",
+      "page_id": "data_display",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Create Report",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Details",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Refresh",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "navigation_path": [],
+      "raw_page_id": "data_display",
+      "raw_page_ids": [
+        "data_display"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "0867b3b0c57c6f09"
+      ],
+      "first_seen_label": "vehicle_diagnostics_01_vehicle_dtc_information_back"
+    },
+    "5bd12a0f79976803": {
+      "node_id": "5bd12a0f79976803",
+      "page_id": "data_display",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Clear DTCs",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Create Report",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Details",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Refresh",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "navigation_path": [],
+      "raw_page_id": "data_display",
+      "raw_page_ids": [
+        "data_display"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "3639477d6582512c"
+      ],
+      "first_seen_label": "vehicle_dtc_variant_start"
+    },
+    "5eb526c7682375a4": {
+      "node_id": "5eb526c7682375a4",
+      "page_id": "data_display",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Clear DTCs",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Create Report",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Details",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Refresh",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Reset Ethernet",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "navigation_path": [],
+      "raw_page_id": "data_display",
+      "raw_page_ids": [
+        "data_display"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "1c19331cc1a8e89e"
+      ],
+      "first_seen_label": "vehicle_dtc_and_id_settled"
+    },
+    "67db308af12c5f07": {
+      "node_id": "67db308af12c5f07",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "A/C Compressor Clutch Relay",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Active Grille Air Shutter System",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Autostart/Autostop",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Auxiliary Coolant Pump",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Camshaft Position Actuator System",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Compression Test",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Cooling Fan",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "EVAP System",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Controls Ignition Relay",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Oil Pressure Control Solenoid Valve",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Speed/Throttle",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Control Loop Status",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel System",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Generator L-Terminal",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Heater Coolant Pump",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Ignition Timing",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Instrument Panel Indicators",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Misfire Graphic",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Oxygen Sensor Heaters",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Starter Pinion Solenoid Actuator Relay",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Turbocharger",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "A/C Compressor Clutch Relay",
+        "Active Grille Air Shutter System",
+        "Autostart/Autostop",
+        "Auxiliary Coolant Pump",
+        "Camshaft Position Actuator System",
+        "Compression Test",
+        "Cooling Fan",
+        "EVAP System",
+        "Engine Controls Ignition Relay",
+        "Engine Oil Pressure Control Solenoid Valve",
+        "Engine Speed/Throttle",
+        "Fuel Control Loop Status",
+        "Fuel System",
+        "Generator L-Terminal",
+        "Heater Coolant Pump",
+        "Ignition Timing",
+        "Instrument Panel Indicators",
+        "Misfire Graphic",
+        "Oxygen Sensor Heaters",
+        "Starter Pinion Solenoid Actuator Relay",
+        "Turbocharger"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "eba9ffd57b93d135"
+      ],
+      "first_seen_label": "explore_control_functions_open"
+    },
+    "d8ef643bfdc225a2": {
+      "node_id": "d8ef643bfdc225a2",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Learn Functions",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Reset Functions",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Learn Functions",
+        "Reset Functions"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "9a2a0958b5f82dee"
+      ],
+      "first_seen_label": "explore_config_reset_open"
+    },
+    "ce370a755155e3f3": {
+      "node_id": "ce370a755155e3f3",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Brake Pedal Position Sensor Learn",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Crankshaft Position Variation Learn",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "HO2S Heater Learn",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Brake Pedal Position Sensor Learn",
+        "Crankshaft Position Variation Learn",
+        "HO2S Heater Learn"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "02e13814e3d982ad"
+      ],
+      "first_seen_label": "explore_config_reset_child_learn_functions"
+    },
+    "ade063d9f699c0ad": {
+      "node_id": "ade063d9f699c0ad",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Ambient Air Temperature Calculation Reset",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Oil Life Reset",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Rail Pressure Relief Valve Learned Values Reset",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Trim Reset",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "HO2S Heater Resistance Learned Values Reset",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Intake System Learned Values Reset",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Remote Vehicle Start Disable History Reset",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Throttle Body Idle Air Flow Compensation Reset",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Ambient Air Temperature Calculation Reset",
+        "Engine Oil Life Reset",
+        "Fuel Rail Pressure Relief Valve Learned Values Reset",
+        "Fuel Trim Reset",
+        "HO2S Heater Resistance Learned Values Reset",
+        "Intake System Learned Values Reset",
+        "Remote Vehicle Start Disable History Reset",
+        "Throttle Body Idle Air Flow Compensation Reset"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "c91639577a6e83a3"
+      ],
+      "first_seen_label": "explore_config_reset_child_reset_functions"
+    },
+    "5f3577bb0574dba9": {
+      "node_id": "5f3577bb0574dba9",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Learn",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Custom Order",
+        "Display Name",
+        "ECU",
+        "Units",
+        "authored"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "21da00f69fce4ab5"
+      ],
+      "first_seen_label": "learn_function_brake_pedal_position_sensor_learn"
+    },
+    "58f9e39aa229ade8": {
+      "node_id": "58f9e39aa229ade8",
+      "page_id": "clear_dtcs_confirmation",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Cancel",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Clear Records",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Continue",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Decrease",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Increase",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "No",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "OK",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "On",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Save and Clear",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Yes",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "navigation_path": [],
+      "raw_page_id": "clear_dtcs_confirmation",
+      "raw_page_ids": [
+        "clear_dtcs_confirmation"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "57758fddc73f9860"
+      ],
+      "first_seen_label": "remaining_learn_crankshaft_position_variation_learn"
+    },
+    "b779596fda53c0ca": {
+      "node_id": "b779596fda53c0ca",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Reset",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Custom Order",
+        "Display Name",
+        "ECU",
+        "Units",
+        "authored"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "5530ff4c472177cb"
+      ],
+      "first_seen_label": "reset_function_ambient_air_temperature_calculation_reset"
+    },
+    "2cfd5a3754751693": {
+      "node_id": "2cfd5a3754751693",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Release Control",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Reset",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Custom Order",
+        "Display Name",
+        "ECU",
+        "Units",
+        "authored"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "9587940369e4bdfd"
+      ],
+      "first_seen_label": "remaining_reset_fuel_rail_pressure_relief_valve_learned_values_reset"
+    },
+    "16879b8a1e82fc48": {
+      "node_id": "16879b8a1e82fc48",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Learn",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Release Control",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Custom Order",
+        "Display Name",
+        "ECU",
+        "Units",
+        "authored"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "9e0455704fb3f2cf"
+      ],
+      "first_seen_label": "remaining_reset_ho2s_heater_resistance_learned_values_reset"
+    },
+    "1b17504790116bc5": {
+      "node_id": "1b17504790116bc5",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Activate",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Custom Order",
+        "Display Name",
+        "ECU",
+        "Units",
+        "authored"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "f0c803bb5c51c99a"
+      ],
+      "first_seen_label": "remaining_reset_intake_system_learned_values_reset"
+    },
+    "b810bf81bb2beeb7": {
+      "node_id": "b810bf81bb2beeb7",
+      "page_id": "data_display",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Bookmarks",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Create Report",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Insert Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Custom Order",
+        "Display Name",
+        "ECU",
+        "Units",
+        "authored"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_display",
+      "raw_page_ids": [
+        "data_display"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "36aaeb7ae124173c"
+      ],
+      "first_seen_label": "session_manager_direct_review"
+    },
+    "4fba1b4bb261a6db": {
+      "node_id": "4fba1b4bb261a6db",
+      "page_id": "vehicle_selection",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Clear Vehicle Selection",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Copy VIN",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Disconnect",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Read VIN",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "navigation_path": [],
+      "raw_page_id": "loading",
+      "raw_page_ids": [
+        "loading"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "2409bd8b2552209c"
+      ],
+      "first_seen_label": "post_diagnostics_enter_disabled_location"
+    },
+    "f9aa21518dfdd31b": {
+      "node_id": "f9aa21518dfdd31b",
+      "page_id": "data_display",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Clear DTCs",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Create Report",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Refresh",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "navigation_path": [],
+      "raw_page_id": "data_display",
+      "raw_page_ids": [
+        "data_display"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "6cfd2a1d1985f552"
+      ],
+      "first_seen_label": "explore_dtc_child_dtc_display"
+    },
+    "5e885c9774281651": {
+      "node_id": "5e885c9774281651",
+      "page_id": "data_display",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Create Report",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Refresh",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "navigation_path": [],
+      "raw_page_id": "data_display",
+      "raw_page_ids": [
+        "data_display"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "5731d793f1280a90"
+      ],
+      "first_seen_label": "explore_dtc_child_diagnostic_test_status_this_ignition_cycle"
+    },
+    "eb490e65a8548131": {
+      "node_id": "eb490e65a8548131",
+      "page_id": "clear_dtcs_confirmation",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Create Report",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Refresh",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "navigation_path": [],
+      "raw_page_id": "clear_dtcs_confirmation",
+      "raw_page_ids": [
+        "clear_dtcs_confirmation"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "4ae29a4af0c2a405"
+      ],
+      "first_seen_label": "explore_dtc_child_diagnostic_test_status_since_dtc_clear"
+    },
+    "89be3204e23828ab": {
+      "node_id": "89be3204e23828ab",
+      "page_id": "data_display",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Create Report",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Custom Order",
+        "Display Name",
+        "ECU",
+        "Units",
+        "authored"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_display",
+      "raw_page_ids": [
+        "data_display"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "e8bbe7fab79db207"
+      ],
+      "first_seen_label": "ident_info_identification_information"
+    },
+    "01a95d64258ac3b3": {
+      "node_id": "01a95d64258ac3b3",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Off",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "On",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Release Control",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Custom Order",
+        "Display Name",
+        "ECU",
+        "Units",
+        "authored"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "c1824940c4b0c403"
+      ],
+      "first_seen_label": "control_function_a_c_compressor_clutch_relay"
+    },
+    "7acf8507043cd55f": {
+      "node_id": "7acf8507043cd55f",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Active Grille Air Shutter 1",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Active Grille Air Shutter 2",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Active Grille Air Shutter 1",
+        "Active Grille Air Shutter 2"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "5c6132db8aa7508a"
+      ],
+      "first_seen_label": "control_function_active_grille_air_shutter_system"
+    },
+    "ca3344cf99d46cd7": {
+      "node_id": "ca3344cf99d46cd7",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Release Control",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Start",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Stop",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Custom Order",
+        "Display Name",
+        "ECU",
+        "Units",
+        "authored"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "e24226cf457b2964"
+      ],
+      "first_seen_label": "control_function_autostart_autostop"
+    },
+    "cb2ba50fa1cb4bc7": {
+      "node_id": "cb2ba50fa1cb4bc7",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Exhaust Camshaft Position Actuator",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Exhaust Camshaft Position Actuator Solenoid Valve",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Intake Camshaft Position Actuator",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Intake Camshaft Position Actuator Solenoid Valve",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Exhaust Camshaft Position Actuator",
+        "Exhaust Camshaft Position Actuator Solenoid Valve",
+        "Intake Camshaft Position Actuator",
+        "Intake Camshaft Position Actuator Solenoid Valve"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "3872317636a11cc9"
+      ],
+      "first_seen_label": "control_function_camshaft_position_actuator_system"
+    },
+    "ea12adbec964c53c": {
+      "node_id": "ea12adbec964c53c",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Compression Test",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Custom Order",
+        "Display Name",
+        "ECU",
+        "Units",
+        "authored"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "3d15301462847413"
+      ],
+      "first_seen_label": "control_function_compression_test"
+    },
+    "09ac46e1451a0c85": {
+      "node_id": "09ac46e1451a0c85",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Cooling Fan",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Cooling Fan Relay 1",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Cooling Fan Relay 2",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Cooling Fan",
+        "Cooling Fan Relay 1",
+        "Cooling Fan Relay 2"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "de5aebe2f074d579"
+      ],
+      "first_seen_label": "control_function_cooling_fan"
+    },
+    "7378c7408c4bbd94": {
+      "node_id": "7378c7408c4bbd94",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "High Pressure",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Low Pressure",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Release Control",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Custom Order",
+        "Display Name",
+        "ECU",
+        "Units",
+        "authored"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "22e57a4d142c808c"
+      ],
+      "first_seen_label": "control_function_engine_oil_pressure_control_solenoid_valve"
+    },
+    "4223da0a8bd54b7f": {
+      "node_id": "4223da0a8bd54b7f",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Speed",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Throttle Position",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Throttle Sweep",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Engine Speed",
+        "Throttle Position",
+        "Throttle Sweep"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "f5c447d269756dc9"
+      ],
+      "first_seen_label": "control_function_engine_speed_throttle"
+    },
+    "e6c64dc41890e7ad": {
+      "node_id": "e6c64dc41890e7ad",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "EVAP Purge Solenoid Valve",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "EVAP Purge Solenoid Valve"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "3009c5d30593623e"
+      ],
+      "first_seen_label": "control_function_evap_system"
+    },
+    "ba742bd3b24db84f": {
+      "node_id": "ba742bd3b24db84f",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Cylinder Power Balance",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Depressurize Fuel System",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Injector Balance",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Pressure",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Pressure Regulator",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Pump Enable",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Rail Pressure",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Trim Enable",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Cylinder Power Balance",
+        "Depressurize Fuel System",
+        "Fuel Injector Balance",
+        "Fuel Pressure",
+        "Fuel Pressure Regulator",
+        "Fuel Pump Enable",
+        "Fuel Rail Pressure",
+        "Fuel Trim Enable"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "e2300b8a4f975e21"
+      ],
+      "first_seen_label": "control_function_fuel_system"
+    },
+    "236ee01337ac90b8": {
+      "node_id": "236ee01337ac90b8",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Ignition Timing Retard",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Ignition Timing Retard"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "3f8d545302f5ab36"
+      ],
+      "first_seen_label": "control_function_ignition_timing"
+    },
+    "cd3422f449ae2047": {
+      "node_id": "cd3422f449ae2047",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Malfunction Indicator Lamp (MIL)",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Malfunction Indicator Lamp (MIL)"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "b113a54ec990dfb3"
+      ],
+      "first_seen_label": "control_function_instrument_panel_indicators"
+    },
+    "33036fcc45af6e28": {
+      "node_id": "33036fcc45af6e28",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "HO2S Heater Sensor 1",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "HO2S Heater Sensor 2",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "HO2S Heater Sensor 1",
+        "HO2S Heater Sensor 2"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "e0df5937b2fd3110"
+      ],
+      "first_seen_label": "control_function_oxygen_sensor_heaters"
+    },
+    "3b6713f9d2193077": {
+      "node_id": "3b6713f9d2193077",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Turbocharger Bypass Solenoid Valve",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Turbocharger Wastegate Solenoid Valve",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Turbocharger Bypass Solenoid Valve",
+        "Turbocharger Wastegate Solenoid Valve"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "b5d4277b5ab4d11f"
+      ],
+      "first_seen_label": "control_function_turbocharger"
+    },
+    "8f0c1d4f73d87208": {
+      "node_id": "8f0c1d4f73d87208",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Close",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Open",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Release Control",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Custom Order",
+        "Display Name",
+        "ECU",
+        "Units",
+        "authored"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "a444666591c72da3"
+      ],
+      "first_seen_label": "control_subitem_active_grille_air_shutter_system_active_grille_air_shutter_1"
+    },
+    "d1fd14fc38191f2f": {
+      "node_id": "d1fd14fc38191f2f",
+      "page_id": "j2534_disconnect",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "OK",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "navigation_path": [],
+      "raw_page_id": "j2534_disconnect",
+      "raw_page_ids": [
+        "j2534_disconnect"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "2806547352b1b367"
+      ],
+      "first_seen_label": "control_subitem_camshaft_position_actuator_system_exhaust_camshaft_position_actuator"
+    },
+    "e5152343b713a5e6": {
+      "node_id": "e5152343b713a5e6",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "1",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "2",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "3",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "4",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "5",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Release Control",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Custom Order",
+        "Display Name",
+        "ECU",
+        "Units",
+        "authored"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "0365274220b61553"
+      ],
+      "first_seen_label": "control_subitem_cooling_fan_cooling_fan"
+    },
+    "72f21f8c424294fa": {
+      "node_id": "72f21f8c424294fa",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Release Control",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Custom Order",
+        "Display Name",
+        "ECU",
+        "Units",
+        "authored"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "876b992029985c3e"
+      ],
+      "first_seen_label": "control_subitem_engine_speed/throttle_throttle_position"
+    },
+    "716eef30a45ad19e": {
+      "node_id": "716eef30a45ad19e",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Disable",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enable",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Release Control",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Custom Order",
+        "Display Name",
+        "ECU",
+        "Units",
+        "authored"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "1e03c36e1b774d00"
+      ],
+      "first_seen_label": "control_subitem_fuel_system_cylinder_power_balance"
+    },
+    "153aad5a96547ab4": {
+      "node_id": "153aad5a96547ab4",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Disabled",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enabled",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Release Control",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Custom Order",
+        "Display Name",
+        "ECU",
+        "Units",
+        "authored"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "4fea456f986c9c5e"
+      ],
+      "first_seen_label": "control_subitem_fuel_system_fuel_trim_enable"
+    },
+    "bc06e717b49f699d": {
+      "node_id": "bc06e717b49f699d",
+      "page_id": "clear_dtcs_selection",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Add All",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Cancel",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "navigation_path": [],
+      "raw_page_id": "clear_dtcs_selection",
+      "raw_page_ids": [
+        "clear_dtcs_selection"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "bb662b9141ffa7f6"
+      ],
+      "first_seen_label": "clear_dtcs_flow_selection"
+    },
+    "c506735547bba42b": {
+      "node_id": "c506735547bba42b",
+      "page_id": "clear_dtcs_selection",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Cancel",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "OK",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Remove",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Remove All",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "navigation_path": [],
+      "raw_page_id": "clear_dtcs_selection",
+      "raw_page_ids": [
+        "clear_dtcs_selection"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "7b24e166d8367993"
+      ],
+      "first_seen_label": "clear_dtcs_flow_after_add_all"
+    },
+    "1bfb4eade9ef144b": {
+      "node_id": "1bfb4eade9ef144b",
+      "page_id": "clear_dtcs_confirmation",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Cancel",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Clear DTCs",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Clear Records",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Continue",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Create Report",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Decrease",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Increase",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "No",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "OK",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "On",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Save and Clear",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Yes",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Custom Order",
+        "Display Name",
+        "ECU",
+        "Units",
+        "authored"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "clear_dtcs_confirmation",
+      "raw_page_ids": [
+        "clear_dtcs_confirmation"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "ab8e118f097d7e78"
+      ],
+      "first_seen_label": "clear_dtcs_yes_after"
+    },
+    "6bc34d3bdcca515d": {
+      "node_id": "6bc34d3bdcca515d",
+      "page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "OK",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "Custom Order",
+        "Display Name",
+        "ECU",
+        "Units",
+        "authored"
+      ],
+      "navigation_path": [],
+      "raw_page_id": "data_list",
+      "raw_page_ids": [
+        "data_list"
+      ],
+      "window_title": "GDS 2",
+      "aliases": [
+        "927ac5808bae32be"
+      ],
+      "first_seen_label": "button_probe_brake_pedal_position_sensor_learn_learn"
+    }
+  },
+  "edges": [
+    {
+      "source_id": "e7ffb5a50e9077e6",
+      "target_id": "55634db00b41f7a8",
+      "source_page_id": "main_menu",
+      "target_page_id": "vehicle_selection",
+      "action": {
+        "kind": "button",
+        "label": "Diagnostics"
+      },
+      "timestamp": "2026-04-17T10:31:29"
+    },
+    {
+      "source_id": "9fbd40baf261ca93",
+      "target_id": "59e2f52784742dba",
+      "source_page_id": "diagnostics_menu",
+      "target_page_id": "module_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Module Diagnostics",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:37:43"
+    },
+    {
+      "source_id": "59e2f52784742dba",
+      "target_id": "0dd2d0fb091389d0",
+      "source_page_id": "module_list",
+      "target_page_id": "module_submenu",
+      "action": {
+        "kind": "list_item",
+        "label": "Engine Control Module",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:37:44"
+    },
+    {
+      "source_id": "0dd2d0fb091389d0",
+      "target_id": "7035947f3988c201",
+      "source_page_id": "module_submenu",
+      "target_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Data Display",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:37:45"
+    },
+    {
+      "source_id": "7035947f3988c201",
+      "target_id": "e2bd8cfaee93ad7f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Engine Data",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:37:47"
+    },
+    {
+      "source_id": "e2bd8cfaee93ad7f",
+      "target_id": "7035947f3988c201",
+      "source_page_id": "data_display",
+      "target_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T10:41:21"
+    },
+    {
+      "source_id": "e2bd8cfaee93ad7f",
+      "target_id": "e2bd8cfaee93ad7f",
+      "source_page_id": "data_display",
+      "target_page_id": "data_display",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T10:41:23"
+    },
+    {
+      "source_id": "7035947f3988c201",
+      "target_id": "e2bd8cfaee93ad7f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Automatic Transmission Data",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:51:45"
+    },
+    {
+      "source_id": "7035947f3988c201",
+      "target_id": "e2bd8cfaee93ad7f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Stop/Start System Data",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:51:50"
+    },
+    {
+      "source_id": "7035947f3988c201",
+      "target_id": "e2bd8cfaee93ad7f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "CMP Actuator Data",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:51:55"
+    },
+    {
+      "source_id": "7035947f3988c201",
+      "target_id": "e2bd8cfaee93ad7f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Engine Cooling and HVAC Data",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:52:00"
+    },
+    {
+      "source_id": "7035947f3988c201",
+      "target_id": "e2bd8cfaee93ad7f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Cruise Control, PTO and Traction Control Data",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:52:05"
+    },
+    {
+      "source_id": "7035947f3988c201",
+      "target_id": "e2bd8cfaee93ad7f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Electrical and Immobilizer Data",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:52:10"
+    },
+    {
+      "source_id": "7035947f3988c201",
+      "target_id": "e2bd8cfaee93ad7f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Engine Mechanical Data",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:52:15"
+    },
+    {
+      "source_id": "7035947f3988c201",
+      "target_id": "e2bd8cfaee93ad7f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "EVAP Data",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:52:20"
+    },
+    {
+      "source_id": "7035947f3988c201",
+      "target_id": "e2bd8cfaee93ad7f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Exhaust Aftertreatment Data",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:52:25"
+    },
+    {
+      "source_id": "7035947f3988c201",
+      "target_id": "e2bd8cfaee93ad7f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Fuel Alcohol Content Event Data",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:52:30"
+    },
+    {
+      "source_id": "7035947f3988c201",
+      "target_id": "e2bd8cfaee93ad7f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Fuel Injector Data",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:52:35"
+    },
+    {
+      "source_id": "7035947f3988c201",
+      "target_id": "e2bd8cfaee93ad7f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Fuel System Data - High Pressure",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:52:40"
+    },
+    {
+      "source_id": "7035947f3988c201",
+      "target_id": "e2bd8cfaee93ad7f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Fuel System Data - Low Pressure",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:52:45"
+    },
+    {
+      "source_id": "7035947f3988c201",
+      "target_id": "e2bd8cfaee93ad7f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Fuel Trim Data",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:52:50"
+    },
+    {
+      "source_id": "7035947f3988c201",
+      "target_id": "e2bd8cfaee93ad7f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "HO2S Data",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:52:54"
+    },
+    {
+      "source_id": "7035947f3988c201",
+      "target_id": "e2bd8cfaee93ad7f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Ignition Data",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:52:59"
+    },
+    {
+      "source_id": "7035947f3988c201",
+      "target_id": "e2bd8cfaee93ad7f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Induction Data",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:53:05"
+    },
+    {
+      "source_id": "7035947f3988c201",
+      "target_id": "e2bd8cfaee93ad7f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Instrument Cluster Data",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:53:10"
+    },
+    {
+      "source_id": "7035947f3988c201",
+      "target_id": "e2bd8cfaee93ad7f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Misfire Data",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:53:15"
+    },
+    {
+      "source_id": "7035947f3988c201",
+      "target_id": "e2bd8cfaee93ad7f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "TAC Data",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:53:20"
+    },
+    {
+      "source_id": "7035947f3988c201",
+      "target_id": "0dd2d0fb091389d0",
+      "source_page_id": "data_list",
+      "target_page_id": "module_submenu",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T10:54:03"
+    },
+    {
+      "source_id": "0dd2d0fb091389d0",
+      "target_id": "076526591125909f",
+      "source_page_id": "module_submenu",
+      "target_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Diagnostic Trouble Codes (DTC)",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:54:04"
+    },
+    {
+      "source_id": "076526591125909f",
+      "target_id": "0dd2d0fb091389d0",
+      "source_page_id": "data_list",
+      "target_page_id": "module_submenu",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T10:54:08"
+    },
+    {
+      "source_id": "0dd2d0fb091389d0",
+      "target_id": "4bc92f91302b5182",
+      "source_page_id": "module_submenu",
+      "target_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Event Information",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:54:09"
+    },
+    {
+      "source_id": "4bc92f91302b5182",
+      "target_id": "0dd2d0fb091389d0",
+      "source_page_id": "data_list",
+      "target_page_id": "module_submenu",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T10:54:13"
+    },
+    {
+      "source_id": "0dd2d0fb091389d0",
+      "target_id": "66b64bacd95a6ace",
+      "source_page_id": "module_submenu",
+      "target_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Identification Information",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:54:14"
+    },
+    {
+      "source_id": "66b64bacd95a6ace",
+      "target_id": "0dd2d0fb091389d0",
+      "source_page_id": "data_list",
+      "target_page_id": "module_submenu",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T10:54:18"
+    },
+    {
+      "source_id": "0dd2d0fb091389d0",
+      "target_id": "b0b43df36ccd3441",
+      "source_page_id": "module_submenu",
+      "target_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Inspection/Maintenance System Information",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:54:19"
+    },
+    {
+      "source_id": "b0b43df36ccd3441",
+      "target_id": "0dd2d0fb091389d0",
+      "source_page_id": "data_list",
+      "target_page_id": "module_submenu",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T10:54:22"
+    },
+    {
+      "source_id": "0dd2d0fb091389d0",
+      "target_id": "59e2f52784742dba",
+      "source_page_id": "module_submenu",
+      "target_page_id": "module_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T10:54:51"
+    },
+    {
+      "source_id": "59e2f52784742dba",
+      "target_id": "9fbd40baf261ca93",
+      "source_page_id": "module_list",
+      "target_page_id": "diagnostics_menu",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T10:54:52"
+    },
+    {
+      "source_id": "9fbd40baf261ca93",
+      "target_id": "b16649d8f1d9df8c",
+      "source_page_id": "diagnostics_menu",
+      "target_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Vehicle Diagnostics",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:54:53"
+    },
+    {
+      "source_id": "b16649d8f1d9df8c",
+      "target_id": "9fbd40baf261ca93",
+      "source_page_id": "data_list",
+      "target_page_id": "diagnostics_menu",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T10:54:57"
+    },
+    {
+      "source_id": "5bd12a0f79976803",
+      "target_id": "b16649d8f1d9df8c",
+      "source_page_id": "data_display",
+      "target_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T11:02:54"
+    },
+    {
+      "source_id": "5eb526c7682375a4",
+      "target_id": "b16649d8f1d9df8c",
+      "source_page_id": "data_display",
+      "target_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T11:03:28"
+    },
+    {
+      "source_id": "0dd2d0fb091389d0",
+      "target_id": "67db308af12c5f07",
+      "source_page_id": "module_submenu",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "module_submenu",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Control Functions",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T11:21:42"
+    },
+    {
+      "source_id": "67db308af12c5f07",
+      "target_id": "0dd2d0fb091389d0",
+      "source_page_id": "data_list",
+      "target_page_id": "module_submenu",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "module_submenu",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T11:21:44"
+    },
+    {
+      "source_id": "0dd2d0fb091389d0",
+      "target_id": "d8ef643bfdc225a2",
+      "source_page_id": "module_submenu",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "module_submenu",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Configuration/Reset Functions",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T11:22:12"
+    },
+    {
+      "source_id": "d8ef643bfdc225a2",
+      "target_id": "0dd2d0fb091389d0",
+      "source_page_id": "data_list",
+      "target_page_id": "module_submenu",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "module_submenu",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T11:22:14"
+    },
+    {
+      "source_id": "d8ef643bfdc225a2",
+      "target_id": "ce370a755155e3f3",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Learn Functions",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T11:22:53"
+    },
+    {
+      "source_id": "ce370a755155e3f3",
+      "target_id": "d8ef643bfdc225a2",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T11:22:57"
+    },
+    {
+      "source_id": "d8ef643bfdc225a2",
+      "target_id": "ade063d9f699c0ad",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Reset Functions",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T11:22:59"
+    },
+    {
+      "source_id": "ade063d9f699c0ad",
+      "target_id": "d8ef643bfdc225a2",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T11:23:03"
+    },
+    {
+      "source_id": "ce370a755155e3f3",
+      "target_id": "5f3577bb0574dba9",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Brake Pedal Position Sensor Learn",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T11:23:52"
+    },
+    {
+      "source_id": "5f3577bb0574dba9",
+      "target_id": "ce370a755155e3f3",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T11:23:57"
+    },
+    {
+      "source_id": "ce370a755155e3f3",
+      "target_id": "58f9e39aa229ade8",
+      "source_page_id": "data_list",
+      "target_page_id": "clear_dtcs_confirmation",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "clear_dtcs_confirmation",
+      "action": {
+        "kind": "list_item",
+        "label": "Crankshaft Position Variation Learn",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T11:25:14"
+    },
+    {
+      "source_id": "58f9e39aa229ade8",
+      "target_id": "ce370a755155e3f3",
+      "source_page_id": "clear_dtcs_confirmation",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "clear_dtcs_confirmation",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T11:25:18"
+    },
+    {
+      "source_id": "ce370a755155e3f3",
+      "target_id": "5f3577bb0574dba9",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "HO2S Heater Learn",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T11:25:24"
+    },
+    {
+      "source_id": "ade063d9f699c0ad",
+      "target_id": "b779596fda53c0ca",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Ambient Air Temperature Calculation Reset",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T11:26:08"
+    },
+    {
+      "source_id": "b779596fda53c0ca",
+      "target_id": "ade063d9f699c0ad",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T11:26:13"
+    },
+    {
+      "source_id": "ade063d9f699c0ad",
+      "target_id": "2cfd5a3754751693",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Fuel Rail Pressure Relief Valve Learned Values Reset",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T11:29:41"
+    },
+    {
+      "source_id": "2cfd5a3754751693",
+      "target_id": "ade063d9f699c0ad",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T11:29:45"
+    },
+    {
+      "source_id": "ade063d9f699c0ad",
+      "target_id": "b779596fda53c0ca",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Fuel Trim Reset",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T11:29:47"
+    },
+    {
+      "source_id": "ade063d9f699c0ad",
+      "target_id": "16879b8a1e82fc48",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "HO2S Heater Resistance Learned Values Reset",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T11:29:55"
+    },
+    {
+      "source_id": "16879b8a1e82fc48",
+      "target_id": "ade063d9f699c0ad",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T11:30:00"
+    },
+    {
+      "source_id": "ade063d9f699c0ad",
+      "target_id": "1b17504790116bc5",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Intake System Learned Values Reset",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T11:30:02"
+    },
+    {
+      "source_id": "1b17504790116bc5",
+      "target_id": "ade063d9f699c0ad",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T11:30:08"
+    },
+    {
+      "source_id": "ade063d9f699c0ad",
+      "target_id": "b779596fda53c0ca",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Remote Vehicle Start Disable History Reset",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T11:30:10"
+    },
+    {
+      "source_id": "ade063d9f699c0ad",
+      "target_id": "2cfd5a3754751693",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Throttle Body Idle Air Flow Compensation Reset",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T11:30:18"
+    },
+    {
+      "source_id": "076526591125909f",
+      "target_id": "f9aa21518dfdd31b",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "DTC Display",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T11:53:40"
+    },
+    {
+      "source_id": "f9aa21518dfdd31b",
+      "target_id": "076526591125909f",
+      "source_page_id": "data_display",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_display",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T11:53:44"
+    },
+    {
+      "source_id": "076526591125909f",
+      "target_id": "5e885c9774281651",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Diagnostic Test Status: This Ignition Cycle",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T11:53:46"
+    },
+    {
+      "source_id": "5e885c9774281651",
+      "target_id": "076526591125909f",
+      "source_page_id": "data_display",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_display",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T11:53:50"
+    },
+    {
+      "source_id": "076526591125909f",
+      "target_id": "eb490e65a8548131",
+      "source_page_id": "data_list",
+      "target_page_id": "clear_dtcs_confirmation",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "clear_dtcs_confirmation",
+      "action": {
+        "kind": "list_item",
+        "label": "Diagnostic Test Status: Since DTC Clear",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T11:53:52"
+    },
+    {
+      "source_id": "eb490e65a8548131",
+      "target_id": "076526591125909f",
+      "source_page_id": "clear_dtcs_confirmation",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "clear_dtcs_confirmation",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T11:53:56"
+    },
+    {
+      "source_id": "076526591125909f",
+      "target_id": "5e885c9774281651",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Freeze Frame/Failure Records",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T11:53:58"
+    },
+    {
+      "source_id": "4bc92f91302b5182",
+      "target_id": "e2bd8cfaee93ad7f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Fuel Alcohol Content Event Data",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T13:33:49"
+    },
+    {
+      "source_id": "e2bd8cfaee93ad7f",
+      "target_id": "4bc92f91302b5182",
+      "source_page_id": "data_display",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_display",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T13:33:53"
+    },
+    {
+      "source_id": "4bc92f91302b5182",
+      "target_id": "e2bd8cfaee93ad7f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Engine Oil Level Warning Event Data",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T13:33:55"
+    },
+    {
+      "source_id": "4bc92f91302b5182",
+      "target_id": "e2bd8cfaee93ad7f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Engine Overspeed Event Data",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T13:34:00"
+    },
+    {
+      "source_id": "66b64bacd95a6ace",
+      "target_id": "89be3204e23828ab",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Identification Information",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T13:35:07"
+    },
+    {
+      "source_id": "89be3204e23828ab",
+      "target_id": "66b64bacd95a6ace",
+      "source_page_id": "data_display",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_display",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T13:35:11"
+    },
+    {
+      "source_id": "66b64bacd95a6ace",
+      "target_id": "89be3204e23828ab",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Calibration History",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T13:35:13"
+    },
+    {
+      "source_id": "b0b43df36ccd3441",
+      "target_id": "89be3204e23828ab",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Inspection/Maintenance Data",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T13:36:20"
+    },
+    {
+      "source_id": "89be3204e23828ab",
+      "target_id": "b0b43df36ccd3441",
+      "source_page_id": "data_display",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_display",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T13:36:25"
+    },
+    {
+      "source_id": "b0b43df36ccd3441",
+      "target_id": "89be3204e23828ab",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Inspection/Maintenance System Status Data",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T13:36:27"
+    },
+    {
+      "source_id": "67db308af12c5f07",
+      "target_id": "01a95d64258ac3b3",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "A/C Compressor Clutch Relay",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:10:48"
+    },
+    {
+      "source_id": "01a95d64258ac3b3",
+      "target_id": "67db308af12c5f07",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:10:54"
+    },
+    {
+      "source_id": "67db308af12c5f07",
+      "target_id": "7acf8507043cd55f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Active Grille Air Shutter System",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:10:56"
+    },
+    {
+      "source_id": "7acf8507043cd55f",
+      "target_id": "67db308af12c5f07",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:11:00"
+    },
+    {
+      "source_id": "67db308af12c5f07",
+      "target_id": "ca3344cf99d46cd7",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Autostart/Autostop",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:11:03"
+    },
+    {
+      "source_id": "ca3344cf99d46cd7",
+      "target_id": "67db308af12c5f07",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:11:09"
+    },
+    {
+      "source_id": "67db308af12c5f07",
+      "target_id": "01a95d64258ac3b3",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Auxiliary Coolant Pump",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:11:12"
+    },
+    {
+      "source_id": "67db308af12c5f07",
+      "target_id": "cb2ba50fa1cb4bc7",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Camshaft Position Actuator System",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:11:19"
+    },
+    {
+      "source_id": "cb2ba50fa1cb4bc7",
+      "target_id": "67db308af12c5f07",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:11:23"
+    },
+    {
+      "source_id": "67db308af12c5f07",
+      "target_id": "ea12adbec964c53c",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Compression Test",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:11:26"
+    },
+    {
+      "source_id": "ea12adbec964c53c",
+      "target_id": "67db308af12c5f07",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:11:31"
+    },
+    {
+      "source_id": "67db308af12c5f07",
+      "target_id": "09ac46e1451a0c85",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Cooling Fan",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:11:33"
+    },
+    {
+      "source_id": "09ac46e1451a0c85",
+      "target_id": "67db308af12c5f07",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:11:37"
+    },
+    {
+      "source_id": "67db308af12c5f07",
+      "target_id": "01a95d64258ac3b3",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Engine Controls Ignition Relay",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:11:39"
+    },
+    {
+      "source_id": "67db308af12c5f07",
+      "target_id": "7378c7408c4bbd94",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Engine Oil Pressure Control Solenoid Valve",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:11:48"
+    },
+    {
+      "source_id": "7378c7408c4bbd94",
+      "target_id": "67db308af12c5f07",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:11:53"
+    },
+    {
+      "source_id": "67db308af12c5f07",
+      "target_id": "4223da0a8bd54b7f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Engine Speed/Throttle",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:11:55"
+    },
+    {
+      "source_id": "4223da0a8bd54b7f",
+      "target_id": "67db308af12c5f07",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:11:59"
+    },
+    {
+      "source_id": "67db308af12c5f07",
+      "target_id": "e6c64dc41890e7ad",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "EVAP System",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:12:01"
+    },
+    {
+      "source_id": "e6c64dc41890e7ad",
+      "target_id": "67db308af12c5f07",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:12:05"
+    },
+    {
+      "source_id": "67db308af12c5f07",
+      "target_id": "ba742bd3b24db84f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Fuel System",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:12:18"
+    },
+    {
+      "source_id": "ba742bd3b24db84f",
+      "target_id": "67db308af12c5f07",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:12:22"
+    },
+    {
+      "source_id": "67db308af12c5f07",
+      "target_id": "01a95d64258ac3b3",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Heater Coolant Pump",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:12:35"
+    },
+    {
+      "source_id": "67db308af12c5f07",
+      "target_id": "236ee01337ac90b8",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Ignition Timing",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:12:43"
+    },
+    {
+      "source_id": "236ee01337ac90b8",
+      "target_id": "67db308af12c5f07",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:12:47"
+    },
+    {
+      "source_id": "67db308af12c5f07",
+      "target_id": "cd3422f449ae2047",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Instrument Panel Indicators",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:12:49"
+    },
+    {
+      "source_id": "cd3422f449ae2047",
+      "target_id": "67db308af12c5f07",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:12:53"
+    },
+    {
+      "source_id": "67db308af12c5f07",
+      "target_id": "89be3204e23828ab",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Misfire Graphic",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:12:55"
+    },
+    {
+      "source_id": "89be3204e23828ab",
+      "target_id": "67db308af12c5f07",
+      "source_page_id": "data_display",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_display",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:12:59"
+    },
+    {
+      "source_id": "67db308af12c5f07",
+      "target_id": "33036fcc45af6e28",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Oxygen Sensor Heaters",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:13:01"
+    },
+    {
+      "source_id": "33036fcc45af6e28",
+      "target_id": "67db308af12c5f07",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:13:05"
+    },
+    {
+      "source_id": "67db308af12c5f07",
+      "target_id": "58f9e39aa229ade8",
+      "source_page_id": "data_list",
+      "target_page_id": "clear_dtcs_confirmation",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "clear_dtcs_confirmation",
+      "action": {
+        "kind": "list_item",
+        "label": "Starter Pinion Solenoid Actuator Relay",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:13:07"
+    },
+    {
+      "source_id": "58f9e39aa229ade8",
+      "target_id": "67db308af12c5f07",
+      "source_page_id": "clear_dtcs_confirmation",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "clear_dtcs_confirmation",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:13:11"
+    },
+    {
+      "source_id": "67db308af12c5f07",
+      "target_id": "3b6713f9d2193077",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Turbocharger",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:13:13"
+    },
+    {
+      "source_id": "3b6713f9d2193077",
+      "target_id": "67db308af12c5f07",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:13:16"
+    },
+    {
+      "source_id": "7acf8507043cd55f",
+      "target_id": "8f0c1d4f73d87208",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Active Grille Air Shutter 1",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T15:08:39"
+    },
+    {
+      "source_id": "8f0c1d4f73d87208",
+      "target_id": "7acf8507043cd55f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T15:08:45"
+    },
+    {
+      "source_id": "7acf8507043cd55f",
+      "target_id": "8f0c1d4f73d87208",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Active Grille Air Shutter 2",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T15:08:48"
+    },
+    {
+      "source_id": "cb2ba50fa1cb4bc7",
+      "target_id": "d1fd14fc38191f2f",
+      "source_page_id": "data_list",
+      "target_page_id": "j2534_disconnect",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "j2534_disconnect",
+      "action": {
+        "kind": "list_item",
+        "label": "Exhaust Camshaft Position Actuator",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T15:09:28"
+    },
+    {
+      "source_id": "d1fd14fc38191f2f",
+      "target_id": "cb2ba50fa1cb4bc7",
+      "source_page_id": "j2534_disconnect",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "j2534_disconnect",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T15:09:32"
+    },
+    {
+      "source_id": "cb2ba50fa1cb4bc7",
+      "target_id": "d1fd14fc38191f2f",
+      "source_page_id": "data_list",
+      "target_page_id": "j2534_disconnect",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "j2534_disconnect",
+      "action": {
+        "kind": "list_item",
+        "label": "Intake Camshaft Position Actuator",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T15:09:35"
+    },
+    {
+      "source_id": "cb2ba50fa1cb4bc7",
+      "target_id": "01a95d64258ac3b3",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Exhaust Camshaft Position Actuator Solenoid Valve",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T15:09:42"
+    },
+    {
+      "source_id": "01a95d64258ac3b3",
+      "target_id": "cb2ba50fa1cb4bc7",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T15:09:47"
+    },
+    {
+      "source_id": "cb2ba50fa1cb4bc7",
+      "target_id": "01a95d64258ac3b3",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Intake Camshaft Position Actuator Solenoid Valve",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T15:09:49"
+    },
+    {
+      "source_id": "09ac46e1451a0c85",
+      "target_id": "e5152343b713a5e6",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Cooling Fan",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T15:10:30"
+    },
+    {
+      "source_id": "e5152343b713a5e6",
+      "target_id": "09ac46e1451a0c85",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T15:10:35"
+    },
+    {
+      "source_id": "09ac46e1451a0c85",
+      "target_id": "01a95d64258ac3b3",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Cooling Fan Relay 1",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T15:10:37"
+    },
+    {
+      "source_id": "01a95d64258ac3b3",
+      "target_id": "09ac46e1451a0c85",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T15:10:42"
+    },
+    {
+      "source_id": "09ac46e1451a0c85",
+      "target_id": "01a95d64258ac3b3",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Cooling Fan Relay 2",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T15:10:44"
+    },
+    {
+      "source_id": "4223da0a8bd54b7f",
+      "target_id": "58f9e39aa229ade8",
+      "source_page_id": "data_list",
+      "target_page_id": "clear_dtcs_confirmation",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "clear_dtcs_confirmation",
+      "action": {
+        "kind": "list_item",
+        "label": "Engine Speed",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T15:11:24"
+    },
+    {
+      "source_id": "58f9e39aa229ade8",
+      "target_id": "4223da0a8bd54b7f",
+      "source_page_id": "clear_dtcs_confirmation",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "clear_dtcs_confirmation",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T15:11:28"
+    },
+    {
+      "source_id": "4223da0a8bd54b7f",
+      "target_id": "72f21f8c424294fa",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Throttle Position",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T15:11:30"
+    },
+    {
+      "source_id": "72f21f8c424294fa",
+      "target_id": "4223da0a8bd54b7f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T15:11:35"
+    },
+    {
+      "source_id": "4223da0a8bd54b7f",
+      "target_id": "72f21f8c424294fa",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Throttle Sweep",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T15:11:37"
+    },
+    {
+      "source_id": "e6c64dc41890e7ad",
+      "target_id": "72f21f8c424294fa",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "EVAP Purge Solenoid Valve",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T15:12:18"
+    },
+    {
+      "source_id": "72f21f8c424294fa",
+      "target_id": "e6c64dc41890e7ad",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T15:12:22"
+    },
+    {
+      "source_id": "ba742bd3b24db84f",
+      "target_id": "716eef30a45ad19e",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Cylinder Power Balance",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T15:12:58"
+    },
+    {
+      "source_id": "716eef30a45ad19e",
+      "target_id": "ba742bd3b24db84f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T15:13:03"
+    },
+    {
+      "source_id": "ba742bd3b24db84f",
+      "target_id": "58f9e39aa229ade8",
+      "source_page_id": "data_list",
+      "target_page_id": "clear_dtcs_confirmation",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "clear_dtcs_confirmation",
+      "action": {
+        "kind": "list_item",
+        "label": "Depressurize Fuel System",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T15:13:04"
+    },
+    {
+      "source_id": "58f9e39aa229ade8",
+      "target_id": "ba742bd3b24db84f",
+      "source_page_id": "clear_dtcs_confirmation",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "clear_dtcs_confirmation",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T15:13:09"
+    },
+    {
+      "source_id": "ba742bd3b24db84f",
+      "target_id": "58f9e39aa229ade8",
+      "source_page_id": "data_list",
+      "target_page_id": "clear_dtcs_confirmation",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "clear_dtcs_confirmation",
+      "action": {
+        "kind": "list_item",
+        "label": "Fuel Injector Balance",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T15:13:10"
+    },
+    {
+      "source_id": "ba742bd3b24db84f",
+      "target_id": "58f9e39aa229ade8",
+      "source_page_id": "data_list",
+      "target_page_id": "clear_dtcs_confirmation",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "clear_dtcs_confirmation",
+      "action": {
+        "kind": "list_item",
+        "label": "Fuel Pressure",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T15:13:16"
+    },
+    {
+      "source_id": "ba742bd3b24db84f",
+      "target_id": "58f9e39aa229ade8",
+      "source_page_id": "data_list",
+      "target_page_id": "clear_dtcs_confirmation",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "clear_dtcs_confirmation",
+      "action": {
+        "kind": "list_item",
+        "label": "Fuel Pump Enable",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T15:13:22"
+    },
+    {
+      "source_id": "ba742bd3b24db84f",
+      "target_id": "153aad5a96547ab4",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Fuel Trim Enable",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T15:13:29"
+    },
+    {
+      "source_id": "153aad5a96547ab4",
+      "target_id": "ba742bd3b24db84f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T15:13:35"
+    },
+    {
+      "source_id": "ba742bd3b24db84f",
+      "target_id": "58f9e39aa229ade8",
+      "source_page_id": "data_list",
+      "target_page_id": "clear_dtcs_confirmation",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "clear_dtcs_confirmation",
+      "action": {
+        "kind": "list_item",
+        "label": "Fuel Rail Pressure",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T15:13:36"
+    },
+    {
+      "source_id": "ba742bd3b24db84f",
+      "target_id": "01a95d64258ac3b3",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Fuel Pressure Regulator",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T15:13:43"
+    },
+    {
+      "source_id": "01a95d64258ac3b3",
+      "target_id": "ba742bd3b24db84f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T15:13:48"
+    },
+    {
+      "source_id": "cd3422f449ae2047",
+      "target_id": "01a95d64258ac3b3",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Malfunction Indicator Lamp (MIL)",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T15:15:06"
+    },
+    {
+      "source_id": "01a95d64258ac3b3",
+      "target_id": "cd3422f449ae2047",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T15:15:11"
+    },
+    {
+      "source_id": "3b6713f9d2193077",
+      "target_id": "01a95d64258ac3b3",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Turbocharger Bypass Solenoid Valve",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T15:16:40"
+    },
+    {
+      "source_id": "01a95d64258ac3b3",
+      "target_id": "3b6713f9d2193077",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T15:16:45"
+    },
+    {
+      "source_id": "3b6713f9d2193077",
+      "target_id": "72f21f8c424294fa",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Turbocharger Wastegate Solenoid Valve",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T15:16:47"
+    },
+    {
+      "source_id": "72f21f8c424294fa",
+      "target_id": "3b6713f9d2193077",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T15:16:53"
+    },
+    {
+      "source_id": "e2bd8cfaee93ad7f",
+      "target_id": "bc06e717b49f699d",
+      "source_page_id": "data_display",
+      "target_page_id": "clear_dtcs_selection",
+      "source_raw_page_id": "data_display",
+      "target_raw_page_id": "clear_dtcs_selection",
+      "action": {
+        "kind": "button",
+        "label": "Clear DTCs"
+      },
+      "timestamp": "2026-04-17T15:19:04"
+    },
+    {
+      "source_id": "bc06e717b49f699d",
+      "target_id": "c506735547bba42b",
+      "source_page_id": "clear_dtcs_selection",
+      "target_page_id": "clear_dtcs_selection",
+      "source_raw_page_id": "clear_dtcs_selection",
+      "target_raw_page_id": "clear_dtcs_selection",
+      "action": {
+        "kind": "button",
+        "label": "Add All"
+      },
+      "timestamp": "2026-04-17T15:19:06"
+    },
+    {
+      "source_id": "c506735547bba42b",
+      "target_id": "58f9e39aa229ade8",
+      "source_page_id": "clear_dtcs_selection",
+      "target_page_id": "clear_dtcs_confirmation",
+      "source_raw_page_id": "clear_dtcs_selection",
+      "target_raw_page_id": "clear_dtcs_confirmation",
+      "action": {
+        "kind": "button",
+        "label": "OK"
+      },
+      "timestamp": "2026-04-17T15:19:08"
+    },
+    {
+      "source_id": "58f9e39aa229ade8",
+      "target_id": "bc06e717b49f699d",
+      "source_page_id": "clear_dtcs_confirmation",
+      "target_page_id": "clear_dtcs_selection",
+      "source_raw_page_id": "clear_dtcs_confirmation",
+      "target_raw_page_id": "clear_dtcs_selection",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T15:19:10"
+    },
+    {
+      "source_id": "58f9e39aa229ade8",
+      "target_id": "e2bd8cfaee93ad7f",
+      "source_page_id": "clear_dtcs_confirmation",
+      "target_page_id": "data_display",
+      "source_raw_page_id": "clear_dtcs_confirmation",
+      "target_raw_page_id": "data_display",
+      "action": {
+        "kind": "button",
+        "label": "No"
+      },
+      "timestamp": "2026-04-17T15:20:17"
+    },
+    {
+      "source_id": "58f9e39aa229ade8",
+      "target_id": "e2bd8cfaee93ad7f",
+      "source_page_id": "clear_dtcs_confirmation",
+      "target_page_id": "data_display",
+      "source_raw_page_id": "clear_dtcs_confirmation",
+      "target_raw_page_id": "data_display",
+      "action": {
+        "kind": "button",
+        "label": "Yes"
+      },
+      "timestamp": "2026-04-17T15:21:01"
+    },
+    {
+      "source_id": "5f3577bb0574dba9",
+      "target_id": "6bc34d3bdcca515d",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Learn"
+      },
+      "timestamp": "2026-04-17T15:25:40"
+    },
+    {
+      "source_id": "6bc34d3bdcca515d",
+      "target_id": "ce370a755155e3f3",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T15:25:43"
+    }
+  ]
+}

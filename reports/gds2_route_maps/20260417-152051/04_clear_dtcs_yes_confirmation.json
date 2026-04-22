@@ -1,0 +1,179 @@
+{
+  "label": "clear_dtcs_yes_confirmation",
+  "timestamp": "2026-04-17T15:20:57",
+  "page": {
+    "page_id": "clear_dtcs_confirmation",
+    "list_item_count": 0,
+    "buttons": [
+      "No",
+      "Decrease",
+      "Save and Clear",
+      "Add Bookmark",
+      "Cancel",
+      "Yes",
+      "Clear Records",
+      "Back",
+      "Increase",
+      "Continue",
+      "OK",
+      "On"
+    ],
+    "evidence": "clear-dtcs confirmation button cluster present",
+    "has_modal": false,
+    "confidence": "medium",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "Add Bookmark",
+      "enabled": true
+    },
+    {
+      "text": "Continue",
+      "enabled": true
+    },
+    {
+      "text": "Yes",
+      "enabled": true
+    },
+    {
+      "text": "No",
+      "enabled": true
+    },
+    {
+      "text": "OK",
+      "enabled": true
+    },
+    {
+      "text": "Cancel",
+      "enabled": true
+    },
+    {
+      "text": "Decrease",
+      "enabled": true
+    },
+    {
+      "text": "Increase",
+      "enabled": true
+    },
+    {
+      "text": "On",
+      "enabled": true
+    },
+    {
+      "text": "Continue",
+      "enabled": true
+    },
+    {
+      "text": "OK",
+      "enabled": true
+    },
+    {
+      "text": "Cancel",
+      "enabled": true
+    },
+    {
+      "text": "Clear Records",
+      "enabled": true
+    },
+    {
+      "text": "Save and Clear",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Add Bookmark",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Back",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Cancel",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Clear Records",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Continue",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Decrease",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Increase",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "No",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "OK",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "On",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Save and Clear",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Yes",
+      "enabled": true
+    }
+  ],
+  "raw_page_id": "clear_dtcs_confirmation",
+  "effective_page_id": "clear_dtcs_confirmation",
+  "node_id": "57758fddc73f9860"
+}

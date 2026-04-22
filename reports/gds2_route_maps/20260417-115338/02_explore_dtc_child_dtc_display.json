@@ -1,0 +1,81 @@
+{
+  "label": "explore_dtc_child_dtc_display",
+  "timestamp": "2026-04-17T11:53:39",
+  "page": {
+    "page_id": "data_display",
+    "list_item_count": 0,
+    "buttons": [
+      "Refresh",
+      "Add Bookmark",
+      "Clear DTCs",
+      "Back",
+      "Create Report"
+    ],
+    "evidence": "button 'Create Report' present",
+    "has_modal": false,
+    "confidence": "high",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "Add Bookmark",
+      "enabled": true
+    },
+    {
+      "text": "Create Report",
+      "enabled": true
+    },
+    {
+      "text": "Clear DTCs",
+      "enabled": true
+    },
+    {
+      "text": "Refresh",
+      "enabled": true
+    },
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Add Bookmark",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Back",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Clear DTCs",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Create Report",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Refresh",
+      "enabled": true
+    }
+  ],
+  "raw_page_id": "data_display",
+  "effective_page_id": "data_display",
+  "node_id": "6cfd2a1d1985f552"
+}

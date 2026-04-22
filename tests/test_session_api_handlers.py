@@ -367,3 +367,29 @@ def test_start_navigation_session_rejects_non_string_goal(monkeypatch) -> None:
 
     assert status == 400
     assert payload == {"success": False, "error": "goal must be a string"}
+
+
+def test_start_navigation_session_returns_409_when_backend_navigation_runtime_missing(monkeypatch) -> None:
+    session = _session("session-nav", capabilities=[BackendCapability.NAVIGATION])
+    orch = _FakeOrchestrator(session)
+
+    monkeypatch.setattr(session_navigation_handlers, "get_orchestrator", lambda: orch)
+    monkeypatch.setattr(session_navigation_handlers, "_runtime", lambda: WorkerRuntime())
+    monkeypatch.setattr(
+        session_navigation_handlers,
+        "get_backend",
+        lambda session_id=None: types.SimpleNamespace(name="broken-backend"),
+    )
+
+    payload, status = session_navigation_handlers.start_navigation_session_for_business(
+        {
+            "session_id": "session-nav",
+            "goal": "Navigate to Data Display",
+        }
+    )
+
+    assert status == 409
+    assert payload == {
+        "success": False,
+        "error": "Backend 'broken-backend' does not expose a navigation runtime",
+    }

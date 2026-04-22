@@ -1,0 +1,72 @@
+{
+  "label": "planned_route_step_01_Back",
+  "timestamp": "2026-04-17T11:07:38",
+  "page": {
+    "page_id": "diagnostics_menu",
+    "list_item_count": 3,
+    "buttons": [
+      "Enter",
+      "Home"
+    ],
+    "evidence": "list contains 'Module Diagnostics' item",
+    "has_modal": false,
+    "confidence": "high",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "Home",
+      "enabled": true
+    },
+    {
+      "text": "Enter",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [
+    "Module Diagnostics",
+    "Vehicle Diagnostics",
+    "Session Manager"
+  ],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Enter",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Home",
+      "enabled": true
+    },
+    {
+      "kind": "list_item",
+      "label": "Module Diagnostics",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Vehicle Diagnostics",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Session Manager",
+      "list_index": 0
+    }
+  ],
+  "node_id": "a6f0f2ddfbe76e61"
+}

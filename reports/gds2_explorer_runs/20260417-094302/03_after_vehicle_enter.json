@@ -1,0 +1,55 @@
+{
+  "label": "after_vehicle_enter",
+  "timestamp": "2026-04-17T09:43:09",
+  "page": {
+    "page_id": "vehicle_selection",
+    "list_item_count": 0,
+    "buttons": [
+      "Clear Vehicle Selection",
+      "Disconnect",
+      "Select Device",
+      "Back",
+      "Copy VIN",
+      "Read VIN"
+    ],
+    "evidence": "vehicle-specific button present",
+    "has_modal": false,
+    "confidence": "high",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "Read VIN",
+      "enabled": true
+    },
+    {
+      "text": "Clear Vehicle Selection",
+      "enabled": true
+    },
+    {
+      "text": "Copy VIN",
+      "enabled": true
+    },
+    {
+      "text": "Select Device",
+      "enabled": true
+    },
+    {
+      "text": "Disconnect",
+      "enabled": true
+    },
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": []
+}

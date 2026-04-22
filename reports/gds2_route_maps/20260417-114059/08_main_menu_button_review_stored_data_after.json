@@ -1,0 +1,71 @@
+{
+  "label": "main_menu_button_review_stored_data_after",
+  "timestamp": "2026-04-17T11:41:13",
+  "page": {
+    "page_id": "unknown",
+    "list_item_count": 0,
+    "buttons": [
+      "Import Session",
+      "Back",
+      "Edit",
+      "Review"
+    ],
+    "evidence": "no matching rule",
+    "has_modal": false,
+    "confidence": "low",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "Review",
+      "enabled": true
+    },
+    {
+      "text": "Edit",
+      "enabled": true
+    },
+    {
+      "text": "Import Session",
+      "enabled": true
+    },
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Back",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Edit",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Import Session",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Review",
+      "enabled": true
+    }
+  ],
+  "raw_page_id": "unknown",
+  "effective_page_id": "unknown",
+  "node_id": "5f180945bacc8abe"
+}

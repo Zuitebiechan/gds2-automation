@@ -12,11 +12,14 @@ import diagnostic_platform.runtime.worker_runtime as worker_runtime_module
 from diagnostic_platform.runtime.navigation_runtime import NavSession, NavSessionStatus
 from diagnostic_platform.runtime.session_actions import (
     apply_navigation_event,
+    abort_navigation,
     clear_dtcs,
     handle_ai_stream_terminal_event,
     handle_live_data_stream_terminal_event,
     navigation_status_payload,
     resolve_session_vehicle_context,
+    start_navigation,
+    submit_navigation_decision as submit_business_navigation_decision,
 )
 from diagnostic_platform.runtime.session_decisions import build_branch_gate, submit_session_decision
 from diagnostic_platform.runtime.session_lifecycle import (
@@ -123,7 +126,7 @@ def test_submit_session_decision_cancels_network_gate_and_clears_override(monkey
         session_id=session.session_id,
         decision_id=gate.decision_id,
         option_id="cancel",
-        get_data_viewer=lambda: MagicMock(),
+        get_navigation_runtime=None,
         get_backend=lambda: MagicMock(),
     )
 
@@ -137,9 +140,42 @@ def test_submit_session_decision_cancels_network_gate_and_clears_override(monkey
 
 def test_submit_session_decision_resumes_branch_selection_and_updates_business_state(monkeypatch):
     runtime, orchestrator, session, _ = _start_gds2_session(monkeypatch)
-    viewer = MagicMock()
-    viewer.select_module.return_value = {"selected_module": "ECM-B"}
-    runtime.set_data_viewer_getter(lambda: viewer)
+    backend = MagicMock()
+    backend.select_module.return_value = {"selected_module": "ECM-B"}
+
+    gate = build_branch_gate(
+        domain="module",
+        target="ECM",
+        choices=["ECM-A", "ECM-B"],
+        reason="ambiguous module",
+        resume_action="select_module",
+    )
+    orchestrator.raise_decision(session.session_id, gate)
+
+    result = submit_session_decision(
+        runtime,
+        orchestrator=orchestrator,
+        backend=backend,
+        session_id=session.session_id,
+        decision_id=gate.decision_id,
+        option_id="branch_1",
+        get_navigation_runtime=None,
+        get_backend=lambda: backend,
+    )
+
+    assert result["success"] is True
+    assert result["resumed"] is True
+    assert result["resume_action"] == "select_module"
+    assert result["selected_choice"] == "ECM-B"
+    assert session.selected_module == "ECM-B"
+    assert session.selected_data_category == ""
+    backend.select_module.assert_called_once_with("ECM-B")
+
+
+def test_submit_session_decision_prefers_navigation_runtime_for_module_resume(monkeypatch):
+    runtime, orchestrator, session, _ = _start_gds2_session(monkeypatch)
+    navigation_runtime = MagicMock()
+    navigation_runtime.select_module.return_value = {"selected_module": "ECM-B"}
 
     gate = build_branch_gate(
         domain="module",
@@ -157,17 +193,43 @@ def test_submit_session_decision_resumes_branch_selection_and_updates_business_s
         session_id=session.session_id,
         decision_id=gate.decision_id,
         option_id="branch_1",
-        get_data_viewer=lambda: viewer,
+        get_navigation_runtime=lambda: navigation_runtime,
         get_backend=lambda: MagicMock(),
     )
 
     assert result["success"] is True
-    assert result["resumed"] is True
     assert result["resume_action"] == "select_module"
-    assert result["selected_choice"] == "ECM-B"
-    assert session.selected_module == "ECM-B"
-    assert session.selected_data_category == ""
-    viewer.select_module.assert_called_once_with("ECM-B")
+    navigation_runtime.select_module.assert_called_once_with("ECM-B")
+
+
+def test_submit_session_decision_falls_back_to_backend_when_navigation_runtime_unavailable(monkeypatch):
+    runtime, orchestrator, session, _ = _start_gds2_session(monkeypatch)
+    backend = MagicMock()
+    backend.select_module.return_value = {"selected_module": "ECM-B"}
+
+    gate = build_branch_gate(
+        domain="module",
+        target="ECM",
+        choices=["ECM-A", "ECM-B"],
+        reason="ambiguous module",
+        resume_action="select_module",
+    )
+    orchestrator.raise_decision(session.session_id, gate)
+
+    result = submit_session_decision(
+        runtime,
+        orchestrator=orchestrator,
+        backend=backend,
+        session_id=session.session_id,
+        decision_id=gate.decision_id,
+        option_id="branch_1",
+        get_navigation_runtime=lambda: (_ for _ in ()).throw(RuntimeError("no navigation runtime")),
+        get_backend=lambda: backend,
+    )
+
+    assert result["success"] is True
+    assert result["resume_action"] == "select_module"
+    backend.select_module.assert_called_once_with("ECM-B")
 
 
 def test_clear_dtcs_uses_current_context_without_hidden_reselection(monkeypatch):
@@ -497,6 +559,111 @@ def test_navigation_status_payload_accepts_string_status() -> None:
 
     assert payload["navigation_session_id"] == "nav-1"
     assert payload["status"] == "completed"
+
+
+def test_start_navigation_prefers_bound_backend_navigation_handle() -> None:
+    runtime = WorkerRuntime()
+    session = types.SimpleNamespace(session_id="session-1")
+    runtime.bind_business_session(session.session_id)
+
+    nav_session = types.SimpleNamespace(
+        session_id="nav-1",
+        status=types.SimpleNamespace(value="running"),
+    )
+    navigation_handle = MagicMock()
+    navigation_handle.start_navigation_session.return_value = nav_session
+    runtime.active_backend_bundle = types.SimpleNamespace(navigation_handle=navigation_handle)
+
+    messages: list[str] = []
+    started = start_navigation(
+        runtime,
+        session,
+        goal="Go to Data Display",
+        emit_progress=messages.append,
+    )
+
+    assert started is nav_session
+    assert runtime.get_navigation_session_id(session.session_id) == "nav-1"
+    assert messages == ["Navigation started: Go to Data Display"]
+    navigation_handle.start_navigation_session.assert_called_once_with(runtime, "Go to Data Display")
+
+
+def test_start_navigation_rejects_backend_without_navigation_runtime() -> None:
+    runtime = WorkerRuntime()
+    session = types.SimpleNamespace(session_id="session-1")
+    runtime.bind_business_session(session.session_id)
+
+    with pytest.raises(RuntimeError, match="does not expose a navigation runtime"):
+        start_navigation(
+            runtime,
+            session,
+            goal="Go to Data Display",
+            backend=types.SimpleNamespace(name="broken-backend"),
+            emit_progress=lambda _message: None,
+        )
+
+
+def test_submit_business_navigation_decision_uses_bound_backend_navigation_handle() -> None:
+    runtime = WorkerRuntime()
+    session = types.SimpleNamespace(session_id="session-1")
+    runtime.bind_business_session(session.session_id)
+    runtime.bind_navigation_session(session.session_id, "nav-1")
+
+    nav_session = NavSession(session_id="nav-1", goal="Navigate to Data Display")
+    runtime.set_navigation_session(nav_session.session_id, nav_session)
+
+    navigation_handle = MagicMock()
+    navigation_handle.get_navigation_session.return_value = nav_session
+    navigation_handle.submit_navigation_decision.return_value = {
+        "success": True,
+        "session_id": "nav-1",
+        "selected_item": "ECM",
+    }
+    runtime.active_backend_bundle = types.SimpleNamespace(navigation_handle=navigation_handle)
+
+    nav_sid, payload = submit_business_navigation_decision(
+        runtime,
+        session,
+        decision_id="decision-1",
+        selected_item="ECM",
+    )
+
+    assert nav_sid == "nav-1"
+    assert payload["selected_item"] == "ECM"
+    navigation_handle.get_navigation_session.assert_called_once_with(runtime, "nav-1")
+    navigation_handle.submit_navigation_decision.assert_called_once_with(
+        runtime,
+        "nav-1",
+        decision_id="decision-1",
+        selected_item="ECM",
+    )
+
+
+def test_abort_navigation_uses_bound_backend_navigation_handle() -> None:
+    runtime = WorkerRuntime()
+    session = types.SimpleNamespace(session_id="session-1")
+    runtime.bind_business_session(session.session_id)
+    runtime.bind_navigation_session(session.session_id, "nav-1")
+
+    nav_session = NavSession(session_id="nav-1", goal="Navigate to Data Display")
+    runtime.set_navigation_session(nav_session.session_id, nav_session)
+
+    navigation_handle = MagicMock()
+    navigation_handle.get_navigation_session.return_value = nav_session
+    navigation_handle.abort_navigation_session.return_value = {
+        "success": True,
+        "session_id": "nav-1",
+        "status": "aborted",
+    }
+    runtime.active_backend_bundle = types.SimpleNamespace(navigation_handle=navigation_handle)
+
+    nav_sid, payload = abort_navigation(runtime, session)
+
+    assert nav_sid == "nav-1"
+    assert payload["status"] == "aborted"
+    assert runtime.get_navigation_session_id(session.session_id) is None
+    navigation_handle.get_navigation_session.assert_called_once_with(runtime, "nav-1")
+    navigation_handle.abort_navigation_session.assert_called_once_with(runtime, "nav-1")
 
 
 def test_abort_business_session_clears_worker_bindings(monkeypatch):

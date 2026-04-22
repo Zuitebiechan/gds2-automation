@@ -94,6 +94,20 @@ Security defaults:
 - CORS is disabled by default. Enable it with `--cors` or `DIAGNOSTIC_API_ENABLE_CORS=1`, and prefer `DIAGNOSTIC_API_CORS_ORIGINS` to scope allowed origins.
 - The reverse tunnel defaults to PSK authentication enabled. Use the same `--auth-token` on the cloud reverse server and the local client.
 
+Product observability defaults:
+
+- cloud artifacts live under `%PROGRAMDATA%\RPA_Diagnostic\observability\cloud\`
+- local artifacts live under `%APPDATA%\VCI_Proxy\observability\`
+- the cloud server now accepts internal artifact uploads at `POST /api/session/logs/upload`
+- the tray client runs a best-effort background observability uploader using the assigned node `api_base_url` when available, otherwise its configured `api_scheme`, `host`, `api_port`, and `api_token`
+- retention defaults can be overridden with:
+  - `PRODUCT_LOGS_ENABLED`
+  - `PRODUCT_LOG_RETENTION_DAYS_RAW`
+  - `PRODUCT_LOG_RETENTION_DAYS_SESSION_TRACE`
+  - `PRODUCT_LOG_RETENTION_DAYS_INCIDENT`
+  - `PRODUCT_LOG_UPLOAD_ENABLED`
+  - `PRODUCT_LOG_MAX_ARTIFACT_MB`
+
 For internet-facing or otherwise untrusted networks, enable TLS on the reverse tunnel:
 
 ```bash

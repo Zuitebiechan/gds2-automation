@@ -1,0 +1,162 @@
+{
+  "label": "clear_dtcs_no_after",
+  "timestamp": "2026-04-17T15:20:16",
+  "page": {
+    "page_id": "data_display",
+    "list_item_count": 5,
+    "buttons": [
+      "Clear DTCs",
+      "Add Bookmark",
+      "Back",
+      "Create Report"
+    ],
+    "evidence": "button 'Create Report' present",
+    "has_modal": false,
+    "confidence": "high",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "Clear DTCs",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "Add Bookmark",
+      "enabled": true
+    },
+    {
+      "text": "Create Report",
+      "enabled": true
+    },
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [
+    "authored",
+    "Display Name",
+    "ECU",
+    "Units",
+    "Custom Order"
+  ],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Add Bookmark",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Back",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Clear DTCs",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Create Report",
+      "enabled": true
+    },
+    {
+      "kind": "list_item",
+      "label": "authored",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Display Name",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "ECU",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Units",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Custom Order",
+      "list_index": 0
+    }
+  ],
+  "raw_page_id": "data_display",
+  "effective_page_id": "data_display",
+  "node_id": "3e873d68520c35c8"
+}

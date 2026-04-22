@@ -1,0 +1,283 @@
+{
+  "started_at": "2026-04-20T10:38:29",
+  "completed_at": "2026-04-20T10:39:07",
+  "target": "Fuel Trim Enable",
+  "target_kind": "list_item",
+  "expected_buttons": [
+    "Enabled",
+    "Disabled",
+    "Release Control"
+  ],
+  "graph_node_count": 55,
+  "graph_edge_count": 165,
+  "graph_checksum": "0ad1cc8931bcd233bb0dac125b97b7b556697d82",
+  "start_snapshot": {
+    "page": {
+      "page_id": "data_list"
+    },
+    "raw_page_id": "data_list",
+    "effective_page_id": "data_list",
+    "observed_actions": [
+      {
+        "kind": "button",
+        "label": "Back"
+      },
+      {
+        "kind": "button",
+        "label": "Home"
+      },
+      {
+        "kind": "button",
+        "label": "Vehicle Menu"
+      },
+      {
+        "kind": "button",
+        "label": "Enter"
+      },
+      {
+        "kind": "list_item",
+        "label": "A/C Compressor Clutch Relay",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Active Grille Air Shutter System",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Autostart/Autostop",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Auxiliary Coolant Pump",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Camshaft Position Actuator System",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Compression Test",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Cooling Fan",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Engine Controls Ignition Relay",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Engine Oil Pressure Control Solenoid Valve",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Engine Speed/Throttle",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "EVAP System",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Fuel Control Loop Status",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Fuel System",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Generator L-Terminal",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Heater Coolant Pump",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Ignition Timing",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Instrument Panel Indicators",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Misfire Graphic",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Oxygen Sensor Heaters",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Starter Pinion Solenoid Actuator Relay",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Turbocharger",
+        "list_index": 0
+      }
+    ],
+    "list_items": [
+      "A/C Compressor Clutch Relay",
+      "Active Grille Air Shutter System",
+      "Autostart/Autostop",
+      "Auxiliary Coolant Pump",
+      "Camshaft Position Actuator System",
+      "Compression Test",
+      "Cooling Fan",
+      "Engine Controls Ignition Relay",
+      "Engine Oil Pressure Control Solenoid Valve",
+      "Engine Speed/Throttle",
+      "EVAP System",
+      "Fuel Control Loop Status",
+      "Fuel System",
+      "Generator L-Terminal",
+      "Heater Coolant Pump",
+      "Ignition Timing",
+      "Instrument Panel Indicators",
+      "Misfire Graphic",
+      "Oxygen Sensor Heaters",
+      "Starter Pinion Solenoid Actuator Relay",
+      "Turbocharger"
+    ],
+    "navigation_path": [
+      "Module Diagnostics",
+      "Engine Control Module",
+      "Control Functions"
+    ]
+  },
+  "preflight_actions": [
+    {
+      "kind": "button",
+      "label": "Back"
+    },
+    {
+      "kind": "button",
+      "label": "Back"
+    }
+  ],
+  "start_buttons": [
+    "Back",
+    "Home",
+    "Vehicle Menu",
+    "Enter"
+  ],
+  "success": false,
+  "failure_reason": "executed action count below minimum threshold (4)",
+  "final_buttons": [
+    "Add Bookmark",
+    "Release Control",
+    "Disabled",
+    "Enabled",
+    "Back"
+  ],
+  "route_result": {
+    "matched_start_node_id": "67db308af12c5f07",
+    "recovery_actions": [],
+    "planned_path": [
+      {
+        "kind": "list_item",
+        "label": "Fuel System",
+        "list_index": 0
+      }
+    ],
+    "executed_actions": [
+      {
+        "kind": "list_item",
+        "label": "Fuel System"
+      },
+      {
+        "kind": "list_item",
+        "label": "Fuel Trim Enable"
+      }
+    ],
+    "final_page": "data_list",
+    "final_snapshot": {
+      "page": {
+        "page_id": "data_list"
+      },
+      "raw_page_id": "data_list",
+      "effective_page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark"
+        },
+        {
+          "kind": "button",
+          "label": "Release Control"
+        },
+        {
+          "kind": "button",
+          "label": "Disabled"
+        },
+        {
+          "kind": "button",
+          "label": "Enabled"
+        },
+        {
+          "kind": "button",
+          "label": "Back"
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "authored",
+        "Display Name",
+        "ECU",
+        "Units",
+        "Custom Order"
+      ],
+      "navigation_path": [
+        "Control Module"
+      ]
+    }
+  }
+}

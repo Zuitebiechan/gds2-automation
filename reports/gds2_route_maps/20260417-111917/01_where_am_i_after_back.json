@@ -1,0 +1,178 @@
+{
+  "label": "where_am_i_after_back",
+  "timestamp": "2026-04-17T11:19:17",
+  "page": {
+    "page_id": "data_list",
+    "list_item_count": 21,
+    "buttons": [
+      "Back",
+      "Enter"
+    ],
+    "evidence": "has list items + Back button, no specific markers",
+    "has_modal": false,
+    "confidence": "medium",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "Enter",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [
+    "Engine Data",
+    "Automatic Transmission Data",
+    "Stop/Start System Data",
+    "CMP Actuator Data",
+    "Engine Cooling and HVAC Data",
+    "Cruise Control, PTO and Traction Control Data",
+    "Electrical and Immobilizer Data",
+    "Engine Mechanical Data",
+    "EVAP Data",
+    "Exhaust Aftertreatment Data",
+    "Fuel Alcohol Content Event Data",
+    "Fuel Injector Data",
+    "Fuel System Data - High Pressure",
+    "Fuel System Data - Low Pressure",
+    "Fuel Trim Data",
+    "HO2S Data",
+    "Ignition Data",
+    "Induction Data",
+    "Instrument Cluster Data",
+    "Misfire Data",
+    "TAC Data"
+  ],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Back",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Enter",
+      "enabled": true
+    },
+    {
+      "kind": "list_item",
+      "label": "Engine Data",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Automatic Transmission Data",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Stop/Start System Data",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "CMP Actuator Data",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Engine Cooling and HVAC Data",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Cruise Control, PTO and Traction Control Data",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Electrical and Immobilizer Data",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Engine Mechanical Data",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "EVAP Data",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Exhaust Aftertreatment Data",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Fuel Alcohol Content Event Data",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Fuel Injector Data",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Fuel System Data - High Pressure",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Fuel System Data - Low Pressure",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Fuel Trim Data",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "HO2S Data",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Ignition Data",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Induction Data",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Instrument Cluster Data",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Misfire Data",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "TAC Data",
+      "list_index": 0
+    }
+  ],
+  "raw_page_id": "data_list",
+  "effective_page_id": "data_list",
+  "node_id": "de81603db47bfa82"
+}

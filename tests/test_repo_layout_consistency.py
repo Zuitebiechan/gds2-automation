@@ -135,7 +135,6 @@ def test_session_dependencies_module_exposes_runtime_accessors():
 
     assert hasattr(module, "get_orchestrator")
     assert hasattr(module, "set_orchestrator")
-    assert hasattr(module, "set_data_viewer_getter")
     assert hasattr(module, "get_executor")
     assert hasattr(module, "get_adapter")
     assert hasattr(module, "reset_executor")

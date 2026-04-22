@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "created_at": "2026-04-17T11:37:36",
+  "nodes": {
+    "0c9acf157a30bdc3": {
+      "node_id": "0c9acf157a30bdc3",
+      "page_id": "main_menu",
+      "raw_page_id": "main_menu",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Close Application",
+          "enabled": true
+        },
+        {
+          "text": "Diagnostics",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Language",
+          "enabled": true
+        },
+        {
+          "text": "Manage Diagnostic Packages",
+          "enabled": true
+        },
+        {
+          "text": "Preferences",
+          "enabled": true
+        },
+        {
+          "text": "Release Notes",
+          "enabled": true
+        },
+        {
+          "text": "Review Stored Data",
+          "enabled": true
+        },
+        {
+          "text": "Update",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Close Application",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Diagnostics",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Language",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Manage Diagnostic Packages",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Preferences",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Release Notes",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Review Stored Data",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Update",
+          "enabled": true
+        }
+      ],
+      "first_seen_label": "explore_main_menu_misc_start"
+    }
+  },
+  "edges": []
+}

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import concurrent.futures
+import functools
 import logging
 import os
 import socket
@@ -12,6 +13,13 @@ import ssl
 import time
 from typing import Any, Callable, Optional
 
+from diagnostic_platform.observability import (
+    LogContext,
+    emit_event,
+    generate_request_id,
+    get_local_observability_root,
+    get_product_log_writer,
+)
 from vci_proxy.auth import compute_signature
 from vci_proxy.benchmark import attach_timing_trailer
 from vci_proxy.cache_ioctl import IoctlCache
@@ -62,6 +70,10 @@ class ReverseProxyClient:
         self._backoff_sleep_task: Optional[asyncio.Task] = None
         self._instance_id = f"pid={os.getpid()}-obj={id(self):x}"
         self._attempt_counter = 0
+        self._observability_writer = get_product_log_writer(
+            "reverse_client",
+            root=get_local_observability_root() / "raw",
+        )
 
     @staticmethod
     def _describe_task_state(task: Optional[asyncio.Task]) -> str:
@@ -131,6 +143,136 @@ class ReverseProxyClient:
             self._get_error_name(ret),
             detail,
         )
+
+    def _emit_client_event(
+        self,
+        event_type: str,
+        *,
+        context: LogContext | None = None,
+        status: str = "ok",
+        failure_code: str | None = None,
+        failure_domain: str = "unknown",
+        reason: str | None = None,
+        impact_scope: str = "reverse_client",
+        **extra: object,
+    ) -> None:
+        emit_event(
+            self._observability_writer,
+            component="reverse_client",
+            event_type=event_type,
+            context=context,
+            status=status,
+            failure_code=failure_code,
+            failure_domain=failure_domain,
+            reason=reason,
+            impact_scope=impact_scope,
+            **extra,
+        )
+
+    def _request_log_context(self, *, sequence: int, msg_name: str, worker_request_id: str) -> LogContext:
+        return LogContext(
+            proxy_seq=sequence,
+            worker_request_id=worker_request_id,
+            operation_kind=f"j2534:{msg_name}",
+        )
+
+    def _ensure_request_context(
+        self,
+        request_context: LogContext | None,
+        *,
+        sequence: int,
+        msg_name: str,
+    ) -> LogContext:
+        return request_context or self._request_log_context(
+            sequence=sequence,
+            msg_name=msg_name,
+            worker_request_id=generate_request_id(),
+        )
+
+    def _invoke_driver_call(
+        self,
+        method_name: str,
+        *args: Any,
+        log_context: dict[str, Any] | None = None,
+    ) -> Any:
+        if self.driver is None:
+            raise RuntimeError("J2534 driver is not loaded")
+        call_with_context = getattr(self.driver, "call_with_context", None)
+        if callable(call_with_context):
+            return call_with_context(method_name, args, log_context=log_context)
+        return getattr(self.driver, method_name)(*args)
+
+    async def _run_driver_call(
+        self,
+        j2534_method: str,
+        *args: Any,
+        request_context: LogContext,
+        ok_codes: tuple[int, ...] = (0,),
+        result_metadata: dict[str, object] | None = None,
+    ) -> Any:
+        loop = asyncio.get_running_loop()
+        msg_name = str(request_context.operation_kind or j2534_method).split(":", 1)[-1]
+        self._emit_client_event(
+            "j2534.call.started",
+            context=request_context,
+            reason="call_started",
+            j2534_method=j2534_method,
+        )
+        started_at = time.monotonic()
+        try:
+            result = await loop.run_in_executor(
+                None,
+                functools.partial(
+                    self._invoke_driver_call,
+                    j2534_method,
+                    *args,
+                    log_context={
+                        "proxy_seq": request_context.proxy_seq,
+                        "worker_request_id": request_context.worker_request_id,
+                        "msg_name": msg_name,
+                    },
+                ),
+            )
+        except Exception as exc:
+            duration_ms = (time.monotonic() - started_at) * 1000.0
+            self._emit_client_event(
+                "j2534.call.failed",
+                context=request_context,
+                status="error",
+                failure_code=type(exc).__name__,
+                failure_domain="local_worker_rpc",
+                reason=str(exc),
+                duration_ms=duration_ms,
+                j2534_method=j2534_method,
+            )
+            raise
+
+        duration_ms = (time.monotonic() - started_at) * 1000.0
+        return_code = None
+        if isinstance(result, int):
+            return_code = result
+        elif isinstance(result, tuple) and result:
+            first = result[0]
+            if isinstance(first, int):
+                return_code = first
+        status = "ok" if return_code is None or return_code in ok_codes else "error"
+        failure_domain = "unknown" if status == "ok" else "local_j2534_driver"
+        failure_code = None if status == "ok" else str(return_code)
+        error_name = None if status == "ok" else self._get_error_name(int(return_code))
+        self._emit_client_event(
+            "j2534.call.finished" if status == "ok" else "j2534.call.failed",
+            context=request_context,
+            status=status,
+            failure_code=failure_code,
+            failure_domain=failure_domain,
+            reason="call_finished" if status == "ok" else "driver_return_code",
+            duration_ms=duration_ms,
+            j2534_method=j2534_method,
+            return_code=return_code,
+            error_name=error_name,
+            **(result_metadata or {}),
+        )
+        return result
 
     def _ensure_driver(self) -> bool:
         if self.driver is None:
@@ -226,6 +368,11 @@ class ReverseProxyClient:
 
     async def shutdown(self) -> None:
         """Gracefully stop background work and close the active tunnel."""
+        self._emit_client_event(
+            "reverse_client.lifecycle.shutdown_started",
+            reason="shutdown_started",
+            instance_id=self._instance_id,
+        )
         logger.debug(
             "[CLIENT_CTRL] shutdown begin instance=%s prewarm_device_id=%s prewarm_task=%s",
             self._instance_id,
@@ -253,6 +400,11 @@ class ReverseProxyClient:
 
         self._ioctl_cache.invalidate()
         logger.debug("[CLIENT_CTRL] shutdown finished instance=%s", self._instance_id)
+        self._emit_client_event(
+            "reverse_client.lifecycle.shutdown_finished",
+            reason="shutdown_finished",
+            instance_id=self._instance_id,
+        )
 
     async def connect_and_serve(self) -> None:
         """Connect to the reverse server and serve requests until stopped."""
@@ -274,6 +426,14 @@ class ReverseProxyClient:
                 attempt_label = f"attempt={self._attempt_counter}"
                 try:
                     self._notify_status("connecting", f"{self.server_host}:{self.server_port}")
+                    self._emit_client_event(
+                        "reverse_client.lifecycle.connecting",
+                        reason="connecting",
+                        instance_id=self._instance_id,
+                        attempt_label=attempt_label,
+                        target_host=self.server_host,
+                        target_port=self.server_port,
+                    )
                     logger.info(
                         "[CLIENT_CONN] instance=%s %s connecting target=%s:%s",
                         self._instance_id,
@@ -309,6 +469,14 @@ class ReverseProxyClient:
                         writer.get_extra_info("sockname"),
                         writer.get_extra_info("peername"),
                     )
+                    self._emit_client_event(
+                        "reverse_client.lifecycle.connected",
+                        reason="connected",
+                        instance_id=self._instance_id,
+                        attempt_label=attempt_label,
+                        local_addr=str(writer.get_extra_info("sockname")),
+                        remote_addr=str(writer.get_extra_info("peername")),
+                    )
                     if ssl_context is not None:
                         logger.info(
                             "[CLIENT_CONN] instance=%s %s reverse tunnel TLS enabled server_name=%s",
@@ -325,6 +493,12 @@ class ReverseProxyClient:
                             self._instance_id,
                             attempt_label,
                         )
+                        self._emit_client_event(
+                            "reverse_client.lifecycle.registration_succeeded",
+                            reason="registration_succeeded",
+                            instance_id=self._instance_id,
+                            attempt_label=attempt_label,
+                        )
                         self._prewarm_task = asyncio.create_task(self._prewarm_open())
                         await self._handle_requests(reader, writer, attempt_label=attempt_label)
                     else:
@@ -333,11 +507,29 @@ class ReverseProxyClient:
                             self._instance_id,
                             attempt_label,
                         )
+                        self._emit_client_event(
+                            "reverse_client.lifecycle.registration_failed",
+                            status="error",
+                            failure_code="registration_failed",
+                            failure_domain="local_reverse_client",
+                            reason="registration_failed",
+                            instance_id=self._instance_id,
+                            attempt_label=attempt_label,
+                        )
 
                 except ConnectionRefusedError:
                     self._notify_status(
                         "disconnected",
                         f"Connection refused, retrying in {backoff_seconds:.0f}s",
+                    )
+                    self._emit_client_event(
+                        "reverse_client.lifecycle.connect_failed",
+                        status="error",
+                        failure_code="connection_refused",
+                        failure_domain="cloud_proxy_tunnel",
+                        reason="connection_refused",
+                        instance_id=self._instance_id,
+                        attempt_label=attempt_label,
                     )
                     logger.warning(
                         "[CLIENT_CONN] instance=%s %s connection refused, retrying in %.0fs",
@@ -353,6 +545,15 @@ class ReverseProxyClient:
                             "disconnected",
                             f"{normalized_reason}, retrying in {backoff_seconds:.0f}s",
                         )
+                    self._emit_client_event(
+                        "reverse_client.lifecycle.disconnected",
+                        status="error",
+                        failure_code="connection_error",
+                        failure_domain="cloud_proxy_tunnel",
+                        reason=reason,
+                        instance_id=self._instance_id,
+                        attempt_label=attempt_label,
+                    )
                     logger.warning(
                         "[CLIENT_CONN] instance=%s %s %s, retrying in %.0fs",
                         self._instance_id,
@@ -366,6 +567,15 @@ class ReverseProxyClient:
                             "disconnected",
                             f"Error: {exc}, retrying in {backoff_seconds:.0f}s",
                         )
+                    self._emit_client_event(
+                        "reverse_client.lifecycle.connect_failed",
+                        status="error",
+                        failure_code=type(exc).__name__,
+                        failure_domain="local_reverse_client",
+                        reason=str(exc),
+                        instance_id=self._instance_id,
+                        attempt_label=attempt_label,
+                    )
                     logger.exception(
                         "[CLIENT_CONN] instance=%s %s connection error, retrying in %.0fs",
                         self._instance_id,
@@ -390,6 +600,12 @@ class ReverseProxyClient:
                         self._instance_id,
                         attempt_label,
                         self.running,
+                    )
+                    self._emit_client_event(
+                        "reverse_client.lifecycle.cleanup",
+                        reason="connection_cleanup",
+                        instance_id=self._instance_id,
+                        attempt_label=attempt_label,
                     )
 
                 if self.running:
@@ -446,12 +662,27 @@ class ReverseProxyClient:
                     success, message = ProtocolDecoder.decode_auth_rsp(body)
                     if success:
                         logger.info("Reverse server authentication succeeded")
+                        self._emit_client_event(
+                            "reverse_client.lifecycle.auth_succeeded",
+                            reason=message or "auth_ok",
+                            instance_id=self._instance_id,
+                            attempt_label=attempt_label,
+                        )
                     else:
                         logger.error(
                             "[CLIENT_CONN] instance=%s %s authentication failed: %s",
                             self._instance_id,
                             attempt_label,
                             message,
+                        )
+                        self._emit_client_event(
+                            "reverse_client.lifecycle.auth_failed",
+                            status="error",
+                            failure_code="auth_failed",
+                            failure_domain="cloud_proxy_tunnel",
+                            reason=message,
+                            instance_id=self._instance_id,
+                            attempt_label=attempt_label,
                         )
                     return success
 
@@ -461,6 +692,12 @@ class ReverseProxyClient:
                         self._instance_id,
                         attempt_label,
                     )
+                    self._emit_client_event(
+                        "reverse_client.lifecycle.auth_legacy_ack",
+                        reason="legacy_heartbeat_ack",
+                        instance_id=self._instance_id,
+                        attempt_label=attempt_label,
+                    )
                     return True
 
                 logger.warning(
@@ -469,6 +706,15 @@ class ReverseProxyClient:
                     attempt_label,
                     msg_type,
                 )
+                self._emit_client_event(
+                    "reverse_client.lifecycle.auth_failed",
+                    status="error",
+                    failure_code="unexpected_auth_response",
+                    failure_domain="cloud_proxy_tunnel",
+                    reason=f"unexpected_auth_response:{msg_type:#x}",
+                    instance_id=self._instance_id,
+                    attempt_label=attempt_label,
+                )
                 return False
             except asyncio.TimeoutError:
                 logger.error(
@@ -476,6 +722,15 @@ class ReverseProxyClient:
                     self._instance_id,
                     attempt_label,
                     self.config.auth.auth_timeout_s,
+                )
+                self._emit_client_event(
+                    "reverse_client.lifecycle.auth_failed",
+                    status="error",
+                    failure_code="auth_timeout",
+                    failure_domain="cloud_proxy_tunnel",
+                    reason="auth_timeout",
+                    instance_id=self._instance_id,
+                    attempt_label=attempt_label,
                 )
                 return False
 
@@ -503,6 +758,15 @@ class ReverseProxyClient:
                 return False
         except asyncio.TimeoutError:
             logger.error("Registration ack timeout")
+            self._emit_client_event(
+                "reverse_client.lifecycle.registration_failed",
+                status="error",
+                failure_code="registration_timeout",
+                failure_domain="cloud_proxy_tunnel",
+                reason="registration_timeout",
+                instance_id=self._instance_id,
+                attempt_label=attempt_label,
+            )
             return False
 
         msg2 = ProtocolEncoder.encode_heartbeat(1)
@@ -534,9 +798,28 @@ class ReverseProxyClient:
 
                 body_len = length - HEADER_SIZE
                 body = await reader.readexactly(body_len) if body_len > 0 else b""
+                msg_name = MsgType(msg_type).name if msg_type in MsgType._value2member_map_ else f"0x{msg_type:04x}"
+                worker_request_id = generate_request_id()
+                request_context = self._request_log_context(
+                    sequence=sequence,
+                    msg_name=msg_name,
+                    worker_request_id=worker_request_id,
+                )
+                self._emit_client_event(
+                    "proxy.request.client_received",
+                    context=request_context,
+                    reason="client_received",
+                    msg_type=msg_type,
+                    msg_name=msg_name,
+                )
 
                 t0 = time.monotonic()
-                response = await self._handle_message(msg_type, body, sequence)
+                response = await self._handle_message(
+                    msg_type,
+                    body,
+                    sequence,
+                    request_context=request_context,
+                )
                 hw_ms = (time.monotonic() - t0) * 1000
 
                 if response:
@@ -549,6 +832,12 @@ class ReverseProxyClient:
                     "[CLIENT_CONN] instance=%s %s idle for 25s, sending heartbeat",
                     self._instance_id,
                     attempt_label,
+                )
+                self._emit_client_event(
+                    "reverse_client.lifecycle.idle_heartbeat",
+                    reason="idle_heartbeat",
+                    instance_id=self._instance_id,
+                    attempt_label=attempt_label,
                 )
                 writer.write(ProtocolEncoder.encode_heartbeat(0))
                 await writer.drain()
@@ -588,7 +877,7 @@ class ReverseProxyClient:
             self._prewarm_device_id = None
             self._prewarm_ret = None
 
-    async def _handle_open(self, body: bytes, sequence: int) -> bytes:
+    async def _handle_open(self, body: bytes, sequence: int, request_context: LogContext | None = None) -> bytes:
         device_name = ProtocolDecoder.decode_open_req(body)
 
         if self._prewarm_task is not None and not self._prewarm_task.done():
@@ -607,31 +896,58 @@ class ReverseProxyClient:
             self._log_j2534_result("PassThruOpen", ret, detail=f" device_id={device_id} [pre-warmed]")
             return ProtocolEncoder.encode_open_rsp(ret, device_id, sequence)
 
-        loop = asyncio.get_running_loop()
-        ret, device_id = await loop.run_in_executor(None, self.driver.open, device_name)
+        request_context = self._ensure_request_context(
+            request_context,
+            sequence=sequence,
+            msg_name="OPEN_REQ",
+        )
+        ret, device_id = await self._run_driver_call(
+            "open",
+            device_name,
+            request_context=request_context,
+            result_metadata={"device_name": device_name or ""},
+        )
         self._log_j2534_result("PassThruOpen", ret, detail=f" device_id={device_id}")
         return ProtocolEncoder.encode_open_rsp(ret, device_id, sequence)
 
-    async def _handle_close(self, body: bytes, sequence: int) -> bytes:
+    async def _handle_close(self, body: bytes, sequence: int, request_context: LogContext | None = None) -> bytes:
         device_id = ProtocolDecoder.decode_close_req(body)
-        loop = asyncio.get_running_loop()
-        ret = await loop.run_in_executor(None, self.driver.close, device_id)
+        request_context = self._ensure_request_context(
+            request_context,
+            sequence=sequence,
+            msg_name="CLOSE_REQ",
+        )
+        ret = await self._run_driver_call(
+            "close",
+            device_id,
+            request_context=request_context,
+            result_metadata={"device_id": device_id},
+        )
         self._log_j2534_result("PassThruClose", ret, detail=f" device_id={device_id}")
         self._ioctl_cache.invalidate()
         self._prewarm_device_id = None
         self._prewarm_ret = None
         return ProtocolEncoder.encode_close_rsp(ret, sequence)
 
-    async def _handle_connect(self, body: bytes, sequence: int) -> bytes:
+    async def _handle_connect(self, body: bytes, sequence: int, request_context: LogContext | None = None) -> bytes:
         device_id, protocol_id, flags, baudrate = ProtocolDecoder.decode_connect_req(body)
-        loop = asyncio.get_running_loop()
-        ret, channel_id = await loop.run_in_executor(
-            None,
-            self.driver.connect,
+        request_context = self._ensure_request_context(
+            request_context,
+            sequence=sequence,
+            msg_name="CONNECT_REQ",
+        )
+        ret, channel_id = await self._run_driver_call(
+            "connect",
             device_id,
             protocol_id,
             flags,
             baudrate,
+            request_context=request_context,
+            result_metadata={
+                "device_id": device_id,
+                "protocol_id": protocol_id,
+                "baudrate": baudrate,
+            },
         )
         self._log_j2534_result(
             "PassThruConnect",
@@ -640,23 +956,38 @@ class ReverseProxyClient:
         )
         return ProtocolEncoder.encode_connect_rsp(ret, channel_id, sequence)
 
-    async def _handle_disconnect(self, body: bytes, sequence: int) -> bytes:
+    async def _handle_disconnect(self, body: bytes, sequence: int, request_context: LogContext | None = None) -> bytes:
         channel_id = ProtocolDecoder.decode_disconnect_req(body)
-        loop = asyncio.get_running_loop()
-        ret = await loop.run_in_executor(None, self.driver.disconnect, channel_id)
+        request_context = self._ensure_request_context(
+            request_context,
+            sequence=sequence,
+            msg_name="DISCONNECT_REQ",
+        )
+        ret = await self._run_driver_call(
+            "disconnect",
+            channel_id,
+            request_context=request_context,
+            result_metadata={"channel_id": channel_id},
+        )
         self._log_j2534_result("PassThruDisconnect", ret, detail=f" channel_id={channel_id}")
         self._ioctl_cache.invalidate()
         return ProtocolEncoder.encode_disconnect_rsp(ret, sequence)
 
-    async def _handle_read_msgs(self, body: bytes, sequence: int) -> bytes:
+    async def _handle_read_msgs(self, body: bytes, sequence: int, request_context: LogContext | None = None) -> bytes:
         channel_id, num_msgs, timeout = ProtocolDecoder.decode_read_msgs_req(body)
-        loop = asyncio.get_running_loop()
-        ret, messages = await loop.run_in_executor(
-            None,
-            self.driver.read_msgs,
+        request_context = self._ensure_request_context(
+            request_context,
+            sequence=sequence,
+            msg_name="READ_MSGS_REQ",
+        )
+        ret, messages = await self._run_driver_call(
+            "read_msgs",
             channel_id,
             num_msgs,
             timeout,
+            request_context=request_context,
+            ok_codes=(0, 0x10),
+            result_metadata={"channel_id": channel_id, "num_msgs": num_msgs},
         )
         self._log_j2534_result(
             "ReadMsgs",
@@ -666,15 +997,20 @@ class ReverseProxyClient:
         )
         return ProtocolEncoder.encode_read_msgs_rsp(ret, messages, sequence)
 
-    async def _handle_write_msgs(self, body: bytes, sequence: int) -> bytes:
+    async def _handle_write_msgs(self, body: bytes, sequence: int, request_context: LogContext | None = None) -> bytes:
         channel_id, messages, timeout = ProtocolDecoder.decode_write_msgs_req(body)
-        loop = asyncio.get_running_loop()
-        ret, num_written = await loop.run_in_executor(
-            None,
-            self.driver.write_msgs,
+        request_context = self._ensure_request_context(
+            request_context,
+            sequence=sequence,
+            msg_name="WRITE_MSGS_REQ",
+        )
+        ret, num_written = await self._run_driver_call(
+            "write_msgs",
             channel_id,
             messages,
             timeout,
+            request_context=request_context,
+            result_metadata={"channel_id": channel_id, "requested_count": len(messages)},
         )
         self._log_j2534_result(
             "WriteMsgs",
@@ -683,30 +1019,40 @@ class ReverseProxyClient:
         )
         return ProtocolEncoder.encode_write_msgs_rsp(ret, num_written, sequence)
 
-    async def _handle_read_version(self, body: bytes, sequence: int) -> bytes:
+    async def _handle_read_version(self, body: bytes, sequence: int, request_context: LogContext | None = None) -> bytes:
         device_id = ProtocolDecoder.decode_read_version_req(body)
-        loop = asyncio.get_running_loop()
-        ret, fw, dll, api = await loop.run_in_executor(
-            None,
-            self.driver.read_version,
+        request_context = self._ensure_request_context(
+            request_context,
+            sequence=sequence,
+            msg_name="READ_VERSION_REQ",
+        )
+        ret, fw, dll, api = await self._run_driver_call(
+            "read_version",
             device_id,
+            request_context=request_context,
+            result_metadata={"device_id": device_id},
         )
         self._log_j2534_result("PassThruReadVersion", ret, detail=f" device_id={device_id}")
         return ProtocolEncoder.encode_read_version_rsp(ret, fw, dll, api, sequence)
 
-    async def _handle_start_filter(self, body: bytes, sequence: int) -> bytes:
+    async def _handle_start_filter(self, body: bytes, sequence: int, request_context: LogContext | None = None) -> bytes:
         channel_id, filter_type, mask_msg, pattern_msg, flow_msg = (
             ProtocolDecoder.decode_start_filter_req(body)
         )
-        loop = asyncio.get_running_loop()
-        ret, filter_id = await loop.run_in_executor(
-            None,
-            self.driver.start_msg_filter,
+        request_context = self._ensure_request_context(
+            request_context,
+            sequence=sequence,
+            msg_name="START_FILTER_REQ",
+        )
+        ret, filter_id = await self._run_driver_call(
+            "start_msg_filter",
             channel_id,
             filter_type,
             mask_msg,
             pattern_msg,
             flow_msg,
+            request_context=request_context,
+            result_metadata={"channel_id": channel_id, "filter_type": filter_type},
         )
         self._log_j2534_result(
             "StartMsgFilter",
@@ -715,14 +1061,19 @@ class ReverseProxyClient:
         )
         return ProtocolEncoder.encode_start_filter_rsp(ret, filter_id, sequence)
 
-    async def _handle_stop_filter(self, body: bytes, sequence: int) -> bytes:
+    async def _handle_stop_filter(self, body: bytes, sequence: int, request_context: LogContext | None = None) -> bytes:
         channel_id, filter_id = ProtocolDecoder.decode_stop_filter_req(body)
-        loop = asyncio.get_running_loop()
-        ret = await loop.run_in_executor(
-            None,
-            self.driver.stop_msg_filter,
+        request_context = self._ensure_request_context(
+            request_context,
+            sequence=sequence,
+            msg_name="STOP_FILTER_REQ",
+        )
+        ret = await self._run_driver_call(
+            "stop_msg_filter",
             channel_id,
             filter_id,
+            request_context=request_context,
+            result_metadata={"channel_id": channel_id, "filter_id": filter_id},
         )
         self._log_j2534_result(
             "StopMsgFilter",
@@ -731,7 +1082,7 @@ class ReverseProxyClient:
         )
         return ProtocolEncoder.encode_stop_filter_rsp(ret, sequence)
 
-    async def _handle_ioctl(self, body: bytes, sequence: int) -> bytes:
+    async def _handle_ioctl(self, body: bytes, sequence: int, request_context: LogContext | None = None) -> bytes:
         channel_id, ioctl_id, input_data = ProtocolDecoder.decode_ioctl_req(body)
 
         cached = self._ioctl_cache.try_get_cached(channel_id, ioctl_id)
@@ -740,13 +1091,18 @@ class ReverseProxyClient:
             logger.debug("<< Ioctl(%#x) -> [cached] ret=%s", ioctl_id, ret)
             return ProtocolEncoder.encode_ioctl_rsp(ret, output_data, sequence)
 
-        loop = asyncio.get_running_loop()
-        ret, output_data = await loop.run_in_executor(
-            None,
-            self.driver.ioctl,
+        request_context = self._ensure_request_context(
+            request_context,
+            sequence=sequence,
+            msg_name="IOCTL_REQ",
+        )
+        ret, output_data = await self._run_driver_call(
+            "ioctl",
             channel_id,
             ioctl_id,
             input_data,
+            request_context=request_context,
+            result_metadata={"channel_id": channel_id, "ioctl_id": ioctl_id},
         )
         self._log_j2534_result(
             "PassThruIoctl",
@@ -774,6 +1130,7 @@ class ReverseProxyClient:
         msg_type: int,
         body: bytes,
         sequence: int,
+        request_context: LogContext | None = None,
     ) -> Optional[bytes]:
         if msg_type == MsgType.PING_REQ:
             return ProtocolEncoder.encode_ping_rsp(sequence)
@@ -786,7 +1143,7 @@ class ReverseProxyClient:
         if handler is None:
             logger.warning("Unknown message type: %#x", msg_type)
             return None
-        return await handler(self, body, sequence)
+        return await handler(self, body, sequence, request_context=request_context)
 
     def stop(self) -> concurrent.futures.Future[None]:
         """Request a graceful shutdown and return a future for completion."""

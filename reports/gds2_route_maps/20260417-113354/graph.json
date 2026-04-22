@@ -1,0 +1,186 @@
+{
+  "version": 1,
+  "created_at": "2026-04-17T11:33:54",
+  "nodes": {
+    "5abe0cee33f3efd9": {
+      "node_id": "5abe0cee33f3efd9",
+      "page_id": "diagnostics_menu",
+      "raw_page_id": "diagnostics_menu",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "Module Diagnostics",
+        "Vehicle Diagnostics",
+        "Session Manager"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Vehicle Diagnostics",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Session Manager",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "explore_vehicle_data_capture_start"
+    },
+    "c358eb1c21df60e1": {
+      "node_id": "c358eb1c21df60e1",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "Vehicle DTC Information",
+        "Vehicle DTC and ID Information",
+        "Vehicle Data Capture"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Vehicle DTC Information",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Vehicle DTC and ID Information",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Vehicle Data Capture",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "explore_vehicle_data_capture_menu"
+    },
+    "42adedc7fa580763": {
+      "node_id": "42adedc7fa580763",
+      "page_id": "loading",
+      "raw_page_id": "loading",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "first_seen_label": "explore_vehicle_data_capture_open"
+    }
+  },
+  "edges": [
+    {
+      "source_id": "5abe0cee33f3efd9",
+      "target_id": "c358eb1c21df60e1",
+      "source_page_id": "diagnostics_menu",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "diagnostics_menu",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Vehicle Diagnostics",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T11:33:56"
+    }
+  ]
+}

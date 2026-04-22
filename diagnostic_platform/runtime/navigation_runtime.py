@@ -11,7 +11,7 @@ import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import Any, Callable
 
 from diagnostic_platform.safe_utils import (
     display_text as _display_text,
@@ -25,10 +25,6 @@ from .errors import OperationCancelledError
 from .worker_runtime import WorkerRuntime
 
 logger = logging.getLogger(__name__)
-
-if TYPE_CHECKING:
-    from src.navigation import NavigationController
-
 
 _MAX_NAVIGATION_STEPS = 48
 _DECISION_POLL_INTERVAL_SEC = 0.25
@@ -60,6 +56,7 @@ class NavSession:
     error: str | None = None
     cleanup_callback: Any = field(default=None, repr=False)
     cancel_event: Any = field(default_factory=threading.Event, repr=False)
+    controller_factory: Any = field(default=None, repr=False)
 
     def cancel(self) -> None:
         self.cancel_event.set()
@@ -77,12 +74,15 @@ def get_navigation_session(runtime: WorkerRuntime, session_id: str) -> NavSessio
 def start_navigation_session(
     runtime: WorkerRuntime,
     goal: str = "Navigate to Data Display",
+    *,
+    controller_factory: Callable[[], Any] | None = None,
 ) -> NavSession:
     """Create and start one internal navigation session."""
     normalized_goal = _strip_optional_text(goal) or "Navigate to Data Display"
     session_id = uuid.uuid4().hex[:16]
     session = NavSession(session_id=session_id, goal=normalized_goal)
     session.cleanup_callback = runtime.schedule_navigation_session_cleanup
+    session.controller_factory = controller_factory
 
     thread = threading.Thread(
         target=_run_graph_thread,
@@ -236,12 +236,6 @@ def _page_value(page: Any) -> str:
     if hasattr(page, "value"):
         return str(page.value)
     return str(page or "unknown")
-
-
-def _create_navigation_controller() -> "NavigationController":
-    from src.navigation import NavigationController
-
-    return NavigationController()
 
 
 def _emit_progress(session: NavSession, *, page: str, action: str, node: str | None = None) -> None:
@@ -639,7 +633,8 @@ def _run_navigation_session(
     *,
     controller: Any | None = None,
 ) -> dict[str, Any]:
-    controller = controller or _create_navigation_controller()
+    if controller is None:
+        raise RuntimeError("Navigation controller factory is required")
     if hasattr(controller, "set_cancel_checker"):
         controller.set_cancel_checker(session.check_cancelled)
 
@@ -668,7 +663,11 @@ def _run_navigation_session(
 def _run_graph_thread(session: NavSession) -> None:
     """Background thread that runs the deterministic navigation runtime."""
     try:
-        final = _run_navigation_session(session)
+        controller = session.controller_factory() if callable(session.controller_factory) else None
+        if controller is None:
+            final = _run_navigation_session(session)
+        else:
+            final = _run_navigation_session(session, controller=controller)
         session.final_state = final
         if session.status not in (NavSessionStatus.ABORTED,):
             final_page = final.get("current_page", "unknown") if final else "unknown"

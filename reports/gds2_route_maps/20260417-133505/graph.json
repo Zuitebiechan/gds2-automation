@@ -1,0 +1,227 @@
+{
+  "version": 1,
+  "created_at": "2026-04-17T13:35:05",
+  "nodes": {
+    "a6f3da83a6884b95": {
+      "node_id": "a6f3da83a6884b95",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "Identification Information",
+        "Calibration History"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Identification Information",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Calibration History",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "explore_identification_info_children_start"
+    },
+    "e8bbe7fab79db207": {
+      "node_id": "e8bbe7fab79db207",
+      "page_id": "data_display",
+      "raw_page_id": "data_display",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Create Report",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "authored",
+        "Display Name",
+        "ECU",
+        "Units",
+        "Custom Order"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Create Report",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "ident_info_identification_information"
+    },
+    "298ce0d5e738593f": {
+      "node_id": "298ce0d5e738593f",
+      "page_id": "unknown",
+      "raw_page_id": "unknown",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "Identification Information",
+        "Calibration History"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Identification Information",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Calibration History",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "ident_info_calibration_history_back"
+    }
+  },
+  "edges": [
+    {
+      "source_id": "a6f3da83a6884b95",
+      "target_id": "e8bbe7fab79db207",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Identification Information",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T13:35:07"
+    },
+    {
+      "source_id": "e8bbe7fab79db207",
+      "target_id": "a6f3da83a6884b95",
+      "source_page_id": "data_display",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_display",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T13:35:11"
+    },
+    {
+      "source_id": "a6f3da83a6884b95",
+      "target_id": "e8bbe7fab79db207",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Calibration History",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T13:35:13"
+    },
+    {
+      "source_id": "e8bbe7fab79db207",
+      "target_id": "a6f3da83a6884b95",
+      "source_page_id": "data_display",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_display",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T13:35:18"
+    }
+  ]
+}

@@ -1,0 +1,79 @@
+{
+  "label": "vehicle_diagnostics_01_vehicle_dtc_information_back",
+  "timestamp": "2026-04-17T10:55:52",
+  "page": {
+    "page_id": "data_display",
+    "list_item_count": 0,
+    "buttons": [
+      "Refresh",
+      "Details",
+      "Add Bookmark",
+      "Back",
+      "Create Report"
+    ],
+    "evidence": "button 'Create Report' present",
+    "has_modal": false,
+    "confidence": "high",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "Refresh",
+      "enabled": true
+    },
+    {
+      "text": "Details",
+      "enabled": true
+    },
+    {
+      "text": "Add Bookmark",
+      "enabled": true
+    },
+    {
+      "text": "Create Report",
+      "enabled": true
+    },
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Add Bookmark",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Back",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Create Report",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Details",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Refresh",
+      "enabled": true
+    }
+  ],
+  "node_id": "0867b3b0c57c6f09"
+}

@@ -1,0 +1,117 @@
+{
+  "started_at": "2026-04-20T15:16:55",
+  "mode": "click-button",
+  "button_text": "Back",
+  "success": true,
+  "page_changed": true,
+  "before_snapshot": {
+    "page": {
+      "page_id": "data_display"
+    },
+    "raw_page_id": "data_display",
+    "effective_page_id": "data_display",
+    "observed_actions": [
+      {
+        "kind": "button",
+        "label": "Add Bookmark"
+      },
+      {
+        "kind": "button",
+        "label": "Create Report"
+      },
+      {
+        "kind": "button",
+        "label": "Clear DTCs"
+      },
+      {
+        "kind": "button",
+        "label": "Refresh"
+      },
+      {
+        "kind": "button",
+        "label": "Back"
+      }
+    ],
+    "list_items": [],
+    "navigation_path": [
+      "Module Diagnostics",
+      "Engine Control Module",
+      "Diagnostic Trouble Codes (DTC)"
+    ]
+  },
+  "click_result": {
+    "success": true,
+    "page": "data_list",
+    "choices": null,
+    "selected": null,
+    "error": null,
+    "context": {
+      "module": null,
+      "data_category": null,
+      "sub_category": null,
+      "device": null
+    }
+  },
+  "after_snapshot": {
+    "page": {
+      "page_id": "data_list"
+    },
+    "raw_page_id": "data_list",
+    "effective_page_id": "data_list",
+    "observed_actions": [
+      {
+        "kind": "button",
+        "label": "Back"
+      },
+      {
+        "kind": "button",
+        "label": "Home"
+      },
+      {
+        "kind": "button",
+        "label": "Vehicle Menu"
+      },
+      {
+        "kind": "button",
+        "label": "Enter"
+      },
+      {
+        "kind": "list_item",
+        "label": "DTC Display",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Diagnostic Test Status: This Ignition Cycle",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Diagnostic Test Status: Since DTC Clear",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Freeze Frame/Failure Records",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Specific DTC",
+        "list_index": 0
+      }
+    ],
+    "list_items": [
+      "DTC Display",
+      "Diagnostic Test Status: This Ignition Cycle",
+      "Diagnostic Test Status: Since DTC Clear",
+      "Freeze Frame/Failure Records",
+      "Specific DTC"
+    ],
+    "navigation_path": [
+      "Module Diagnostics",
+      "Engine Control Module",
+      "Diagnostic Trouble Codes (DTC)"
+    ]
+  }
+}

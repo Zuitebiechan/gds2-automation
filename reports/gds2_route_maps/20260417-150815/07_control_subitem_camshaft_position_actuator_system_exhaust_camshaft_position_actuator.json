@@ -1,0 +1,51 @@
+{
+  "label": "control_subitem_camshaft_position_actuator_system_exhaust_camshaft_position_actuator",
+  "timestamp": "2026-04-17T15:09:27",
+  "page": {
+    "page_id": "j2534_disconnect",
+    "list_item_count": 0,
+    "buttons": [
+      "Back",
+      "OK"
+    ],
+    "evidence": "Back + OK with empty list and no navigation markers",
+    "has_modal": false,
+    "confidence": "high",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "OK",
+      "enabled": true
+    },
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Back",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "OK",
+      "enabled": true
+    }
+  ],
+  "raw_page_id": "j2534_disconnect",
+  "effective_page_id": "j2534_disconnect",
+  "node_id": "2806547352b1b367"
+}

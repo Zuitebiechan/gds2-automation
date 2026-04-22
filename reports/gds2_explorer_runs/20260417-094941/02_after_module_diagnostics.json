@@ -1,0 +1,179 @@
+{
+  "label": "after_module_diagnostics",
+  "timestamp": "2026-04-17T09:49:45",
+  "page": {
+    "page_id": "module_list",
+    "list_item_count": 32,
+    "buttons": [
+      "Vehicle Menu",
+      "Back",
+      "Enter",
+      "Home"
+    ],
+    "evidence": "list items contain module code patterns [...]",
+    "has_modal": false,
+    "confidence": "high",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "Home",
+      "enabled": true
+    },
+    {
+      "text": "Vehicle Menu",
+      "enabled": true
+    },
+    {
+      "text": "Enter",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [
+    "[T1] Accessory DC/AC Power Inverter Module",
+    "[K124] Active Safety Control Module",
+    "[T3] Amplifier",
+    "[K9] Body Control Module",
+    "[K17] Electronic Brake Control Module",
+    "[K20] Engine Control Module",
+    "[K109] Frontview Camera Module",
+    "[K26] Headlamp Control Module",
+    "[K74] Human Machine Interface Control Module",
+    "[A26] HVAC Controls",
+    "[K33] HVAC Control Module",
+    "[K36] Inflatable Restraint Sensing and Diagnostic Module",
+    "[P16] Instrument Cluster",
+    "[K84] Keyless Entry Control Module",
+    "[B218L] Left Side Object Detection Control Module",
+    "[K39] Liftgate Control Module",
+    "[B233B] Long Range Radar Sensor Module",
+    "[B119] Multi-Axis Acceleration Sensor Module",
+    "[K182] Parking Assist Control Module",
+    "[K43] Power Steering Control Module",
+    "[A11] Radio",
+    "[A22] Radio Controls",
+    "[K47] Rear Differential Clutch Control Module",
+    "[B218R] Right Side Object Detection Control Module",
+    "[K40D] Seat Memory Control Module - Driver",
+    "[K56] Serial Data Gateway Module",
+    "[K60] Steering Column Lock Control Module",
+    "[B99] Steering Wheel Angle Sensor Module",
+    "[K19] Suspension Control Module",
+    "[K73] Telematics Communication Interface Control Module",
+    "[K71] Transmission Control Module",
+    "[K157] Video Processing Control Module"
+  ],
+  "latest_json": {
+    "pageContext": {
+      "showingStageCount": 1,
+      "isModalShowing": false,
+      "detected": false,
+      "windowTitle": "GDS 2"
+    },
+    "tables": [
+      {
+        "tableType": "unknown",
+        "visible": true,
+        "columns": [
+          "Property",
+          "Value",
+          "Value Source"
+        ],
+        "rowCount": 3,
+        "rows": [
+          {
+            "Value Source": " VIN",
+            "Value": " 2017",
+            "Property": " Model Year"
+          },
+          {
+            "Value Source": " VIN",
+            "Value": " Buick",
+            "Property": " Make"
+          },
+          {
+            "Value Source": " VIN",
+            "Value": " Envision",
+            "Property": " Model"
+          }
+        ]
+      },
+      {
+        "tableType": "unknown",
+        "visible": true,
+        "columns": [
+          "Property",
+          "Value",
+          "Value Source"
+        ],
+        "rowCount": 6,
+        "rows": [
+          {
+            "Value Source": " User",
+            "Value": " High Intensity Discharge (T4F TT2 TT6 TT7 TT8)",
+            "Property": " Headlamp Type"
+          },
+          {
+            "Value Source": " User",
+            "Value": " Automatic",
+            "Property": " Transmission Type"
+          },
+          {
+            "Value Source": " User",
+            "Value": " Not Equipped",
+            "Property": " Seat Memory Control Module Version"
+          },
+          {
+            "Value Source": " User",
+            "Value": " Stop/Start System (KL9)",
+            "Property": " Stop/Start System (KL9)"
+          },
+          {
+            "Value Source": " User",
+            "Value": " Auto Control Dual Zone (CJ2)",
+            "Property": " HVAC Control Module Type"
+          },
+          {
+            "Value Source": " User",
+            "Value": " 1.5L (LFV)",
+            "Property": " Engine Identifier"
+          }
+        ]
+      },
+      {
+        "tableType": "unknown",
+        "visible": true,
+        "columns": [
+          ""
+        ],
+        "rowCount": 1,
+        "rows": [
+          {
+            "": " Module Diagnostics"
+          }
+        ]
+      }
+    ],
+    "extractionCount": 5327,
+    "tableCount": 3,
+    "extractionDurationMs": 0,
+    "version": "2.0",
+    "timestamp": 1776390585966
+  }
+}

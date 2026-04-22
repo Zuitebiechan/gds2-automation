@@ -1,0 +1,181 @@
+{
+  "started_at": "2026-04-20T15:20:36",
+  "completed_at": "2026-04-20T15:20:37",
+  "entry_key": "clear codes",
+  "entry": {
+    "page_key": "dtc.clear",
+    "title": "Clear DTCs Flow",
+    "category": "dtc",
+    "page_kind": "clear_dtcs_selection",
+    "canonical_path": [
+      "Module Diagnostics",
+      "Engine Control Module",
+      "Diagnostic Trouble Codes (DTC)",
+      "DTC Display",
+      "Clear DTCs"
+    ],
+    "route_steps": [
+      {
+        "kind": "list_item",
+        "label": "Module Diagnostics"
+      },
+      {
+        "kind": "list_item",
+        "label": "Engine Control Module"
+      },
+      {
+        "kind": "list_item",
+        "label": "Diagnostic Trouble Codes (DTC)"
+      },
+      {
+        "kind": "list_item",
+        "label": "DTC Display"
+      },
+      {
+        "kind": "button",
+        "label": "Clear DTCs"
+      }
+    ],
+    "target_action": {
+      "kind": "button",
+      "label": "Clear DTCs"
+    },
+    "expected_page_id": "clear_dtcs_selection",
+    "expected_actions": [
+      {
+        "kind": "button",
+        "label": "Add All"
+      },
+      {
+        "kind": "button",
+        "label": "Add"
+      },
+      {
+        "kind": "button",
+        "label": "Cancel"
+      }
+    ],
+    "fallback_strategy": [
+      "navigate to DTC Display",
+      "click Clear DTCs",
+      "handle confirmation with No/Yes as requested"
+    ],
+    "confidence": "explored",
+    "source": "merged_route_graph",
+    "notes": "Live probe on 2026-04-20 showed first Clear DTCs page exposes Add All/Add/Cancel/Back, not OK.",
+    "aliases": [
+      "clear codes",
+      "clear dtc",
+      "clear dtcs",
+      "dtc.clear",
+      "erase codes"
+    ],
+    "created_at": "2026-04-20T15:20:36",
+    "updated_at": "2026-04-20T15:20:36"
+  },
+  "target_action": {
+    "kind": "button",
+    "label": "Clear DTCs"
+  },
+  "bootstrap_actions": [],
+  "start_snapshot": {
+    "page": {
+      "page_id": "clear_dtcs_selection"
+    },
+    "raw_page_id": "clear_dtcs_selection",
+    "effective_page_id": "clear_dtcs_selection",
+    "observed_actions": [
+      {
+        "kind": "button",
+        "label": "Cancel"
+      },
+      {
+        "kind": "button",
+        "label": "Add Bookmark"
+      },
+      {
+        "kind": "button",
+        "label": "Add"
+      },
+      {
+        "kind": "button",
+        "label": "Back"
+      },
+      {
+        "kind": "button",
+        "label": "Add All"
+      }
+    ],
+    "list_items": [],
+    "navigation_path": [
+      "Module Diagnostics",
+      "Engine Control Module",
+      "Diagnostic Trouble Codes (DTC)"
+    ]
+  },
+  "success": true,
+  "missing_expected_actions": [],
+  "route_result": {
+    "matched_start_node_id": "bc06e717b49f699d",
+    "recovery_actions": [],
+    "planned_path": [
+      {
+        "kind": "list_item",
+        "label": "Module Diagnostics"
+      },
+      {
+        "kind": "list_item",
+        "label": "Engine Control Module"
+      },
+      {
+        "kind": "list_item",
+        "label": "Diagnostic Trouble Codes (DTC)"
+      },
+      {
+        "kind": "list_item",
+        "label": "DTC Display"
+      },
+      {
+        "kind": "button",
+        "label": "Clear DTCs"
+      }
+    ],
+    "executed_actions": [],
+    "final_page": "clear_dtcs_selection",
+    "final_snapshot": {
+      "page": {
+        "page_id": "clear_dtcs_selection"
+      },
+      "raw_page_id": "clear_dtcs_selection",
+      "effective_page_id": "clear_dtcs_selection",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Cancel"
+        },
+        {
+          "kind": "button",
+          "label": "Add Bookmark"
+        },
+        {
+          "kind": "button",
+          "label": "Add"
+        },
+        {
+          "kind": "button",
+          "label": "Back"
+        },
+        {
+          "kind": "button",
+          "label": "Add All"
+        }
+      ],
+      "list_items": [],
+      "navigation_path": [
+        "Module Diagnostics",
+        "Engine Control Module",
+        "Diagnostic Trouble Codes (DTC)"
+      ]
+    }
+  }
+}

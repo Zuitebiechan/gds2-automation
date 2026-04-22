@@ -1,0 +1,136 @@
+{
+  "label": "start_diagnostics_menu",
+  "timestamp": "2026-04-17T09:49:41",
+  "page": {
+    "page_id": "diagnostics_menu",
+    "list_item_count": 3,
+    "buttons": [
+      "Enter",
+      "Home"
+    ],
+    "evidence": "list contains 'Module Diagnostics' item",
+    "has_modal": false,
+    "confidence": "high",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "Home",
+      "enabled": true
+    },
+    {
+      "text": "Enter",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [
+    "Module Diagnostics",
+    "Vehicle Diagnostics",
+    "Session Manager"
+  ],
+  "latest_json": {
+    "pageContext": {
+      "showingStageCount": 1,
+      "isModalShowing": false,
+      "detected": false,
+      "windowTitle": "GDS 2"
+    },
+    "tables": [
+      {
+        "tableType": "unknown",
+        "visible": true,
+        "columns": [
+          "Property",
+          "Value",
+          "Value Source"
+        ],
+        "rowCount": 3,
+        "rows": [
+          {
+            "Value Source": " VIN",
+            "Value": " 2017",
+            "Property": " Model Year"
+          },
+          {
+            "Value Source": " VIN",
+            "Value": " Buick",
+            "Property": " Make"
+          },
+          {
+            "Value Source": " VIN",
+            "Value": " Envision",
+            "Property": " Model"
+          }
+        ]
+      },
+      {
+        "tableType": "unknown",
+        "visible": true,
+        "columns": [
+          "Property",
+          "Value",
+          "Value Source"
+        ],
+        "rowCount": 6,
+        "rows": [
+          {
+            "Value Source": " User",
+            "Value": " High Intensity Discharge (T4F TT2 TT6 TT7 TT8)",
+            "Property": " Headlamp Type"
+          },
+          {
+            "Value Source": " User",
+            "Value": " Automatic",
+            "Property": " Transmission Type"
+          },
+          {
+            "Value Source": " User",
+            "Value": " Not Equipped",
+            "Property": " Seat Memory Control Module Version"
+          },
+          {
+            "Value Source": " User",
+            "Value": " Stop/Start System (KL9)",
+            "Property": " Stop/Start System (KL9)"
+          },
+          {
+            "Value Source": " User",
+            "Value": " Auto Control Dual Zone (CJ2)",
+            "Property": " HVAC Control Module Type"
+          },
+          {
+            "Value Source": " User",
+            "Value": " 1.5L (LFV)",
+            "Property": " Engine Identifier"
+          }
+        ]
+      },
+      {
+        "tableType": "unknown",
+        "visible": true,
+        "columns": [
+          ""
+        ],
+        "rowCount": 0,
+        "rows": []
+      }
+    ],
+    "extractionCount": 5292,
+    "tableCount": 3,
+    "extractionDurationMs": 1,
+    "version": "2.0",
+    "timestamp": 1776390582373
+  }
+}

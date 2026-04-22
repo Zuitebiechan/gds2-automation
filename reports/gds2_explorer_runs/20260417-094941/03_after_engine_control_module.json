@@ -1,0 +1,158 @@
+{
+  "label": "after_engine_control_module",
+  "timestamp": "2026-04-17T09:49:48",
+  "page": {
+    "page_id": "module_submenu",
+    "list_item_count": 7,
+    "buttons": [
+      "Vehicle Menu",
+      "Back",
+      "Enter",
+      "Home"
+    ],
+    "evidence": "list contains 'Data Display' item",
+    "has_modal": false,
+    "confidence": "high",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "Home",
+      "enabled": true
+    },
+    {
+      "text": "Vehicle Menu",
+      "enabled": true
+    },
+    {
+      "text": "Enter",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [
+    "Diagnostic Trouble Codes (DTC)",
+    "Event Information",
+    "Identification Information",
+    "Data Display",
+    "Control Functions",
+    "Configuration/Reset Functions",
+    "Inspection/Maintenance System Information"
+  ],
+  "latest_json": {
+    "pageContext": {
+      "showingStageCount": 1,
+      "isModalShowing": false,
+      "moduleName": "2017,Buick,Envision,Module Diagnostics,Engine Control Module",
+      "detected": false,
+      "windowTitle": "GDS 2"
+    },
+    "tables": [
+      {
+        "tableType": "unknown",
+        "visible": true,
+        "columns": [
+          "Property",
+          "Value",
+          "Value Source"
+        ],
+        "rowCount": 3,
+        "rows": [
+          {
+            "Value Source": " VIN",
+            "Value": " 2017",
+            "Property": " Model Year"
+          },
+          {
+            "Value Source": " VIN",
+            "Value": " Buick",
+            "Property": " Make"
+          },
+          {
+            "Value Source": " VIN",
+            "Value": " Envision",
+            "Property": " Model"
+          }
+        ]
+      },
+      {
+        "tableType": "unknown",
+        "visible": true,
+        "columns": [
+          "Property",
+          "Value",
+          "Value Source"
+        ],
+        "rowCount": 6,
+        "rows": [
+          {
+            "Value Source": " User",
+            "Value": " High Intensity Discharge (T4F TT2 TT6 TT7 TT8)",
+            "Property": " Headlamp Type"
+          },
+          {
+            "Value Source": " User",
+            "Value": " Automatic",
+            "Property": " Transmission Type"
+          },
+          {
+            "Value Source": " User",
+            "Value": " Not Equipped",
+            "Property": " Seat Memory Control Module Version"
+          },
+          {
+            "Value Source": " User",
+            "Value": " Stop/Start System (KL9)",
+            "Property": " Stop/Start System (KL9)"
+          },
+          {
+            "Value Source": " User",
+            "Value": " Auto Control Dual Zone (CJ2)",
+            "Property": " HVAC Control Module Type"
+          },
+          {
+            "Value Source": " User",
+            "Value": " 1.5L (LFV)",
+            "Property": " Engine Identifier"
+          }
+        ]
+      },
+      {
+        "tableType": "unknown",
+        "visible": true,
+        "columns": [
+          ""
+        ],
+        "rowCount": 2,
+        "rows": [
+          {
+            "": " Module Diagnostics"
+          },
+          {
+            "": " Engine Control Module"
+          }
+        ]
+      }
+    ],
+    "extractionCount": 5360,
+    "tableCount": 3,
+    "extractionDurationMs": 0,
+    "version": "2.0",
+    "timestamp": 1776390589499
+  }
+}

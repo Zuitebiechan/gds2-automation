@@ -1,0 +1,85 @@
+{
+  "label": "preferences_unicode_no_after",
+  "timestamp": "2026-04-17T11:44:59",
+  "page": {
+    "page_id": "unknown",
+    "list_item_count": 0,
+    "buttons": [
+      "Cancel",
+      "Save",
+      "Reset to Default",
+      "Reset"
+    ],
+    "evidence": "no matching rule",
+    "has_modal": true,
+    "confidence": "low",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "Reset",
+      "enabled": true
+    },
+    {
+      "text": "Save",
+      "enabled": true
+    },
+    {
+      "text": "Cancel",
+      "enabled": true
+    },
+    {
+      "text": "Reset to Default",
+      "enabled": true
+    },
+    {
+      "text": "是",
+      "enabled": true
+    },
+    {
+      "text": "否",
+      "enabled": true
+    }
+  ],
+  "list_items": [],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Cancel",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Reset",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Reset to Default",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Save",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "否",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "是",
+      "enabled": true
+    }
+  ],
+  "raw_page_id": "unknown",
+  "effective_page_id": "unknown",
+  "node_id": "bbd1e9e00fb6f8de"
+}

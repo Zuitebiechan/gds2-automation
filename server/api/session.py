@@ -47,6 +47,7 @@ from diagnostic_platform.runtime.session_streams import (
     iter_session_events,
 )
 from server.api import session_ai_handlers
+from server.api import session_log_handlers
 from server.api.http_utils import (
     RequestPayloadError,
     internal_error_payload,
@@ -57,7 +58,7 @@ from server.api.session_dependencies import (
     _runtime,
     get_adapter,
     get_backend as _get_backend,
-    get_data_viewer as _get_data_viewer,
+    get_navigation_runtime as _get_navigation_runtime,
     get_executor,
     get_launch_spec_resolver,
     get_node_allocator,
@@ -68,7 +69,6 @@ from server.api.session_dependencies import (
     get_trust_cloudfront_headers,
     get_ai_engine as _get_ai_engine,
     reset_executor,
-    set_data_viewer_getter,
     set_orchestrator,
 )
 from server.api import session_live_data_handlers
@@ -586,7 +586,7 @@ def session_start_diagnostics():
     """Start GDS2 diagnostics via the deterministic executor.
 
     Executes START_DIAGNOSTICS through the DeterministicExecutor,
-    which dispatches to the real DataViewerWorkflow.start().
+    which dispatches to the active backend startup path.
 
     Request body (JSON)::
 
@@ -831,7 +831,7 @@ def session_decision():
                 session_id=session_id,
                 decision_id=decision_id,
                 option_id=option_id,
-                get_data_viewer=_get_data_viewer,
+                get_navigation_runtime=_get_navigation_runtime,
                 get_backend=lambda: _get_backend(session_id),
             )
         )
@@ -880,7 +880,6 @@ def session_select_module():
                 session,
                 module=module,
                 backend=_get_backend(session_id),
-                get_data_viewer=_get_data_viewer,
                 get_executor=get_executor,
                 get_adapter=get_adapter,
                 emit_progress=lambda message: orch.emit_progress(session_id, message),
@@ -956,7 +955,6 @@ def session_select_data_category():
                 session,
                 data_category=data_category,
                 backend=_get_backend(session_id),
-                get_data_viewer=_get_data_viewer,
                 get_executor=get_executor,
                 get_adapter=get_adapter,
                 emit_progress=lambda message: orch.emit_progress(session_id, message),
@@ -1245,3 +1243,13 @@ def session_status():
     except Exception as exc:
         logger.exception("session_status failed")
         return jsonify(internal_error_payload()), 500
+
+
+@session_bp.route("/logs/upload", methods=["POST"])
+def session_logs_upload():
+    try:
+        data = require_json_object(request)
+    except RequestPayloadError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    payload, status = session_log_handlers.upload_session_logs(data)
+    return jsonify(payload), status

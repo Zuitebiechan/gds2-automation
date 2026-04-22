@@ -1,0 +1,1105 @@
+{
+  "label": "data_display",
+  "timestamp": "2026-04-17T09:54:48",
+  "page": {
+    "page_id": "data_display",
+    "list_item_count": 5,
+    "buttons": [
+      "Clear DTCs",
+      "Add Bookmark",
+      "Back",
+      "Create Report"
+    ],
+    "evidence": "button 'Create Report' present",
+    "has_modal": false,
+    "confidence": "high",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "Clear DTCs",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "Add Bookmark",
+      "enabled": true
+    },
+    {
+      "text": "Create Report",
+      "enabled": true
+    },
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [
+    "authored",
+    "Display Name",
+    "ECU",
+    "Units",
+    "Custom Order"
+  ],
+  "latest_json": {
+    "pageContext": {
+      "showingStageCount": 1,
+      "isModalShowing": false,
+      "moduleName": "Control Module",
+      "detected": false,
+      "windowTitle": "GDS 2"
+    },
+    "tables": [
+      {
+        "tableType": "dtc",
+        "visible": true,
+        "columns": [
+          "Control Module",
+          "DTC",
+          "Symptom Byte",
+          "Description",
+          "Symptom Description",
+          "Status"
+        ],
+        "rowCount": 31,
+        "rows": [
+          {
+            "Status": "Current",
+            "DTC": "P0073",
+            "Description": "Ambient Air Temperature Sensor Circuit High Voltage",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "P00EB",
+            "Description": "Intake Air Temperature (IAT) Sensor 3 Circuit High Voltage",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "P0108",
+            "Description": "Manifold Absolute Pressure (MAP) Sensor Circuit High Voltage",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "P0113",
+            "Description": "Intake Air Temperature (IAT) Sensor Circuit High Voltage",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "P0118",
+            "Description": "Engine Coolant Temperature (ECT) Sensor Circuit High Voltage",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "P018C",
+            "Description": "Fuel Pressure Sensor Circuit Low Voltage",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "P0238",
+            "Description": "Turbocharger Boost Sensor Circuit High Voltage",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "P0463",
+            "Description": "Fuel Level Sensor Circuit High Voltage",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "P0480",
+            "Description": "Cooling Fan Relay 1 Control Circuit",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "P0532",
+            "Description": "Air Conditioning (A/C) Refrigerant Pressure Sensor Circuit Low Voltage",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "P0557",
+            "Description": "Brake Booster Pressure Sensor Circuit Low Voltage",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "P057C",
+            "Description": "Brake Pedal Position Sensor Circuit Low Voltage",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "P0615",
+            "Description": "Starter Relay Control Circuit",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "P0616",
+            "Description": "Starter Relay Control Circuit Low Voltage",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "P0627",
+            "Description": "Fuel Pump Enable Circuit",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "P0629",
+            "Description": "Fuel Pump Enable Circuit High Voltage",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "P0689",
+            "Description": "Engine Controls Ignition Relay Feedback Circuit Low Voltage",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "P0691",
+            "Description": "Cooling Fan Relay 1 Control Circuit Low Voltage",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "P1682",
+            "Description": "Ignition 1 Switch Circuit 2",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "P16A1",
+            "Description": "Sensor Communication Circuit High Voltage",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "P16E5",
+            "Description": "Sensor Communication Circuit 3 High Voltage",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "P2068",
+            "Description": "Fuel Level Sensor 2 Circuit High Voltage",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "P2122",
+            "Description": "Accelerator Pedal Position (APP) Sensor 1 Circuit Low Voltage",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "P2127",
+            "Description": "Accelerator Pedal Position (APP) Sensor 2 Circuit Low Voltage",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "P2229",
+            "Description": "Barometric Pressure (BARO) Sensor Circuit High Voltage",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "P257F",
+            "Description": "Engine Hood Switch Circuit High Voltage",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "P26E4",
+            "Description": "Starter Pinion Solenoid Actuator Relay Control Circuit",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "P26E6",
+            "Description": "Starter Pinion Solenoid Actuator Relay Control Circuit High Voltage",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "P3051",
+            "Description": "DC/DC Converter Output Voltage Sensor Circuit 1 Low Voltage",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "P3052",
+            "Description": "DC/DC Converter Output Voltage Sensor Circuit 2 Low Voltage",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          },
+          {
+            "Status": "Current",
+            "DTC": "U01B0",
+            "Description": "Lost Communication with Battery Sensor Module",
+            "Control Module": "Engine Control Module",
+            "Symptom Byte": "00",
+            "Symptom Description": "- - -"
+          }
+        ]
+      },
+      {
+        "tableType": "unknown",
+        "visible": true,
+        "columns": [
+          "Category",
+          "Decoded Value"
+        ],
+        "rowCount": 5,
+        "rows": [
+          {
+            "Category": "  This Ignition Cycle",
+            "Decoded Value": "  Failed"
+          },
+          {
+            "Category": "  Last Test",
+            "Decoded Value": "  Failed Current DTC"
+          },
+          {
+            "Category": "  Since DTC Clear",
+            "Decoded Value": "  Failed"
+          },
+          {
+            "Category": "  DTC History Status",
+            "Decoded Value": "  Not History"
+          },
+          {
+            "Category": "  MIL Status",
+            "Decoded Value": "  Not Requested"
+          }
+        ]
+      },
+      {
+        "tableType": "data_display",
+        "visible": true,
+        "columns": [
+          "Legend",
+          "Parameter Name",
+          "Control Module",
+          "Value",
+          "Unit"
+        ],
+        "rowCount": 0,
+        "rows": []
+      },
+      {
+        "tableType": "unknown",
+        "visible": true,
+        "columns": [
+          ""
+        ],
+        "rowCount": 72,
+        "rows": [
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          },
+          {
+            "": "null_TableData"
+          }
+        ]
+      },
+      {
+        "tableType": "data_display",
+        "visible": true,
+        "columns": [
+          "Parameter Name",
+          "Value",
+          "Unit",
+          "Control Module"
+        ],
+        "rowCount": 72,
+        "rows": [
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Hood Position",
+            "Value": "Open ",
+            "Unit": " "
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Engine Speed",
+            "Value": "0 ",
+            "Unit": " RPM"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " ECT Sensor",
+            "Value": "-40 ",
+            "Unit": " °F"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " IAT Sensor 1",
+            "Value": "-40 ",
+            "Unit": " °F"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " IAT Sensor 2",
+            "Value": "32 ",
+            "Unit": " °F"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Ambient Air Temperature",
+            "Value": "-40 ",
+            "Unit": " °F"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Cold Start-Up",
+            "Value": "No ",
+            "Unit": " "
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " MAF Sensor",
+            "Value": "0.00 ",
+            "Unit": " g/s"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Engine Load",
+            "Value": "0.0 ",
+            "Unit": " %"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Accelerator Pedal Position",
+            "Value": "0 ",
+            "Unit": " %"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Throttle Position",
+            "Value": "30 ",
+            "Unit": " %"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " MAP Sensor",
+            "Value": "63.2 ",
+            "Unit": " PSI"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Boost Pressure Sensor",
+            "Value": "63.1 ",
+            "Unit": " PSI"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Turbocharger Bypass Solenoid Valve Command",
+            "Value": "On ",
+            "Unit": " "
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Turbocharger Bypass Solenoid Valve Command",
+            "Value": "0 ",
+            "Unit": " %"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Turbocharger Wastegate Solenoid Valve Command",
+            "Value": "0 ",
+            "Unit": " %"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " BARO",
+            "Value": "18.56 ",
+            "Unit": " PSI"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " BARO Sensor",
+            "Value": "5.00 ",
+            "Unit": " V"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Calculated BARO",
+            "Value": "13.0 ",
+            "Unit": " PSI"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Ambient Humidity",
+            "Value": "0 ",
+            "Unit": " %"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Fuel Control Loop Status",
+            "Value": "Open ",
+            "Unit": " "
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Injector Duty Cycle",
+            "Value": "0.00 ",
+            "Unit": " ms"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " HO2S 1",
+            "Value": "1880 ",
+            "Unit": " mV"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " HO2S 2",
+            "Value": "1900 ",
+            "Unit": " mV"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Short Term Fuel Trim",
+            "Value": "0 ",
+            "Unit": " %"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Long Term Fuel Trim",
+            "Value": "0 ",
+            "Unit": " %"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Fuel Trim Memory Cell",
+            "Value": "8 ",
+            "Unit": " "
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Power Enrichment",
+            "Value": "Inactive ",
+            "Unit": " "
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Deceleration Fuel Cut-Off",
+            "Value": "Inactive ",
+            "Unit": " "
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Fuel Economy",
+            "Value": "0.00 ",
+            "Unit": " gal/h"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " EVAP Purge Solenoid Valve Command",
+            "Value": "0 ",
+            "Unit": " %"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " EVAP Vent Solenoid Valve Command",
+            "Value": "Venting ",
+            "Unit": " "
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Fuel Tank Pressure Sensor",
+            "Value": "0.00 ",
+            "Unit": " V"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Remaining Fuel in Tank",
+            "Value": "0.0 ",
+            "Unit": " %"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Ignition Timing",
+            "Value": "0.0 ",
+            "Unit": " °"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Power Mode",
+            "Value": "Off ",
+            "Unit": " "
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Ignition 1 Signal",
+            "Value": "11.70 ",
+            "Unit": " V"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Ignition 1 Signal",
+            "Value": "On ",
+            "Unit": " "
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Battery Voltage",
+            "Value": "11.7 ",
+            "Unit": " V"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Ignition Accessory Signal",
+            "Value": "Off ",
+            "Unit": " "
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Reduced Engine Power History",
+            "Value": "High Pressure Fuel System Malfunction ",
+            "Unit": " "
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Engine Controls Ignition Relay Command",
+            "Value": "On ",
+            "Unit": " "
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Engine Controls Ignition Relay Feedback Signal",
+            "Value": "0.1 ",
+            "Unit": " V"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " MIL Command",
+            "Value": "On ",
+            "Unit": " "
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " MIL Requested by DTC",
+            "Value": "Yes ",
+            "Unit": " "
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Cruise Control",
+            "Value": "Disabled ",
+            "Unit": " "
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Fuel Pressure Sensor",
+            "Value": "0.0 ",
+            "Unit": " PSI"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Fuel Rail Pressure Sensor",
+            "Value": "95026 ",
+            "Unit": " PSI"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Fuel Alcohol Content",
+            "Value": "8 ",
+            "Unit": " %"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Recommended Maximum Fuel Alcohol Content",
+            "Value": "0 ",
+            "Unit": " %"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Fuel Pump Enable Command",
+            "Value": "Off ",
+            "Unit": " "
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Current Gear",
+            "Value": "Unknown ",
+            "Unit": " "
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Brake Pedal Position Sensor Signal",
+            "Value": "No ",
+            "Unit": " "
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Brake Pedal Position Sensor",
+            "Value": "0 ",
+            "Unit": " %"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Brake Booster Pressure Sensor",
+            "Value": "4.060 ",
+            "Unit": " PSI"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " A/C Compressor Operation",
+            "Value": "Not Allowed ",
+            "Unit": " "
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Engine Oil Level Switch",
+            "Value": "OK ",
+            "Unit": " "
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Engine Oil Pressure",
+            "Value": "0.0 ",
+            "Unit": " PSI"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Engine Oil Absolute Pressure Sensor",
+            "Value": "0.0 ",
+            "Unit": " PSI"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Calculated Engine Oil Pressure",
+            "Value": "0.0 ",
+            "Unit": " PSI"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Engine Oil Pressure Control Solenoid Valve Command",
+            "Value": "High Pressure ",
+            "Unit": " "
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Engine Oil Pressure Control Solenoid Valve Control Circuit Low Voltage Test Status",
+            "Value": "Not Run ",
+            "Unit": " "
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Engine Oil Pressure Control Solenoid Valve Control Circuit Open Test Status",
+            "Value": "Not Run ",
+            "Unit": " "
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Engine Oil Pressure Control Solenoid Valve Control Circuit High Voltage Test Status",
+            "Value": "Not Run ",
+            "Unit": " "
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Engine Oil Pressure Control Test Counter",
+            "Value": "0 ",
+            "Unit": " Counts"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Fuel Economy Mode",
+            "Value": "Inactive ",
+            "Unit": " "
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Vehicle Speed Sensor",
+            "Value": "158 ",
+            "Unit": " MPH"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Warm-Ups Since DTC Cleared",
+            "Value": "0 ",
+            "Unit": " Counts"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Warm-Ups without Emission Malfunctions",
+            "Value": "0 ",
+            "Unit": " Counts"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Warm-Ups without Non-Emission Malfunctions",
+            "Value": "0 ",
+            "Unit": " Counts"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Distance Since DTC Cleared",
+            "Value": "0 ",
+            "Unit": " mi"
+          },
+          {
+            "Control Module": " Engine Control Module",
+            "Parameter Name": " Engine Run Time",
+            "Value": "00:00:00 ",
+            "Unit": " "
+          }
+        ]
+      }
+    ],
+    "extractionCount": 8329,
+    "tableCount": 5,
+    "extractionDurationMs": 1,
+    "version": "2.0",
+    "timestamp": 1776390888472
+  }
+}

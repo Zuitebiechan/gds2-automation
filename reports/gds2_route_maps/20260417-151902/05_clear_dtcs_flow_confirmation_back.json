@@ -1,0 +1,81 @@
+{
+  "label": "clear_dtcs_flow_confirmation_back",
+  "timestamp": "2026-04-17T15:19:09",
+  "page": {
+    "page_id": "clear_dtcs_selection",
+    "list_item_count": 0,
+    "buttons": [
+      "Add",
+      "Cancel",
+      "Add Bookmark",
+      "Add All",
+      "Back"
+    ],
+    "evidence": "clear-dtcs selection button cluster present",
+    "has_modal": false,
+    "confidence": "high",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "Add All",
+      "enabled": true
+    },
+    {
+      "text": "Add",
+      "enabled": true
+    },
+    {
+      "text": "Cancel",
+      "enabled": true
+    },
+    {
+      "text": "Add Bookmark",
+      "enabled": true
+    },
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Add",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Add All",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Add Bookmark",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Back",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Cancel",
+      "enabled": true
+    }
+  ],
+  "raw_page_id": "clear_dtcs_selection",
+  "effective_page_id": "clear_dtcs_selection",
+  "node_id": "bb662b9141ffa7f6"
+}

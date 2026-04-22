@@ -1,0 +1,88 @@
+{
+  "label": "learn_function_recover_menu_01",
+  "timestamp": "2026-04-17T11:23:58",
+  "page": {
+    "page_id": "data_list",
+    "list_item_count": 2,
+    "buttons": [
+      "Vehicle Menu",
+      "Back",
+      "Enter",
+      "Home"
+    ],
+    "evidence": "has list items + Back button, no specific markers",
+    "has_modal": false,
+    "confidence": "medium",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "Home",
+      "enabled": true
+    },
+    {
+      "text": "Vehicle Menu",
+      "enabled": true
+    },
+    {
+      "text": "Enter",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [
+    "Learn Functions",
+    "Reset Functions"
+  ],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Back",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Enter",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Home",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Vehicle Menu",
+      "enabled": true
+    },
+    {
+      "kind": "list_item",
+      "label": "Learn Functions",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Reset Functions",
+      "list_index": 0
+    }
+  ],
+  "raw_page_id": "data_list",
+  "effective_page_id": "data_list",
+  "node_id": "9a2a0958b5f82dee"
+}

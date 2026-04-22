@@ -31,6 +31,7 @@ from datetime import datetime
 from typing import Dict, List, Callable, Optional, Any, Tuple
 from dataclasses import dataclass, field
 
+from diagnostic_platform.session_observability import emit_collector_event
 from diagnostic_platform.safe_utils import (
     json_dumps_safe as _json_dumps_safe,
     mapping_or_empty as _mapping_or_empty,
@@ -358,6 +359,12 @@ class AgentDataCollector:
         self._thread.start()
         logger.info("Agent collector started interval=%sms", self.interval_ms)
         logger.debug("Agent collector JSON path: %s", self._json_path)
+        emit_collector_event(
+            "agent.collector.started",
+            reason="collector_started",
+            interval_ms=self.interval_ms,
+            json_path=str(self._json_path),
+        )
 
     def stop(self):
         """Stop polling."""
@@ -369,6 +376,12 @@ class AgentDataCollector:
             self._guard_thread.join(timeout=5)
             self._guard_thread = None
         logger.info("Agent collector stopped")
+        emit_collector_event(
+            "agent.collector.stopped",
+            reason="collector_stopped",
+            json_path=str(self._json_path),
+            collection_count=self._collection_count,
+        )
 
     @property
     def is_running(self) -> bool:
@@ -439,6 +452,14 @@ class AgentDataCollector:
         }
 
         if not self._json_path.exists():
+            emit_collector_event(
+                "agent.collector.availability",
+                status="error",
+                failure_code="json_missing",
+                reason="latest_json_missing",
+                json_path=str(self._json_path),
+                available=False,
+            )
             return result
 
         try:
@@ -466,6 +487,18 @@ class AgentDataCollector:
             result['extraction_count'] = data.get('extractionCount', 0)
             result['version'] = data.get('version', '1.0')
             result['available'] = age < _AGENT_AVAILABILITY_MAX_AGE_SECONDS
+            emit_collector_event(
+                "agent.collector.availability",
+                status="ok" if result["available"] else "error",
+                failure_code=None if result["available"] else "stale_or_unreadable",
+                reason=result.get("error") or ("available" if result["available"] else "stale"),
+                json_path=str(self._json_path),
+                available=bool(result["available"]),
+                age_seconds=result.get("age_seconds"),
+                extraction_count=result.get("extraction_count"),
+                version=result.get("version"),
+                attempts=result.get("attempts"),
+            )
 
         except Exception as e:
             result['error'] = f"{type(e).__name__}: {e}"
@@ -473,6 +506,14 @@ class AgentDataCollector:
                 "Error checking agent availability path=%s error=%s",
                 self._json_path,
                 result['error'],
+            )
+            emit_collector_event(
+                "agent.collector.availability",
+                status="error",
+                failure_code=type(e).__name__,
+                reason=result["error"],
+                json_path=str(self._json_path),
+                available=False,
             )
 
         return result
@@ -555,6 +596,13 @@ class AgentDataCollector:
         if not result.get('ok', False):
             self._fatal_error = str(result.get('error') or 'Data Display guard failed.')
             logger.warning("Agent collector guard failed: %s", self._fatal_error)
+            emit_collector_event(
+                "agent.collector.guard_failed",
+                status="error",
+                failure_code="guard_failed",
+                reason=self._fatal_error,
+                guard_payload=dict(result),
+            )
             self._running = False
             if self.on_error:
                 self.on_error(self._fatal_error)
@@ -599,6 +647,16 @@ class AgentDataCollector:
                     1,
                 )
 
+            emit_collector_event(
+                "agent.collector.snapshot",
+                reason="snapshot_read",
+                extraction_count=snapshot.extraction_count,
+                collector_lag_ms=snapshot.collector_lag_ms,
+                page_context=snapshot.page_context,
+                dtc_count=len(snapshot.dtcs),
+                parameter_count=len(snapshot.parameters),
+            )
+
             return snapshot
 
         except json.JSONDecodeError:
@@ -606,6 +664,13 @@ class AgentDataCollector:
             return None
         except Exception as e:
             logger.debug(f"Error reading agent JSON: {e}")
+            emit_collector_event(
+                "agent.collector.error",
+                status="error",
+                failure_code=type(e).__name__,
+                reason=str(e),
+                json_path=str(self._json_path),
+            )
             return None
 
     def _detect_param_changes(self, new_params: List[dict]) -> List[dict]:

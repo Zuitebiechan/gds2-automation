@@ -162,6 +162,12 @@ Current routes:
 
 Use this surface when you want standalone UI navigation behavior without creating a business session.
 
+Current runtime binding rule:
+
+- direct `/api/navigate/*` no longer bootstraps a backend/controller/viewer on demand
+- `POST /api/navigate/start` requires an already-active worker-scoped backend bundle with a navigation runtime
+- when no active backend navigation runtime is available, `POST /api/navigate/start` returns `409 Conflict`
+
 ## Compatibility Notes
 
 - Clients should migrate to `backend_name`.

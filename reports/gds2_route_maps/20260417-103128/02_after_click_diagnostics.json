@@ -1,0 +1,80 @@
+{
+  "label": "after_click_diagnostics",
+  "timestamp": "2026-04-17T10:31:29",
+  "page": {
+    "page_id": "vehicle_selection",
+    "list_item_count": 0,
+    "buttons": [
+      "Clear Vehicle Selection",
+      "Disconnect",
+      "Select Device",
+      "Back",
+      "Copy VIN",
+      "Read VIN"
+    ],
+    "evidence": "vehicle-specific button present",
+    "has_modal": false,
+    "confidence": "high",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "Read VIN",
+      "enabled": true
+    },
+    {
+      "text": "Clear Vehicle Selection",
+      "enabled": true
+    },
+    {
+      "text": "Copy VIN",
+      "enabled": true
+    },
+    {
+      "text": "Disconnect",
+      "enabled": true
+    },
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Back",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Clear Vehicle Selection",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Copy VIN",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Disconnect",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Read VIN",
+      "enabled": true
+    }
+  ],
+  "node_id": "b45227ef942fd20b"
+}

@@ -1,0 +1,764 @@
+{
+  "version": 1,
+  "created_at": "2026-04-17T10:37:38",
+  "nodes": {
+    "9673198d963c50ce": {
+      "node_id": "9673198d963c50ce",
+      "page_id": "loading",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Clear Vehicle Selection",
+          "enabled": true
+        },
+        {
+          "text": "Copy VIN",
+          "enabled": true
+        },
+        {
+          "text": "Disconnect",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Read VIN",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Clear Vehicle Selection",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Copy VIN",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Disconnect",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Read VIN",
+          "enabled": true
+        }
+      ],
+      "first_seen_label": "start"
+    },
+    "f9d476fe3f522316": {
+      "node_id": "f9d476fe3f522316",
+      "page_id": "unknown",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        }
+      ],
+      "first_seen_label": "after_click_enter"
+    },
+    "a6f0f2ddfbe76e61": {
+      "node_id": "a6f0f2ddfbe76e61",
+      "page_id": "diagnostics_menu",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "Module Diagnostics",
+        "Vehicle Diagnostics",
+        "Session Manager"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Vehicle Diagnostics",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Session Manager",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "unknown"
+    },
+    "e0aa2bc3de8c725e": {
+      "node_id": "e0aa2bc3de8c725e",
+      "page_id": "module_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "[T1] Accessory DC/AC Power Inverter Module",
+        "[K124] Active Safety Control Module",
+        "[T3] Amplifier",
+        "[K9] Body Control Module",
+        "[K17] Electronic Brake Control Module",
+        "[K20] Engine Control Module",
+        "[K109] Frontview Camera Module",
+        "[K26] Headlamp Control Module",
+        "[K74] Human Machine Interface Control Module",
+        "[A26] HVAC Controls",
+        "[K33] HVAC Control Module",
+        "[K36] Inflatable Restraint Sensing and Diagnostic Module",
+        "[P16] Instrument Cluster",
+        "[K84] Keyless Entry Control Module",
+        "[B218L] Left Side Object Detection Control Module",
+        "[K39] Liftgate Control Module",
+        "[B233B] Long Range Radar Sensor Module",
+        "[B119] Multi-Axis Acceleration Sensor Module",
+        "[K182] Parking Assist Control Module",
+        "[K43] Power Steering Control Module",
+        "[A11] Radio",
+        "[A22] Radio Controls",
+        "[K47] Rear Differential Clutch Control Module",
+        "[B218R] Right Side Object Detection Control Module",
+        "[K40D] Seat Memory Control Module - Driver",
+        "[K56] Serial Data Gateway Module",
+        "[K60] Steering Column Lock Control Module",
+        "[B99] Steering Wheel Angle Sensor Module",
+        "[K19] Suspension Control Module",
+        "[K73] Telematics Communication Interface Control Module",
+        "[K71] Transmission Control Module",
+        "[K157] Video Processing Control Module"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "[T1] Accessory DC/AC Power Inverter Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K124] Active Safety Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[T3] Amplifier",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K9] Body Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K17] Electronic Brake Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K20] Engine Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K109] Frontview Camera Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K26] Headlamp Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K74] Human Machine Interface Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[A26] HVAC Controls",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K33] HVAC Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K36] Inflatable Restraint Sensing and Diagnostic Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[P16] Instrument Cluster",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K84] Keyless Entry Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[B218L] Left Side Object Detection Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K39] Liftgate Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[B233B] Long Range Radar Sensor Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[B119] Multi-Axis Acceleration Sensor Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K182] Parking Assist Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K43] Power Steering Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[A11] Radio",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[A22] Radio Controls",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K47] Rear Differential Clutch Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[B218R] Right Side Object Detection Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K40D] Seat Memory Control Module - Driver",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K56] Serial Data Gateway Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K60] Steering Column Lock Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[B99] Steering Wheel Angle Sensor Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K19] Suspension Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K73] Telematics Communication Interface Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K71] Transmission Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K157] Video Processing Control Module",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "after_module_diagnostics"
+    },
+    "d422c2dba7595d24": {
+      "node_id": "d422c2dba7595d24",
+      "page_id": "module_submenu",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "Diagnostic Trouble Codes (DTC)",
+        "Event Information",
+        "Identification Information",
+        "Data Display",
+        "Control Functions",
+        "Configuration/Reset Functions",
+        "Inspection/Maintenance System Information"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Diagnostic Trouble Codes (DTC)",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Event Information",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Identification Information",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Data Display",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Control Functions",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Configuration/Reset Functions",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Inspection/Maintenance System Information",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "after_module_selection"
+    },
+    "591fc220c5983ac9": {
+      "node_id": "591fc220c5983ac9",
+      "page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "Engine Data",
+        "Automatic Transmission Data",
+        "Stop/Start System Data",
+        "CMP Actuator Data",
+        "Engine Cooling and HVAC Data",
+        "Cruise Control, PTO and Traction Control Data",
+        "Electrical and Immobilizer Data",
+        "Engine Mechanical Data",
+        "EVAP Data",
+        "Exhaust Aftertreatment Data",
+        "Fuel Alcohol Content Event Data",
+        "Fuel Injector Data",
+        "Fuel System Data - High Pressure",
+        "Fuel System Data - Low Pressure",
+        "Fuel Trim Data",
+        "HO2S Data",
+        "Ignition Data",
+        "Induction Data",
+        "Instrument Cluster Data",
+        "Misfire Data",
+        "TAC Data"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Automatic Transmission Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Stop/Start System Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "CMP Actuator Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Cooling and HVAC Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Cruise Control, PTO and Traction Control Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Electrical and Immobilizer Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Mechanical Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "EVAP Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Exhaust Aftertreatment Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Alcohol Content Event Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Injector Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel System Data - High Pressure",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel System Data - Low Pressure",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Trim Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "HO2S Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Ignition Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Induction Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Instrument Cluster Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Misfire Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "TAC Data",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "after_submenu_selection"
+    },
+    "fa790c308eac35c4": {
+      "node_id": "fa790c308eac35c4",
+      "page_id": "data_display",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Clear DTCs",
+          "enabled": true
+        },
+        {
+          "text": "Create Report",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "authored",
+        "Display Name",
+        "ECU",
+        "Units",
+        "Custom Order"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Clear DTCs",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Create Report",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "after_data_selection"
+    }
+  },
+  "edges": [
+    {
+      "source_id": "9673198d963c50ce",
+      "target_id": "f9d476fe3f522316",
+      "source_page_id": "loading",
+      "target_page_id": "unknown",
+      "action": {
+        "kind": "button",
+        "label": "Enter"
+      },
+      "timestamp": "2026-04-17T10:37:39"
+    },
+    {
+      "source_id": "a6f0f2ddfbe76e61",
+      "target_id": "e0aa2bc3de8c725e",
+      "source_page_id": "diagnostics_menu",
+      "target_page_id": "module_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Module Diagnostics",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:37:43"
+    },
+    {
+      "source_id": "e0aa2bc3de8c725e",
+      "target_id": "d422c2dba7595d24",
+      "source_page_id": "module_list",
+      "target_page_id": "module_submenu",
+      "action": {
+        "kind": "list_item",
+        "label": "Engine Control Module",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:37:44"
+    },
+    {
+      "source_id": "d422c2dba7595d24",
+      "target_id": "591fc220c5983ac9",
+      "source_page_id": "module_submenu",
+      "target_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Data Display",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:37:45"
+    },
+    {
+      "source_id": "591fc220c5983ac9",
+      "target_id": "fa790c308eac35c4",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Engine Data",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:37:47"
+    }
+  ]
+}

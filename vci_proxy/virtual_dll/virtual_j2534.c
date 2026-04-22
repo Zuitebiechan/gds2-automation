@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <stdarg.h>
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -69,7 +70,311 @@ static CRITICAL_SECTION g_cs;
 
 // Logging
 static FILE* g_log_file = NULL;
+static FILE* g_jsonl_file = NULL;
 static LARGE_INTEGER g_perf_freq;
+static char g_component_instance_id[128] = {0};
+static unsigned long g_readmsgs_buffer_empty_count = 0;
+static double g_readmsgs_buffer_empty_last_emit_ms = 0.0;
+
+static void ensure_dir_tree(const char* dir_path) {
+    char temp[MAX_PATH];
+    char* p;
+    if (dir_path == NULL || !dir_path[0]) {
+        return;
+    }
+    strcpy_s(temp, sizeof(temp), dir_path);
+    for (p = temp + 3; *p; ++p) {
+        if (*p == '\\' || *p == '/') {
+            char saved = *p;
+            *p = '\0';
+            CreateDirectoryA(temp, NULL);
+            *p = saved;
+        }
+    }
+    CreateDirectoryA(temp, NULL);
+}
+
+static void json_escape(FILE* out, const char* value) {
+    const unsigned char* p = (const unsigned char*)(value ? value : "");
+    fputc('"', out);
+    while (*p) {
+        switch (*p) {
+            case '\\': fputs("\\\\", out); break;
+            case '"': fputs("\\\"", out); break;
+            case '\n': fputs("\\n", out); break;
+            case '\r': fputs("\\r", out); break;
+            case '\t': fputs("\\t", out); break;
+            default:
+                if (*p < 0x20) {
+                    fprintf(out, "\\u%04x", (unsigned int)*p);
+                } else {
+                    fputc(*p, out);
+                }
+                break;
+        }
+        ++p;
+    }
+    fputc('"', out);
+}
+
+static void jsonl_write_timestamp(FILE* out) {
+    SYSTEMTIME st;
+    GetSystemTime(&st);
+    fprintf(
+        out,
+        "\"%04d-%02d-%02dT%02d:%02d:%02d.%03dZ\"",
+        st.wYear,
+        st.wMonth,
+        st.wDay,
+        st.wHour,
+        st.wMinute,
+        st.wSecond,
+        st.wMilliseconds
+    );
+}
+
+static const char* msg_name(unsigned short msg_type) {
+    switch (msg_type) {
+        case MSG_OPEN_REQ: return "OPEN_REQ";
+        case MSG_CLOSE_REQ: return "CLOSE_REQ";
+        case MSG_CONNECT_REQ: return "CONNECT_REQ";
+        case MSG_DISCONNECT_REQ: return "DISCONNECT_REQ";
+        case MSG_READ_MSGS_REQ: return "READ_MSGS_REQ";
+        case MSG_WRITE_MSGS_REQ: return "WRITE_MSGS_REQ";
+        case MSG_IOCTL_REQ: return "IOCTL_REQ";
+        case MSG_START_FILTER_REQ: return "START_FILTER_REQ";
+        case MSG_STOP_FILTER_REQ: return "STOP_FILTER_REQ";
+        case MSG_READ_VERSION_REQ: return "READ_VERSION_REQ";
+        default: return "UNKNOWN";
+    }
+}
+
+static void jsonl_init(void) {
+    char json_path[MAX_PATH];
+    char dir_path[MAX_PATH];
+    char* programdata = getenv("PROGRAMDATA");
+    char* userprofile = getenv("USERPROFILE");
+    DWORD pid = GetCurrentProcessId();
+    SYSTEMTIME st;
+
+    if (programdata && programdata[0]) {
+        sprintf_s(
+            json_path,
+            sizeof(json_path),
+            "%s\\RPA_Diagnostic\\observability\\cloud\\raw\\virtual_j2534-%lu.jsonl",
+            programdata,
+            (unsigned long)pid
+        );
+    } else if (userprofile && userprofile[0]) {
+        sprintf_s(
+            json_path,
+            sizeof(json_path),
+            "%s\\gds2-data\\virtual_j2534-observability.jsonl",
+            userprofile
+        );
+    } else {
+        strcpy_s(json_path, sizeof(json_path), "C:\\virtual_j2534-observability.jsonl");
+    }
+
+    strcpy_s(dir_path, sizeof(dir_path), json_path);
+    {
+        char* last_slash = strrchr(dir_path, '\\');
+        if (last_slash != NULL) {
+            *last_slash = '\0';
+            ensure_dir_tree(dir_path);
+        }
+    }
+
+    g_jsonl_file = fopen(json_path, "a");
+    GetSystemTime(&st);
+    sprintf_s(
+        g_component_instance_id,
+        sizeof(g_component_instance_id),
+        "virtual_j2534:%lu:%04d%02d%02dT%02d%02d%02dZ",
+        (unsigned long)pid,
+        st.wYear,
+        st.wMonth,
+        st.wDay,
+        st.wHour,
+        st.wMinute,
+        st.wSecond
+    );
+}
+
+static void jsonl_close(void) {
+    if (g_jsonl_file) {
+        fclose(g_jsonl_file);
+        g_jsonl_file = NULL;
+    }
+}
+
+static void jsonl_emit_event(
+    const char* event_type,
+    const char* operation_kind,
+    unsigned long dll_seq,
+    const char* status,
+    const char* failure_code,
+    const char* failure_domain,
+    const char* reason,
+    double duration_ms,
+    long return_code,
+    unsigned short msg_type,
+    unsigned long payload_len,
+    unsigned long extra_value,
+    const char* extra_key
+) {
+    if (!g_jsonl_file) return;
+
+    fputc('{', g_jsonl_file);
+    fputs("\"schema_version\":\"observability.v1\",", g_jsonl_file);
+    fputs("\"ts\":", g_jsonl_file);
+    jsonl_write_timestamp(g_jsonl_file);
+    fputs(",\"component\":\"virtual_j2534\",", g_jsonl_file);
+    fputs("\"component_instance_id\":", g_jsonl_file);
+    json_escape(g_jsonl_file, g_component_instance_id);
+    fputs(",\"event_type\":", g_jsonl_file);
+    json_escape(g_jsonl_file, event_type);
+    fputs(",\"session_id\":null,", g_jsonl_file);
+    fputs("\"connection_epoch\":null,", g_jsonl_file);
+    fprintf(g_jsonl_file, "\"dll_seq\":%lu,", dll_seq);
+    fputs("\"proxy_seq\":null,", g_jsonl_file);
+    fputs("\"worker_request_id\":null,", g_jsonl_file);
+    fputs("\"operation_kind\":", g_jsonl_file);
+    json_escape(g_jsonl_file, operation_kind ? operation_kind : "");
+    fputs(",\"status\":", g_jsonl_file);
+    json_escape(g_jsonl_file, status ? status : "ok");
+    fputs(",\"failure_code\":", g_jsonl_file);
+    if (failure_code) json_escape(g_jsonl_file, failure_code); else fputs("null", g_jsonl_file);
+    fputs(",\"failure_domain\":", g_jsonl_file);
+    json_escape(g_jsonl_file, failure_domain ? failure_domain : "unknown");
+    fputs(",\"reason\":", g_jsonl_file);
+    if (reason) json_escape(g_jsonl_file, reason); else fputs("null", g_jsonl_file);
+    fprintf(g_jsonl_file, ",\"duration_ms\":%.3f", duration_ms >= 0.0 ? duration_ms : 0.0);
+    fputs(",\"hw_ms\":null,", g_jsonl_file);
+    fputs("\"network_ms\":null,", g_jsonl_file);
+    fputs("\"page\":null,\"module\":null,\"data_category\":null,", g_jsonl_file);
+    fputs("\"symptom\":null,\"impact_scope\":\"virtual_j2534\",", g_jsonl_file);
+    fputs("\"next_checks\":[],\"redaction_applied\":[],", g_jsonl_file);
+    fputs("\"j2534_method\":", g_jsonl_file);
+    json_escape(g_jsonl_file, operation_kind ? operation_kind : "");
+    fputs(",\"msg_name\":", g_jsonl_file);
+    json_escape(g_jsonl_file, msg_name(msg_type));
+    fprintf(g_jsonl_file, ",\"payload_length\":%lu", payload_len);
+    if (return_code >= 0) {
+        fprintf(g_jsonl_file, ",\"return_code\":%ld", return_code);
+    } else {
+        fputs(",\"return_code\":null", g_jsonl_file);
+    }
+    if (extra_key != NULL && extra_key[0]) {
+        fputs(",\"", g_jsonl_file);
+        fputs(extra_key, g_jsonl_file);
+        fprintf(g_jsonl_file, "\":%lu", extra_value);
+    }
+    fputs("}\n", g_jsonl_file);
+    fflush(g_jsonl_file);
+}
+
+static void jsonl_flush_readmsgs_buffer_empty(void) {
+    double now_ms = get_time_ms();
+    if (g_readmsgs_buffer_empty_count == 0) {
+        return;
+    }
+    if ((now_ms - g_readmsgs_buffer_empty_last_emit_ms) < 5000.0 &&
+        g_readmsgs_buffer_empty_count < 50) {
+        return;
+    }
+    jsonl_emit_event(
+        "j2534.read_msgs.buffer_empty_aggregate",
+        "PassThruReadMsgs",
+        0,
+        "ok",
+        NULL,
+        "unknown",
+        "BUFFER_EMPTY",
+        0.0,
+        ERR_BUFFER_EMPTY,
+        MSG_READ_MSGS_REQ,
+        0,
+        g_readmsgs_buffer_empty_count,
+        "buffer_empty_count"
+    );
+    g_readmsgs_buffer_empty_count = 0;
+    g_readmsgs_buffer_empty_last_emit_ms = now_ms;
+}
+
+static void emit_j2534_call_started(
+    const char* method,
+    unsigned long dll_seq,
+    unsigned short msg_type,
+    unsigned long payload_len
+) {
+    jsonl_emit_event(
+        "j2534.call.started",
+        method,
+        dll_seq,
+        "started",
+        NULL,
+        "unknown",
+        "call_started",
+        0.0,
+        -1,
+        msg_type,
+        payload_len,
+        0,
+        NULL
+    );
+}
+
+static void emit_j2534_call_finished(
+    const char* method,
+    unsigned long dll_seq,
+    unsigned short msg_type,
+    unsigned long payload_len,
+    double duration_ms,
+    long return_code
+) {
+    jsonl_emit_event(
+        "j2534.call.finished",
+        method,
+        dll_seq,
+        "ok",
+        NULL,
+        "unknown",
+        error_name(return_code),
+        duration_ms,
+        return_code,
+        msg_type,
+        payload_len,
+        0,
+        NULL
+    );
+}
+
+static void emit_j2534_call_failed(
+    const char* method,
+    unsigned long dll_seq,
+    unsigned short msg_type,
+    unsigned long payload_len,
+    double duration_ms,
+    long return_code,
+    const char* reason
+) {
+    jsonl_emit_event(
+        "j2534.call.failed",
+        method,
+        dll_seq,
+        "error",
+        error_name(return_code),
+        "cloud_dll_local_proxy",
+        reason,
+        duration_ms,
+        return_code,
+        msg_type,
+        payload_len,
+        0,
+        NULL
+    );
+}
 
 // ============================================================================
 // Logging
@@ -243,6 +548,21 @@ static BOOL connect_to_server(void) {
     if (g_socket == INVALID_SOCKET) {
         sprintf_s(g_last_error, sizeof(g_last_error), "Socket creation failed");
         log_msg("ERROR: Socket creation failed");
+        jsonl_emit_event(
+            "dll.socket.connect_failed",
+            "socket_connect",
+            0,
+            "error",
+            "socket_creation_failed",
+            "cloud_dll_local_proxy",
+            "socket creation failed",
+            0.0,
+            -1,
+            0,
+            0,
+            0,
+            NULL
+        );
         return FALSE;
     }
 
@@ -266,12 +586,42 @@ static BOOL connect_to_server(void) {
         sprintf_s(g_last_error, sizeof(g_last_error),
                   "Connection to %s:%d failed", SERVER_HOST, SERVER_PORT);
         log_msg("ERROR: Connection failed (WSA=%d)", WSAGetLastError());
+        jsonl_emit_event(
+            "dll.socket.connect_failed",
+            "socket_connect",
+            0,
+            "error",
+            "connect_failed",
+            "cloud_dll_local_proxy",
+            g_last_error,
+            0.0,
+            -1,
+            0,
+            0,
+            (unsigned long)WSAGetLastError(),
+            "wsa_error"
+        );
         closesocket(g_socket);
         g_socket = INVALID_SOCKET;
         return FALSE;
     }
 
     log_msg("Connected to server");
+    jsonl_emit_event(
+        "dll.socket.connected",
+        "socket_connect",
+        0,
+        "ok",
+        NULL,
+        "unknown",
+        "connected",
+        0.0,
+        -1,
+        0,
+        0,
+        0,
+        NULL
+    );
     return TRUE;
 }
 
@@ -281,6 +631,21 @@ static void disconnect_socket(void) {
         closesocket(g_socket);
         g_socket = INVALID_SOCKET;
         log_msg("Socket disconnected");
+        jsonl_emit_event(
+            "dll.socket.disconnected",
+            "socket_disconnect",
+            0,
+            "error",
+            "socket_disconnected",
+            "cloud_dll_local_proxy",
+            "socket disconnected",
+            0.0,
+            -1,
+            0,
+            0,
+            0,
+            NULL
+        );
     }
 }
 
@@ -291,7 +656,8 @@ static const DWORD RETRY_DELAYS[] = { 100, 500, 1000 };
 // Send message and receive response (with retry on transient failures)
 static long send_recv(unsigned short msg_type, const unsigned char* body,
                       unsigned long body_len, unsigned char* resp_body,
-                      unsigned long* resp_len, unsigned long max_resp_len) {
+                      unsigned long* resp_len, unsigned long max_resp_len,
+                      unsigned long* used_sequence) {
     unsigned char header[HEADER_SIZE];
     unsigned char resp_header[HEADER_SIZE];
     unsigned long total_len = HEADER_SIZE + body_len;
@@ -305,11 +671,29 @@ static long send_recv(unsigned short msg_type, const unsigned char* body,
 
     g_sequence++;
     sequence = g_sequence;
+    if (used_sequence != NULL) {
+        *used_sequence = sequence;
+    }
 
     for (retry = 0; retry <= MAX_RETRIES; retry++) {
         if (retry > 0) {
             log_msg("RETRY %d/%d for seq=%lu (delay=%lums)",
                     retry, MAX_RETRIES, sequence, RETRY_DELAYS[retry - 1]);
+            jsonl_emit_event(
+                "dll.request.retry",
+                msg_name(msg_type),
+                sequence,
+                "error",
+                "retry",
+                "cloud_dll_local_proxy",
+                "transient transport failure",
+                0.0,
+                -1,
+                msg_type,
+                body_len,
+                (unsigned long)retry,
+                "retry_index"
+            );
             Sleep(RETRY_DELAYS[retry - 1]);
         }
 
@@ -327,6 +711,21 @@ static long send_recv(unsigned short msg_type, const unsigned char* body,
         sent = send_exact(g_socket, (const char*)header, HEADER_SIZE);
         if (sent != HEADER_SIZE) {
             log_msg("ERROR: Send header failed (sent=%d, WSA=%d)", sent, WSAGetLastError());
+            jsonl_emit_event(
+                "dll.socket.send_failed",
+                msg_name(msg_type),
+                sequence,
+                "error",
+                "send_header_failed",
+                "cloud_dll_local_proxy",
+                "send header failed",
+                0.0,
+                -1,
+                msg_type,
+                body_len,
+                (unsigned long)WSAGetLastError(),
+                "wsa_error"
+            );
             disconnect_socket();
             continue;
         }
@@ -336,6 +735,21 @@ static long send_recv(unsigned short msg_type, const unsigned char* body,
             sent = send_exact(g_socket, (const char*)body, body_len);
             if (sent != (int)body_len) {
                 log_msg("ERROR: Send body failed (sent=%d/%lu, WSA=%d)", sent, body_len, WSAGetLastError());
+                jsonl_emit_event(
+                    "dll.socket.send_failed",
+                    msg_name(msg_type),
+                    sequence,
+                    "error",
+                    "send_body_failed",
+                    "cloud_dll_local_proxy",
+                    "send body failed",
+                    0.0,
+                    -1,
+                    msg_type,
+                    body_len,
+                    (unsigned long)WSAGetLastError(),
+                    "wsa_error"
+                );
                 disconnect_socket();
                 continue;
             }
@@ -345,6 +759,21 @@ static long send_recv(unsigned short msg_type, const unsigned char* body,
         received = recv_exact(g_socket, (char*)resp_header, HEADER_SIZE);
         if (received != HEADER_SIZE) {
             log_msg("ERROR: Recv header failed (received=%d, WSA=%d)", received, WSAGetLastError());
+            jsonl_emit_event(
+                "dll.socket.recv_failed",
+                msg_name(msg_type),
+                sequence,
+                "error",
+                "recv_header_failed",
+                "cloud_dll_local_proxy",
+                "recv header failed",
+                0.0,
+                -1,
+                msg_type,
+                body_len,
+                (unsigned long)WSAGetLastError(),
+                "wsa_error"
+            );
             disconnect_socket();
             continue;
         }
@@ -377,6 +806,21 @@ static long send_recv(unsigned short msg_type, const unsigned char* body,
             received = recv_exact(g_socket, (char*)resp_body, *resp_len);
             if (received != (int)*resp_len) {
                 log_msg("ERROR: Recv body failed (received=%d/%lu, WSA=%d)", received, *resp_len, WSAGetLastError());
+                jsonl_emit_event(
+                    "dll.socket.recv_failed",
+                    msg_name(msg_type),
+                    sequence,
+                    "error",
+                    "recv_body_failed",
+                    "cloud_dll_local_proxy",
+                    "recv body failed",
+                    0.0,
+                    -1,
+                    msg_type,
+                    body_len,
+                    (unsigned long)WSAGetLastError(),
+                    "wsa_error"
+                );
                 disconnect_socket();
                 continue;
             }
@@ -385,6 +829,21 @@ static long send_recv(unsigned short msg_type, const unsigned char* body,
         // Success
         if (retry > 0) {
             log_msg("RETRY succeeded on attempt %d for seq=%lu", retry + 1, sequence);
+            jsonl_emit_event(
+                "dll.request.retry_succeeded",
+                msg_name(msg_type),
+                sequence,
+                "ok",
+                NULL,
+                "unknown",
+                "retry succeeded",
+                0.0,
+                -1,
+                msg_type,
+                body_len,
+                (unsigned long)(retry + 1),
+                "attempt"
+            );
         }
         LeaveCriticalSection(&g_cs);
         return STATUS_NOERROR;
@@ -392,6 +851,21 @@ static long send_recv(unsigned short msg_type, const unsigned char* body,
 
     // All retries exhausted
     log_msg("ERROR: All %d retries exhausted for seq=%lu", MAX_RETRIES + 1, sequence);
+    jsonl_emit_event(
+        "dll.request.retry_exhausted",
+        msg_name(msg_type),
+        sequence,
+        "error",
+        "retry_exhausted",
+        "cloud_dll_local_proxy",
+        "all retries exhausted",
+        0.0,
+        ERR_DEVICE_NOT_CONNECTED,
+        msg_type,
+        body_len,
+        (unsigned long)(MAX_RETRIES + 1),
+        "attempts"
+    );
     LeaveCriticalSection(&g_cs);
     return ERR_DEVICE_NOT_CONNECTED;
 }
@@ -407,6 +881,7 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
                 WSAStartup(MAKEWORD(2, 2), &wsaData);
                 g_initialized = TRUE;
                 log_init();
+                jsonl_init();
                 if (GetEnvironmentVariableA("VCI_PROXY_PORT", port_buf, sizeof(port_buf))) {
                     int port = atoi(port_buf);
                     if (port > 0 && port < 65536) {
@@ -421,8 +896,10 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
                 closesocket(g_socket);
                 g_socket = INVALID_SOCKET;
             }
+            jsonl_flush_readmsgs_buffer_empty();
             WSACleanup();
             log_close();
+            jsonl_close();
             DeleteCriticalSection(&g_cs);
             break;
     }
@@ -438,6 +915,7 @@ J2534_API long __stdcall PassThruOpen(void* pName, unsigned long* pDeviceID) {
     unsigned char resp[64];
     unsigned long resp_len;
     unsigned long body_len = 0;
+    unsigned long dll_seq = 0;
     long ret;
     double start_ms;
 
@@ -462,10 +940,12 @@ J2534_API long __stdcall PassThruOpen(void* pName, unsigned long* pDeviceID) {
 
     start_ms = get_time_ms();
     log_msg(">> PassThruOpen(name=%s)", pName ? (const char*)pName : "NULL");
+    emit_j2534_call_started("PassThruOpen", g_sequence + 1, MSG_OPEN_REQ, body_len);
 
-    ret = send_recv(MSG_OPEN_REQ, body, body_len, resp, &resp_len, sizeof(resp));
+    ret = send_recv(MSG_OPEN_REQ, body, body_len, resp, &resp_len, sizeof(resp), &dll_seq);
     if (ret != STATUS_NOERROR) {
         log_msg("<< PassThruOpen -> %s (%.1fms)", error_name(ret), get_time_ms() - start_ms);
+        emit_j2534_call_failed("PassThruOpen", dll_seq, MSG_OPEN_REQ, body_len, get_time_ms() - start_ms, ret, "transport_failed");
         return ret;
     }
 
@@ -474,10 +954,16 @@ J2534_API long __stdcall PassThruOpen(void* pName, unsigned long* pDeviceID) {
         *pDeviceID = read_uint32_be(resp + 4);
         log_msg("<< PassThruOpen -> %s, deviceId=%lu (%.1fms)",
                 error_name(return_code), *pDeviceID, get_time_ms() - start_ms);
+        if (return_code == STATUS_NOERROR) {
+            emit_j2534_call_finished("PassThruOpen", dll_seq, MSG_OPEN_REQ, body_len, get_time_ms() - start_ms, return_code);
+        } else {
+            emit_j2534_call_failed("PassThruOpen", dll_seq, MSG_OPEN_REQ, body_len, get_time_ms() - start_ms, return_code, "remote_return_code");
+        }
         return return_code;
     }
 
     log_msg("<< PassThruOpen -> FAILED (short response, %.1fms)", get_time_ms() - start_ms);
+    emit_j2534_call_failed("PassThruOpen", dll_seq, MSG_OPEN_REQ, body_len, get_time_ms() - start_ms, ERR_FAILED, "short_response");
     return ERR_FAILED;
 }
 
@@ -485,24 +971,33 @@ J2534_API long __stdcall PassThruClose(unsigned long DeviceID) {
     unsigned char body[4];
     unsigned char resp[16];
     unsigned long resp_len;
+    unsigned long dll_seq = 0;
     long ret;
     double start_ms = get_time_ms();
 
     log_msg(">> PassThruClose(deviceId=%lu)", DeviceID);
+    emit_j2534_call_started("PassThruClose", g_sequence + 1, MSG_CLOSE_REQ, 4);
 
     write_uint32_be(body, DeviceID);
-    ret = send_recv(MSG_CLOSE_REQ, body, 4, resp, &resp_len, sizeof(resp));
+    ret = send_recv(MSG_CLOSE_REQ, body, 4, resp, &resp_len, sizeof(resp), &dll_seq);
     if (ret != STATUS_NOERROR) {
         log_msg("<< PassThruClose -> %s (%.1fms)", error_name(ret), get_time_ms() - start_ms);
+        emit_j2534_call_failed("PassThruClose", dll_seq, MSG_CLOSE_REQ, 4, get_time_ms() - start_ms, ret, "transport_failed");
         return ret;
     }
 
     if (resp_len >= 4) {
         long rc = read_uint32_be(resp);
         log_msg("<< PassThruClose -> %s (%.1fms)", error_name(rc), get_time_ms() - start_ms);
+        if (rc == STATUS_NOERROR) {
+            emit_j2534_call_finished("PassThruClose", dll_seq, MSG_CLOSE_REQ, 4, get_time_ms() - start_ms, rc);
+        } else {
+            emit_j2534_call_failed("PassThruClose", dll_seq, MSG_CLOSE_REQ, 4, get_time_ms() - start_ms, rc, "remote_return_code");
+        }
         return rc;
     }
 
+    emit_j2534_call_failed("PassThruClose", dll_seq, MSG_CLOSE_REQ, 4, get_time_ms() - start_ms, ERR_FAILED, "short_response");
     return ERR_FAILED;
 }
 
@@ -514,6 +1009,7 @@ J2534_API long __stdcall PassThruConnect(unsigned long DeviceID,
     unsigned char body[16];
     unsigned char resp[16];
     unsigned long resp_len;
+    unsigned long dll_seq = 0;
     long ret;
     double start_ms = get_time_ms();
 
@@ -523,15 +1019,17 @@ J2534_API long __stdcall PassThruConnect(unsigned long DeviceID,
 
     log_msg(">> PassThruConnect(dev=%lu, proto=%lu, flags=0x%lx, baud=%lu)",
             DeviceID, ProtocolID, Flags, BaudRate);
+    emit_j2534_call_started("PassThruConnect", g_sequence + 1, MSG_CONNECT_REQ, 16);
 
     write_uint32_be(body, DeviceID);
     write_uint32_be(body + 4, ProtocolID);
     write_uint32_be(body + 8, Flags);
     write_uint32_be(body + 12, BaudRate);
 
-    ret = send_recv(MSG_CONNECT_REQ, body, 16, resp, &resp_len, sizeof(resp));
+    ret = send_recv(MSG_CONNECT_REQ, body, 16, resp, &resp_len, sizeof(resp), &dll_seq);
     if (ret != STATUS_NOERROR) {
         log_msg("<< PassThruConnect -> %s (%.1fms)", error_name(ret), get_time_ms() - start_ms);
+        emit_j2534_call_failed("PassThruConnect", dll_seq, MSG_CONNECT_REQ, 16, get_time_ms() - start_ms, ret, "transport_failed");
         return ret;
     }
 
@@ -540,9 +1038,15 @@ J2534_API long __stdcall PassThruConnect(unsigned long DeviceID,
         *pChannelID = read_uint32_be(resp + 4);
         log_msg("<< PassThruConnect -> %s, channelId=%lu (%.1fms)",
                 error_name(return_code), *pChannelID, get_time_ms() - start_ms);
+        if (return_code == STATUS_NOERROR) {
+            emit_j2534_call_finished("PassThruConnect", dll_seq, MSG_CONNECT_REQ, 16, get_time_ms() - start_ms, return_code);
+        } else {
+            emit_j2534_call_failed("PassThruConnect", dll_seq, MSG_CONNECT_REQ, 16, get_time_ms() - start_ms, return_code, "remote_return_code");
+        }
         return return_code;
     }
 
+    emit_j2534_call_failed("PassThruConnect", dll_seq, MSG_CONNECT_REQ, 16, get_time_ms() - start_ms, ERR_FAILED, "short_response");
     return ERR_FAILED;
 }
 
@@ -550,24 +1054,33 @@ J2534_API long __stdcall PassThruDisconnect(unsigned long ChannelID) {
     unsigned char body[4];
     unsigned char resp[16];
     unsigned long resp_len;
+    unsigned long dll_seq = 0;
     long ret;
     double start_ms = get_time_ms();
 
     log_msg(">> PassThruDisconnect(ch=%lu)", ChannelID);
+    emit_j2534_call_started("PassThruDisconnect", g_sequence + 1, MSG_DISCONNECT_REQ, 4);
 
     write_uint32_be(body, ChannelID);
-    ret = send_recv(MSG_DISCONNECT_REQ, body, 4, resp, &resp_len, sizeof(resp));
+    ret = send_recv(MSG_DISCONNECT_REQ, body, 4, resp, &resp_len, sizeof(resp), &dll_seq);
     if (ret != STATUS_NOERROR) {
         log_msg("<< PassThruDisconnect -> %s (%.1fms)", error_name(ret), get_time_ms() - start_ms);
+        emit_j2534_call_failed("PassThruDisconnect", dll_seq, MSG_DISCONNECT_REQ, 4, get_time_ms() - start_ms, ret, "transport_failed");
         return ret;
     }
 
     if (resp_len >= 4) {
         long rc = read_uint32_be(resp);
         log_msg("<< PassThruDisconnect -> %s (%.1fms)", error_name(rc), get_time_ms() - start_ms);
+        if (rc == STATUS_NOERROR) {
+            emit_j2534_call_finished("PassThruDisconnect", dll_seq, MSG_DISCONNECT_REQ, 4, get_time_ms() - start_ms, rc);
+        } else {
+            emit_j2534_call_failed("PassThruDisconnect", dll_seq, MSG_DISCONNECT_REQ, 4, get_time_ms() - start_ms, rc, "remote_return_code");
+        }
         return rc;
     }
 
+    emit_j2534_call_failed("PassThruDisconnect", dll_seq, MSG_DISCONNECT_REQ, 4, get_time_ms() - start_ms, ERR_FAILED, "short_response");
     return ERR_FAILED;
 }
 
@@ -581,6 +1094,7 @@ J2534_API long __stdcall PassThruReadMsgs(unsigned long ChannelID,
     long ret;
     unsigned long return_code, num_msgs;
     unsigned long offset, i;
+    unsigned long dll_seq = 0;
     double start_ms = get_time_ms();
 
     if (pMsg == NULL || pNumMsgs == NULL) {
@@ -590,11 +1104,13 @@ J2534_API long __stdcall PassThruReadMsgs(unsigned long ChannelID,
     write_uint32_be(body, ChannelID);
     write_uint32_be(body + 4, *pNumMsgs);
     write_uint32_be(body + 8, Timeout);
+    emit_j2534_call_started("PassThruReadMsgs", g_sequence + 1, MSG_READ_MSGS_REQ, 12);
 
-    ret = send_recv(MSG_READ_MSGS_REQ, body, 12, resp, &resp_len, sizeof(resp));
+    ret = send_recv(MSG_READ_MSGS_REQ, body, 12, resp, &resp_len, sizeof(resp), &dll_seq);
     if (ret != STATUS_NOERROR) {
         log_msg("<< ReadMsgs(ch=%lu,t=%lu) -> %s (%.1fms)",
                 ChannelID, Timeout, error_name(ret), get_time_ms() - start_ms);
+        emit_j2534_call_failed("PassThruReadMsgs", dll_seq, MSG_READ_MSGS_REQ, 12, get_time_ms() - start_ms, ret, "transport_failed");
         return ret;
     }
 
@@ -635,6 +1151,17 @@ J2534_API long __stdcall PassThruReadMsgs(unsigned long ChannelID,
     if (return_code != ERR_BUFFER_EMPTY && return_code != ERR_TIMEOUT) {
         log_msg("<< ReadMsgs(ch=%lu) -> %s, msgs=%lu (%.1fms)",
                 ChannelID, error_name(return_code), i, get_time_ms() - start_ms);
+        if (return_code == STATUS_NOERROR) {
+            jsonl_flush_readmsgs_buffer_empty();
+            emit_j2534_call_finished("PassThruReadMsgs", dll_seq, MSG_READ_MSGS_REQ, 12, get_time_ms() - start_ms, return_code);
+        } else {
+            emit_j2534_call_failed("PassThruReadMsgs", dll_seq, MSG_READ_MSGS_REQ, 12, get_time_ms() - start_ms, return_code, "remote_return_code");
+        }
+    } else if (return_code == ERR_BUFFER_EMPTY) {
+        g_readmsgs_buffer_empty_count++;
+        jsonl_flush_readmsgs_buffer_empty();
+    } else {
+        emit_j2534_call_failed("PassThruReadMsgs", dll_seq, MSG_READ_MSGS_REQ, 12, get_time_ms() - start_ms, return_code, "remote_return_code");
     }
 
     return return_code;
@@ -649,6 +1176,7 @@ J2534_API long __stdcall PassThruWriteMsgs(unsigned long ChannelID,
     unsigned long resp_len;
     unsigned long body_len;
     unsigned long i;
+    unsigned long dll_seq = 0;
     long ret;
     double start_ms = get_time_ms();
 
@@ -678,10 +1206,12 @@ J2534_API long __stdcall PassThruWriteMsgs(unsigned long ChannelID,
 
     // Update actual message count in case loop broke early
     write_uint32_be(body + 4, i);
+    emit_j2534_call_started("PassThruWriteMsgs", g_sequence + 1, MSG_WRITE_MSGS_REQ, body_len);
 
-    ret = send_recv(MSG_WRITE_MSGS_REQ, body, body_len, resp, &resp_len, sizeof(resp));
+    ret = send_recv(MSG_WRITE_MSGS_REQ, body, body_len, resp, &resp_len, sizeof(resp), &dll_seq);
     if (ret != STATUS_NOERROR) {
         log_msg("<< WriteMsgs -> %s (%.1fms)", error_name(ret), get_time_ms() - start_ms);
+        emit_j2534_call_failed("PassThruWriteMsgs", dll_seq, MSG_WRITE_MSGS_REQ, body_len, get_time_ms() - start_ms, ret, "transport_failed");
         return ret;
     }
 
@@ -690,9 +1220,15 @@ J2534_API long __stdcall PassThruWriteMsgs(unsigned long ChannelID,
         *pNumMsgs = read_uint32_be(resp + 4);
         log_msg("<< WriteMsgs -> %s, written=%lu (%.1fms)",
                 error_name(return_code), *pNumMsgs, get_time_ms() - start_ms);
+        if (return_code == STATUS_NOERROR) {
+            emit_j2534_call_finished("PassThruWriteMsgs", dll_seq, MSG_WRITE_MSGS_REQ, body_len, get_time_ms() - start_ms, return_code);
+        } else {
+            emit_j2534_call_failed("PassThruWriteMsgs", dll_seq, MSG_WRITE_MSGS_REQ, body_len, get_time_ms() - start_ms, return_code, "remote_return_code");
+        }
         return return_code;
     }
 
+    emit_j2534_call_failed("PassThruWriteMsgs", dll_seq, MSG_WRITE_MSGS_REQ, body_len, get_time_ms() - start_ms, ERR_FAILED, "short_response");
     return ERR_FAILED;
 }
 
@@ -720,6 +1256,7 @@ J2534_API long __stdcall PassThruStartMsgFilter(unsigned long ChannelID,
     unsigned char resp[16];
     unsigned long resp_len;
     unsigned long body_len = 0;
+    unsigned long dll_seq = 0;
     long ret;
     double start_ms = get_time_ms();
 
@@ -788,9 +1325,11 @@ J2534_API long __stdcall PassThruStartMsgFilter(unsigned long ChannelID,
         body[body_len++] = 0;
     }
 
-    ret = send_recv(MSG_START_FILTER_REQ, body, body_len, resp, &resp_len, sizeof(resp));
+    emit_j2534_call_started("PassThruStartMsgFilter", g_sequence + 1, MSG_START_FILTER_REQ, body_len);
+    ret = send_recv(MSG_START_FILTER_REQ, body, body_len, resp, &resp_len, sizeof(resp), &dll_seq);
     if (ret != STATUS_NOERROR) {
         log_msg("<< StartMsgFilter -> %s (%.1fms)", error_name(ret), get_time_ms() - start_ms);
+        emit_j2534_call_failed("PassThruStartMsgFilter", dll_seq, MSG_START_FILTER_REQ, body_len, get_time_ms() - start_ms, ret, "transport_failed");
         return ret;
     }
 
@@ -799,9 +1338,15 @@ J2534_API long __stdcall PassThruStartMsgFilter(unsigned long ChannelID,
         *pFilterID = read_uint32_be(resp + 4);
         log_msg("<< StartMsgFilter -> %s, filterId=%lu (%.1fms)",
                 error_name(return_code), *pFilterID, get_time_ms() - start_ms);
+        if (return_code == STATUS_NOERROR) {
+            emit_j2534_call_finished("PassThruStartMsgFilter", dll_seq, MSG_START_FILTER_REQ, body_len, get_time_ms() - start_ms, return_code);
+        } else {
+            emit_j2534_call_failed("PassThruStartMsgFilter", dll_seq, MSG_START_FILTER_REQ, body_len, get_time_ms() - start_ms, return_code, "remote_return_code");
+        }
         return return_code;
     }
 
+    emit_j2534_call_failed("PassThruStartMsgFilter", dll_seq, MSG_START_FILTER_REQ, body_len, get_time_ms() - start_ms, ERR_FAILED, "short_response");
     return ERR_FAILED;
 }
 
@@ -810,6 +1355,7 @@ J2534_API long __stdcall PassThruStopMsgFilter(unsigned long ChannelID,
     unsigned char body[8];
     unsigned char resp[16];
     unsigned long resp_len;
+    unsigned long dll_seq = 0;
     long ret;
     double start_ms = get_time_ms();
 
@@ -818,18 +1364,26 @@ J2534_API long __stdcall PassThruStopMsgFilter(unsigned long ChannelID,
     write_uint32_be(body, ChannelID);
     write_uint32_be(body + 4, FilterID);
 
-    ret = send_recv(MSG_STOP_FILTER_REQ, body, 8, resp, &resp_len, sizeof(resp));
+    emit_j2534_call_started("PassThruStopMsgFilter", g_sequence + 1, MSG_STOP_FILTER_REQ, 8);
+    ret = send_recv(MSG_STOP_FILTER_REQ, body, 8, resp, &resp_len, sizeof(resp), &dll_seq);
     if (ret != STATUS_NOERROR) {
         log_msg("<< StopMsgFilter -> %s (%.1fms)", error_name(ret), get_time_ms() - start_ms);
+        emit_j2534_call_failed("PassThruStopMsgFilter", dll_seq, MSG_STOP_FILTER_REQ, 8, get_time_ms() - start_ms, ret, "transport_failed");
         return ret;
     }
 
     if (resp_len >= 4) {
         long rc = read_uint32_be(resp);
         log_msg("<< StopMsgFilter -> %s (%.1fms)", error_name(rc), get_time_ms() - start_ms);
+        if (rc == STATUS_NOERROR) {
+            emit_j2534_call_finished("PassThruStopMsgFilter", dll_seq, MSG_STOP_FILTER_REQ, 8, get_time_ms() - start_ms, rc);
+        } else {
+            emit_j2534_call_failed("PassThruStopMsgFilter", dll_seq, MSG_STOP_FILTER_REQ, 8, get_time_ms() - start_ms, rc, "remote_return_code");
+        }
         return rc;
     }
 
+    emit_j2534_call_failed("PassThruStopMsgFilter", dll_seq, MSG_STOP_FILTER_REQ, 8, get_time_ms() - start_ms, ERR_FAILED, "short_response");
     return ERR_FAILED;
 }
 
@@ -847,6 +1401,7 @@ J2534_API long __stdcall PassThruReadVersion(unsigned long DeviceID,
     unsigned char body[4];
     unsigned char resp[256];
     unsigned long resp_len;
+    unsigned long dll_seq = 0;
     long ret;
     double start_ms = get_time_ms();
 
@@ -855,12 +1410,14 @@ J2534_API long __stdcall PassThruReadVersion(unsigned long DeviceID,
     }
 
     log_msg(">> PassThruReadVersion(dev=%lu)", DeviceID);
+    emit_j2534_call_started("PassThruReadVersion", g_sequence + 1, MSG_READ_VERSION_REQ, 4);
 
     write_uint32_be(body, DeviceID);
 
-    ret = send_recv(MSG_READ_VERSION_REQ, body, 4, resp, &resp_len, sizeof(resp));
+    ret = send_recv(MSG_READ_VERSION_REQ, body, 4, resp, &resp_len, sizeof(resp), &dll_seq);
     if (ret != STATUS_NOERROR) {
         log_msg("<< ReadVersion -> %s (%.1fms)", error_name(ret), get_time_ms() - start_ms);
+        emit_j2534_call_failed("PassThruReadVersion", dll_seq, MSG_READ_VERSION_REQ, 4, get_time_ms() - start_ms, ret, "transport_failed");
         return ret;
     }
 
@@ -873,9 +1430,15 @@ J2534_API long __stdcall PassThruReadVersion(unsigned long DeviceID,
         memcpy(pApiVersion, resp + 164, 80);
         pApiVersion[79] = 0;
         log_msg("<< ReadVersion -> %s (%.1fms)", error_name(return_code), get_time_ms() - start_ms);
+        if (return_code == STATUS_NOERROR) {
+            emit_j2534_call_finished("PassThruReadVersion", dll_seq, MSG_READ_VERSION_REQ, 4, get_time_ms() - start_ms, return_code);
+        } else {
+            emit_j2534_call_failed("PassThruReadVersion", dll_seq, MSG_READ_VERSION_REQ, 4, get_time_ms() - start_ms, return_code, "remote_return_code");
+        }
         return return_code;
     }
 
+    emit_j2534_call_failed("PassThruReadVersion", dll_seq, MSG_READ_VERSION_REQ, 4, get_time_ms() - start_ms, ERR_FAILED, "short_response");
     return ERR_FAILED;
 }
 
@@ -896,6 +1459,7 @@ J2534_API long __stdcall PassThruIoctl(unsigned long ChannelID,
     unsigned char resp[4096];
     unsigned long resp_len;
     unsigned long body_len;
+    unsigned long dll_seq = 0;
     long ret;
     double start_ms = get_time_ms();
 
@@ -947,10 +1511,12 @@ J2534_API long __stdcall PassThruIoctl(unsigned long ChannelID,
         body_len = 12;
     }
 
-    ret = send_recv(MSG_IOCTL_REQ, body, body_len, resp, &resp_len, sizeof(resp));
+    emit_j2534_call_started("PassThruIoctl", g_sequence + 1, MSG_IOCTL_REQ, body_len);
+    ret = send_recv(MSG_IOCTL_REQ, body, body_len, resp, &resp_len, sizeof(resp), &dll_seq);
     if (ret != STATUS_NOERROR) {
         log_msg("<< Ioctl(%s) -> %s (%.1fms)", ioctl_name(IoctlID),
                 error_name(ret), get_time_ms() - start_ms);
+        emit_j2534_call_failed("PassThruIoctl", dll_seq, MSG_IOCTL_REQ, body_len, get_time_ms() - start_ms, ret, "transport_failed");
         return ret;
     }
 
@@ -988,10 +1554,16 @@ J2534_API long __stdcall PassThruIoctl(unsigned long ChannelID,
                     error_name(return_code), get_time_ms() - start_ms);
         }
 
+        if (return_code == STATUS_NOERROR) {
+            emit_j2534_call_finished("PassThruIoctl", dll_seq, MSG_IOCTL_REQ, body_len, get_time_ms() - start_ms, return_code);
+        } else {
+            emit_j2534_call_failed("PassThruIoctl", dll_seq, MSG_IOCTL_REQ, body_len, get_time_ms() - start_ms, return_code, "remote_return_code");
+        }
         return return_code;
     }
 
     log_msg("<< Ioctl(%s) -> FAILED (short response, %.1fms)",
             ioctl_name(IoctlID), get_time_ms() - start_ms);
+    emit_j2534_call_failed("PassThruIoctl", dll_seq, MSG_IOCTL_REQ, body_len, get_time_ms() - start_ms, ERR_FAILED, "short_response");
     return ERR_FAILED;
 }

@@ -37,9 +37,11 @@ from .session_state import (
     clear_navigation_binding,
     live_data_active,
     navigation_session_id,
+    set_session_current_page,
     set_live_data_active,
     set_session_selection,
 )
+from diagnostic_platform.session_observability import emit_session_runtime_event
 from .worker_runtime import WorkerRuntime
 
 logger = logging.getLogger(__name__)
@@ -293,9 +295,20 @@ def start_ai_diagnosis(
         session,
         module=vehicle_context.get("module", ""),
         data_category=data_category,
+        runtime=runtime,
     )
     emit_progress(
         f"AI diagnosis started: {vehicle_context.get('module') or '-'} / {data_category}"
+    )
+    emit_session_runtime_event(
+        "session.ai.started",
+        runtime=runtime,
+        session=session,
+        operation_kind="ai.start",
+        reason="ai_started",
+        module=vehicle_context.get("module", ""),
+        data_category=data_category,
+        ai_session_id=ai_sid,
     )
     return ai_sid
 
@@ -319,11 +332,23 @@ def retry_ai_diagnosis(
         session,
         module=vehicle_context.get("module", ""),
         data_category=vehicle_context.get("data_category", ""),
+        runtime=runtime,
     )
     emit_progress(
         "AI diagnosis retry started: "
         f"{vehicle_context.get('module') or '-'} / "
         f"{vehicle_context.get('data_category') or '-'}"
+    )
+    emit_session_runtime_event(
+        "session.ai.retry_started",
+        runtime=runtime,
+        session=session,
+        operation_kind="ai.retry",
+        reason="ai_retry_started",
+        module=vehicle_context.get("module", ""),
+        data_category=vehicle_context.get("data_category", ""),
+        ai_session_id=ai_sid,
+        cached_payload_id=cached_payload_id,
     )
     return ai_sid
 
@@ -352,6 +377,17 @@ def handle_ai_stream_terminal_event(runtime: WorkerRuntime, session: Any, messag
     if not isinstance(message, str):
         return False
     if message.startswith("event: done\n") or message.startswith("event: error\n"):
+        if message.startswith("event: error\n"):
+            emit_session_runtime_event(
+                "ai.stream.error",
+                runtime=runtime,
+                session=session,
+                operation_kind="ai.stream",
+                status="error",
+                failure_code="ai_stream_error",
+                failure_domain="session_runtime",
+                reason="stream_error",
+            )
         clear_ai_binding(runtime, session)
         return True
     return False
@@ -366,6 +402,17 @@ def handle_live_data_stream_terminal_event(
     if not isinstance(message, str):
         return False
     if message.startswith("event: done\n") or message.startswith("event: error\n"):
+        if message.startswith("event: error\n"):
+            emit_session_runtime_event(
+                "live_data.stream.error",
+                runtime=runtime,
+                session=session,
+                operation_kind="live_data.stream",
+                status="error",
+                failure_code="live_data_stream_error",
+                failure_domain="session_runtime",
+                reason="stream_error",
+            )
         set_live_data_active(runtime, session, False)
         return True
     return False
@@ -376,6 +423,7 @@ def start_navigation(
     session: Any,
     *,
     goal: str,
+    backend: Any | None = None,
     emit_progress: Callable[[str], None],
 ) -> Any:
     """Start and bind one navigation sub-session."""
@@ -387,10 +435,46 @@ def start_navigation(
     if navigation_session_id(runtime, session.session_id):
         raise RuntimeError("Navigation already in progress for this session")
 
-    nav_session = start_worker_navigation_session(runtime, goal)
+    nav_handle = _session_navigation_handle(runtime, session)
+    if nav_handle is None and backend is not None:
+        navigation_runtime_getter = getattr(backend, "get_navigation_runtime", None)
+        if callable(navigation_runtime_getter):
+            nav_handle = navigation_runtime_getter()
+        else:
+            backend_name = getattr(backend, "name", None) or type(backend).__name__
+            raise RuntimeError(
+                f"Backend '{backend_name}' does not expose a navigation runtime"
+            )
+
+    if nav_handle is None and backend is not None:
+        raise RuntimeError("No active backend navigation runtime is available for this session")
+
+    if nav_handle is not None:
+        nav_session = nav_handle.start_navigation_session(runtime, goal)
+    else:
+        nav_session = start_worker_navigation_session(runtime, goal)
     bind_navigation_session(runtime, session, nav_session.session_id)
     emit_progress(f"Navigation started: {goal}")
+    emit_session_runtime_event(
+        "session.navigation.started",
+        runtime=runtime,
+        session=session,
+        backend=backend,
+        operation_kind="navigation.start",
+        reason=goal,
+        navigation_session_id=nav_session.session_id,
+    )
     return nav_session
+
+
+def _session_navigation_handle(runtime: WorkerRuntime, session: Any) -> Any | None:
+    session_id = _strip_optional_text(getattr(session, "session_id", None))
+    if not session_id:
+        return None
+    bundle = runtime.get_active_backend_bundle(session_id)
+    if bundle is None:
+        return None
+    return bundle.navigation_handle
 
 
 def resolve_navigation(runtime: WorkerRuntime, session: Any) -> tuple[str, Any]:
@@ -399,6 +483,9 @@ def resolve_navigation(runtime: WorkerRuntime, session: Any) -> tuple[str, Any]:
     if not nav_sid:
         raise LookupError(f"No active navigation session for {session.session_id}")
 
+    nav_handle = _session_navigation_handle(runtime, session)
+    if nav_handle is not None:
+        return nav_sid, nav_handle.get_navigation_session(runtime, nav_sid)
     return nav_sid, get_worker_navigation_session(runtime, nav_sid)
 
 
@@ -408,11 +495,23 @@ def apply_navigation_event(runtime: WorkerRuntime, session: Any, nav_session: An
     event_type = event.get("type", "progress")
     if event_type == "progress":
         nav_session.current_page = event.get("page", nav_session.current_page)
+        if nav_session.current_page:
+            set_session_current_page(session, nav_session.current_page, runtime=runtime)
     elif event_type == "decision_required":
         nav_session.status = NavSessionStatus.AWAITING_DECISION
         nav_session.pending_decision_id = event.get("decision_id")
         nav_session.pending_items = event.get("items", [])
+        emit_session_runtime_event(
+            "session.navigation.decision_required",
+            runtime=runtime,
+            session=session,
+            operation_kind="navigation.decision_required",
+            reason="decision_required",
+            navigation_decision_id=nav_session.pending_decision_id,
+            items=list(nav_session.pending_items or []),
+        )
     elif event_type == "done":
+        nav_session.current_page = event.get("page", nav_session.current_page)
         selections = _mapping_or_empty(event.get("selections"))
         module = _strip_optional_text(selections.get("module"))
         data_category = _strip_optional_text(
@@ -423,10 +522,31 @@ def apply_navigation_event(runtime: WorkerRuntime, session: Any, nav_session: An
                 session,
                 module=module if module else None,
                 data_category=data_category if data_category else None,
+                runtime=runtime,
             )
+        if nav_session.current_page:
+            set_session_current_page(session, nav_session.current_page, runtime=runtime)
         clear_navigation_binding(runtime, session)
+        emit_session_runtime_event(
+            "session.navigation.completed",
+            runtime=runtime,
+            session=session,
+            operation_kind="navigation.complete",
+            reason="navigation_completed",
+            final_page=str(nav_session.current_page or ""),
+        )
     elif event_type == "error":
         clear_navigation_binding(runtime, session)
+        emit_session_runtime_event(
+            "session.navigation.failed",
+            runtime=runtime,
+            session=session,
+            operation_kind="navigation.failed",
+            status="error",
+            failure_code="navigation_error",
+            failure_domain="session_runtime",
+            reason=str(event.get("error") or "navigation_error"),
+        )
 
     return event_type
 
@@ -455,11 +575,30 @@ def submit_navigation_decision(
     """Submit one pending navigation decision."""
     nav_sid, _ = resolve_navigation(runtime, session)
 
-    payload = submit_worker_navigation_decision(
-        runtime,
-        nav_sid,
+    nav_handle = _session_navigation_handle(runtime, session)
+    if nav_handle is not None:
+        payload = nav_handle.submit_navigation_decision(
+            runtime,
+            nav_sid,
+            decision_id=decision_id,
+            selected_item=selected_item,
+        )
+    else:
+        payload = submit_worker_navigation_decision(
+            runtime,
+            nav_sid,
+            decision_id=decision_id,
+            selected_item=selected_item,
+        )
+    emit_session_runtime_event(
+        "session.navigation.decision_submitted",
+        runtime=runtime,
+        session=session,
+        operation_kind="navigation.decision_submit",
+        reason=str(payload.get("selected_item") or selected_item),
+        navigation_session_id=nav_sid,
+        selected_item=str(payload.get("selected_item") or selected_item),
         decision_id=decision_id,
-        selected_item=selected_item,
     )
     return nav_sid, payload
 
@@ -468,8 +607,23 @@ def abort_navigation(runtime: WorkerRuntime, session: Any) -> tuple[str, dict[st
     """Abort the active navigation sub-session."""
     nav_sid, _ = resolve_navigation(runtime, session)
 
-    payload = abort_worker_navigation_session(runtime, nav_sid)
+    nav_handle = _session_navigation_handle(runtime, session)
+    if nav_handle is not None:
+        payload = nav_handle.abort_navigation_session(runtime, nav_sid)
+    else:
+        payload = abort_worker_navigation_session(runtime, nav_sid)
     clear_navigation_binding(runtime, session)
+    emit_session_runtime_event(
+        "session.navigation.aborted",
+        runtime=runtime,
+        session=session,
+        operation_kind="navigation.abort",
+        status="error",
+        failure_code="aborted",
+        failure_domain="session_runtime",
+        reason="aborted_by_user",
+        navigation_session_id=nav_sid,
+    )
     return nav_sid, payload
 
 
@@ -583,6 +737,7 @@ def clear_dtcs(
             "Clear DTCs completed "
             f"({int(getattr(clear_result, 'cleared_count', 0) or 0)} codes)"
         )
+        set_session_current_page(session, page_context, runtime=runtime)
         return _clear_dtcs_result_payload(clear_result, page_context=page_context)
     finally:
         runtime.finish_operation(operation)
@@ -594,16 +749,12 @@ def select_module_action(
     *,
     module: str,
     backend: Any | None = None,
-    get_data_viewer: Callable[[], Any] | None = None,
     get_executor: Callable[[], Any] | None = None,
     get_adapter: Callable[[], Any] | None = None,
     emit_progress: Callable[[str], None],
 ) -> dict[str, Any]:
     """Select one module and update session-scoped selection state."""
-    if runtime.has_data_viewer_getter():
-        result = get_data_viewer().select_module(module)
-        exec_result = None
-    elif backend is not None:
+    if backend is not None:
         backend.select_module(module)
         result = {
             "selected_module": module,
@@ -633,7 +784,7 @@ def select_module_action(
             "error": exec_result.error,
         }
 
-    set_session_selection(session, module=module, data_category="")
+    set_session_selection(session, module=module, data_category="", runtime=runtime)
     emit_progress(f"Module selected: {module}")
     return {
         "success": True,
@@ -647,16 +798,12 @@ def select_data_category_action(
     *,
     data_category: str,
     backend: Any | None = None,
-    get_data_viewer: Callable[[], Any] | None = None,
     get_executor: Callable[[], Any] | None = None,
     get_adapter: Callable[[], Any] | None = None,
     emit_progress: Callable[[str], None],
 ) -> dict[str, Any]:
     """Select one data category and update session-scoped selection state."""
-    if runtime.has_data_viewer_getter():
-        result = get_data_viewer().select_data_category(data_category)
-        exec_result = None
-    elif backend is not None:
+    if backend is not None:
         result = {
             "selected_data_category": data_category,
             "items": backend.select_data_category(data_category),
@@ -685,7 +832,7 @@ def select_data_category_action(
             "error": exec_result.error,
         }
 
-    set_session_selection(session, data_category=data_category)
+    set_session_selection(session, data_category=data_category, runtime=runtime)
     emit_progress(f"Data category selected: {data_category}")
     return {
         "success": True,
@@ -699,7 +846,7 @@ def resume_branch_selection(
     *,
     pending_gate: Any,
     option_id: str,
-    get_data_viewer: Callable[[], Any],
+    get_navigation_runtime: Callable[[], Any] | None,
     get_backend: Callable[[], Any],
     emit_progress: Callable[[str, dict[str, Any] | None], None],
 ) -> dict[str, Any]:
@@ -713,29 +860,24 @@ def resume_branch_selection(
     if not resume_action:
         raise ValueError("Missing resume_action in branch decision context")
 
-    viewer = get_data_viewer()
-    if runtime.has_data_viewer_getter():
-        if resume_action == "select_module":
-            resume_result = viewer.select_module(selected_choice)
-        elif resume_action == "select_sub_module":
-            resume_result = viewer.select_sub_module(selected_choice)
-        elif resume_action == "select_data_category":
-            resume_result = viewer.select_data_category(selected_choice)
-        elif resume_action == "select_sub_category":
-            resume_result = viewer.select_sub_category(selected_choice)
-        else:
-            raise ValueError(f"Unsupported resume action: {resume_action}")
-    else:
-        controller = viewer.controller
+    navigation_runtime = None
+    if get_navigation_runtime is not None and resume_action in {"select_module", "select_data_category"}:
+        try:
+            navigation_runtime = get_navigation_runtime()
+        except Exception:
+            navigation_runtime = None
 
+    if navigation_runtime is not None and resume_action in {"select_module", "select_data_category"}:
         if resume_action == "select_module":
-            resume_result = viewer.select_module(selected_choice)
-        elif resume_action == "select_sub_module":
-            resume_result = controller.select_list_item(selected_choice).to_dict()
+            resume_result = navigation_runtime.select_module(selected_choice)
+        else:
+            resume_result = navigation_runtime.select_data_category(selected_choice)
+    else:
+        backend = get_backend()
+        if resume_action == "select_module":
+            resume_result = backend.select_module(selected_choice)
         elif resume_action == "select_data_category":
-            resume_result = viewer.select_data_category(selected_choice)
-        elif resume_action == "select_sub_category":
-            resume_result = controller.select_sub_category(selected_choice).to_dict()
+            resume_result = backend.select_data_category(selected_choice)
         else:
             raise ValueError(f"Unsupported resume action: {resume_action}")
 
@@ -747,9 +889,9 @@ def resume_branch_selection(
         },
     )
     if resume_action in {"select_module", "select_sub_module"}:
-        set_session_selection(session, module=selected_choice)
+        set_session_selection(session, module=selected_choice, runtime=runtime)
     if resume_action in {"select_data_category", "select_sub_category"}:
-        set_session_selection(session, data_category=selected_choice)
+        set_session_selection(session, data_category=selected_choice, runtime=runtime)
 
     return {
         "resume_action": resume_action,
@@ -852,9 +994,21 @@ def start_live_data(
         session,
         module=context.get("module", ""),
         data_category=data_category,
+        runtime=runtime,
     )
     set_live_data_active(runtime, session, True)
     emit_progress(f"Live data started: {data_category}")
+    emit_session_runtime_event(
+        "session.live_data.started",
+        runtime=runtime,
+        session=session,
+        backend=backend,
+        operation_kind="live_data.start",
+        reason="live_data_started",
+        data_category=data_category,
+        module=context.get("module", ""),
+        stream_scope=stream_scope,
+    )
     return data_category, payload
 
 
@@ -872,6 +1026,14 @@ def stop_live_data(
         payload = stop_diagnostics_live_data_stream(runtime, backend=backend)
     set_live_data_active(runtime, session, False)
     emit_progress("Live data stopped")
+    emit_session_runtime_event(
+        "session.live_data.stopped",
+        runtime=runtime,
+        session=session,
+        backend=backend,
+        operation_kind="live_data.stop",
+        reason="live_data_stopped",
+    )
     return payload
 
 

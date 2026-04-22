@@ -1,0 +1,86 @@
+{
+  "label": "safe_submenu_03_identification_information",
+  "timestamp": "2026-04-17T10:54:14",
+  "page": {
+    "page_id": "data_list",
+    "list_item_count": 2,
+    "buttons": [
+      "Vehicle Menu",
+      "Back",
+      "Enter",
+      "Home"
+    ],
+    "evidence": "has list items + Back button, no specific markers",
+    "has_modal": false,
+    "confidence": "medium",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "Home",
+      "enabled": true
+    },
+    {
+      "text": "Vehicle Menu",
+      "enabled": true
+    },
+    {
+      "text": "Enter",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [
+    "Identification Information",
+    "Calibration History"
+  ],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Back",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Enter",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Home",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Vehicle Menu",
+      "enabled": true
+    },
+    {
+      "kind": "list_item",
+      "label": "Identification Information",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Calibration History",
+      "list_index": 0
+    }
+  ],
+  "node_id": "435da6c8f2850f3e"
+}

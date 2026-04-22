@@ -1,0 +1,99 @@
+{
+  "label": "vehicle_dtc_and_id_settled",
+  "timestamp": "2026-04-17T11:03:27",
+  "page": {
+    "page_id": "data_display",
+    "list_item_count": 0,
+    "buttons": [
+      "Refresh",
+      "Reset Ethernet",
+      "Details",
+      "Clear DTCs",
+      "Add Bookmark",
+      "Back",
+      "Create Report"
+    ],
+    "evidence": "button 'Create Report' present",
+    "has_modal": false,
+    "confidence": "high",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "Clear DTCs",
+      "enabled": true
+    },
+    {
+      "text": "Refresh",
+      "enabled": true
+    },
+    {
+      "text": "Details",
+      "enabled": true
+    },
+    {
+      "text": "Reset Ethernet",
+      "enabled": true
+    },
+    {
+      "text": "Add Bookmark",
+      "enabled": true
+    },
+    {
+      "text": "Create Report",
+      "enabled": true
+    },
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Add Bookmark",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Back",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Clear DTCs",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Create Report",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Details",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Refresh",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Reset Ethernet",
+      "enabled": true
+    }
+  ],
+  "node_id": "1c19331cc1a8e89e"
+}

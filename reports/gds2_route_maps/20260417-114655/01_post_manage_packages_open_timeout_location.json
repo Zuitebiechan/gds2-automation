@@ -1,0 +1,79 @@
+{
+  "label": "post_manage_packages_open_timeout_location",
+  "timestamp": "2026-04-17T11:46:55",
+  "page": {
+    "page_id": "unknown",
+    "list_item_count": 0,
+    "buttons": [
+      "Browse...",
+      "Back",
+      "Install"
+    ],
+    "evidence": "no matching rule",
+    "has_modal": true,
+    "confidence": "low",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "Install",
+      "enabled": true
+    },
+    {
+      "text": "Browse...",
+      "enabled": true
+    },
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "是",
+      "enabled": true
+    },
+    {
+      "text": "否",
+      "enabled": true
+    }
+  ],
+  "list_items": [],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Back",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Browse...",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Install",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "否",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "是",
+      "enabled": true
+    }
+  ],
+  "raw_page_id": "unknown",
+  "effective_page_id": "unknown",
+  "node_id": "c837caf31d406720"
+}

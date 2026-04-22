@@ -1,0 +1,114 @@
+{
+  "started_at": "2026-04-20T10:21:26",
+  "completed_at": "2026-04-20T10:22:02",
+  "target": "Fuel Trim Enable",
+  "target_kind": "list_item",
+  "expected_buttons": [
+    "Enabled",
+    "Disabled",
+    "Release Control"
+  ],
+  "success": true,
+  "failure_reason": null,
+  "final_buttons": [
+    "Add Bookmark",
+    "Release Control",
+    "Disabled",
+    "Enabled",
+    "Back"
+  ],
+  "route_result": {
+    "matched_start_node_id": "59e2f52784742dba",
+    "recovery_actions": [],
+    "planned_path": [
+      {
+        "kind": "list_item",
+        "label": "Fuel System",
+        "list_index": 0
+      }
+    ],
+    "executed_actions": [
+      {
+        "kind": "list_item",
+        "label": "Engine Control Module"
+      },
+      {
+        "kind": "list_item",
+        "label": "Control Functions"
+      },
+      {
+        "kind": "list_item",
+        "label": "Fuel System"
+      },
+      {
+        "kind": "list_item",
+        "label": "Fuel Trim Enable"
+      }
+    ],
+    "final_page": "data_list",
+    "final_snapshot": {
+      "page": {
+        "page_id": "data_list"
+      },
+      "raw_page_id": "data_list",
+      "effective_page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark"
+        },
+        {
+          "kind": "button",
+          "label": "Release Control"
+        },
+        {
+          "kind": "button",
+          "label": "Disabled"
+        },
+        {
+          "kind": "button",
+          "label": "Enabled"
+        },
+        {
+          "kind": "button",
+          "label": "Back"
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "authored",
+        "Display Name",
+        "ECU",
+        "Units",
+        "Custom Order"
+      ],
+      "navigation_path": [
+        "Control Module"
+      ]
+    }
+  }
+}

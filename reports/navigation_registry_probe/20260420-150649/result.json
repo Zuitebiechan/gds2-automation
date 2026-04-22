@@ -1,0 +1,7 @@
+{
+  "started_at": "2026-04-20T15:06:49",
+  "completed_at": "2026-04-20T15:06:49",
+  "entry_key": "Fuel Trim Enable",
+  "success": false,
+  "failure_reason": "Registry route to 'control.fuel_trim_enable' is stuck on device_explorer"
+}

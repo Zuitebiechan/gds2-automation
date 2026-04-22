@@ -1,0 +1,68 @@
+{
+  "label": "safe_submenu_02_event_information",
+  "timestamp": "2026-04-17T10:54:09",
+  "page": {
+    "page_id": "data_list",
+    "list_item_count": 3,
+    "buttons": [
+      "Back",
+      "Enter"
+    ],
+    "evidence": "has list items + Back button, no specific markers",
+    "has_modal": false,
+    "confidence": "medium",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "Enter",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [
+    "Fuel Alcohol Content Event Data",
+    "Engine Oil Level Warning Event Data",
+    "Engine Overspeed Event Data"
+  ],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Back",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Enter",
+      "enabled": true
+    },
+    {
+      "kind": "list_item",
+      "label": "Fuel Alcohol Content Event Data",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Engine Oil Level Warning Event Data",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Engine Overspeed Event Data",
+      "list_index": 0
+    }
+  ],
+  "node_id": "94ed613bf0e26cec"
+}

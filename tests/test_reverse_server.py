@@ -5,9 +5,11 @@ import logging
 import ssl
 import struct
 import types
+import json
 
 import pytest
 
+from diagnostic_platform.observability import flush_product_log_writers
 from vci_proxy.config import ProxyConfig
 from vci_proxy.protocol import HEADER_SIZE, Message, MsgType, ProtocolDecoder, ProtocolEncoder
 import vci_proxy.reverse_server as reverse_server_module
@@ -75,6 +77,19 @@ class _StepReader:
         if len(data) != n:
             raise AssertionError(f"expected {n} bytes, got {len(data)}")
         return data
+
+
+def _read_product_log_events(tmp_path) -> list[dict[str, object]]:
+    flush_product_log_writers()
+    raw_dir = tmp_path / "RPA_Diagnostic" / "observability" / "cloud" / "raw"
+    records: list[dict[str, object]] = []
+    for path in sorted(raw_dir.glob("*.jsonl")):
+        records.extend(
+            json.loads(line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        )
+    return records
 
 
 def test_authenticate_vci_accepts_valid_auth_request(monkeypatch) -> None:
@@ -235,6 +250,48 @@ def test_handle_vci_connection_treats_midstream_connection_reset_as_clean_discon
     assert not any(record.exc_info for record in caplog.records)
 
 
+def test_handle_vci_connection_emits_observability_connected_and_disconnected_events(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    async def _run() -> None:
+        monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+        server = ReverseProxyServer(config=ProxyConfig.from_args(auth_token="secret"))
+        auth_frame = ProtocolEncoder.encode_auth_req(123, b"x" * 32, sequence=7)
+        reader = _StepReader(
+            auth_frame[:HEADER_SIZE],
+            auth_frame[HEADER_SIZE:],
+            ConnectionResetError(64, "network dropped"),
+        )
+        writer = _FakeWriter(peername=("61.173.158.139", 6535))
+
+        monkeypatch.setattr(
+            "vci_proxy.reverse_server.verify_signature",
+            lambda token, timestamp, signature: (True, "ok"),
+        )
+
+        async def _probe_loop(epoch: str) -> None:
+            return None
+
+        server._probe_loop = _probe_loop
+
+        await server._handle_vci_connection(reader, writer)
+
+    asyncio.run(_run())
+
+    records = _read_product_log_events(tmp_path)
+    connected = [record for record in records if record["event_type"] == "tunnel.lifecycle.connected"]
+    disconnected = [
+        record for record in records if record["event_type"] == "tunnel.lifecycle.disconnected"
+    ]
+
+    assert connected
+    assert disconnected
+    assert connected[-1]["connection_epoch"] == disconnected[-1]["connection_epoch"]
+    assert disconnected[-1]["status"] == "error"
+    assert "connection_lost" in str(disconnected[-1]["reason"])
+
+
 def test_build_server_tls_context_loads_cert_chain_and_optional_client_ca(monkeypatch) -> None:
     observed: dict[str, object] = {}
 
@@ -375,6 +432,44 @@ def test_run_probe_records_network_time_from_duration_minus_hw(monkeypatch) -> N
     asyncio.run(_run())
 
 
+def test_run_probe_emits_observability_failure_event(monkeypatch, tmp_path) -> None:
+    class _FakeTunnelQuality:
+        def __init__(self) -> None:
+            self.probe_failures = 0
+
+        def record_probe(self, network_ms: float) -> None:
+            raise AssertionError("record_probe should not be called on failure")
+
+        def record_probe_failure(self, reason: str = "") -> None:
+            self.probe_failures += 1
+
+    async def _run() -> None:
+        monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+        server = ReverseProxyServer()
+        server.vci_writer = _FakeWriter()
+        server._connection_epoch = "epoch-1"
+        server._tunnel_quality = _FakeTunnelQuality()
+        server._write_tunnel_quality_snapshot = lambda: None
+        server._next_sequence = lambda: 9
+
+        async def _failing_wait_for(future, timeout):
+            raise asyncio.TimeoutError()
+
+        monkeypatch.setattr("vci_proxy.reverse_server.asyncio.wait_for", _failing_wait_for)
+
+        await server._run_probe("epoch-1")
+
+    asyncio.run(_run())
+
+    records = _read_product_log_events(tmp_path)
+    failures = [record for record in records if record["event_type"] == "tunnel.probe.failure"]
+
+    assert failures
+    assert failures[-1]["connection_epoch"] == "epoch-1"
+    assert failures[-1]["status"] == "error"
+    assert failures[-1]["failure_code"] == "probe_failure"
+
+
 def test_write_tunnel_quality_snapshot_skips_healthy_logs(monkeypatch, caplog) -> None:
     server = ReverseProxyServer()
     server._tunnel_quality = types.SimpleNamespace(
@@ -427,6 +522,35 @@ def test_write_tunnel_quality_snapshot_logs_blocked_state_once(monkeypatch, capl
     assert tunnel_logs == [
         "[TUNNEL_QUALITY] status=blocked connected=False reason=tunnel_disconnected"
     ]
+
+
+def test_write_tunnel_quality_snapshot_tolerates_permission_error(monkeypatch, caplog) -> None:
+    server = ReverseProxyServer()
+    server._tunnel_quality = types.SimpleNamespace(
+        snapshot=lambda: {
+            "connection_epoch": "epoch-3",
+            "connected": True,
+            "fresh": True,
+            "updated_at": "2026-04-15T00:00:00Z",
+            "source": "probe",
+            "sample_count": 1,
+            "network_ms": {"last": 1.0, "p50": 1.0, "p95": 1.0},
+            "grade": "good",
+            "status": "healthy",
+            "reason": "ok",
+            "probe_failures": 0,
+        }
+    )
+    monkeypatch.setattr(
+        reverse_server_module,
+        "write_tunnel_quality_snapshot",
+        lambda snapshot: (_ for _ in ()).throw(PermissionError("denied")),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="vci_proxy.reverse_server"):
+        server._write_tunnel_quality_snapshot()
+
+    assert "Failed to persist tunnel quality snapshot: denied" in caplog.text
 
 
 def test_invalidate_caches_clears_channel_and_filter_entries() -> None:
@@ -534,3 +658,75 @@ def test_new_vci_connection_can_replace_stale_existing_tunnel() -> None:
     assert accepted is True
     assert reason == "existing_tunnel_stale"
     assert existing_addr == ("1.1.1.1", 1111)
+
+
+def test_handle_proxy_connection_emits_staged_success_events(monkeypatch, tmp_path) -> None:
+    async def _run() -> None:
+        monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+        server = ReverseProxyServer()
+        server.vci_connected.set()
+        server.vci_writer = _FakeWriter(peername=("10.0.0.9", 9000))
+        server._connection_epoch = "epoch-1"
+        server._next_sequence = lambda: 77
+
+        proxy_reader = _FakeReader(ProtocolEncoder.encode_disconnect_req(33, sequence=5))
+        proxy_writer = _FakeWriter(peername=("127.0.0.1", 50000))
+
+        async def _success_wait_for(awaitable, timeout):
+            if isinstance(awaitable, asyncio.Future):
+                return (MsgType.DISCONNECT_RSP, struct.pack(">I", 0), 12.5)
+            return await awaitable
+
+        monkeypatch.setattr("vci_proxy.reverse_server.asyncio.wait_for", _success_wait_for)
+
+        await server._handle_proxy_connection(proxy_reader, proxy_writer)
+
+    asyncio.run(_run())
+
+    records = _read_product_log_events(tmp_path)
+    event_types = [record["event_type"] for record in records]
+
+    assert "proxy.request.received_from_dll" in event_types
+    assert "proxy.request.cache_decision" in event_types
+    assert "proxy.request.forwarded_to_tunnel" in event_types
+    assert "proxy.request.response_received" in event_types
+    assert "proxy.request.replied_to_dll" in event_types
+
+    forwarded = next(record for record in records if record["event_type"] == "proxy.request.forwarded_to_tunnel")
+    assert forwarded["connection_epoch"] == "epoch-1"
+    assert forwarded["dll_seq"] == 5
+    assert forwarded["proxy_seq"] == 77
+
+
+def test_handle_proxy_connection_emits_timeout_event(monkeypatch, tmp_path) -> None:
+    async def _run() -> None:
+        monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+        server = ReverseProxyServer()
+        server.vci_connected.set()
+        server.vci_writer = _FakeWriter(peername=("10.0.0.9", 9000))
+        server._connection_epoch = "epoch-9"
+        server._next_sequence = lambda: 88
+
+        proxy_reader = _FakeReader(ProtocolEncoder.encode_disconnect_req(33, sequence=6))
+        proxy_writer = _FakeWriter(peername=("127.0.0.1", 50001))
+
+        async def _timeout_wait_for(awaitable, timeout):
+            if isinstance(awaitable, asyncio.Future):
+                raise asyncio.TimeoutError()
+            return await awaitable
+
+        monkeypatch.setattr("vci_proxy.reverse_server.asyncio.wait_for", _timeout_wait_for)
+
+        await server._handle_proxy_connection(proxy_reader, proxy_writer)
+
+    asyncio.run(_run())
+
+    records = _read_product_log_events(tmp_path)
+    timeouts = [record for record in records if record["event_type"] == "proxy.request.timeout"]
+
+    assert timeouts
+    assert timeouts[-1]["connection_epoch"] == "epoch-9"
+    assert timeouts[-1]["dll_seq"] == 6
+    assert timeouts[-1]["proxy_seq"] == 88
+    assert timeouts[-1]["status"] == "error"
+    assert timeouts[-1]["failure_code"] == "timeout"

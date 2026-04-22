@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "created_at": "2026-04-17T11:24:34",
+  "nodes": {
+    "9a2a0958b5f82dee": {
+      "node_id": "9a2a0958b5f82dee",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "Learn Functions",
+        "Reset Functions"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Learn Functions",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Reset Functions",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "post_learn_functions_location"
+    }
+  },
+  "edges": []
+}

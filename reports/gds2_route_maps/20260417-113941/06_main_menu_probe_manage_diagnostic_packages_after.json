@@ -1,0 +1,128 @@
+{
+  "label": "main_menu_probe_manage_diagnostic_packages_after",
+  "timestamp": "2026-04-17T11:39:48",
+  "page": {
+    "page_id": "unknown",
+    "list_item_count": 15,
+    "buttons": [
+      "OK"
+    ],
+    "evidence": "no matching rule",
+    "has_modal": false,
+    "confidence": "low",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "OK",
+      "enabled": true
+    }
+  ],
+  "list_items": [
+    "Deutsch",
+    "ENGLISH",
+    "Español",
+    "Español Latinoamericano",
+    "Français Canadien",
+    "Italiano",
+    "Nederlands",
+    "Português do Brasil",
+    "Tiếng Việt",
+    "Русский",
+    "ภาษาไทย",
+    "日本語",
+    "简体中文",
+    "繁體中文",
+    "한국어"
+  ],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "OK",
+      "enabled": true
+    },
+    {
+      "kind": "list_item",
+      "label": "Deutsch",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "ENGLISH",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Español",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Español Latinoamericano",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Français Canadien",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Italiano",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Nederlands",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Português do Brasil",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Tiếng Việt",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Русский",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "ภาษาไทย",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "日本語",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "简体中文",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "繁體中文",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "한국어",
+      "list_index": 0
+    }
+  ],
+  "raw_page_id": "unknown",
+  "effective_page_id": "unknown",
+  "node_id": "4df1b6a5bd92469d"
+}

@@ -12,7 +12,7 @@ to ensure consistent behavior across different OEM software (GDS2, Honda, etc.).
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Callable, Optional, Protocol, runtime_checkable
 
 
 def _normalize_brand_key(brand: str) -> str:
@@ -157,9 +157,51 @@ class ActiveBackendBundle:
     backend: Any | None = None
     live_data_handle: Any | None = None
     ai_collection_handle: Any | None = None
-    navigation_handle: Any | None = None
+    navigation_handle: "BackendNavigationRuntime | None" = None
     action_executor: Any | None = None
     backend_private: dict[str, Any] = field(default_factory=dict)
+
+
+@runtime_checkable
+class BackendNavigationRuntime(Protocol):
+    """Backend-neutral runtime seam for navigation-owned backend behavior.
+
+    The implementation remains backend-private, but platform/session layers can
+    depend on this typed capability once a backend bundle exposes it.
+    """
+
+    def ensure_started(
+        self,
+        *,
+        cancel_checker: Callable[[], None] | None = None,
+    ) -> dict[str, Any]: ...
+
+    def connect_vci(self, device: str) -> None: ...
+
+    def select_module(self, module: str) -> Any: ...
+
+    def select_data_category(self, category: str) -> Any: ...
+
+    def clear_dtcs(self) -> Any: ...
+
+    def detect_current_page(self) -> str: ...
+
+    def go_back(self) -> Any: ...
+
+    def start_navigation_session(self, runtime: Any, goal: str) -> Any: ...
+
+    def submit_navigation_decision(
+        self,
+        runtime: Any,
+        session_id: str,
+        *,
+        decision_id: str,
+        selected_item: str,
+    ) -> dict[str, Any]: ...
+
+    def abort_navigation_session(self, runtime: Any, session_id: str) -> dict[str, Any]: ...
+
+    def get_navigation_session(self, runtime: Any, session_id: str) -> Any: ...
 
 
 @dataclass
@@ -468,10 +510,6 @@ class DiagnosticBackend(ABC):
             Dict with at minimum 'success' (bool) and optional 'metadata', 'error' keys
         """
         raise UnsupportedCapabilityError(BackendCapability.GENERIC_ACTIONS, self.name)
-
-    def get_guided_runtime(self) -> Any:
-        """Return a backend-owned guided runtime when the backend exposes one."""
-        raise RuntimeError(f"Backend '{self.name}' does not expose a guided runtime")
 
     def build_action_runtime(self) -> BackendActionRuntime:
         """Return a backend-owned executor/adapter bridge for generic actions."""

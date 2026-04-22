@@ -1,0 +1,7 @@
+{
+  "started_at": "2026-04-20T15:15:19",
+  "completed_at": "2026-04-20T15:15:19",
+  "entry_key": "DTC Display",
+  "success": false,
+  "failure_reason": "Registry route to 'dtc.display' did not converge within 8 steps"
+}

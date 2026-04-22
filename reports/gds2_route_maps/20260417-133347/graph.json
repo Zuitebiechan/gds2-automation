@@ -1,0 +1,217 @@
+{
+  "version": 1,
+  "created_at": "2026-04-17T13:33:47",
+  "nodes": {
+    "978f6de18b3b0a60": {
+      "node_id": "978f6de18b3b0a60",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "Fuel Alcohol Content Event Data",
+        "Engine Oil Level Warning Event Data",
+        "Engine Overspeed Event Data"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Alcohol Content Event Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Oil Level Warning Event Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Overspeed Event Data",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "explore_event_information_children_start"
+    },
+    "3e873d68520c35c8": {
+      "node_id": "3e873d68520c35c8",
+      "page_id": "data_display",
+      "raw_page_id": "data_display",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Clear DTCs",
+          "enabled": true
+        },
+        {
+          "text": "Create Report",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "authored",
+        "Display Name",
+        "ECU",
+        "Units",
+        "Custom Order"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Clear DTCs",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Create Report",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "event_info_fuel_alcohol_content_event_data"
+    }
+  },
+  "edges": [
+    {
+      "source_id": "978f6de18b3b0a60",
+      "target_id": "3e873d68520c35c8",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Fuel Alcohol Content Event Data",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T13:33:49"
+    },
+    {
+      "source_id": "3e873d68520c35c8",
+      "target_id": "978f6de18b3b0a60",
+      "source_page_id": "data_display",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_display",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T13:33:53"
+    },
+    {
+      "source_id": "978f6de18b3b0a60",
+      "target_id": "3e873d68520c35c8",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Engine Oil Level Warning Event Data",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T13:33:55"
+    },
+    {
+      "source_id": "3e873d68520c35c8",
+      "target_id": "978f6de18b3b0a60",
+      "source_page_id": "data_display",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_display",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T13:33:58"
+    },
+    {
+      "source_id": "978f6de18b3b0a60",
+      "target_id": "3e873d68520c35c8",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Engine Overspeed Event Data",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T13:34:00"
+    },
+    {
+      "source_id": "3e873d68520c35c8",
+      "target_id": "978f6de18b3b0a60",
+      "source_page_id": "data_display",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_display",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T13:34:04"
+    }
+  ]
+}

@@ -10,6 +10,7 @@ from diagnostic_platform.branch_planning import BranchDecisionRequiredError
 from diagnostic_platform.session_models import DecisionGate, DecisionOption
 
 from .session_actions import resume_branch_selection
+from diagnostic_platform.session_observability import emit_session_runtime_event
 from .session_preflight import (
     clear_network_override,
     get_session_network_snapshot,
@@ -105,6 +106,15 @@ def raise_branch_decision(
         resume_action=resume_action,
     )
     session = orchestrator.raise_decision(session_id, gate)
+    emit_session_runtime_event(
+        "session.branch.decision_required",
+        session=session,
+        operation_kind=resume_action,
+        reason=exc.decision.reason,
+        decision=gate.to_dict(),
+        target=exc.decision.target,
+        domain=exc.decision.domain.value,
+    )
     return _session_success_payload(
         session,
         decision_required=True,
@@ -138,6 +148,17 @@ def _resume_network_quality_start(
         option_id,
         network_quality_summary(snapshot.get("network_quality")),
     )
+    emit_session_runtime_event(
+        "session.network_gate.decision_submitted",
+        runtime=runtime,
+        session=orchestrator.get_session(session_id),
+        backend=backend,
+        operation_kind="network_gate.decision_submit",
+        reason="continue_anyway",
+        connection_epoch=str(snapshot.get("connection_epoch")) if snapshot.get("connection_epoch") else None,
+        option_id=option_id,
+        decision_id=decision_id,
+    )
     payload = run_start_diagnostics(
         runtime,
         orchestrator=orchestrator,
@@ -163,6 +184,15 @@ def _cancel_network_quality_start(
         session_id,
         decision_id,
         option_id,
+    )
+    emit_session_runtime_event(
+        "session.network_gate.decision_submitted",
+        session=session,
+        backend=backend,
+        operation_kind="network_gate.decision_submit",
+        reason="cancel",
+        option_id=option_id,
+        decision_id=decision_id,
     )
     clear_network_override(
         orchestrator=orchestrator,
@@ -217,7 +247,7 @@ def _resume_branch_decision(
     pending_gate: Any,
     session_id: str,
     option_id: str,
-    get_data_viewer: Callable[[], Any],
+    get_navigation_runtime: Callable[[], Any] | None,
     get_backend: Callable[[], Any],
 ) -> dict[str, Any]:
     try:
@@ -226,7 +256,7 @@ def _resume_branch_decision(
             session,
             pending_gate=pending_gate,
             option_id=option_id,
-            get_data_viewer=get_data_viewer,
+            get_navigation_runtime=get_navigation_runtime,
             get_backend=get_backend,
             emit_progress=lambda message, details=None: orchestrator.emit_progress(
                 session_id,
@@ -249,6 +279,15 @@ def _resume_branch_decision(
         resume_payload["resume_action"],
         resume_payload["selected_choice"],
     )
+    emit_session_runtime_event(
+        "session.branch.resumed",
+        runtime=runtime,
+        session=session,
+        operation_kind=resume_payload["resume_action"],
+        reason=resume_payload["selected_choice"],
+        selected_choice=resume_payload["selected_choice"],
+        resume_action=resume_payload["resume_action"],
+    )
     return _session_success_payload(
         session,
         resumed=True,
@@ -266,7 +305,7 @@ def submit_session_decision(
     session_id: str,
     decision_id: str,
     option_id: str,
-    get_data_viewer: Callable[[], Any],
+    get_navigation_runtime: Callable[[], Any] | None,
     get_backend: Callable[[], Any],
 ) -> dict[str, Any]:
     """Apply a pending session decision and return the public API payload."""
@@ -294,7 +333,7 @@ def submit_session_decision(
             pending_gate=pending_gate,
             session_id=session_id,
             option_id=option_id,
-            get_data_viewer=get_data_viewer,
+            get_navigation_runtime=get_navigation_runtime,
             get_backend=get_backend,
         )
 

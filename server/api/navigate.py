@@ -11,7 +11,6 @@ Endpoints:
     POST /api/navigate/abort        - Abort running session
 """
 
-import logging
 from typing import Any
 
 from flask import Blueprint, Response, jsonify, request
@@ -21,7 +20,6 @@ from diagnostic_platform.runtime.navigation_runtime import (
     build_navigation_status_payload,
     get_navigation_session as get_runtime_navigation_session,
     iter_navigation_session_events,
-    start_navigation_session as start_runtime_navigation_session,
     submit_navigation_decision as submit_runtime_navigation_decision,
 )
 from diagnostic_platform.runtime.worker_runtime import get_worker_runtime
@@ -30,8 +28,6 @@ from server.api.http_utils import (
     read_text_mapping_field,
     require_json_object,
 )
-
-logger = logging.getLogger(__name__)
 
 navigate_bp = Blueprint("navigate", __name__, url_prefix="/api/navigate")
 
@@ -53,6 +49,15 @@ def _get_session(session_id: str) -> NavSession:
     return get_runtime_navigation_session(_runtime(), session_id)
 
 
+def _get_active_navigation_handle(*, required: bool = True):
+    bundle = _runtime().get_active_backend_bundle()
+    if bundle is None or bundle.navigation_handle is None:
+        if required:
+            raise RuntimeError("No active backend navigation runtime is available")
+        return None
+    return bundle.navigation_handle
+
+
 def _sse_response(stream) -> Response:
     return Response(
         stream,
@@ -67,11 +72,14 @@ def _sse_response(stream) -> Response:
 
 def start_navigation_session(goal: str = "Navigate to Data Display") -> NavSession:
     """Create and start an internal navigation session."""
-    return start_runtime_navigation_session(_runtime(), goal)
+    return _get_active_navigation_handle().start_navigation_session(_runtime(), goal)
 
 
 def get_navigation_session(session_id: str) -> NavSession:
     """Return an internal navigation session by id."""
+    handle = _get_active_navigation_handle(required=False)
+    if handle is not None:
+        return handle.get_navigation_session(_runtime(), session_id)
     return _get_session(session_id)
 
 
@@ -82,6 +90,14 @@ def submit_navigation_decision(
     selected_item: str,
 ) -> dict[str, Any]:
     """Resume a paused navigation session with a selected item."""
+    handle = _get_active_navigation_handle(required=False)
+    if handle is not None:
+        return handle.submit_navigation_decision(
+            _runtime(),
+            session_id,
+            decision_id=decision_id,
+            selected_item=selected_item,
+        )
     return submit_runtime_navigation_decision(
         _runtime(),
         session_id,
@@ -92,6 +108,9 @@ def submit_navigation_decision(
 
 def abort_navigation_session(session_id: str) -> dict[str, Any]:
     """Abort a running or paused internal navigation session."""
+    handle = _get_active_navigation_handle(required=False)
+    if handle is not None:
+        return handle.abort_navigation_session(_runtime(), session_id)
     return abort_runtime_navigation_session(_runtime(), session_id)
 
 
@@ -105,12 +124,13 @@ def navigate_start():
     try:
         data = require_json_object(request)
         goal = _read_text_field(data, "goal", default="Navigate to Data Display")
+        session = start_navigation_session(goal)
     except RequestPayloadError as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
     except ValueError as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
-
-    session = start_navigation_session(goal)
+    except RuntimeError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 409
 
     return jsonify({
         "success": True,

@@ -1,0 +1,508 @@
+{
+  "started_at": "2026-04-20T16:01:09",
+  "completed_at": "2026-04-20T16:01:41",
+  "entry_key": "clear codes",
+  "entry": {
+    "page_key": "dtc.clear.execute",
+    "title": "Execute Clear DTCs",
+    "category": "dtc",
+    "page_kind": "clear_dtcs_execute",
+    "canonical_path": [
+      "Module Diagnostics",
+      "Engine Control Module",
+      "Diagnostic Trouble Codes (DTC)",
+      "DTC Display",
+      "Clear DTCs",
+      "Add All",
+      "OK",
+      "OK"
+    ],
+    "route_steps": [
+      {
+        "kind": "list_item",
+        "label": "Module Diagnostics"
+      },
+      {
+        "kind": "list_item",
+        "label": "Engine Control Module"
+      },
+      {
+        "kind": "list_item",
+        "label": "Diagnostic Trouble Codes (DTC)"
+      },
+      {
+        "kind": "list_item",
+        "label": "DTC Display"
+      },
+      {
+        "kind": "button",
+        "label": "Clear DTCs"
+      },
+      {
+        "kind": "button",
+        "label": "Add All",
+        "transition": "clear_dtcs_selection_state",
+        "expect_selected_modules": [
+          "Engine Control Module"
+        ],
+        "expect_buttons_enabled": [
+          "OK",
+          "Remove",
+          "Remove All"
+        ],
+        "expect_buttons_disabled": [
+          "Add All",
+          "Add"
+        ]
+      },
+      {
+        "kind": "button",
+        "label": "OK"
+      },
+      {
+        "kind": "button",
+        "label": "OK"
+      }
+    ],
+    "target_action": {
+      "kind": "button",
+      "label": "OK"
+    },
+    "expected_page_id": "data_display",
+    "expected_actions": [
+      {
+        "kind": "button",
+        "label": "Clear DTCs"
+      },
+      {
+        "kind": "button",
+        "label": "Refresh"
+      }
+    ],
+    "success_criteria": {
+      "page_id_any": [
+        "data_display",
+        "data_list"
+      ],
+      "variants": [
+        {
+          "name": "returned_to_dtc_display_after_final_ok",
+          "all_of": [
+            {
+              "kind": "button",
+              "label": "Clear DTCs"
+            },
+            {
+              "kind": "button",
+              "label": "Refresh"
+            }
+          ]
+        },
+        {
+          "name": "returned_to_dtc_menu_after_final_ok",
+          "all_of": [
+            {
+              "kind": "list_item",
+              "label": "DTC Display"
+            },
+            {
+              "kind": "list_item",
+              "label": "Specific DTC"
+            }
+          ]
+        }
+      ],
+      "navigation_path_contains_prefix": [
+        "Module Diagnostics",
+        "Engine Control Module",
+        "Diagnostic Trouble Codes (DTC)"
+      ],
+      "requires_executed": [
+        {
+          "kind": "button",
+          "label": "Add All"
+        },
+        {
+          "kind": "button",
+          "label": "OK"
+        },
+        {
+          "kind": "button",
+          "label": "OK"
+        }
+      ]
+    },
+    "fallback_strategy": [
+      "navigate to DTC Display",
+      "click Clear DTCs",
+      "click Add All",
+      "click OK on selection page",
+      "click OK on final confirmation page"
+    ],
+    "confidence": "explored",
+    "source": "merged_route_graph",
+    "notes": "Executes the Clear DTCs flow through Add All -> OK -> final confirmation OK. Other confirmation buttons are intentionally ignored.",
+    "aliases": [
+      "clear codes",
+      "clear dtc",
+      "clear dtcs",
+      "dtc.clear",
+      "dtc.clear.execute",
+      "erase codes",
+      "execute clear dtcs"
+    ],
+    "created_at": "2026-04-20T16:00:48",
+    "updated_at": "2026-04-20T16:00:48"
+  },
+  "target_action": {
+    "kind": "button",
+    "label": "OK"
+  },
+  "bootstrap_actions": [],
+  "start_snapshot": {
+    "page": {
+      "page_id": "main_menu"
+    },
+    "raw_page_id": "main_menu",
+    "effective_page_id": "main_menu",
+    "observed_actions": [
+      {
+        "kind": "button",
+        "label": "Manage Diagnostic Packages"
+      },
+      {
+        "kind": "button",
+        "label": "Review Stored Data"
+      },
+      {
+        "kind": "button",
+        "label": "Preferences"
+      },
+      {
+        "kind": "button",
+        "label": "Release Notes"
+      },
+      {
+        "kind": "button",
+        "label": "Language"
+      },
+      {
+        "kind": "button",
+        "label": "Diagnostics"
+      },
+      {
+        "kind": "button",
+        "label": "Update"
+      },
+      {
+        "kind": "button",
+        "label": "Close Application"
+      },
+      {
+        "kind": "button",
+        "label": "Home"
+      }
+    ],
+    "list_items": [],
+    "navigation_path": []
+  },
+  "success": true,
+  "success_details": {
+    "page_ok": true,
+    "page_id": "data_list",
+    "page_id_any": [
+      "data_display",
+      "data_list"
+    ],
+    "missing_all_of": [],
+    "matched_any_of": [],
+    "required_any_of": [],
+    "forbidden_present": [],
+    "path_ok": true,
+    "path_mode": "contains_prefix",
+    "variant_results": [
+      {
+        "page_ok": true,
+        "page_id": "data_list",
+        "page_id_any": [],
+        "missing_all_of": [
+          {
+            "kind": "button",
+            "label": "Clear DTCs"
+          },
+          {
+            "kind": "button",
+            "label": "Refresh"
+          }
+        ],
+        "matched_any_of": [],
+        "required_any_of": [],
+        "forbidden_present": [],
+        "path_ok": true,
+        "path_mode": null,
+        "variant_results": [],
+        "name": "returned_to_dtc_display_after_final_ok"
+      },
+      {
+        "page_ok": true,
+        "page_id": "data_list",
+        "page_id_any": [],
+        "missing_all_of": [],
+        "matched_any_of": [],
+        "required_any_of": [],
+        "forbidden_present": [],
+        "path_ok": true,
+        "path_mode": null,
+        "variant_results": [],
+        "name": "returned_to_dtc_menu_after_final_ok"
+      }
+    ]
+  },
+  "missing_expected_actions": [],
+  "route_result": {
+    "matched_start_node_id": "e7ffb5a50e9077e6",
+    "recovery_actions": [
+      {
+        "kind": "device",
+        "label": "SM2 USB",
+        "reason": "initial Device Explorer requires VCI selection before Vehicle Selection banner is populated",
+        "success": true
+      },
+      {
+        "kind": "wait",
+        "label": "vehicle_selection",
+        "reason": "connected_session",
+        "success": true
+      },
+      {
+        "kind": "button",
+        "label": "Add All",
+        "reason": "verified Clear DTCs same-page state change",
+        "success": true,
+        "state": {
+          "selected_rows": [
+            "Engine Control Module"
+          ],
+          "missing_modules": [],
+          "not_enabled": [],
+          "not_disabled": [],
+          "buttons": {
+            "Add All": {
+              "enabled": false,
+              "disabled": true,
+              "styleClass": [
+                "button",
+                "_Double_Bordered_Button"
+              ]
+            },
+            "Add": {
+              "enabled": false,
+              "disabled": true,
+              "styleClass": [
+                "button",
+                "_Double_Bordered_Button"
+              ]
+            },
+            "Remove": {
+              "enabled": true,
+              "disabled": false,
+              "styleClass": [
+                "button",
+                "_Double_Bordered_Button"
+              ]
+            },
+            "Remove All": {
+              "enabled": true,
+              "disabled": false,
+              "styleClass": [
+                "button",
+                "_Double_Bordered_Button"
+              ]
+            },
+            "Cancel": {
+              "enabled": true,
+              "disabled": false,
+              "styleClass": [
+                "button",
+                "_Double_Bordered_Button"
+              ]
+            },
+            "OK": {
+              "enabled": true,
+              "disabled": false,
+              "styleClass": [
+                "button",
+                "_Double_Bordered_Button"
+              ]
+            },
+            "Back": {
+              "enabled": true,
+              "disabled": false,
+              "styleClass": [
+                "button",
+                "_Button_Etched_Border"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "kind": "button",
+        "label": "Back",
+        "success": true
+      }
+    ],
+    "planned_path": [
+      {
+        "kind": "list_item",
+        "label": "Module Diagnostics"
+      },
+      {
+        "kind": "list_item",
+        "label": "Engine Control Module"
+      },
+      {
+        "kind": "list_item",
+        "label": "Diagnostic Trouble Codes (DTC)"
+      },
+      {
+        "kind": "list_item",
+        "label": "DTC Display"
+      },
+      {
+        "kind": "button",
+        "label": "Clear DTCs"
+      },
+      {
+        "kind": "button",
+        "label": "Add All",
+        "transition": "clear_dtcs_selection_state",
+        "expect_selected_modules": [
+          "Engine Control Module"
+        ],
+        "expect_buttons_enabled": [
+          "OK",
+          "Remove",
+          "Remove All"
+        ],
+        "expect_buttons_disabled": [
+          "Add All",
+          "Add"
+        ]
+      },
+      {
+        "kind": "button",
+        "label": "OK"
+      },
+      {
+        "kind": "button",
+        "label": "OK"
+      }
+    ],
+    "executed_actions": [
+      {
+        "kind": "button",
+        "label": "Diagnostics"
+      },
+      {
+        "kind": "button",
+        "label": "Enter"
+      },
+      {
+        "kind": "list_item",
+        "label": "Module Diagnostics"
+      },
+      {
+        "kind": "list_item",
+        "label": "Engine Control Module"
+      },
+      {
+        "kind": "list_item",
+        "label": "Diagnostic Trouble Codes (DTC)"
+      },
+      {
+        "kind": "list_item",
+        "label": "DTC Display"
+      },
+      {
+        "kind": "button",
+        "label": "Clear DTCs"
+      },
+      {
+        "kind": "button",
+        "label": "Add All"
+      },
+      {
+        "kind": "button",
+        "label": "OK"
+      },
+      {
+        "kind": "button",
+        "label": "OK"
+      }
+    ],
+    "final_page": "data_list",
+    "final_snapshot": {
+      "page": {
+        "page_id": "data_list"
+      },
+      "raw_page_id": "data_list",
+      "effective_page_id": "data_list",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back"
+        },
+        {
+          "kind": "button",
+          "label": "Home"
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu"
+        },
+        {
+          "kind": "button",
+          "label": "Enter"
+        },
+        {
+          "kind": "list_item",
+          "label": "DTC Display",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Diagnostic Test Status: This Ignition Cycle",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Diagnostic Test Status: Since DTC Clear",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Freeze Frame/Failure Records",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Specific DTC",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "DTC Display",
+        "Diagnostic Test Status: This Ignition Cycle",
+        "Diagnostic Test Status: Since DTC Clear",
+        "Freeze Frame/Failure Records",
+        "Specific DTC"
+      ],
+      "navigation_path": [
+        "Module Diagnostics",
+        "Engine Control Module",
+        "Diagnostic Trouble Codes (DTC)"
+      ]
+    }
+  }
+}

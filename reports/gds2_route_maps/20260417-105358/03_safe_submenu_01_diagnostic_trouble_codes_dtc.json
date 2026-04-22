@@ -1,0 +1,104 @@
+{
+  "label": "safe_submenu_01_diagnostic_trouble_codes_dtc",
+  "timestamp": "2026-04-17T10:54:04",
+  "page": {
+    "page_id": "data_list",
+    "list_item_count": 5,
+    "buttons": [
+      "Vehicle Menu",
+      "Back",
+      "Enter",
+      "Home"
+    ],
+    "evidence": "has list items + Back button, no specific markers",
+    "has_modal": false,
+    "confidence": "medium",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "Home",
+      "enabled": true
+    },
+    {
+      "text": "Vehicle Menu",
+      "enabled": true
+    },
+    {
+      "text": "Enter",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [
+    "DTC Display",
+    "Diagnostic Test Status: This Ignition Cycle",
+    "Diagnostic Test Status: Since DTC Clear",
+    "Freeze Frame/Failure Records",
+    "Specific DTC"
+  ],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Back",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Enter",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Home",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Vehicle Menu",
+      "enabled": true
+    },
+    {
+      "kind": "list_item",
+      "label": "DTC Display",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Diagnostic Test Status: This Ignition Cycle",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Diagnostic Test Status: Since DTC Clear",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Freeze Frame/Failure Records",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Specific DTC",
+      "list_index": 0
+    }
+  ],
+  "node_id": "9517de34acd212f0"
+}

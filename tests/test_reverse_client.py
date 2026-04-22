@@ -3,9 +3,12 @@ from __future__ import annotations
 import asyncio
 import ssl
 import types
+import json
+from pathlib import Path
 
 import pytest
 
+from diagnostic_platform.observability import flush_product_log_writers
 from vci_proxy.config import ProxyConfig
 from vci_proxy.protocol import HEADER_SIZE, Message, MsgType, ProtocolDecoder, ProtocolEncoder
 from vci_proxy.reverse_client import ReverseProxyClient
@@ -44,6 +47,19 @@ class _FakeReader:
         chunk = self._buffer[self._offset : self._offset + n]
         self._offset += n
         return chunk
+
+
+def _read_local_events(tmp_path: Path) -> list[dict[str, object]]:
+    flush_product_log_writers()
+    raw_dir = tmp_path / "VCI_Proxy" / "observability" / "raw"
+    rows: list[dict[str, object]] = []
+    for path in sorted(raw_dir.glob("*.jsonl")):
+        rows.extend(
+            json.loads(line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        )
+    return rows
 
 
 def test_ensure_driver_notifies_error_when_driver_load_fails(monkeypatch) -> None:
@@ -378,3 +394,87 @@ def test_handle_message_returns_ping_response() -> None:
     assert length == HEADER_SIZE
     assert msg_type == MsgType.PING_RSP
     assert sequence == 5
+
+
+def test_handle_requests_emits_proxy_and_j2534_events(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    client = ReverseProxyClient("example.com", 9000, config=ProxyConfig.from_args(auth_token="secret"))
+    client.running = True
+    client.driver = types.SimpleNamespace(
+        disconnect=lambda channel_id: 0,
+        get_error_name=lambda code: f"ERR_{code}",
+    )
+
+    async def _run() -> None:
+        reader = _FakeReader(ProtocolEncoder.encode_disconnect_req(33, sequence=7))
+        writer = _FakeWriter()
+        with pytest.raises(ConnectionError):
+            await client._handle_requests(reader, writer, attempt_label="attempt=1")
+
+    asyncio.run(_run())
+
+    rows = _read_local_events(tmp_path)
+    event_types = [row["event_type"] for row in rows]
+    assert "proxy.request.client_received" in event_types
+    assert "j2534.call.started" in event_types
+    assert "j2534.call.finished" in event_types
+    finished = next(row for row in rows if row["event_type"] == "j2534.call.finished")
+    assert finished["proxy_seq"] == 7
+    assert finished["worker_request_id"]
+
+
+def test_handle_requests_emits_j2534_error_name_on_failed_return_code(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    client = ReverseProxyClient("example.com", 9000, config=ProxyConfig.from_args(auth_token="secret"))
+    client.running = True
+    client.driver = types.SimpleNamespace(
+        disconnect=lambda channel_id: 7,
+        get_error_name=lambda code: "ERR_DEVICE_NOT_CONNECTED" if code == 7 else f"ERR_{code}",
+    )
+
+    async def _run() -> None:
+        reader = _FakeReader(ProtocolEncoder.encode_disconnect_req(33, sequence=9))
+        writer = _FakeWriter()
+        with pytest.raises(ConnectionError):
+            await client._handle_requests(reader, writer, attempt_label="attempt=1")
+
+    asyncio.run(_run())
+
+    rows = _read_local_events(tmp_path)
+    failed = next(row for row in rows if row["event_type"] == "j2534.call.failed")
+    assert failed["error_name"] == "ERR_DEVICE_NOT_CONNECTED"
+
+
+def test_connect_and_serve_emits_lifecycle_events(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    fake_writer = _FakeWriter()
+    client = ReverseProxyClient("diag.example", 9000, config=ProxyConfig.from_args(auth_token="secret"))
+
+    async def _fake_open_connection(*_args, **_kwargs):
+        return _FakeReader(), fake_writer
+
+    async def _fake_send_registration(reader, writer, **_kwargs):
+        return True
+
+    async def _fake_handle_requests(reader, writer, **_kwargs):
+        raise ConnectionError("reverse server disconnected: EOF while waiting for messages")
+
+    async def _fake_sleep(_seconds):
+        client.running = False
+        return None
+
+    monkeypatch.setattr(client, "_ensure_driver", lambda: True)
+    monkeypatch.setattr(client, "_send_registration", _fake_send_registration)
+    monkeypatch.setattr(client, "_handle_requests", _fake_handle_requests)
+    monkeypatch.setattr("vci_proxy.reverse_client.asyncio.open_connection", _fake_open_connection)
+    monkeypatch.setattr("vci_proxy.reverse_client.asyncio.sleep", _fake_sleep)
+
+    asyncio.run(client.connect_and_serve())
+
+    rows = _read_local_events(tmp_path)
+    event_types = [row["event_type"] for row in rows]
+    assert "reverse_client.lifecycle.connecting" in event_types
+    assert "reverse_client.lifecycle.connected" in event_types
+    assert "reverse_client.lifecycle.registration_succeeded" in event_types
+    assert "reverse_client.lifecycle.disconnected" in event_types
+    assert "reverse_client.lifecycle.cleanup" in event_types

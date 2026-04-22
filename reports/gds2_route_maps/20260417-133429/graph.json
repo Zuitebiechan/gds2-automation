@@ -1,0 +1,257 @@
+{
+  "version": 1,
+  "created_at": "2026-04-17T13:34:29",
+  "nodes": {
+    "978f6de18b3b0a60": {
+      "node_id": "978f6de18b3b0a60",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "Fuel Alcohol Content Event Data",
+        "Engine Oil Level Warning Event Data",
+        "Engine Overspeed Event Data"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Alcohol Content Event Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Oil Level Warning Event Data",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Overspeed Event Data",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "explore_identification_info_start"
+    },
+    "768c7732e1416a4e": {
+      "node_id": "768c7732e1416a4e",
+      "page_id": "unknown",
+      "raw_page_id": "unknown",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        }
+      ],
+      "first_seen_label": "explore_identification_info_to_submenu"
+    },
+    "1805ef52ad0e78d2": {
+      "node_id": "1805ef52ad0e78d2",
+      "page_id": "module_submenu",
+      "raw_page_id": "module_submenu",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "Diagnostic Trouble Codes (DTC)",
+        "Event Information",
+        "Identification Information",
+        "Data Display",
+        "Control Functions",
+        "Configuration/Reset Functions",
+        "Inspection/Maintenance System Information"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Diagnostic Trouble Codes (DTC)",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Event Information",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Identification Information",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Data Display",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Control Functions",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Configuration/Reset Functions",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Inspection/Maintenance System Information",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "explore_identification_info_to_submenu"
+    },
+    "a6f3da83a6884b95": {
+      "node_id": "a6f3da83a6884b95",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "Identification Information",
+        "Calibration History"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Identification Information",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Calibration History",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "explore_identification_info_open"
+    }
+  },
+  "edges": [
+    {
+      "source_id": "978f6de18b3b0a60",
+      "target_id": "1805ef52ad0e78d2",
+      "source_page_id": "data_list",
+      "target_page_id": "module_submenu",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "module_submenu",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T13:34:32"
+    },
+    {
+      "source_id": "1805ef52ad0e78d2",
+      "target_id": "a6f3da83a6884b95",
+      "source_page_id": "module_submenu",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "module_submenu",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Identification Information",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T13:34:34"
+    }
+  ]
+}

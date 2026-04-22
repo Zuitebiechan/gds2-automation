@@ -13,10 +13,21 @@ import logging
 import os
 import socket
 import sys
+import time
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
+from diagnostic_platform.observability import (
+    LogContext,
+    emit_event,
+    generate_request_id,
+    get_product_log_writer,
+)
+from diagnostic_platform.observability_artifacts import (
+    cleanup_product_observability,
+    resolve_product_log_settings,
+)
 from server.api.diagnostics import diagnostics_bp
 from server.api.navigate import navigate_bp
 from server.api.session import session_bp
@@ -147,6 +158,42 @@ def _extract_request_token() -> str:
     return str(headers.get("X-API-Token") or "").strip()
 
 
+def _install_api_request_observability(app: Flask) -> None:
+    @app.before_request
+    def _bind_api_request_id():
+        request_path = str(getattr(request, "path", "") or "")
+        if not request_path.startswith("/api/"):
+            return None
+        if not getattr(request, "request_id", None):
+            setattr(request, "request_id", generate_request_id())
+        setattr(request, "_request_started_at", time.perf_counter())
+        return None
+
+
+def _extract_request_session_id() -> str | None:
+    request_json = None
+    get_json = getattr(request, "get_json", None)
+    if callable(get_json):
+        try:
+            request_json = get_json(silent=True)
+        except Exception:
+            request_json = None
+    if not isinstance(request_json, dict):
+        request_json = getattr(request, "json", None)
+    if isinstance(request_json, dict):
+        session_id = request_json.get("session_id")
+        if isinstance(session_id, str) and session_id.strip():
+            return session_id.strip()
+    request_args = getattr(request, "args", None)
+    session_id = None
+    get_value = getattr(request_args, "get", None)
+    if callable(get_value):
+        session_id = get_value("session_id")
+    if isinstance(session_id, str) and session_id.strip():
+        return session_id.strip()
+    return None
+
+
 def _install_api_token_guard(app: Flask, settings: ServerRuntimeSettings) -> None:
     if not settings.api_token:
         return
@@ -165,11 +212,42 @@ def _install_api_token_guard(app: Flask, settings: ServerRuntimeSettings) -> Non
 
 
 def _install_api_failure_logger(app: Flask) -> None:
+    writer = get_product_log_writer("server.api")
+
     @app.after_request
     def _log_api_failure(response):
         status_code = int(getattr(response, "status_code", 200) or 200)
         request_path = str(getattr(request, "path", "") or "")
-        if status_code < 400 or not request_path.startswith("/api/"):
+        if not request_path.startswith("/api/"):
+            return response
+
+        request_started_at = getattr(request, "_request_started_at", None)
+        duration_ms = None
+        if isinstance(request_started_at, (float, int)):
+            duration_ms = round((time.perf_counter() - float(request_started_at)) * 1000.0, 3)
+
+        emit_event(
+            writer,
+            component="server.api",
+            event_type="api.request.completed",
+            context=LogContext(
+                session_id=_extract_request_session_id(),
+                operation_kind=f"http:{str(getattr(request, 'method', 'GET') or 'GET')} {request_path}",
+                request_id=str(getattr(request, "request_id", "") or generate_request_id()),
+            ),
+            status="error" if status_code >= 400 else "ok",
+            failure_code=f"http_{status_code}" if status_code >= 400 else None,
+            reason=f"http_status_{status_code}" if status_code >= 400 else None,
+            duration_ms=duration_ms,
+            impact_scope=f"http:{request_path}",
+            http_status=status_code,
+            http_method=str(getattr(request, "method", "GET") or "GET"),
+            endpoint=str(getattr(request, "endpoint", "") or "-"),
+            remote_addr=str(getattr(request, "remote_addr", "") or "-"),
+            request_id=str(getattr(request, "request_id", "") or ""),
+        )
+
+        if status_code < 400:
             return response
 
         level = logging.ERROR if status_code >= 500 else logging.WARNING
@@ -188,10 +266,19 @@ def _install_api_failure_logger(app: Flask) -> None:
 def create_app(settings: ServerRuntimeSettings | None = None) -> Flask:
     resolved_settings = settings or resolve_server_settings([])
     app = Flask(__name__)
+    log_settings = resolve_product_log_settings()
+    if log_settings.enabled:
+        cleanup_product_observability(
+            programdata=os.environ.get("PROGRAMDATA"),
+            retention_days_raw=log_settings.retention_days_raw,
+            retention_days_session_trace=log_settings.retention_days_session_trace,
+            retention_days_incident=log_settings.retention_days_incident,
+        )
     configure_node_allocator_from_env()
     configure_node_provisioning_from_env()
     configure_node_readiness_from_env()
     _apply_cors(app, resolved_settings)
+    _install_api_request_observability(app)
     _install_api_token_guard(app, resolved_settings)
     _install_api_failure_logger(app)
     app.register_blueprint(diagnostics_bp)

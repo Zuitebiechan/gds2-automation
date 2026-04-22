@@ -1,0 +1,2558 @@
+{
+  "schema_version": 1,
+  "backend": "gds2",
+  "generated_from": "manual_seed_from_exploration_and_navigation_path_proof",
+  "vehicle_profile": {
+    "device": "SM2 USB",
+    "module": "Engine Control Module",
+    "default_data_category": "Engine Data"
+  },
+  "entries": [
+    {
+      "page_key": "main.diagnostics",
+      "title": "Main Menu / Diagnostics",
+      "category": "bootstrap",
+      "page_kind": "main_menu",
+      "canonical_path": [],
+      "route_steps": [
+        {
+          "kind": "button",
+          "label": "Diagnostics"
+        }
+      ],
+      "target_action": {
+        "kind": "button",
+        "label": "Diagnostics"
+      },
+      "expected_page_id": "vehicle_selection",
+      "expected_actions": [
+        {
+          "kind": "button",
+          "label": "Enter"
+        }
+      ],
+      "fallback_strategy": [
+        "Home",
+        "click Diagnostics"
+      ],
+      "confidence": "verified",
+      "source": "live_debug_20260420",
+      "aliases": [
+        "Diagnostics",
+        "diagnostics button"
+      ],
+      "success_criteria": {
+        "page_id_any": [
+          "vehicle_selection",
+          "device_explorer",
+          "diagnostics_menu"
+        ],
+        "any_of": [
+          {
+            "kind": "button",
+            "label": "Enter"
+          },
+          {
+            "kind": "button",
+            "label": "Select Device"
+          },
+          {
+            "kind": "list_item",
+            "label": "Module Diagnostics"
+          }
+        ]
+      },
+      "notes": " Success criteria normalized for flexible live probing."
+    },
+    {
+      "page_key": "diagnostics.module_diagnostics",
+      "title": "Diagnostics / Module Diagnostics",
+      "category": "bootstrap",
+      "page_kind": "diagnostics_menu",
+      "canonical_path": [
+        "Module Diagnostics"
+      ],
+      "route_steps": [
+        {
+          "kind": "button",
+          "label": "Diagnostics",
+          "optional": true
+        },
+        {
+          "kind": "device",
+          "label": "SM2 USB",
+          "optional": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "optional": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics"
+        }
+      ],
+      "target_action": {
+        "kind": "list_item",
+        "label": "Module Diagnostics"
+      },
+      "expected_page_id": "module_list",
+      "expected_actions": [
+        {
+          "kind": "list_item",
+          "label": "Engine Control Module"
+        }
+      ],
+      "fallback_strategy": [
+        "Home",
+        "click Diagnostics",
+        "select SM2 USB if Device Explorer appears",
+        "select Module Diagnostics"
+      ],
+      "confidence": "verified",
+      "source": "live_debug_20260420",
+      "aliases": [
+        "Module Diagnostics",
+        "module diagnostics root"
+      ],
+      "success_criteria": {
+        "page_id_any": [
+          "module_list"
+        ],
+        "all_of": [
+          {
+            "kind": "list_item",
+            "label": "Engine Control Module"
+          }
+        ],
+        "any_of": [
+          {
+            "kind": "button",
+            "label": "Back"
+          },
+          {
+            "kind": "button",
+            "label": "Enter"
+          }
+        ],
+        "navigation_path_contains_prefix": [
+          "Module Diagnostics"
+        ]
+      },
+      "notes": " Success criteria normalized for flexible live probing."
+    },
+    {
+      "page_key": "module.engine_control_module",
+      "title": "Engine Control Module",
+      "category": "module",
+      "page_kind": "module_submenu",
+      "canonical_path": [
+        "Module Diagnostics",
+        "Engine Control Module"
+      ],
+      "route_steps": [
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics"
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Control Module"
+        }
+      ],
+      "target_action": {
+        "kind": "list_item",
+        "label": "Engine Control Module"
+      },
+      "expected_page_id": "module_submenu",
+      "expected_actions": [
+        {
+          "kind": "list_item",
+          "label": "Data Display"
+        },
+        {
+          "kind": "list_item",
+          "label": "Diagnostic Trouble Codes (DTC)"
+        },
+        {
+          "kind": "list_item",
+          "label": "Control Functions"
+        },
+        {
+          "kind": "list_item",
+          "label": "Configuration/Reset Functions"
+        }
+      ],
+      "fallback_strategy": [
+        "click breadcrumb Engine Control Module when present",
+        "Back to Module Diagnostics",
+        "select Engine Control Module"
+      ],
+      "confidence": "verified",
+      "source": "live_debug_20260420",
+      "aliases": [
+        "ECM",
+        "Engine Control Module",
+        "[K20] Engine Control Module"
+      ],
+      "success_criteria": {
+        "page_id_any": [
+          "module_submenu"
+        ],
+        "all_of": [
+          {
+            "kind": "list_item",
+            "label": "Data Display"
+          },
+          {
+            "kind": "list_item",
+            "label": "Diagnostic Trouble Codes (DTC)"
+          }
+        ],
+        "any_of": [
+          {
+            "kind": "list_item",
+            "label": "Control Functions"
+          },
+          {
+            "kind": "list_item",
+            "label": "Configuration/Reset Functions"
+          }
+        ],
+        "navigation_path_contains_prefix": [
+          "Module Diagnostics",
+          "Engine Control Module"
+        ]
+      }
+    },
+    {
+      "page_key": "dtc.menu",
+      "title": "Diagnostic Trouble Codes Menu",
+      "category": "dtc",
+      "page_kind": "data_list",
+      "canonical_path": [
+        "Module Diagnostics",
+        "Engine Control Module",
+        "Diagnostic Trouble Codes (DTC)"
+      ],
+      "route_steps": [
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics"
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Control Module"
+        },
+        {
+          "kind": "list_item",
+          "label": "Diagnostic Trouble Codes (DTC)"
+        }
+      ],
+      "target_action": {
+        "kind": "list_item",
+        "label": "Diagnostic Trouble Codes (DTC)"
+      },
+      "expected_page_id": "data_list",
+      "expected_actions": [
+        {
+          "kind": "list_item",
+          "label": "DTC Display"
+        },
+        {
+          "kind": "list_item",
+          "label": "Specific DTC"
+        },
+        {
+          "kind": "list_item",
+          "label": "Freeze Frame/Failure Records"
+        }
+      ],
+      "fallback_strategy": [
+        "click breadcrumb Engine Control Module",
+        "select Diagnostic Trouble Codes (DTC)"
+      ],
+      "confidence": "explored",
+      "source": "merged_route_graph",
+      "aliases": [
+        "DTC menu",
+        "Diagnostic Trouble Codes",
+        "DTCs"
+      ],
+      "success_criteria": {
+        "page_id_any": [
+          "data_list"
+        ],
+        "all_of": [
+          {
+            "kind": "list_item",
+            "label": "DTC Display"
+          },
+          {
+            "kind": "list_item",
+            "label": "Specific DTC"
+          }
+        ],
+        "any_of": [
+          {
+            "kind": "list_item",
+            "label": "Freeze Frame/Failure Records"
+          },
+          {
+            "kind": "list_item",
+            "label": "Diagnostic Test Status: This Ignition Cycle"
+          }
+        ],
+        "navigation_path_contains_prefix": [
+          "Module Diagnostics",
+          "Engine Control Module",
+          "Diagnostic Trouble Codes (DTC)"
+        ]
+      }
+    },
+    {
+      "page_key": "dtc.display",
+      "title": "DTC Display",
+      "category": "dtc",
+      "page_kind": "data_display",
+      "canonical_path": [
+        "Module Diagnostics",
+        "Engine Control Module",
+        "Diagnostic Trouble Codes (DTC)",
+        "DTC Display"
+      ],
+      "route_steps": [
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics"
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Control Module"
+        },
+        {
+          "kind": "list_item",
+          "label": "Diagnostic Trouble Codes (DTC)"
+        },
+        {
+          "kind": "list_item",
+          "label": "DTC Display"
+        }
+      ],
+      "target_action": {
+        "kind": "list_item",
+        "label": "DTC Display"
+      },
+      "expected_page_id": "data_display",
+      "expected_actions": [
+        {
+          "kind": "button",
+          "label": "Clear DTCs"
+        },
+        {
+          "kind": "button",
+          "label": "Refresh"
+        },
+        {
+          "kind": "button",
+          "label": "Create Report"
+        }
+      ],
+      "fallback_strategy": [
+        "click breadcrumb Engine Control Module",
+        "select Diagnostic Trouble Codes (DTC)",
+        "select DTC Display"
+      ],
+      "confidence": "explored",
+      "source": "merged_route_graph",
+      "aliases": [
+        "read DTCs",
+        "read dtc",
+        "DTC Display",
+        "DTC list"
+      ],
+      "notes": "Live probe on 2026-04-20 showed no Details button on this DTC Display state.",
+      "success_criteria": {
+        "page_id_any": [
+          "data_display"
+        ],
+        "all_of": [
+          {
+            "kind": "button",
+            "label": "Clear DTCs"
+          },
+          {
+            "kind": "button",
+            "label": "Refresh"
+          }
+        ],
+        "any_of": [
+          {
+            "kind": "button",
+            "label": "Create Report"
+          },
+          {
+            "kind": "button",
+            "label": "Details"
+          }
+        ],
+        "navigation_path_contains_prefix": [
+          "Module Diagnostics",
+          "Engine Control Module",
+          "Diagnostic Trouble Codes (DTC)"
+        ]
+      }
+    },
+    {
+      "page_key": "dtc.clear.selection",
+      "title": "Clear DTCs / Selection Page",
+      "category": "dtc",
+      "page_kind": "clear_dtcs_selection",
+      "canonical_path": [
+        "Module Diagnostics",
+        "Engine Control Module",
+        "Diagnostic Trouble Codes (DTC)",
+        "DTC Display",
+        "Clear DTCs"
+      ],
+      "route_steps": [
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics"
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Control Module"
+        },
+        {
+          "kind": "list_item",
+          "label": "Diagnostic Trouble Codes (DTC)"
+        },
+        {
+          "kind": "list_item",
+          "label": "DTC Display"
+        },
+        {
+          "kind": "button",
+          "label": "Clear DTCs"
+        }
+      ],
+      "target_action": {
+        "kind": "button",
+        "label": "Clear DTCs"
+      },
+      "expected_page_id": "clear_dtcs_selection",
+      "expected_actions": [
+        {
+          "kind": "button",
+          "label": "Add All"
+        },
+        {
+          "kind": "button",
+          "label": "Add"
+        },
+        {
+          "kind": "button",
+          "label": "Cancel"
+        }
+      ],
+      "fallback_strategy": [
+        "navigate to DTC Display",
+        "click Clear DTCs",
+        "handle confirmation with No/Yes as requested"
+      ],
+      "confidence": "explored",
+      "source": "merged_route_graph",
+      "aliases": [
+        "clear dtc selection",
+        "clear dtcs selection",
+        "dtc.clear.selection"
+      ],
+      "notes": "Live probe on 2026-04-20 showed first Clear DTCs page exposes Add All/Add/Cancel/Back, not OK. Renamed from dtc.clear because this entry only reaches the selection page.",
+      "success_criteria": {
+        "page_id_any": [
+          "clear_dtcs_selection",
+          "clear_dtcs_confirmation"
+        ],
+        "variants": [
+          {
+            "name": "selection",
+            "all_of": [
+              {
+                "kind": "button",
+                "label": "Add All"
+              },
+              {
+                "kind": "button",
+                "label": "Cancel"
+              }
+            ],
+            "any_of": [
+              {
+                "kind": "button",
+                "label": "Add"
+              },
+              {
+                "kind": "button",
+                "label": "OK"
+              }
+            ]
+          },
+          {
+            "name": "confirmation",
+            "all_of": [
+              {
+                "kind": "button",
+                "label": "OK"
+              },
+              {
+                "kind": "button",
+                "label": "Cancel"
+              }
+            ],
+            "any_of": [
+              {
+                "kind": "button",
+                "label": "Clear Records"
+              },
+              {
+                "kind": "button",
+                "label": "Save and Clear"
+              },
+              {
+                "kind": "button",
+                "label": "Yes"
+              }
+            ]
+          }
+        ],
+        "navigation_path_contains_prefix": [
+          "Module Diagnostics",
+          "Engine Control Module",
+          "Diagnostic Trouble Codes (DTC)"
+        ]
+      }
+    },
+    {
+      "page_key": "dtc.clear.execute",
+      "title": "Execute Clear DTCs",
+      "category": "dtc",
+      "page_kind": "clear_dtcs_execute",
+      "canonical_path": [
+        "Module Diagnostics",
+        "Engine Control Module",
+        "Diagnostic Trouble Codes (DTC)",
+        "DTC Display",
+        "Clear DTCs",
+        "Add All",
+        "OK",
+        "OK"
+      ],
+      "route_steps": [
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics"
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Control Module"
+        },
+        {
+          "kind": "list_item",
+          "label": "Diagnostic Trouble Codes (DTC)"
+        },
+        {
+          "kind": "list_item",
+          "label": "DTC Display"
+        },
+        {
+          "kind": "button",
+          "label": "Clear DTCs"
+        },
+        {
+          "kind": "button",
+          "label": "Add All",
+          "transition": "clear_dtcs_selection_state",
+          "expect_selected_modules": [
+            "Engine Control Module"
+          ],
+          "expect_buttons_enabled": [
+            "OK",
+            "Remove",
+            "Remove All"
+          ],
+          "expect_buttons_disabled": [
+            "Add All",
+            "Add"
+          ]
+        },
+        {
+          "kind": "button",
+          "label": "OK"
+        },
+        {
+          "kind": "button",
+          "label": "OK"
+        }
+      ],
+      "target_action": {
+        "kind": "button",
+        "label": "OK"
+      },
+      "expected_page_id": "data_display",
+      "expected_actions": [
+        {
+          "kind": "button",
+          "label": "Clear DTCs"
+        },
+        {
+          "kind": "button",
+          "label": "Refresh"
+        }
+      ],
+      "fallback_strategy": [
+        "navigate to DTC Display",
+        "click Clear DTCs",
+        "click Add All",
+        "click OK on selection page",
+        "click OK on final confirmation page"
+      ],
+      "confidence": "explored",
+      "source": "merged_route_graph",
+      "aliases": [
+        "clear codes",
+        "clear DTCs",
+        "clear dtc",
+        "erase codes",
+        "execute clear dtcs",
+        "dtc.clear"
+      ],
+      "notes": "Executes the Clear DTCs flow through Add All -> OK -> final confirmation OK. Other confirmation buttons are intentionally ignored.",
+      "success_criteria": {
+        "page_id_any": [
+          "data_display",
+          "data_list"
+        ],
+        "variants": [
+          {
+            "name": "returned_to_dtc_display_after_final_ok",
+            "all_of": [
+              {
+                "kind": "button",
+                "label": "Clear DTCs"
+              },
+              {
+                "kind": "button",
+                "label": "Refresh"
+              }
+            ]
+          },
+          {
+            "name": "returned_to_dtc_menu_after_final_ok",
+            "all_of": [
+              {
+                "kind": "list_item",
+                "label": "DTC Display"
+              },
+              {
+                "kind": "list_item",
+                "label": "Specific DTC"
+              }
+            ]
+          }
+        ],
+        "navigation_path_contains_prefix": [
+          "Module Diagnostics",
+          "Engine Control Module",
+          "Diagnostic Trouble Codes (DTC)"
+        ],
+        "requires_executed": [
+          {
+            "kind": "button",
+            "label": "Add All"
+          },
+          {
+            "kind": "button",
+            "label": "OK"
+          },
+          {
+            "kind": "button",
+            "label": "OK"
+          }
+        ]
+      }
+    },
+    {
+      "page_key": "data.engine_data",
+      "title": "Data Display / Engine Data",
+      "category": "live_data",
+      "page_kind": "data_display",
+      "canonical_path": [
+        "Module Diagnostics",
+        "Engine Control Module",
+        "Data Display",
+        "Engine Data"
+      ],
+      "route_steps": [
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics"
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Control Module"
+        },
+        {
+          "kind": "list_item",
+          "label": "Data Display"
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Data"
+        }
+      ],
+      "target_action": {
+        "kind": "list_item",
+        "label": "Engine Data"
+      },
+      "expected_page_id": "data_display",
+      "expected_actions": [
+        {
+          "kind": "button",
+          "label": "Create Report"
+        },
+        {
+          "kind": "button",
+          "label": "Clear DTCs"
+        },
+        {
+          "kind": "button",
+          "label": "Add Bookmark"
+        }
+      ],
+      "fallback_strategy": [
+        "click breadcrumb Engine Control Module if available",
+        "Back to module submenu",
+        "select Data Display",
+        "select Engine Data"
+      ],
+      "confidence": "verified",
+      "source": "live_debug_20260420",
+      "aliases": [
+        "Engine Data",
+        "live data",
+        "read live data",
+        "data display"
+      ],
+      "success_criteria": {
+        "page_id_any": [
+          "data_display"
+        ],
+        "all_of": [
+          {
+            "kind": "button",
+            "label": "Create Report"
+          },
+          {
+            "kind": "button",
+            "label": "Back"
+          }
+        ],
+        "any_of": [
+          {
+            "kind": "button",
+            "label": "Clear DTCs"
+          },
+          {
+            "kind": "button",
+            "label": "Add Bookmark"
+          }
+        ],
+        "navigation_path_contains_prefix": [
+          "Module Diagnostics",
+          "Engine Control Module"
+        ]
+      }
+    },
+    {
+      "page_key": "data.fuel_trim_data",
+      "title": "Data Display / Fuel Trim Data",
+      "category": "live_data",
+      "page_kind": "data_display",
+      "canonical_path": [
+        "Module Diagnostics",
+        "Engine Control Module",
+        "Data Display",
+        "Fuel Trim Data"
+      ],
+      "route_steps": [
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics"
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Control Module"
+        },
+        {
+          "kind": "list_item",
+          "label": "Data Display"
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Trim Data"
+        }
+      ],
+      "target_action": {
+        "kind": "list_item",
+        "label": "Fuel Trim Data"
+      },
+      "expected_page_id": "data_display",
+      "expected_actions": [
+        {
+          "kind": "button",
+          "label": "Create Report"
+        }
+      ],
+      "fallback_strategy": [
+        "Back to data category list",
+        "select Fuel Trim Data"
+      ],
+      "confidence": "explored",
+      "source": "merged_route_graph",
+      "aliases": [
+        "Fuel Trim Data",
+        "fuel trim live data"
+      ],
+      "success_criteria": {
+        "page_id_any": [
+          "data_display"
+        ],
+        "all_of": [
+          {
+            "kind": "button",
+            "label": "Create Report"
+          },
+          {
+            "kind": "button",
+            "label": "Back"
+          }
+        ],
+        "navigation_path_contains_prefix": [
+          "Module Diagnostics",
+          "Engine Control Module"
+        ]
+      }
+    },
+    {
+      "page_key": "control.menu",
+      "title": "Control Functions Menu",
+      "category": "control",
+      "page_kind": "data_list",
+      "canonical_path": [
+        "Module Diagnostics",
+        "Engine Control Module",
+        "Control Functions"
+      ],
+      "route_steps": [
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics"
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Control Module"
+        },
+        {
+          "kind": "list_item",
+          "label": "Control Functions"
+        }
+      ],
+      "target_action": {
+        "kind": "list_item",
+        "label": "Control Functions"
+      },
+      "expected_page_id": "data_list",
+      "expected_actions": [
+        {
+          "kind": "list_item",
+          "label": "Fuel System"
+        },
+        {
+          "kind": "list_item",
+          "label": "Cooling Fan"
+        },
+        {
+          "kind": "list_item",
+          "label": "Turbocharger"
+        }
+      ],
+      "fallback_strategy": [
+        "click breadcrumb Engine Control Module",
+        "select Control Functions"
+      ],
+      "confidence": "verified",
+      "source": "live_debug_20260420",
+      "aliases": [
+        "Control Functions",
+        "function controls",
+        "controls"
+      ],
+      "success_criteria": {
+        "page_id_any": [
+          "data_list"
+        ],
+        "all_of": [
+          {
+            "kind": "list_item",
+            "label": "Fuel System"
+          },
+          {
+            "kind": "list_item",
+            "label": "Cooling Fan"
+          }
+        ],
+        "any_of": [
+          {
+            "kind": "list_item",
+            "label": "Turbocharger"
+          },
+          {
+            "kind": "list_item",
+            "label": "Engine Speed/Throttle"
+          }
+        ],
+        "navigation_path_contains_prefix": [
+          "Module Diagnostics",
+          "Engine Control Module",
+          "Control Functions"
+        ]
+      }
+    },
+    {
+      "page_key": "control.fuel_system",
+      "title": "Control Functions / Fuel System",
+      "category": "control",
+      "page_kind": "data_list",
+      "canonical_path": [
+        "Module Diagnostics",
+        "Engine Control Module",
+        "Control Functions",
+        "Fuel System"
+      ],
+      "route_steps": [
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics"
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Control Module"
+        },
+        {
+          "kind": "list_item",
+          "label": "Control Functions"
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel System"
+        }
+      ],
+      "target_action": {
+        "kind": "list_item",
+        "label": "Fuel System"
+      },
+      "expected_page_id": "data_list",
+      "expected_actions": [
+        {
+          "kind": "list_item",
+          "label": "Fuel Trim Enable"
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Pump Enable"
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Pressure"
+        }
+      ],
+      "fallback_strategy": [
+        "click breadcrumb Control Functions",
+        "select Fuel System"
+      ],
+      "confidence": "verified",
+      "source": "live_click_breadcrumb_20260420",
+      "aliases": [
+        "Fuel System",
+        "fuel system controls"
+      ],
+      "success_criteria": {
+        "page_id_any": [
+          "data_list"
+        ],
+        "all_of": [
+          {
+            "kind": "list_item",
+            "label": "Fuel Trim Enable"
+          },
+          {
+            "kind": "list_item",
+            "label": "Fuel Pump Enable"
+          }
+        ],
+        "any_of": [
+          {
+            "kind": "list_item",
+            "label": "Fuel Pressure"
+          },
+          {
+            "kind": "list_item",
+            "label": "Fuel Rail Pressure"
+          }
+        ],
+        "navigation_path_contains_prefix": [
+          "Module Diagnostics",
+          "Engine Control Module",
+          "Control Functions",
+          "Fuel System"
+        ]
+      }
+    },
+    {
+      "page_key": "control.fuel_trim_enable",
+      "title": "Fuel System / Fuel Trim Enable",
+      "category": "control",
+      "page_kind": "control_leaf",
+      "canonical_path": [
+        "Module Diagnostics",
+        "Engine Control Module",
+        "Control Functions",
+        "Fuel System",
+        "Fuel Trim Enable"
+      ],
+      "route_steps": [
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics"
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Control Module"
+        },
+        {
+          "kind": "list_item",
+          "label": "Control Functions"
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel System"
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Trim Enable"
+        }
+      ],
+      "target_action": {
+        "kind": "list_item",
+        "label": "Fuel Trim Enable"
+      },
+      "expected_page_id": "data_list",
+      "expected_actions": [
+        {
+          "kind": "button",
+          "label": "Enabled"
+        },
+        {
+          "kind": "button",
+          "label": "Disabled"
+        },
+        {
+          "kind": "button",
+          "label": "Release Control"
+        }
+      ],
+      "fallback_strategy": [
+        "if leaf lacks breadcrumb table, Back once to Fuel System",
+        "click breadcrumb Control Functions or Engine Control Module",
+        "reselect Fuel System",
+        "select Fuel Trim Enable"
+      ],
+      "confidence": "verified",
+      "source": "navigation_path_proof_20260420",
+      "aliases": [
+        "Fuel Trim Enable",
+        "fuel trim enable control"
+      ],
+      "success_criteria": {
+        "page_id_any": [
+          "data_list"
+        ],
+        "all_of": [
+          {
+            "kind": "button",
+            "label": "Enabled"
+          },
+          {
+            "kind": "button",
+            "label": "Disabled"
+          },
+          {
+            "kind": "button",
+            "label": "Release Control"
+          }
+        ],
+        "navigation_path_contains_prefix": [
+          "Module Diagnostics",
+          "Engine Control Module",
+          "Control Functions",
+          "Fuel System"
+        ]
+      }
+    },
+    {
+      "page_key": "control.fuel_pump_enable",
+      "title": "Fuel System / Fuel Pump Enable",
+      "category": "control",
+      "page_kind": "control_leaf",
+      "canonical_path": [
+        "Module Diagnostics",
+        "Engine Control Module",
+        "Control Functions",
+        "Fuel System",
+        "Fuel Pump Enable"
+      ],
+      "route_steps": [
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics"
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Control Module"
+        },
+        {
+          "kind": "list_item",
+          "label": "Control Functions"
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel System"
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Pump Enable"
+        }
+      ],
+      "target_action": {
+        "kind": "list_item",
+        "label": "Fuel Pump Enable"
+      },
+      "expected_page_id": "data_list",
+      "expected_actions": [
+        {
+          "kind": "button",
+          "label": "On"
+        },
+        {
+          "kind": "button",
+          "label": "Off"
+        },
+        {
+          "kind": "button",
+          "label": "Release Control"
+        }
+      ],
+      "fallback_strategy": [
+        "Back to Fuel System list",
+        "select Fuel Pump Enable"
+      ],
+      "confidence": "explored",
+      "source": "merged_route_graph",
+      "aliases": [
+        "Fuel Pump Enable"
+      ],
+      "notes": " Route steps normalized to full canonical path for random-start navigation. Success criteria normalized for flexible live probing.",
+      "success_criteria": {
+        "page_id_any": [
+          "data_list"
+        ],
+        "all_of": [
+          {
+            "kind": "button",
+            "label": "Release Control"
+          }
+        ],
+        "any_of": [
+          {
+            "kind": "button",
+            "label": "On"
+          },
+          {
+            "kind": "button",
+            "label": "Off"
+          }
+        ],
+        "navigation_path_contains_prefix": [
+          "Module Diagnostics",
+          "Engine Control Module",
+          "Control Functions",
+          "Fuel System"
+        ]
+      }
+    },
+    {
+      "page_key": "control.fuel_pressure",
+      "title": "Fuel System / Fuel Pressure",
+      "category": "control",
+      "page_kind": "control_leaf",
+      "canonical_path": [
+        "Module Diagnostics",
+        "Engine Control Module",
+        "Control Functions",
+        "Fuel System",
+        "Fuel Pressure"
+      ],
+      "route_steps": [
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics"
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Control Module"
+        },
+        {
+          "kind": "list_item",
+          "label": "Control Functions"
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel System"
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Pressure"
+        }
+      ],
+      "target_action": {
+        "kind": "list_item",
+        "label": "Fuel Pressure"
+      },
+      "expected_page_id": "data_list",
+      "expected_actions": [
+        {
+          "kind": "button",
+          "label": "High Pressure"
+        },
+        {
+          "kind": "button",
+          "label": "Low Pressure"
+        },
+        {
+          "kind": "button",
+          "label": "Release Control"
+        }
+      ],
+      "fallback_strategy": [
+        "Back to Fuel System list",
+        "select Fuel Pressure"
+      ],
+      "confidence": "explored",
+      "source": "merged_route_graph",
+      "aliases": [
+        "Fuel Pressure"
+      ],
+      "notes": " Route steps normalized to full canonical path for random-start navigation. Success criteria normalized for flexible live probing.",
+      "success_criteria": {
+        "page_id_any": [
+          "data_list"
+        ],
+        "all_of": [
+          {
+            "kind": "button",
+            "label": "Release Control"
+          }
+        ],
+        "any_of": [
+          {
+            "kind": "button",
+            "label": "High Pressure"
+          },
+          {
+            "kind": "button",
+            "label": "Low Pressure"
+          }
+        ],
+        "navigation_path_contains_prefix": [
+          "Module Diagnostics",
+          "Engine Control Module",
+          "Control Functions",
+          "Fuel System"
+        ]
+      }
+    },
+    {
+      "page_key": "control.active_grille_air_shutter",
+      "title": "Control Functions / Active Grille Air Shutter System",
+      "category": "control",
+      "page_kind": "data_list",
+      "canonical_path": [
+        "Module Diagnostics",
+        "Engine Control Module",
+        "Control Functions",
+        "Active Grille Air Shutter System"
+      ],
+      "route_steps": [
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics"
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Control Module"
+        },
+        {
+          "kind": "list_item",
+          "label": "Control Functions"
+        },
+        {
+          "kind": "list_item",
+          "label": "Active Grille Air Shutter System"
+        }
+      ],
+      "target_action": {
+        "kind": "list_item",
+        "label": "Active Grille Air Shutter System"
+      },
+      "expected_page_id": "data_list",
+      "expected_actions": [
+        {
+          "kind": "list_item",
+          "label": "Active Grille Air Shutter 1"
+        },
+        {
+          "kind": "list_item",
+          "label": "Active Grille Air Shutter 2"
+        }
+      ],
+      "fallback_strategy": [
+        "click breadcrumb Control Functions",
+        "select Active Grille Air Shutter System"
+      ],
+      "confidence": "explored",
+      "source": "merged_route_graph",
+      "aliases": [
+        "Active Grille Air Shutter System",
+        "active grille"
+      ],
+      "notes": " Route steps normalized to full canonical path for random-start navigation. Success criteria normalized for flexible live probing.",
+      "success_criteria": {
+        "page_id_any": [
+          "data_list"
+        ],
+        "all_of": [
+          {
+            "kind": "list_item",
+            "label": "Active Grille Air Shutter 1"
+          },
+          {
+            "kind": "list_item",
+            "label": "Active Grille Air Shutter 2"
+          }
+        ],
+        "navigation_path_contains_prefix": [
+          "Module Diagnostics",
+          "Engine Control Module",
+          "Control Functions",
+          "Active Grille Air Shutter System"
+        ]
+      }
+    },
+    {
+      "page_key": "control.cooling_fan",
+      "title": "Control Functions / Cooling Fan",
+      "category": "control",
+      "page_kind": "data_list",
+      "canonical_path": [
+        "Module Diagnostics",
+        "Engine Control Module",
+        "Control Functions",
+        "Cooling Fan"
+      ],
+      "route_steps": [
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics"
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Control Module"
+        },
+        {
+          "kind": "list_item",
+          "label": "Control Functions"
+        },
+        {
+          "kind": "list_item",
+          "label": "Cooling Fan"
+        }
+      ],
+      "target_action": {
+        "kind": "list_item",
+        "label": "Cooling Fan"
+      },
+      "expected_page_id": "data_list",
+      "expected_actions": [
+        {
+          "kind": "list_item",
+          "label": "Cooling Fan"
+        },
+        {
+          "kind": "list_item",
+          "label": "Cooling Fan Relay 1"
+        },
+        {
+          "kind": "list_item",
+          "label": "Cooling Fan Relay 2"
+        }
+      ],
+      "fallback_strategy": [
+        "click breadcrumb Control Functions",
+        "select Cooling Fan"
+      ],
+      "confidence": "explored",
+      "source": "merged_route_graph",
+      "aliases": [
+        "Cooling Fan"
+      ],
+      "notes": " Route steps normalized to full canonical path for random-start navigation. Success criteria normalized for flexible live probing.",
+      "success_criteria": {
+        "page_id_any": [
+          "data_list"
+        ],
+        "all_of": [
+          {
+            "kind": "list_item",
+            "label": "Cooling Fan Relay 1"
+          },
+          {
+            "kind": "list_item",
+            "label": "Cooling Fan Relay 2"
+          }
+        ],
+        "any_of": [
+          {
+            "kind": "list_item",
+            "label": "Cooling Fan"
+          }
+        ],
+        "navigation_path_contains_prefix": [
+          "Module Diagnostics",
+          "Engine Control Module",
+          "Control Functions",
+          "Cooling Fan"
+        ]
+      }
+    },
+    {
+      "page_key": "control.engine_speed_throttle",
+      "title": "Control Functions / Engine Speed/Throttle",
+      "category": "control",
+      "page_kind": "data_list",
+      "canonical_path": [
+        "Module Diagnostics",
+        "Engine Control Module",
+        "Control Functions",
+        "Engine Speed/Throttle"
+      ],
+      "route_steps": [
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics"
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Control Module"
+        },
+        {
+          "kind": "list_item",
+          "label": "Control Functions"
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Speed/Throttle"
+        }
+      ],
+      "target_action": {
+        "kind": "list_item",
+        "label": "Engine Speed/Throttle"
+      },
+      "expected_page_id": "data_list",
+      "expected_actions": [
+        {
+          "kind": "list_item",
+          "label": "Engine Speed"
+        },
+        {
+          "kind": "list_item",
+          "label": "Throttle Position"
+        },
+        {
+          "kind": "list_item",
+          "label": "Throttle Sweep"
+        }
+      ],
+      "fallback_strategy": [
+        "click breadcrumb Control Functions",
+        "select Engine Speed/Throttle"
+      ],
+      "confidence": "explored",
+      "source": "merged_route_graph",
+      "aliases": [
+        "Engine Speed/Throttle",
+        "throttle controls"
+      ],
+      "notes": " Route steps normalized to full canonical path for random-start navigation. Success criteria normalized for flexible live probing.",
+      "success_criteria": {
+        "page_id_any": [
+          "data_list"
+        ],
+        "all_of": [
+          {
+            "kind": "list_item",
+            "label": "Engine Speed"
+          },
+          {
+            "kind": "list_item",
+            "label": "Throttle Position"
+          }
+        ],
+        "any_of": [
+          {
+            "kind": "list_item",
+            "label": "Throttle Sweep"
+          }
+        ],
+        "navigation_path_contains_prefix": [
+          "Module Diagnostics",
+          "Engine Control Module",
+          "Control Functions",
+          "Engine Speed/Throttle"
+        ]
+      }
+    },
+    {
+      "page_key": "control.turbocharger",
+      "title": "Control Functions / Turbocharger",
+      "category": "control",
+      "page_kind": "data_list",
+      "canonical_path": [
+        "Module Diagnostics",
+        "Engine Control Module",
+        "Control Functions",
+        "Turbocharger"
+      ],
+      "route_steps": [
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics"
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Control Module"
+        },
+        {
+          "kind": "list_item",
+          "label": "Control Functions"
+        },
+        {
+          "kind": "list_item",
+          "label": "Turbocharger"
+        }
+      ],
+      "target_action": {
+        "kind": "list_item",
+        "label": "Turbocharger"
+      },
+      "expected_page_id": "data_list",
+      "expected_actions": [
+        {
+          "kind": "list_item",
+          "label": "Turbocharger Bypass Solenoid Valve"
+        },
+        {
+          "kind": "list_item",
+          "label": "Turbocharger Wastegate Solenoid Valve"
+        }
+      ],
+      "fallback_strategy": [
+        "click breadcrumb Control Functions",
+        "select Turbocharger"
+      ],
+      "confidence": "explored",
+      "source": "merged_route_graph",
+      "aliases": [
+        "Turbocharger",
+        "turbo controls"
+      ],
+      "notes": " Route steps normalized to full canonical path for random-start navigation. Success criteria normalized for flexible live probing.",
+      "success_criteria": {
+        "page_id_any": [
+          "data_list"
+        ],
+        "all_of": [
+          {
+            "kind": "list_item",
+            "label": "Turbocharger Bypass Solenoid Valve"
+          },
+          {
+            "kind": "list_item",
+            "label": "Turbocharger Wastegate Solenoid Valve"
+          }
+        ],
+        "navigation_path_contains_prefix": [
+          "Module Diagnostics",
+          "Engine Control Module",
+          "Control Functions",
+          "Turbocharger"
+        ]
+      }
+    },
+    {
+      "page_key": "configuration_reset.menu",
+      "title": "Configuration/Reset Functions Menu",
+      "category": "configuration_reset",
+      "page_kind": "data_list",
+      "canonical_path": [
+        "Module Diagnostics",
+        "Engine Control Module",
+        "Configuration/Reset Functions"
+      ],
+      "route_steps": [
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics"
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Control Module"
+        },
+        {
+          "kind": "list_item",
+          "label": "Configuration/Reset Functions"
+        }
+      ],
+      "target_action": {
+        "kind": "list_item",
+        "label": "Configuration/Reset Functions"
+      },
+      "expected_page_id": "data_list",
+      "expected_actions": [
+        {
+          "kind": "list_item",
+          "label": "Learn Functions"
+        },
+        {
+          "kind": "list_item",
+          "label": "Reset Functions"
+        }
+      ],
+      "fallback_strategy": [
+        "click breadcrumb Engine Control Module",
+        "select Configuration/Reset Functions"
+      ],
+      "confidence": "explored",
+      "source": "merged_route_graph",
+      "aliases": [
+        "Configuration/Reset Functions",
+        "config reset",
+        "reset menu"
+      ],
+      "success_criteria": {
+        "page_id_any": [
+          "data_list"
+        ],
+        "all_of": [
+          {
+            "kind": "list_item",
+            "label": "Learn Functions"
+          },
+          {
+            "kind": "list_item",
+            "label": "Reset Functions"
+          }
+        ],
+        "navigation_path_contains_prefix": [
+          "Module Diagnostics",
+          "Engine Control Module",
+          "Configuration/Reset Functions"
+        ]
+      }
+    },
+    {
+      "page_key": "reset.menu",
+      "title": "Reset Functions Menu",
+      "category": "reset",
+      "page_kind": "data_list",
+      "canonical_path": [
+        "Module Diagnostics",
+        "Engine Control Module",
+        "Configuration/Reset Functions",
+        "Reset Functions"
+      ],
+      "route_steps": [
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics"
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Control Module"
+        },
+        {
+          "kind": "list_item",
+          "label": "Configuration/Reset Functions"
+        },
+        {
+          "kind": "list_item",
+          "label": "Reset Functions"
+        }
+      ],
+      "target_action": {
+        "kind": "list_item",
+        "label": "Reset Functions"
+      },
+      "expected_page_id": "data_list",
+      "expected_actions": [
+        {
+          "kind": "list_item",
+          "label": "Engine Oil Life Reset"
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Trim Reset"
+        },
+        {
+          "kind": "list_item",
+          "label": "Throttle Body Idle Air Flow Compensation Reset"
+        }
+      ],
+      "fallback_strategy": [
+        "click breadcrumb Configuration/Reset Functions",
+        "select Reset Functions"
+      ],
+      "confidence": "explored",
+      "source": "merged_route_graph",
+      "aliases": [
+        "Reset Functions",
+        "resets"
+      ],
+      "success_criteria": {
+        "page_id_any": [
+          "data_list"
+        ],
+        "all_of": [
+          {
+            "kind": "list_item",
+            "label": "Engine Oil Life Reset"
+          },
+          {
+            "kind": "list_item",
+            "label": "Fuel Trim Reset"
+          }
+        ],
+        "any_of": [
+          {
+            "kind": "list_item",
+            "label": "Throttle Body Idle Air Flow Compensation Reset"
+          },
+          {
+            "kind": "list_item",
+            "label": "Intake System Learned Values Reset"
+          }
+        ],
+        "navigation_path_contains_prefix": [
+          "Module Diagnostics",
+          "Engine Control Module",
+          "Configuration/Reset Functions",
+          "Reset Functions"
+        ]
+      },
+      "notes": " Route steps normalized to full canonical path for random-start navigation."
+    },
+    {
+      "page_key": "reset.engine_oil_life",
+      "title": "Reset Functions / Engine Oil Life Reset",
+      "category": "reset",
+      "page_kind": "control_leaf",
+      "canonical_path": [
+        "Module Diagnostics",
+        "Engine Control Module",
+        "Configuration/Reset Functions",
+        "Reset Functions",
+        "Engine Oil Life Reset"
+      ],
+      "route_steps": [
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics"
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Control Module"
+        },
+        {
+          "kind": "list_item",
+          "label": "Configuration/Reset Functions"
+        },
+        {
+          "kind": "list_item",
+          "label": "Reset Functions"
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Oil Life Reset"
+        }
+      ],
+      "target_action": {
+        "kind": "list_item",
+        "label": "Engine Oil Life Reset"
+      },
+      "expected_page_id": "data_list",
+      "expected_actions": [
+        {
+          "kind": "button",
+          "label": "Reset"
+        },
+        {
+          "kind": "button",
+          "label": "Release Control"
+        }
+      ],
+      "fallback_strategy": [
+        "Back to Reset Functions",
+        "select Engine Oil Life Reset"
+      ],
+      "confidence": "explored",
+      "source": "merged_route_graph",
+      "aliases": [
+        "Engine Oil Life Reset",
+        "oil life reset"
+      ],
+      "notes": " Route steps normalized to full canonical path for random-start navigation. Success criteria normalized for flexible live probing.",
+      "success_criteria": {
+        "page_id_any": [
+          "data_list"
+        ],
+        "all_of": [
+          {
+            "kind": "button",
+            "label": "Release Control"
+          }
+        ],
+        "any_of": [
+          {
+            "kind": "button",
+            "label": "Reset"
+          }
+        ],
+        "navigation_path_contains_prefix": [
+          "Module Diagnostics",
+          "Engine Control Module",
+          "Configuration/Reset Functions",
+          "Reset Functions"
+        ]
+      }
+    },
+    {
+      "page_key": "reset.fuel_trim",
+      "title": "Reset Functions / Fuel Trim Reset",
+      "category": "reset",
+      "page_kind": "control_leaf",
+      "canonical_path": [
+        "Module Diagnostics",
+        "Engine Control Module",
+        "Configuration/Reset Functions",
+        "Reset Functions",
+        "Fuel Trim Reset"
+      ],
+      "route_steps": [
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics"
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Control Module"
+        },
+        {
+          "kind": "list_item",
+          "label": "Configuration/Reset Functions"
+        },
+        {
+          "kind": "list_item",
+          "label": "Reset Functions"
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Trim Reset"
+        }
+      ],
+      "target_action": {
+        "kind": "list_item",
+        "label": "Fuel Trim Reset"
+      },
+      "expected_page_id": "data_list",
+      "expected_actions": [
+        {
+          "kind": "button",
+          "label": "Reset"
+        },
+        {
+          "kind": "button",
+          "label": "Release Control"
+        }
+      ],
+      "fallback_strategy": [
+        "Back to Reset Functions",
+        "select Fuel Trim Reset"
+      ],
+      "confidence": "explored",
+      "source": "merged_route_graph",
+      "aliases": [
+        "Fuel Trim Reset"
+      ],
+      "notes": " Route steps normalized to full canonical path for random-start navigation. Success criteria normalized for flexible live probing.",
+      "success_criteria": {
+        "page_id_any": [
+          "data_list"
+        ],
+        "all_of": [
+          {
+            "kind": "button",
+            "label": "Release Control"
+          }
+        ],
+        "any_of": [
+          {
+            "kind": "button",
+            "label": "Reset"
+          }
+        ],
+        "navigation_path_contains_prefix": [
+          "Module Diagnostics",
+          "Engine Control Module",
+          "Configuration/Reset Functions",
+          "Reset Functions"
+        ]
+      }
+    },
+    {
+      "page_key": "learn.menu",
+      "title": "Learn Functions Menu",
+      "category": "learn",
+      "page_kind": "data_list",
+      "canonical_path": [
+        "Module Diagnostics",
+        "Engine Control Module",
+        "Configuration/Reset Functions",
+        "Learn Functions"
+      ],
+      "route_steps": [
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics"
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Control Module"
+        },
+        {
+          "kind": "list_item",
+          "label": "Configuration/Reset Functions"
+        },
+        {
+          "kind": "list_item",
+          "label": "Learn Functions"
+        }
+      ],
+      "target_action": {
+        "kind": "list_item",
+        "label": "Learn Functions"
+      },
+      "expected_page_id": "data_list",
+      "expected_actions": [
+        {
+          "kind": "list_item",
+          "label": "Brake Pedal Position Sensor Learn"
+        },
+        {
+          "kind": "list_item",
+          "label": "Crankshaft Position Variation Learn"
+        },
+        {
+          "kind": "list_item",
+          "label": "HO2S Heater Learn"
+        }
+      ],
+      "fallback_strategy": [
+        "click breadcrumb Configuration/Reset Functions",
+        "select Learn Functions"
+      ],
+      "confidence": "explored",
+      "source": "merged_route_graph",
+      "aliases": [
+        "Learn Functions",
+        "learns"
+      ],
+      "success_criteria": {
+        "page_id_any": [
+          "data_list"
+        ],
+        "all_of": [
+          {
+            "kind": "list_item",
+            "label": "Crankshaft Position Variation Learn"
+          }
+        ],
+        "any_of": [
+          {
+            "kind": "list_item",
+            "label": "Brake Pedal Position Sensor Learn"
+          },
+          {
+            "kind": "list_item",
+            "label": "HO2S Heater Learn"
+          }
+        ],
+        "navigation_path_contains_prefix": [
+          "Module Diagnostics",
+          "Engine Control Module",
+          "Configuration/Reset Functions",
+          "Learn Functions"
+        ]
+      },
+      "notes": " Route steps normalized to full canonical path for random-start navigation."
+    },
+    {
+      "page_key": "learn.crankshaft_position_variation",
+      "title": "Learn Functions / Crankshaft Position Variation Learn",
+      "category": "learn",
+      "page_kind": "control_leaf",
+      "canonical_path": [
+        "Module Diagnostics",
+        "Engine Control Module",
+        "Configuration/Reset Functions",
+        "Learn Functions",
+        "Crankshaft Position Variation Learn"
+      ],
+      "route_steps": [
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics"
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Control Module"
+        },
+        {
+          "kind": "list_item",
+          "label": "Configuration/Reset Functions"
+        },
+        {
+          "kind": "list_item",
+          "label": "Learn Functions"
+        },
+        {
+          "kind": "list_item",
+          "label": "Crankshaft Position Variation Learn"
+        }
+      ],
+      "target_action": {
+        "kind": "list_item",
+        "label": "Crankshaft Position Variation Learn"
+      },
+      "expected_page_id": "data_list",
+      "expected_actions": [
+        {
+          "kind": "button",
+          "label": "Learn"
+        },
+        {
+          "kind": "button",
+          "label": "Release Control"
+        }
+      ],
+      "fallback_strategy": [
+        "Back to Learn Functions",
+        "select Crankshaft Position Variation Learn"
+      ],
+      "confidence": "explored",
+      "source": "merged_route_graph",
+      "aliases": [
+        "Crankshaft Position Variation Learn",
+        "crank learn"
+      ],
+      "notes": " Route steps normalized to full canonical path for random-start navigation. Success criteria normalized for flexible live probing.",
+      "success_criteria": {
+        "page_id_any": [
+          "data_list"
+        ],
+        "all_of": [
+          {
+            "kind": "button",
+            "label": "Release Control"
+          }
+        ],
+        "any_of": [
+          {
+            "kind": "button",
+            "label": "Learn"
+          }
+        ],
+        "navigation_path_contains_prefix": [
+          "Module Diagnostics",
+          "Engine Control Module",
+          "Configuration/Reset Functions",
+          "Learn Functions"
+        ]
+      }
+    },
+    {
+      "page_key": "event_information.menu",
+      "title": "Event Information Menu",
+      "category": "information",
+      "page_kind": "data_list",
+      "canonical_path": [
+        "Module Diagnostics",
+        "Engine Control Module",
+        "Event Information"
+      ],
+      "route_steps": [
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics"
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Control Module"
+        },
+        {
+          "kind": "list_item",
+          "label": "Event Information"
+        }
+      ],
+      "target_action": {
+        "kind": "list_item",
+        "label": "Event Information"
+      },
+      "expected_page_id": "data_list",
+      "expected_actions": [
+        {
+          "kind": "list_item",
+          "label": "Engine Oil Level Warning Event Data"
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Overspeed Event Data"
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Alcohol Content Event Data"
+        }
+      ],
+      "fallback_strategy": [
+        "click breadcrumb Engine Control Module",
+        "select Event Information"
+      ],
+      "confidence": "explored",
+      "source": "merged_route_graph",
+      "aliases": [
+        "Event Information"
+      ],
+      "success_criteria": {
+        "page_id_any": [
+          "data_list"
+        ],
+        "all_of": [
+          {
+            "kind": "list_item",
+            "label": "Engine Oil Level Warning Event Data"
+          },
+          {
+            "kind": "list_item",
+            "label": "Engine Overspeed Event Data"
+          }
+        ],
+        "any_of": [
+          {
+            "kind": "list_item",
+            "label": "Fuel Alcohol Content Event Data"
+          }
+        ],
+        "navigation_path_contains_prefix": [
+          "Module Diagnostics",
+          "Engine Control Module",
+          "Event Information"
+        ]
+      },
+      "notes": " Success criteria normalized for flexible live probing."
+    },
+    {
+      "page_key": "identification_information.menu",
+      "title": "Identification Information Menu",
+      "category": "information",
+      "page_kind": "data_list",
+      "canonical_path": [
+        "Module Diagnostics",
+        "Engine Control Module",
+        "Identification Information"
+      ],
+      "route_steps": [
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics"
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Control Module"
+        },
+        {
+          "kind": "list_item",
+          "label": "Identification Information"
+        }
+      ],
+      "target_action": {
+        "kind": "list_item",
+        "label": "Identification Information"
+      },
+      "expected_page_id": "data_list",
+      "expected_actions": [
+        {
+          "kind": "list_item",
+          "label": "Calibration History"
+        },
+        {
+          "kind": "list_item",
+          "label": "Identification Information"
+        }
+      ],
+      "fallback_strategy": [
+        "click breadcrumb Engine Control Module",
+        "select Identification Information"
+      ],
+      "confidence": "explored",
+      "source": "merged_route_graph",
+      "aliases": [
+        "Identification Information",
+        "ID Information"
+      ],
+      "success_criteria": {
+        "page_id_any": [
+          "data_list"
+        ],
+        "all_of": [
+          {
+            "kind": "list_item",
+            "label": "Calibration History"
+          },
+          {
+            "kind": "list_item",
+            "label": "Identification Information"
+          }
+        ],
+        "navigation_path_contains_prefix": [
+          "Module Diagnostics",
+          "Engine Control Module",
+          "Identification Information"
+        ]
+      },
+      "notes": " Success criteria normalized for flexible live probing."
+    },
+    {
+      "page_key": "inspection_maintenance.menu",
+      "title": "Inspection/Maintenance System Information Menu",
+      "category": "information",
+      "page_kind": "data_list",
+      "canonical_path": [
+        "Module Diagnostics",
+        "Engine Control Module",
+        "Inspection/Maintenance System Information"
+      ],
+      "route_steps": [
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics"
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Control Module"
+        },
+        {
+          "kind": "list_item",
+          "label": "Inspection/Maintenance System Information"
+        }
+      ],
+      "target_action": {
+        "kind": "list_item",
+        "label": "Inspection/Maintenance System Information"
+      },
+      "expected_page_id": "data_list",
+      "expected_actions": [
+        {
+          "kind": "list_item",
+          "label": "Inspection/Maintenance Data"
+        },
+        {
+          "kind": "list_item",
+          "label": "Inspection/Maintenance System Status Data"
+        }
+      ],
+      "fallback_strategy": [
+        "click breadcrumb Engine Control Module",
+        "select Inspection/Maintenance System Information"
+      ],
+      "confidence": "explored",
+      "source": "merged_route_graph",
+      "aliases": [
+        "Inspection/Maintenance System Information",
+        "I/M System Information",
+        "IM readiness"
+      ],
+      "success_criteria": {
+        "page_id_any": [
+          "data_list"
+        ],
+        "all_of": [
+          {
+            "kind": "list_item",
+            "label": "Inspection/Maintenance Data"
+          },
+          {
+            "kind": "list_item",
+            "label": "Inspection/Maintenance System Status Data"
+          }
+        ],
+        "navigation_path_contains_prefix": [
+          "Module Diagnostics",
+          "Engine Control Module",
+          "Inspection/Maintenance System Information"
+        ]
+      },
+      "notes": " Success criteria normalized for flexible live probing."
+    }
+  ],
+  "page_states": [
+    {
+      "state_key": "device_explorer.visible",
+      "page_id": "device_explorer",
+      "signals": {
+        "native_window_title_contains": "Device Explorer"
+      },
+      "action_hint": "select_device_and_continue",
+      "confidence": "verified",
+      "source": "live_probe_20260420",
+      "notes": "Native Win32 dialog can appear before Vehicle Selection banner text is populated."
+    },
+    {
+      "state_key": "vehicle_selection.connected_session",
+      "page_id": "vehicle_selection",
+      "signals": {
+        "text_contains": "Vehicle data is loaded from session",
+        "buttons_enabled": [
+          "Enter"
+        ],
+        "buttons_disabled_any": [
+          "Select Device"
+        ]
+      },
+      "action_hint": "click_enter",
+      "confidence": "verified",
+      "source": "live_probe_20260420",
+      "notes": "Green banner state: vehicle data is loaded and Enter should continue."
+    },
+    {
+      "state_key": "vehicle_selection.connecting",
+      "page_id": "vehicle_selection",
+      "signals": {
+        "text_contains": "Connecting to Device"
+      },
+      "action_hint": "wait",
+      "confidence": "user_confirmed",
+      "source": "user_screenshot_20260420",
+      "notes": "Yellow banner state, normally transient; long duration should be handled by policy."
+    },
+    {
+      "state_key": "vehicle_selection.disconnected",
+      "page_id": "vehicle_selection",
+      "signals": {
+        "text_contains_any": [
+          "Select a Device",
+          "No Device Selected"
+        ],
+        "buttons_enabled": [
+          "Select Device"
+        ],
+        "buttons_disabled_any": [
+          "Enter",
+          "Disconnect"
+        ]
+      },
+      "action_hint": "select_device",
+      "confidence": "verified",
+      "source": "live_probe_20260420",
+      "notes": "Red banner or no-device-selected state; select SM2 USB before continuing."
+    },
+    {
+      "state_key": "loading.deep_page",
+      "page_id": "loading",
+      "signals": {
+        "buttons_present": [
+          "Back",
+          "Home",
+          "Vehicle Menu",
+          "Enter"
+        ],
+        "list_empty": true
+      },
+      "action_hint": "wait_then_restart",
+      "confidence": "verified",
+      "source": "live_probe_20260420",
+      "notes": "Deep page loading can hang; do not press Back repeatedly."
+    },
+    {
+      "state_key": "navigation.path_diverged",
+      "page_id": "any",
+      "signals": {
+        "current_navigation_path_not_prefix_of_target": true
+      },
+      "action_hint": "return_to_common_ancestor",
+      "confidence": "verified",
+      "source": "live_probe_20260420",
+      "notes": "Prefer clickable Navigation Path common ancestor, then Back/Home fallback."
+    },
+    {
+      "state_key": "j2534_disconnect.visible",
+      "page_id": "j2534_disconnect",
+      "signals": {
+        "buttons_present": [
+          "OK"
+        ],
+        "prior_context_any": [
+          "data_display",
+          "data_list",
+          "module_submenu"
+        ]
+      },
+      "action_hint": "soft_ok_then_backtrack",
+      "confidence": "explored",
+      "source": "merged_route_graph",
+      "notes": "Disconnect page can be transient or require OK/backtrack recovery."
+    }
+  ],
+  "recovery_policies": [
+    {
+      "policy_key": "device_explorer.select_sm2_usb",
+      "applies_to": [
+        "device_explorer.visible",
+        "vehicle_selection.disconnected"
+      ],
+      "action_key": "select_device_and_continue",
+      "params": {
+        "device_name": "SM2 USB",
+        "dialog_timeout_sec": 5.0,
+        "post_continue_wait_sec": 1.5
+      },
+      "max_attempts": 2,
+      "timeout_sec": 10.0,
+      "resume_original_task": true,
+      "source": "live_probe_20260420",
+      "notes": "Select the local test VCI and continue into Vehicle Selection."
+    },
+    {
+      "policy_key": "vehicle_selection.connected_enter",
+      "applies_to": [
+        "vehicle_selection.connected_session"
+      ],
+      "action_key": "click_enter",
+      "params": {
+        "post_enter_wait_sec": 1.0
+      },
+      "max_attempts": 2,
+      "timeout_sec": 30.0,
+      "resume_original_task": true,
+      "source": "live_probe_20260420",
+      "notes": "When the session-loaded green banner is visible, Enter is the correct next action."
+    },
+    {
+      "policy_key": "vehicle_selection.connecting_wait",
+      "applies_to": [
+        "vehicle_selection.connecting"
+      ],
+      "action_key": "wait",
+      "params": {
+        "poll_interval_sec": 2.0
+      },
+      "max_attempts": 10,
+      "timeout_sec": 20.0,
+      "resume_original_task": true,
+      "source": "user_screenshot_20260420",
+      "notes": "Wait for connecting state to become connected or disconnected before acting."
+    },
+    {
+      "policy_key": "loading.restart_after_timeout",
+      "applies_to": [
+        "loading.deep_page"
+      ],
+      "action_key": "restart_gds2",
+      "params": {
+        "timeout_sec": 20.0,
+        "max_restarts": 1,
+        "wait_after_restart_sec": 8.0
+      },
+      "max_attempts": 1,
+      "timeout_sec": 20.0,
+      "resume_original_task": true,
+      "source": "live_probe_20260420",
+      "notes": "If loading persists, restart GDS2 and resume the original registry task."
+    },
+    {
+      "policy_key": "navigation.return_to_common_ancestor",
+      "applies_to": [
+        "navigation.path_diverged"
+      ],
+      "action_key": "return_to_common_ancestor",
+      "params": {
+        "prefer_navigation_path_click": true,
+        "fallback_actions": [
+          "Back",
+          "Home"
+        ]
+      },
+      "max_attempts": 8,
+      "timeout_sec": 60.0,
+      "resume_original_task": true,
+      "source": "live_probe_20260420",
+      "notes": "Recover from wrong module/branch by going to nearest common ancestor."
+    },
+    {
+      "policy_key": "j2534_disconnect.recover",
+      "applies_to": [
+        "j2534_disconnect.visible"
+      ],
+      "action_key": "soft_ok_then_backtrack",
+      "params": {
+        "soft_retry_attempts": 3,
+        "ok_timeout_sec": 2.0,
+        "backtrack_attempts": 2
+      },
+      "max_attempts": 3,
+      "timeout_sec": 20.0,
+      "resume_original_task": true,
+      "source": "existing_controller_policy",
+      "notes": "Mirrors existing data display connection recovery policy."
+    }
+  ]
+}

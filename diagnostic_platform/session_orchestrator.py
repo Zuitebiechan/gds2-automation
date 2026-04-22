@@ -25,6 +25,7 @@ from diagnostic_platform.session_models import (
     SessionContext,
     SessionStatus,
 )
+from diagnostic_platform.session_observability import emit_session_runtime_event
 
 logger = logging.getLogger(__name__)
 
@@ -452,6 +453,15 @@ class SessionOrchestrator:
                 },
             )
         self._schedule_terminal_cleanup(session_id)
+        emit_session_runtime_event(
+            "session.lifecycle.aborted",
+            session=session,
+            operation_kind="session.abort",
+            status="error",
+            failure_code="aborted",
+            failure_domain="session_runtime",
+            reason=session.error,
+        )
         return session
 
     def complete_session(self, session_id: str, result: dict[str, Any] | None = None) -> Session:
@@ -469,6 +479,13 @@ class SessionOrchestrator:
                 },
             )
         self._schedule_terminal_cleanup(session_id)
+        emit_session_runtime_event(
+            "session.lifecycle.completed",
+            session=session,
+            operation_kind="session.complete",
+            reason="session_completed",
+            result=result or {},
+        )
         return session
 
     def fail_session(self, session_id: str, error: str) -> Session:
@@ -495,6 +512,15 @@ class SessionOrchestrator:
                 },
             )
         self._schedule_terminal_cleanup(session_id)
+        emit_session_runtime_event(
+            "session.lifecycle.failed",
+            session=session,
+            operation_kind="session.fail",
+            status="error",
+            failure_code="failed",
+            failure_domain="session_runtime",
+            reason=error,
+        )
         return session
 
     def emit_progress(

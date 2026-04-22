@@ -1,0 +1,558 @@
+{
+  "version": 1,
+  "created_at": "2026-04-17T10:54:50",
+  "nodes": {
+    "d422c2dba7595d24": {
+      "node_id": "d422c2dba7595d24",
+      "page_id": "module_submenu",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "Diagnostic Trouble Codes (DTC)",
+        "Event Information",
+        "Identification Information",
+        "Data Display",
+        "Control Functions",
+        "Configuration/Reset Functions",
+        "Inspection/Maintenance System Information"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Diagnostic Trouble Codes (DTC)",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Event Information",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Identification Information",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Data Display",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Control Functions",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Configuration/Reset Functions",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Inspection/Maintenance System Information",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "explore_diagnostics_menu_start"
+    },
+    "e0aa2bc3de8c725e": {
+      "node_id": "e0aa2bc3de8c725e",
+      "page_id": "module_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "[T1] Accessory DC/AC Power Inverter Module",
+        "[K124] Active Safety Control Module",
+        "[T3] Amplifier",
+        "[K9] Body Control Module",
+        "[K17] Electronic Brake Control Module",
+        "[K20] Engine Control Module",
+        "[K109] Frontview Camera Module",
+        "[K26] Headlamp Control Module",
+        "[K74] Human Machine Interface Control Module",
+        "[A26] HVAC Controls",
+        "[K33] HVAC Control Module",
+        "[K36] Inflatable Restraint Sensing and Diagnostic Module",
+        "[P16] Instrument Cluster",
+        "[K84] Keyless Entry Control Module",
+        "[B218L] Left Side Object Detection Control Module",
+        "[K39] Liftgate Control Module",
+        "[B233B] Long Range Radar Sensor Module",
+        "[B119] Multi-Axis Acceleration Sensor Module",
+        "[K182] Parking Assist Control Module",
+        "[K43] Power Steering Control Module",
+        "[A11] Radio",
+        "[A22] Radio Controls",
+        "[K47] Rear Differential Clutch Control Module",
+        "[B218R] Right Side Object Detection Control Module",
+        "[K40D] Seat Memory Control Module - Driver",
+        "[K56] Serial Data Gateway Module",
+        "[K60] Steering Column Lock Control Module",
+        "[B99] Steering Wheel Angle Sensor Module",
+        "[K19] Suspension Control Module",
+        "[K73] Telematics Communication Interface Control Module",
+        "[K71] Transmission Control Module",
+        "[K157] Video Processing Control Module"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "[T1] Accessory DC/AC Power Inverter Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K124] Active Safety Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[T3] Amplifier",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K9] Body Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K17] Electronic Brake Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K20] Engine Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K109] Frontview Camera Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K26] Headlamp Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K74] Human Machine Interface Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[A26] HVAC Controls",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K33] HVAC Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K36] Inflatable Restraint Sensing and Diagnostic Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[P16] Instrument Cluster",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K84] Keyless Entry Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[B218L] Left Side Object Detection Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K39] Liftgate Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[B233B] Long Range Radar Sensor Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[B119] Multi-Axis Acceleration Sensor Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K182] Parking Assist Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K43] Power Steering Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[A11] Radio",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[A22] Radio Controls",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K47] Rear Differential Clutch Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[B218R] Right Side Object Detection Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K40D] Seat Memory Control Module - Driver",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K56] Serial Data Gateway Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K60] Steering Column Lock Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[B99] Steering Wheel Angle Sensor Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K19] Suspension Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K73] Telematics Communication Interface Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K71] Transmission Control Module",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "[K157] Video Processing Control Module",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "explore_diagnostics_menu_back_01"
+    },
+    "a6f0f2ddfbe76e61": {
+      "node_id": "a6f0f2ddfbe76e61",
+      "page_id": "diagnostics_menu",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "Module Diagnostics",
+        "Vehicle Diagnostics",
+        "Session Manager"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Vehicle Diagnostics",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Session Manager",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "explore_diagnostics_menu_back_02"
+    },
+    "13b5b8c65fca7d10": {
+      "node_id": "13b5b8c65fca7d10",
+      "page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "Vehicle DTC Information",
+        "Vehicle DTC and ID Information",
+        "Vehicle Data Capture"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Vehicle DTC Information",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Vehicle DTC and ID Information",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Vehicle Data Capture",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "diagnostics_menu_01_vehicle_diagnostics"
+    },
+    "94a59b76e7a63b64": {
+      "node_id": "94a59b76e7a63b64",
+      "page_id": "unknown",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Delete",
+          "enabled": true
+        },
+        {
+          "text": "Review",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Delete",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Review",
+          "enabled": true
+        }
+      ],
+      "first_seen_label": "diagnostics_menu_02_session_manager"
+    }
+  },
+  "edges": [
+    {
+      "source_id": "d422c2dba7595d24",
+      "target_id": "e0aa2bc3de8c725e",
+      "source_page_id": "module_submenu",
+      "target_page_id": "module_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T10:54:51"
+    },
+    {
+      "source_id": "e0aa2bc3de8c725e",
+      "target_id": "a6f0f2ddfbe76e61",
+      "source_page_id": "module_list",
+      "target_page_id": "diagnostics_menu",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T10:54:52"
+    },
+    {
+      "source_id": "a6f0f2ddfbe76e61",
+      "target_id": "13b5b8c65fca7d10",
+      "source_page_id": "diagnostics_menu",
+      "target_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Vehicle Diagnostics",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:54:53"
+    },
+    {
+      "source_id": "13b5b8c65fca7d10",
+      "target_id": "a6f0f2ddfbe76e61",
+      "source_page_id": "data_list",
+      "target_page_id": "diagnostics_menu",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T10:54:57"
+    },
+    {
+      "source_id": "a6f0f2ddfbe76e61",
+      "target_id": "94a59b76e7a63b64",
+      "source_page_id": "diagnostics_menu",
+      "target_page_id": "unknown",
+      "action": {
+        "kind": "list_item",
+        "label": "Session Manager",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T10:55:05"
+    },
+    {
+      "source_id": "94a59b76e7a63b64",
+      "target_id": "a6f0f2ddfbe76e61",
+      "source_page_id": "unknown",
+      "target_page_id": "diagnostics_menu",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T10:55:09"
+    }
+  ]
+}

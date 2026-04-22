@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 
 from diagnostic_platform.contracts import BackendCapability
-from diagnostic_platform.runtime import navigation_runtime
 from diagnostic_platform.runtime.worker_runtime import WorkerRuntime
 from server.api import (
     session_ai_handlers,
@@ -73,6 +72,7 @@ def _bind_simulated_dependencies(
 ) -> None:
     monkeypatch.setattr(session_navigation_handlers, "_runtime", lambda: runtime)
     monkeypatch.setattr(session_navigation_handlers, "get_orchestrator", lambda: orchestrator)
+    monkeypatch.setattr(session_navigation_handlers, "get_backend", lambda session_id=None: backend)
 
     monkeypatch.setattr(session_ai_handlers, "_runtime", lambda: runtime)
     monkeypatch.setattr(session_ai_handlers, "get_orchestrator", lambda: orchestrator)
@@ -91,12 +91,6 @@ def _drive_navigation_to_data_display(
     session: Session,
     harness,
 ) -> None:
-    monkeypatch.setattr(
-        navigation_runtime,
-        "_create_navigation_controller",
-        lambda: harness.controller,
-    )
-
     payload, status = session_navigation_handlers.start_navigation_session_for_business(
         {
             "session_id": session.session_id,
@@ -497,11 +491,6 @@ def test_simulated_clear_dtcs_conflicts_while_navigation_is_active(monkeypatch) 
         orchestrator=orchestrator,
         backend=harness.backend,
         ai_engine=FakeAIEngine(),
-    )
-    monkeypatch.setattr(
-        navigation_runtime,
-        "_create_navigation_controller",
-        lambda: harness.controller,
     )
 
     nav_payload, nav_status = session_navigation_handlers.start_navigation_session_for_business(

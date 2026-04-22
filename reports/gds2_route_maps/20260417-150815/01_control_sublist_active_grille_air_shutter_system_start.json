@@ -1,0 +1,88 @@
+{
+  "label": "control_sublist_active_grille_air_shutter_system_start",
+  "timestamp": "2026-04-17T15:08:37",
+  "page": {
+    "page_id": "data_list",
+    "list_item_count": 2,
+    "buttons": [
+      "Vehicle Menu",
+      "Back",
+      "Enter",
+      "Home"
+    ],
+    "evidence": "has list items + Back button, no specific markers",
+    "has_modal": false,
+    "confidence": "medium",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "Home",
+      "enabled": true
+    },
+    {
+      "text": "Vehicle Menu",
+      "enabled": true
+    },
+    {
+      "text": "Enter",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [
+    "Active Grille Air Shutter 1",
+    "Active Grille Air Shutter 2"
+  ],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Back",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Enter",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Home",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Vehicle Menu",
+      "enabled": true
+    },
+    {
+      "kind": "list_item",
+      "label": "Active Grille Air Shutter 1",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Active Grille Air Shutter 2",
+      "list_index": 0
+    }
+  ],
+  "raw_page_id": "data_list",
+  "effective_page_id": "data_list",
+  "node_id": "5c6132db8aa7508a"
+}

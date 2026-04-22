@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "created_at": "2026-04-17T15:19:41",
+  "nodes": {
+    "bb662b9141ffa7f6": {
+      "node_id": "bb662b9141ffa7f6",
+      "page_id": "clear_dtcs_selection",
+      "raw_page_id": "clear_dtcs_selection",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Add",
+          "enabled": true
+        },
+        {
+          "text": "Add All",
+          "enabled": true
+        },
+        {
+          "text": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Cancel",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Add All",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Cancel",
+          "enabled": true
+        }
+      ],
+      "first_seen_label": "clear_dtcs_confirmation_no_start"
+    }
+  },
+  "edges": []
+}

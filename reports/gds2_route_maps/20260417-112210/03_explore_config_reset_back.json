@@ -1,0 +1,118 @@
+{
+  "label": "explore_config_reset_back",
+  "timestamp": "2026-04-17T11:22:13",
+  "page": {
+    "page_id": "module_submenu",
+    "list_item_count": 7,
+    "buttons": [
+      "Vehicle Menu",
+      "Back",
+      "Enter",
+      "Home"
+    ],
+    "evidence": "list contains 'Data Display' item",
+    "has_modal": false,
+    "confidence": "high",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "Home",
+      "enabled": true
+    },
+    {
+      "text": "Vehicle Menu",
+      "enabled": true
+    },
+    {
+      "text": "Enter",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [
+    "Diagnostic Trouble Codes (DTC)",
+    "Event Information",
+    "Identification Information",
+    "Data Display",
+    "Control Functions",
+    "Configuration/Reset Functions",
+    "Inspection/Maintenance System Information"
+  ],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Back",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Enter",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Home",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Vehicle Menu",
+      "enabled": true
+    },
+    {
+      "kind": "list_item",
+      "label": "Diagnostic Trouble Codes (DTC)",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Event Information",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Identification Information",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Data Display",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Control Functions",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Configuration/Reset Functions",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Inspection/Maintenance System Information",
+      "list_index": 0
+    }
+  ],
+  "raw_page_id": "module_submenu",
+  "effective_page_id": "module_submenu",
+  "node_id": "1805ef52ad0e78d2"
+}

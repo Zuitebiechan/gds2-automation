@@ -1,0 +1,452 @@
+{
+  "version": 1,
+  "created_at": "2026-04-17T11:53:38",
+  "nodes": {
+    "810f0f26d245cdb5": {
+      "node_id": "810f0f26d245cdb5",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "DTC Display",
+        "Diagnostic Test Status: This Ignition Cycle",
+        "Diagnostic Test Status: Since DTC Clear",
+        "Freeze Frame/Failure Records",
+        "Specific DTC"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "DTC Display",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Diagnostic Test Status: This Ignition Cycle",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Diagnostic Test Status: Since DTC Clear",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Freeze Frame/Failure Records",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Specific DTC",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "explore_dtc_children_start"
+    },
+    "6cfd2a1d1985f552": {
+      "node_id": "6cfd2a1d1985f552",
+      "page_id": "data_display",
+      "raw_page_id": "data_display",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Clear DTCs",
+          "enabled": true
+        },
+        {
+          "text": "Create Report",
+          "enabled": true
+        },
+        {
+          "text": "Refresh",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Clear DTCs",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Create Report",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Refresh",
+          "enabled": true
+        }
+      ],
+      "first_seen_label": "explore_dtc_child_dtc_display"
+    },
+    "5731d793f1280a90": {
+      "node_id": "5731d793f1280a90",
+      "page_id": "data_display",
+      "raw_page_id": "data_display",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Create Report",
+          "enabled": true
+        },
+        {
+          "text": "Refresh",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Create Report",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Refresh",
+          "enabled": true
+        }
+      ],
+      "first_seen_label": "explore_dtc_child_diagnostic_test_status_this_ignition_cycle"
+    },
+    "4ae29a4af0c2a405": {
+      "node_id": "4ae29a4af0c2a405",
+      "page_id": "clear_dtcs_confirmation",
+      "raw_page_id": "clear_dtcs_confirmation",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Create Report",
+          "enabled": true
+        },
+        {
+          "text": "Refresh",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Create Report",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Refresh",
+          "enabled": true
+        }
+      ],
+      "first_seen_label": "explore_dtc_child_diagnostic_test_status_since_dtc_clear"
+    },
+    "c86969b3722f397d": {
+      "node_id": "c86969b3722f397d",
+      "page_id": "unknown",
+      "raw_page_id": "unknown",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "DTC Display",
+        "Diagnostic Test Status: This Ignition Cycle",
+        "Diagnostic Test Status: Since DTC Clear",
+        "Freeze Frame/Failure Records",
+        "Specific DTC"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "DTC Display",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Diagnostic Test Status: This Ignition Cycle",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Diagnostic Test Status: Since DTC Clear",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Freeze Frame/Failure Records",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Specific DTC",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "explore_dtc_child_freeze_frame_failure_records_recover_back"
+    },
+    "fe39a1b4a032525e": {
+      "node_id": "fe39a1b4a032525e",
+      "page_id": "unknown",
+      "raw_page_id": "unknown",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Show DTC Status",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Show DTC Status",
+          "enabled": true
+        }
+      ],
+      "first_seen_label": "explore_dtc_child_specific_dtc"
+    }
+  },
+  "edges": [
+    {
+      "source_id": "810f0f26d245cdb5",
+      "target_id": "6cfd2a1d1985f552",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "DTC Display",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T11:53:40"
+    },
+    {
+      "source_id": "6cfd2a1d1985f552",
+      "target_id": "810f0f26d245cdb5",
+      "source_page_id": "data_display",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_display",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T11:53:44"
+    },
+    {
+      "source_id": "810f0f26d245cdb5",
+      "target_id": "5731d793f1280a90",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Diagnostic Test Status: This Ignition Cycle",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T11:53:46"
+    },
+    {
+      "source_id": "5731d793f1280a90",
+      "target_id": "810f0f26d245cdb5",
+      "source_page_id": "data_display",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_display",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T11:53:50"
+    },
+    {
+      "source_id": "810f0f26d245cdb5",
+      "target_id": "4ae29a4af0c2a405",
+      "source_page_id": "data_list",
+      "target_page_id": "clear_dtcs_confirmation",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "clear_dtcs_confirmation",
+      "action": {
+        "kind": "list_item",
+        "label": "Diagnostic Test Status: Since DTC Clear",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T11:53:52"
+    },
+    {
+      "source_id": "4ae29a4af0c2a405",
+      "target_id": "810f0f26d245cdb5",
+      "source_page_id": "clear_dtcs_confirmation",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "clear_dtcs_confirmation",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T11:53:56"
+    },
+    {
+      "source_id": "810f0f26d245cdb5",
+      "target_id": "5731d793f1280a90",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Freeze Frame/Failure Records",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T11:53:58"
+    },
+    {
+      "source_id": "5731d793f1280a90",
+      "target_id": "810f0f26d245cdb5",
+      "source_page_id": "data_display",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_display",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T11:54:11"
+    },
+    {
+      "source_id": "fe39a1b4a032525e",
+      "target_id": "810f0f26d245cdb5",
+      "source_page_id": "unknown",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "unknown",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T11:54:21"
+    }
+  ]
+}

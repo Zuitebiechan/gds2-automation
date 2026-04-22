@@ -178,6 +178,59 @@ def test_navigate_start_rejects_non_string_goal(monkeypatch):
     }
 
 
+def test_navigate_start_requires_active_backend_navigation_runtime(monkeypatch):
+    _install_fake_flask_stack(monkeypatch, {"goal": "Go to Data Display"})
+    navigate_api = _fresh_import(monkeypatch, "server.api.navigate")
+    monkeypatch.setattr(
+        navigate_api,
+        "_runtime",
+        lambda: types.SimpleNamespace(get_active_backend_bundle=lambda: None),
+    )
+
+    payload, status = navigate_api.navigate_start()
+
+    assert status == 409
+    assert payload == {
+        "success": False,
+        "error": "No active backend navigation runtime is available",
+    }
+
+
+def test_navigate_start_uses_active_backend_navigation_handle(monkeypatch):
+    _install_fake_flask_stack(monkeypatch, {"goal": "Go to Data Display"})
+    navigate_api = _fresh_import(monkeypatch, "server.api.navigate")
+
+    fake_session = types.SimpleNamespace(
+        session_id="nav-1",
+        status=types.SimpleNamespace(value="running"),
+    )
+
+    class _FakeNavigationHandle:
+        def __init__(self):
+            self.calls = []
+
+        def start_navigation_session(self, runtime, goal):
+            self.calls.append((runtime, goal))
+            return fake_session
+
+    navigation_handle = _FakeNavigationHandle()
+    runtime = types.SimpleNamespace(
+        get_active_backend_bundle=lambda: types.SimpleNamespace(
+            navigation_handle=navigation_handle
+        )
+    )
+    monkeypatch.setattr(navigate_api, "_runtime", lambda: runtime)
+
+    payload = navigate_api.navigate_start()
+
+    assert payload == {
+        "success": True,
+        "session_id": "nav-1",
+        "status": "running",
+    }
+    assert navigation_handle.calls == [(runtime, "Go to Data Display")]
+
+
 def test_navigate_decision_rejects_non_string_selected_item(monkeypatch):
     _install_fake_flask_stack(
         monkeypatch,

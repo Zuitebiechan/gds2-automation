@@ -1,12 +1,30 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+import json
+from pathlib import Path
 
+import backends.gds2.controller_runtime as controller_runtime_module
+from diagnostic_platform.observability import flush_product_log_writers
 from diagnostic_platform.contracts import BackendCapability, BackendRegistry, BackendState
 
 from backends.gds2.backend import GDS2DiagnosticBackend
 from backends.gds2.controller_runtime import GDS2ControllerRuntime
+from backends.gds2.registry_navigation_runtime import RegistryNavigationRuntime
 from src.navigation import GDS2Page, NavigationController, NavigationResult
 from src.streaming.agent_data_collector import AgentSnapshot, DTCInfo
+
+
+def _read_cloud_events(tmp_path: Path) -> list[dict[str, object]]:
+    flush_product_log_writers()
+    raw_dir = tmp_path / "RPA_Diagnostic" / "observability" / "cloud" / "raw"
+    records: list[dict[str, object]] = []
+    for path in sorted(raw_dir.glob("*.jsonl")):
+        records.extend(
+            json.loads(line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        )
+    return records
 
 
 def _make_workflow():
@@ -32,7 +50,8 @@ def _make_workflow():
 def test_controller_runtime_status_includes_network_quality():
     workflow = _make_workflow()
     runtime = GDS2ControllerRuntime(
-        workflow=workflow,
+        controller=workflow.controller,
+        state_reader=workflow.get_state,
         snapshot_reader=lambda: {
             "connection_epoch": "epoch-1",
             "connected": True,
@@ -58,20 +77,26 @@ def test_controller_runtime_status_includes_network_quality():
 
 def test_backend_start_delegates_to_controller_runtime():
     runtime = MagicMock()
+    nav_runtime = MagicMock()
+    nav_runtime.ensure_started.return_value = {}
+    runtime.build_navigation_runtime.return_value = nav_runtime
     backend = GDS2DiagnosticBackend(runtime=runtime)
 
     backend.start()
 
-    runtime.ensure_ready.assert_called_once_with()
+    runtime.build_navigation_runtime.assert_called_once_with(source="registry_runtime")
+    nav_runtime.ensure_started.assert_called_once_with()
 
 
 def test_backend_get_modules_uses_cached_start_result_when_page_check_is_unstable():
     runtime = MagicMock()
-    runtime.ensure_ready.return_value = {
+    nav_runtime = MagicMock()
+    nav_runtime.ensure_started.return_value = {
         "modules": ["ECM", "TCM"],
         "vin": "VIN123",
         "device": "VCI Proxy (Remote)",
     }
+    runtime.build_navigation_runtime.return_value = nav_runtime
     backend = GDS2DiagnosticBackend(runtime=runtime)
     backend._require_page = MagicMock(side_effect=RuntimeError("still at diagnostics_menu"))
 
@@ -92,6 +117,9 @@ def test_backend_get_state_delegates_to_runtime_status():
     )
     runtime = MagicMock()
     runtime.status.return_value = expected
+    runtime.build_navigation_runtime.return_value = MagicMock(
+        get_runtime_status=MagicMock(return_value={"status": "idle", "runtime_source": "registry_runtime"})
+    )
     backend = GDS2DiagnosticBackend(runtime=runtime)
 
     state = backend.get_state()
@@ -100,21 +128,75 @@ def test_backend_get_state_delegates_to_runtime_status():
     assert state.current_module == "ECM"
     assert state.current_data_category == "Engine Data"
     assert state.extra["connection_epoch"] == "epoch-1"
+    assert state.extra["navigation_runtime_source"] == "registry_runtime"
+    assert state.extra["navigation_runtime_status"] == {
+        "status": "idle",
+        "runtime_source": "registry_runtime",
+    }
     runtime.status.assert_called_once_with()
+
+
+def test_controller_runtime_builds_registry_navigation_runtime(monkeypatch):
+    workflow = _make_workflow()
+    created = {}
+
+    monkeypatch.setattr(
+        controller_runtime_module,
+        "load_or_rebuild_graph",
+        lambda _path: {"version": 1, "nodes": {}, "edges": []},
+    )
+
+    class _Connection:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(controller_runtime_module, "connect_registry", lambda _path: _Connection())
+    monkeypatch.setattr(
+        controller_runtime_module,
+        "list_entries",
+        lambda _connection: [{"page_key": "dtc.clear.execute", "aliases": []}],
+    )
+    monkeypatch.setattr(controller_runtime_module, "list_page_states", lambda _connection: [])
+    monkeypatch.setattr(controller_runtime_module, "list_recovery_policies", lambda _connection: [])
+    monkeypatch.setattr(controller_runtime_module, "lookup_recovery_policy", lambda _connection, _key: None)
+    monkeypatch.setattr(
+        controller_runtime_module,
+        "DEFAULT_REGISTRY_PATH",
+        type("_Path", (), {"exists": lambda self: True})(),
+    )
+
+    def fake_registry_runtime(**kwargs):
+        created.update(kwargs)
+        return MagicMock()
+
+    monkeypatch.setattr(controller_runtime_module, "RegistryNavigationRuntime", fake_registry_runtime)
+
+    runtime = GDS2ControllerRuntime(
+        controller=workflow.controller,
+        state_reader=workflow.get_state,
+    )
+
+    nav_runtime = runtime.build_navigation_runtime(source="registry_runtime")
+
+    assert nav_runtime is not None
+    assert created["entries"] == [{"page_key": "dtc.clear.execute", "aliases": []}]
+    assert callable(created["state_reader"])
+    assert created["default_device_name"] == "SM2 USB"
 
 
 def test_gds2_backend_clear_dtcs_delegates_to_workflow():
     runtime = MagicMock()
-    runtime.get_workflow.return_value = MagicMock(
-        clear_dtcs=MagicMock(
-            return_value={
-                "success": True,
-                "cleared_count": 5,
-                "message": "Clear DTCs completed",
-                "page_context": "data_display",
-            }
-        )
-    )
+    registry_runtime = MagicMock()
+    registry_runtime.clear_dtcs.return_value = {
+        "success": True,
+        "cleared_count": 5,
+        "message": "Clear DTCs completed",
+        "page_context": "data_display",
+    }
+    runtime.build_navigation_runtime.return_value = registry_runtime
     backend = GDS2DiagnosticBackend(runtime=runtime)
 
     result = backend.clear_dtcs()
@@ -123,7 +205,61 @@ def test_gds2_backend_clear_dtcs_delegates_to_workflow():
     assert result.success is True
     assert result.cleared_count == 5
     assert result.message == "Clear DTCs completed"
-    runtime.get_workflow.return_value.clear_dtcs.assert_called_once_with()
+    runtime.build_navigation_runtime.assert_called_once_with(source="registry_runtime")
+    registry_runtime.clear_dtcs.assert_called_once_with()
+
+
+def test_backend_navigation_methods_delegate_via_navigation_runtime_seam():
+    runtime = MagicMock()
+    controller = MagicMock()
+    controller.detect_current_page.return_value = SimpleNamespace(value="module_list")
+    runtime.get_controller.return_value = controller
+    nav_runtime = MagicMock(
+        select_module=MagicMock(return_value={"data_categories": ["Engine Data"]}),
+        select_data_category=MagicMock(return_value={"sub_categories": ["Fuel Trim"]}),
+        connect_vci=MagicMock(),
+    )
+    runtime.build_navigation_runtime.return_value = nav_runtime
+
+    backend = GDS2DiagnosticBackend(runtime=runtime)
+
+    backend.connect_vci("SM2 USB")
+    backend.select_module("ECM")
+    categories = backend.select_data_category("Engine Data")
+    page = backend.detect_current_page()
+    backend.go_back()
+
+    assert categories == ["Fuel Trim"]
+    assert page == "module_list"
+    runtime.build_navigation_runtime.assert_any_call(source="registry_runtime")
+    nav_runtime.connect_vci.assert_called_once_with("SM2 USB")
+    nav_runtime.select_module.assert_called_once_with("ECM")
+    nav_runtime.select_data_category.assert_called_once_with("Engine Data")
+    controller.detect_current_page.assert_called_once_with()
+    controller.go_back.assert_called_once_with()
+
+
+def test_backend_read_dtcs_uses_controller_runtime_snapshot() -> None:
+    runtime = MagicMock()
+    controller = MagicMock()
+    controller.current_module = "ECM"
+    runtime.get_controller.return_value = controller
+    runtime.read_all_dtcs.return_value = {
+        "dtcs": [
+            {
+                "code": "P0001",
+                "control_module": "Engine",
+                "status": "Active",
+                "description": "Fuel Volume Regulator",
+            }
+        ]
+    }
+    backend = GDS2DiagnosticBackend(runtime=runtime)
+
+    dtcs = backend.read_dtcs()
+
+    assert [dtc.code for dtc in dtcs] == ["P0001"]
+    runtime.read_all_dtcs.assert_called_once_with()
 
 
 def test_gds2_backend_brand_aliases_route_without_manual_decision():
@@ -249,6 +385,15 @@ def test_gds2_backend_data_display_guard_waits_through_loading_page() -> None:
     controller.detect_current_page.return_value = GDS2Page.LOADING
     runtime.get_controller.return_value = controller
     runtime.get_workflow.return_value = MagicMock()
+    recovery_runtime = MagicMock()
+    recovery_runtime._loading_timeout_sec = 20.0
+    recovery_runtime._max_loading_restarts = 1
+    recovery_runtime.recover_data_display.return_value = {
+        "ok": True,
+        "mode": "stream",
+        "message": "Waiting for GDS2 loading page to finish...",
+    }
+    runtime.build_navigation_runtime.return_value = recovery_runtime
     backend = GDS2DiagnosticBackend(runtime=runtime)
 
     guard = backend.build_data_display_guard(
@@ -262,21 +407,28 @@ def test_gds2_backend_data_display_guard_waits_through_loading_page() -> None:
         "mode": "stream",
         "message": "Waiting for GDS2 loading page to finish...",
     }
+    runtime.build_navigation_runtime.assert_called_once_with(source="registry_runtime")
+    recovery_runtime.recover_data_display.assert_called_once()
 
 
 def test_gds2_backend_data_display_guard_recovers_stream_after_disconnect() -> None:
     runtime = MagicMock()
     controller = MagicMock()
     controller.detect_current_page.return_value = GDS2Page.J2534_DISCONNECT
-    controller.recover_data_display_connection.return_value = SimpleNamespace(
-        success=True,
-        page=GDS2Page.DATA_DISPLAY,
-        context={"recovery_method": "in_place"},
-    )
-    workflow = MagicMock()
-    workflow.controller = controller
     runtime.get_controller.return_value = controller
-    runtime.get_workflow.return_value = workflow
+    runtime.get_workflow.return_value = MagicMock()
+    recovery_runtime = MagicMock()
+    recovery_runtime._loading_timeout_sec = 20.0
+    recovery_runtime._max_loading_restarts = 1
+    recovery_runtime.recover_data_display.return_value = {
+        "ok": True,
+        "mode": "stream",
+        "recovered": True,
+        "recovery_method": "in_place",
+        "restart_collection": False,
+        "message": "Recovered Data Display after J2534 disconnect.",
+    }
+    runtime.build_navigation_runtime.return_value = recovery_runtime
     backend = GDS2DiagnosticBackend(runtime=runtime)
 
     guard = backend.build_data_display_guard(
@@ -293,21 +445,104 @@ def test_gds2_backend_data_display_guard_recovers_stream_after_disconnect() -> N
         "restart_collection": False,
         "message": "Recovered Data Display after J2534 disconnect.",
     }
+    recovery_runtime.recover_data_display.assert_called_once()
+
+
+def test_gds2_backend_data_display_guard_emits_guard_and_recovery_events(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+    runtime = MagicMock()
+    controller = MagicMock()
+    controller.detect_current_page.return_value = GDS2Page.J2534_DISCONNECT
+    runtime.get_controller.return_value = controller
+    runtime.get_workflow.return_value = MagicMock()
+    recovery_runtime = MagicMock()
+    recovery_runtime._loading_timeout_sec = 20.0
+    recovery_runtime._max_loading_restarts = 1
+    recovery_runtime.recover_data_display.return_value = {
+        "ok": True,
+        "mode": "stream",
+        "recovered": True,
+        "recovery_method": "in_place",
+        "restart_collection": False,
+        "message": "Recovered Data Display after J2534 disconnect.",
+    }
+    runtime.build_navigation_runtime.return_value = recovery_runtime
+    backend = GDS2DiagnosticBackend(runtime=runtime)
+
+    guard = backend.build_data_display_guard(
+        data_category="Engine Data",
+        mode="stream",
+        check_interval=0.0,
+    )
+
+    result = guard()
+
+    assert result["ok"] is True
+    events = _read_cloud_events(tmp_path)
+    event_types = [event["event_type"] for event in events]
+    assert "page_guard_triggered" in event_types
+    assert "j2534_disconnect_page_seen" in event_types
+
+
+def test_registry_runtime_recover_data_display_emits_success_event(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+    route_navigator = MagicMock()
+    route_navigator.capture_settled_snapshot.return_value = {"effective_page_id": "j2534_disconnect"}
+    route_navigator.graph = {}
+    runtime = RegistryNavigationRuntime(
+        controller=MagicMock(),
+        route_navigator=route_navigator,
+        entries=[{"page_key": "Engine Data", "aliases": []}],
+    )
+    runtime.execute_registry_route = MagicMock(
+        return_value={"final_page": "data_display", "recovery_actions": [{"action": "backtrack"}]}
+    )
+
+    result = runtime.recover_data_display(data_category="Engine Data", mode="stream")
+
+    assert result["ok"] is True
+    events = _read_cloud_events(tmp_path)
+    assert "recovery_attempted" in [event["event_type"] for event in events]
+    assert "recovery_succeeded" in [event["event_type"] for event in events]
+
+
+def test_registry_runtime_recover_data_display_emits_failure_event(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+    route_navigator = MagicMock()
+    route_navigator.capture_settled_snapshot.return_value = {"effective_page_id": "j2534_disconnect"}
+    route_navigator.graph = {}
+    runtime = RegistryNavigationRuntime(
+        controller=MagicMock(),
+        route_navigator=route_navigator,
+        entries=[{"page_key": "Engine Data", "aliases": []}],
+    )
+    runtime.execute_registry_route = MagicMock(side_effect=RuntimeError("route boom"))
+
+    result = runtime.recover_data_display(data_category="Engine Data", mode="stream")
+
+    assert result["ok"] is False
+    events = _read_cloud_events(tmp_path)
+    assert "recovery_failed" in [event["event_type"] for event in events]
 
 
 def test_gds2_backend_data_display_guard_requests_ai_restart_after_backtrack_recovery() -> None:
     runtime = MagicMock()
     controller = MagicMock()
     controller.detect_current_page.return_value = GDS2Page.J2534_DISCONNECT
-    controller.recover_data_display_connection.return_value = SimpleNamespace(
-        success=True,
-        page=GDS2Page.DATA_DISPLAY,
-        context={"recovery_method": "backtrack"},
-    )
-    workflow = MagicMock()
-    workflow.controller = controller
     runtime.get_controller.return_value = controller
-    runtime.get_workflow.return_value = workflow
+    runtime.get_workflow.return_value = MagicMock()
+    recovery_runtime = MagicMock()
+    recovery_runtime._loading_timeout_sec = 20.0
+    recovery_runtime._max_loading_restarts = 1
+    recovery_runtime.recover_data_display.return_value = {
+        "ok": True,
+        "mode": "ai_collect",
+        "recovered": True,
+        "recovery_method": "backtrack",
+        "restart_collection": True,
+        "message": "Recovered Data Display after reconnect; restarting AI collection window.",
+    }
+    runtime.build_navigation_runtime.return_value = recovery_runtime
     backend = GDS2DiagnosticBackend(runtime=runtime)
 
     guard = backend.build_data_display_guard(
@@ -324,21 +559,28 @@ def test_gds2_backend_data_display_guard_requests_ai_restart_after_backtrack_rec
         "restart_collection": True,
         "message": "Recovered Data Display after reconnect; restarting AI collection window.",
     }
+    recovery_runtime.recover_data_display.assert_called_once()
 
 
 def test_gds2_backend_data_display_guard_fails_ai_collection_when_recovery_fails() -> None:
     runtime = MagicMock()
     controller = MagicMock()
     controller.detect_current_page.return_value = GDS2Page.J2534_DISCONNECT
-    controller.recover_data_display_connection.return_value = SimpleNamespace(
-        success=False,
-        page=GDS2Page.J2534_DISCONNECT,
-        context={},
-    )
-    workflow = MagicMock()
-    workflow.controller = controller
     runtime.get_controller.return_value = controller
-    runtime.get_workflow.return_value = workflow
+    runtime.get_workflow.return_value = MagicMock()
+    recovery_runtime = MagicMock()
+    recovery_runtime._loading_timeout_sec = 20.0
+    recovery_runtime._max_loading_restarts = 1
+    recovery_runtime.recover_data_display.return_value = {
+        "ok": False,
+        "mode": "ai_collect",
+        "error": (
+            "Lost communication with J2534 during AI collection and could not "
+            "restore Data Display in-place. Please reconnect and restart AI "
+            "Diagnostics."
+        ),
+    }
+    runtime.build_navigation_runtime.return_value = recovery_runtime
     backend = GDS2DiagnosticBackend(runtime=runtime)
 
     guard = backend.build_data_display_guard(
@@ -356,6 +598,7 @@ def test_gds2_backend_data_display_guard_fails_ai_collection_when_recovery_fails
             "Diagnostics."
         ),
     }
+    recovery_runtime.recover_data_display.assert_called_once()
 
 
 def test_navigation_controller_maps_clear_dtcs_agent_page_ids() -> None:

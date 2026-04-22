@@ -4,17 +4,34 @@ import importlib
 import logging
 import sys
 import types
+import json
 from pathlib import Path
 
 import pytest
 
+from diagnostic_platform.observability import flush_product_log_writers
 import vci_proxy.j2534_worker as worker_module
 from vci_proxy.j2534_worker import (
+    J2534WorkerController,
+    RemoteJ2534Driver,
     WorkerLaunchSpec,
     resolve_worker_launch_spec,
     resolve_worker_launch_specs,
     select_python_executable,
 )
+
+
+def _read_local_events(tmp_path: Path) -> list[dict[str, object]]:
+    flush_product_log_writers()
+    raw_dir = tmp_path / "VCI_Proxy" / "observability" / "raw"
+    rows: list[dict[str, object]] = []
+    for path in sorted(raw_dir.glob("*.jsonl")):
+        rows.extend(
+            json.loads(line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        )
+    return rows
 
 
 def test_select_python_executable_prefers_current_process_when_arch_matches(monkeypatch) -> None:
@@ -301,3 +318,119 @@ def test_serve_worker_exits_cleanly_when_parent_disconnects_during_shutdown_ack(
     assert observed["conn_closed"] is True
     assert observed["listener_closed"] is True
     assert "J2534 worker parent disconnected during shutdown ack" in caplog.text
+
+
+def test_remote_driver_call_with_context_sends_log_context(monkeypatch) -> None:
+    observed: dict[str, object] = {}
+
+    class _FakeConn:
+        def send(self, payload) -> None:
+            observed["payload"] = payload
+
+        def recv(self):
+            return {"ok": True, "result": (0, 11)}
+
+    monkeypatch.setattr(worker_module, "Client", lambda address, authkey=None: _FakeConn())
+
+    driver = RemoteJ2534Driver(("127.0.0.1", 8259), b"secret", dll_path=r"C:\drivers\sm2.dll")
+    result = driver.call_with_context(
+        "connect",
+        (1, 6, 0, 500000),
+        log_context={"proxy_seq": 77, "worker_request_id": "wrk-1", "msg_name": "CONNECT_REQ"},
+    )
+
+    assert result == (0, 11)
+    assert observed["payload"] == {
+        "method": "connect",
+        "args": (1, 6, 0, 500000),
+        "log_context": {"proxy_seq": 77, "worker_request_id": "wrk-1", "msg_name": "CONNECT_REQ"},
+    }
+
+
+def test_serve_worker_emits_rpc_events_with_log_context(monkeypatch, tmp_path: Path) -> None:
+    observed: dict[str, object] = {}
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+
+    class _FakeDriver:
+        def ping(self, value: str) -> str:
+            observed["driver_call"] = value
+            return f"pong:{value}"
+
+    class _FakeConn:
+        def __init__(self) -> None:
+            self._requests = [
+                {
+                    "method": "ping",
+                    "args": ("hello",),
+                    "log_context": {"proxy_seq": 77, "worker_request_id": "wrk-77", "msg_name": "PING_REQ"},
+                },
+                EOFError("done"),
+            ]
+
+        def recv(self):
+            item = self._requests.pop(0)
+            if isinstance(item, BaseException):
+                raise item
+            return item
+
+        def send(self, payload) -> None:
+            observed.setdefault("responses", []).append(payload)
+
+        def close(self) -> None:
+            observed["conn_closed"] = True
+
+    class _FakeListener:
+        def __init__(self, address, authkey=None):
+            pass
+
+        def accept(self):
+            return _FakeConn()
+
+        def close(self) -> None:
+            observed["listener_closed"] = True
+
+    monkeypatch.setattr(worker_module, "_configure_worker_logging", lambda log_file: None)
+    monkeypatch.setattr(worker_module, "J2534Driver", lambda dll_path: _FakeDriver())
+    monkeypatch.setattr(worker_module, "Listener", _FakeListener)
+
+    worker_module.serve_worker("127.0.0.1", 8262, b"secret", r"C:\drivers\sm2.dll")
+
+    rows = _read_local_events(tmp_path)
+    event_types = [row["event_type"] for row in rows]
+    assert "worker.lifecycle.starting" in event_types
+    assert "worker.lifecycle.listener_ready" in event_types
+    assert "worker.rpc.received" in event_types
+    assert "worker.rpc.returned" in event_types
+    rpc_received = next(row for row in rows if row["event_type"] == "worker.rpc.received")
+    assert rpc_received["proxy_seq"] == 77
+    assert rpc_received["worker_request_id"] == "wrk-77"
+
+
+def test_worker_controller_emits_spawn_failed_event(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.setattr(
+        worker_module,
+        "resolve_worker_launch_specs",
+        lambda dll_path: [
+            WorkerLaunchSpec(
+                dll_path=r"C:\drivers\sm2.dll",
+                target_arch="x64",
+                mode="python",
+                command=[sys.executable, "-m", "vci_proxy.j2534_worker"],
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        worker_module.subprocess,
+        "Popen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("spawn boom")),
+    )
+
+    controller = J2534WorkerController(r"C:\drivers\sm2.dll")
+    with pytest.raises(RuntimeError, match="failed to start"):
+        controller.start()
+
+    rows = _read_local_events(tmp_path)
+    event_types = [row["event_type"] for row in rows]
+    assert "worker.lifecycle.spawn_started" in event_types
+    assert "worker.lifecycle.spawn_failed" in event_types

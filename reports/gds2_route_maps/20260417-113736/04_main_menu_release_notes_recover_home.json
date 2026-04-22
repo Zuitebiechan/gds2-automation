@@ -1,0 +1,122 @@
+{
+  "label": "main_menu_release_notes_recover_home",
+  "timestamp": "2026-04-17T11:37:52",
+  "page": {
+    "page_id": "main_menu",
+    "list_item_count": 0,
+    "buttons": [
+      "Release Notes",
+      "Language",
+      "Diagnostics",
+      "Manage Diagnostic Packages",
+      "Review Stored Data",
+      "Preferences",
+      "Update",
+      "Home",
+      "Close Application"
+    ],
+    "evidence": "buttons 'Diagnostics' + 'Update' present",
+    "has_modal": false,
+    "confidence": "high",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "Manage Diagnostic Packages",
+      "enabled": true
+    },
+    {
+      "text": "Review Stored Data",
+      "enabled": true
+    },
+    {
+      "text": "Preferences",
+      "enabled": true
+    },
+    {
+      "text": "Release Notes",
+      "enabled": true
+    },
+    {
+      "text": "Language",
+      "enabled": true
+    },
+    {
+      "text": "Diagnostics",
+      "enabled": true
+    },
+    {
+      "text": "Update",
+      "enabled": true
+    },
+    {
+      "text": "Close Application",
+      "enabled": true
+    },
+    {
+      "text": "Home",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Close Application",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Diagnostics",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Home",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Language",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Manage Diagnostic Packages",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Preferences",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Release Notes",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Review Stored Data",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Update",
+      "enabled": true
+    }
+  ],
+  "raw_page_id": "main_menu",
+  "effective_page_id": "main_menu",
+  "node_id": "0c9acf157a30bdc3",
+  "transition_error": "Transition did not settle from main_menu within 8.0s"
+}

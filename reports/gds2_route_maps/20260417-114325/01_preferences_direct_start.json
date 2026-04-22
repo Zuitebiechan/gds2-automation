@@ -1,0 +1,67 @@
+{
+  "label": "preferences_direct_start",
+  "timestamp": "2026-04-17T11:43:25",
+  "page": {
+    "page_id": "unknown",
+    "list_item_count": 0,
+    "buttons": [
+      "Cancel",
+      "Save",
+      "Reset to Default",
+      "Reset"
+    ],
+    "evidence": "no matching rule",
+    "has_modal": false,
+    "confidence": "low",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "Reset",
+      "enabled": true
+    },
+    {
+      "text": "Save",
+      "enabled": true
+    },
+    {
+      "text": "Cancel",
+      "enabled": true
+    },
+    {
+      "text": "Reset to Default",
+      "enabled": true
+    }
+  ],
+  "list_items": [],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Cancel",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Reset",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Reset to Default",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Save",
+      "enabled": true
+    }
+  ],
+  "raw_page_id": "unknown",
+  "effective_page_id": "unknown",
+  "node_id": "2ac436b684a2a4d8"
+}

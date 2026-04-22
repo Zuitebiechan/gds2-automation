@@ -1,0 +1,71 @@
+{
+  "label": "explore_dtc_child_diagnostic_test_status_since_dtc_clear",
+  "timestamp": "2026-04-17T11:53:51",
+  "page": {
+    "page_id": "clear_dtcs_confirmation",
+    "list_item_count": 0,
+    "buttons": [
+      "Refresh",
+      "Add Bookmark",
+      "Back",
+      "Create Report"
+    ],
+    "evidence": "label contains 'DTC Clear'",
+    "has_modal": false,
+    "confidence": "high",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "Add Bookmark",
+      "enabled": true
+    },
+    {
+      "text": "Create Report",
+      "enabled": true
+    },
+    {
+      "text": "Refresh",
+      "enabled": true
+    },
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Add Bookmark",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Back",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Create Report",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Refresh",
+      "enabled": true
+    }
+  ],
+  "raw_page_id": "clear_dtcs_confirmation",
+  "effective_page_id": "clear_dtcs_confirmation",
+  "node_id": "4ae29a4af0c2a405"
+}

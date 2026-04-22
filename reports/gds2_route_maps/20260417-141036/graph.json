@@ -1,0 +1,2583 @@
+{
+  "version": 1,
+  "created_at": "2026-04-17T14:10:36",
+  "nodes": {
+    "5530ff4c472177cb": {
+      "node_id": "5530ff4c472177cb",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Reset",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "authored",
+        "Display Name",
+        "ECU",
+        "Units",
+        "Custom Order"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Reset",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "explore_control_functions_leaves_start"
+    },
+    "768c7732e1416a4e": {
+      "node_id": "768c7732e1416a4e",
+      "page_id": "unknown",
+      "raw_page_id": "unknown",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        }
+      ],
+      "first_seen_label": "explore_control_functions_recover_back_01"
+    },
+    "c91639577a6e83a3": {
+      "node_id": "c91639577a6e83a3",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "Ambient Air Temperature Calculation Reset",
+        "Engine Oil Life Reset",
+        "Fuel Rail Pressure Relief Valve Learned Values Reset",
+        "Fuel Trim Reset",
+        "HO2S Heater Resistance Learned Values Reset",
+        "Intake System Learned Values Reset",
+        "Remote Vehicle Start Disable History Reset",
+        "Throttle Body Idle Air Flow Compensation Reset"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Ambient Air Temperature Calculation Reset",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Oil Life Reset",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Rail Pressure Relief Valve Learned Values Reset",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Trim Reset",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "HO2S Heater Resistance Learned Values Reset",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Intake System Learned Values Reset",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Remote Vehicle Start Disable History Reset",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Throttle Body Idle Air Flow Compensation Reset",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "explore_control_functions_recover_back_01"
+    },
+    "9a2a0958b5f82dee": {
+      "node_id": "9a2a0958b5f82dee",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "Learn Functions",
+        "Reset Functions"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Learn Functions",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Reset Functions",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "explore_control_functions_recover_back_02"
+    },
+    "1805ef52ad0e78d2": {
+      "node_id": "1805ef52ad0e78d2",
+      "page_id": "module_submenu",
+      "raw_page_id": "module_submenu",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "Diagnostic Trouble Codes (DTC)",
+        "Event Information",
+        "Identification Information",
+        "Data Display",
+        "Control Functions",
+        "Configuration/Reset Functions",
+        "Inspection/Maintenance System Information"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Diagnostic Trouble Codes (DTC)",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Event Information",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Identification Information",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Data Display",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Control Functions",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Configuration/Reset Functions",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Inspection/Maintenance System Information",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "explore_control_functions_recover_back_03"
+    },
+    "eba9ffd57b93d135": {
+      "node_id": "eba9ffd57b93d135",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "A/C Compressor Clutch Relay",
+        "Active Grille Air Shutter System",
+        "Autostart/Autostop",
+        "Auxiliary Coolant Pump",
+        "Camshaft Position Actuator System",
+        "Compression Test",
+        "Cooling Fan",
+        "Engine Controls Ignition Relay",
+        "Engine Oil Pressure Control Solenoid Valve",
+        "Engine Speed/Throttle",
+        "EVAP System",
+        "Fuel Control Loop Status",
+        "Fuel System",
+        "Generator L-Terminal",
+        "Heater Coolant Pump",
+        "Ignition Timing",
+        "Instrument Panel Indicators",
+        "Misfire Graphic",
+        "Oxygen Sensor Heaters",
+        "Starter Pinion Solenoid Actuator Relay",
+        "Turbocharger"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "A/C Compressor Clutch Relay",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Active Grille Air Shutter System",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Autostart/Autostop",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Auxiliary Coolant Pump",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Camshaft Position Actuator System",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Compression Test",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Cooling Fan",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Controls Ignition Relay",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Oil Pressure Control Solenoid Valve",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Speed/Throttle",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "EVAP System",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Control Loop Status",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel System",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Generator L-Terminal",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Heater Coolant Pump",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Ignition Timing",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Instrument Panel Indicators",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Misfire Graphic",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Oxygen Sensor Heaters",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Starter Pinion Solenoid Actuator Relay",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Turbocharger",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "explore_control_functions_leaves_menu"
+    },
+    "c1824940c4b0c403": {
+      "node_id": "c1824940c4b0c403",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Off",
+          "enabled": true
+        },
+        {
+          "text": "On",
+          "enabled": true
+        },
+        {
+          "text": "Release Control",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "authored",
+        "Display Name",
+        "ECU",
+        "Units",
+        "Custom Order"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Off",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "On",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Release Control",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "control_function_a_c_compressor_clutch_relay"
+    },
+    "5c6132db8aa7508a": {
+      "node_id": "5c6132db8aa7508a",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "Active Grille Air Shutter 1",
+        "Active Grille Air Shutter 2"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Active Grille Air Shutter 1",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Active Grille Air Shutter 2",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "control_function_active_grille_air_shutter_system"
+    },
+    "42adedc7fa580763": {
+      "node_id": "42adedc7fa580763",
+      "page_id": "loading",
+      "raw_page_id": "loading",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "first_seen_label": "control_function_autostart_autostop"
+    },
+    "e24226cf457b2964": {
+      "node_id": "e24226cf457b2964",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Release Control",
+          "enabled": true
+        },
+        {
+          "text": "Start",
+          "enabled": true
+        },
+        {
+          "text": "Stop",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "authored",
+        "Display Name",
+        "ECU",
+        "Units",
+        "Custom Order"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Release Control",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Start",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Stop",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "control_function_autostart_autostop"
+    },
+    "64c8db4c044382db": {
+      "node_id": "64c8db4c044382db",
+      "page_id": "unknown",
+      "raw_page_id": "unknown",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "A/C Compressor Clutch Relay",
+        "Active Grille Air Shutter System",
+        "Autostart/Autostop",
+        "Auxiliary Coolant Pump",
+        "Camshaft Position Actuator System",
+        "Compression Test",
+        "Cooling Fan",
+        "Engine Controls Ignition Relay",
+        "Engine Oil Pressure Control Solenoid Valve",
+        "Engine Speed/Throttle",
+        "EVAP System",
+        "Fuel Control Loop Status",
+        "Fuel System",
+        "Generator L-Terminal",
+        "Heater Coolant Pump",
+        "Ignition Timing",
+        "Instrument Panel Indicators",
+        "Misfire Graphic",
+        "Oxygen Sensor Heaters",
+        "Starter Pinion Solenoid Actuator Relay",
+        "Turbocharger"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "A/C Compressor Clutch Relay",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Active Grille Air Shutter System",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Autostart/Autostop",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Auxiliary Coolant Pump",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Camshaft Position Actuator System",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Compression Test",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Cooling Fan",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Controls Ignition Relay",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Oil Pressure Control Solenoid Valve",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Speed/Throttle",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "EVAP System",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Control Loop Status",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel System",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Generator L-Terminal",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Heater Coolant Pump",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Ignition Timing",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Instrument Panel Indicators",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Misfire Graphic",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Oxygen Sensor Heaters",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Starter Pinion Solenoid Actuator Relay",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Turbocharger",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "control_function_autostart_autostop_back"
+    },
+    "3872317636a11cc9": {
+      "node_id": "3872317636a11cc9",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "Exhaust Camshaft Position Actuator",
+        "Intake Camshaft Position Actuator",
+        "Exhaust Camshaft Position Actuator Solenoid Valve",
+        "Intake Camshaft Position Actuator Solenoid Valve"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Exhaust Camshaft Position Actuator",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Intake Camshaft Position Actuator",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Exhaust Camshaft Position Actuator Solenoid Valve",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Intake Camshaft Position Actuator Solenoid Valve",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "control_function_camshaft_position_actuator_system"
+    },
+    "3d15301462847413": {
+      "node_id": "3d15301462847413",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Compression Test",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "authored",
+        "Display Name",
+        "ECU",
+        "Units",
+        "Custom Order"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Compression Test",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "control_function_compression_test"
+    },
+    "de5aebe2f074d579": {
+      "node_id": "de5aebe2f074d579",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "Cooling Fan",
+        "Cooling Fan Relay 1",
+        "Cooling Fan Relay 2"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Cooling Fan",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Cooling Fan Relay 1",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Cooling Fan Relay 2",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "control_function_cooling_fan"
+    },
+    "22e57a4d142c808c": {
+      "node_id": "22e57a4d142c808c",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "High Pressure",
+          "enabled": true
+        },
+        {
+          "text": "Low Pressure",
+          "enabled": true
+        },
+        {
+          "text": "Release Control",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "authored",
+        "Display Name",
+        "ECU",
+        "Units",
+        "Custom Order"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "High Pressure",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Low Pressure",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Release Control",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "control_function_engine_oil_pressure_control_solenoid_valve"
+    },
+    "3c110dc72f9fb635": {
+      "node_id": "3c110dc72f9fb635",
+      "page_id": "unknown",
+      "raw_page_id": "unknown",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "text": "Back",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        }
+      ],
+      "first_seen_label": "control_function_engine_oil_pressure_control_solenoid_valve_back"
+    },
+    "f5c447d269756dc9": {
+      "node_id": "f5c447d269756dc9",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "Engine Speed",
+        "Throttle Position",
+        "Throttle Sweep"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Speed",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Throttle Position",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Throttle Sweep",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "control_function_engine_speed_throttle"
+    },
+    "3009c5d30593623e": {
+      "node_id": "3009c5d30593623e",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "EVAP Purge Solenoid Valve"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "EVAP Purge Solenoid Valve",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "control_function_evap_system"
+    },
+    "2aa635c4007c0e81": {
+      "node_id": "2aa635c4007c0e81",
+      "page_id": "unknown",
+      "raw_page_id": "unknown",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Continue",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Continue",
+          "enabled": true
+        }
+      ],
+      "first_seen_label": "control_function_fuel_control_loop_status"
+    },
+    "e2300b8a4f975e21": {
+      "node_id": "e2300b8a4f975e21",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "Cylinder Power Balance",
+        "Depressurize Fuel System",
+        "Fuel Injector Balance",
+        "Fuel Pressure",
+        "Fuel Pump Enable",
+        "Fuel Trim Enable",
+        "Fuel Rail Pressure",
+        "Fuel Pressure Regulator"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Cylinder Power Balance",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Depressurize Fuel System",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Injector Balance",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Pressure",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Pump Enable",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Trim Enable",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Rail Pressure",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Pressure Regulator",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "control_function_fuel_system"
+    },
+    "3f8d545302f5ab36": {
+      "node_id": "3f8d545302f5ab36",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "Ignition Timing Retard"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Ignition Timing Retard",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "control_function_ignition_timing"
+    },
+    "b113a54ec990dfb3": {
+      "node_id": "b113a54ec990dfb3",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "Malfunction Indicator Lamp (MIL)"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Malfunction Indicator Lamp (MIL)",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "control_function_instrument_panel_indicators"
+    },
+    "e8bbe7fab79db207": {
+      "node_id": "e8bbe7fab79db207",
+      "page_id": "data_display",
+      "raw_page_id": "data_display",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Create Report",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "authored",
+        "Display Name",
+        "ECU",
+        "Units",
+        "Custom Order"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Create Report",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "control_function_misfire_graphic"
+    },
+    "e0df5937b2fd3110": {
+      "node_id": "e0df5937b2fd3110",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "HO2S Heater Sensor 1",
+        "HO2S Heater Sensor 2"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "HO2S Heater Sensor 1",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "HO2S Heater Sensor 2",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "control_function_oxygen_sensor_heaters"
+    },
+    "57758fddc73f9860": {
+      "node_id": "57758fddc73f9860",
+      "page_id": "clear_dtcs_confirmation",
+      "raw_page_id": "clear_dtcs_confirmation",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Cancel",
+          "enabled": true
+        },
+        {
+          "text": "Clear Records",
+          "enabled": true
+        },
+        {
+          "text": "Continue",
+          "enabled": true
+        },
+        {
+          "text": "Decrease",
+          "enabled": true
+        },
+        {
+          "text": "Increase",
+          "enabled": true
+        },
+        {
+          "text": "No",
+          "enabled": true
+        },
+        {
+          "text": "OK",
+          "enabled": true
+        },
+        {
+          "text": "On",
+          "enabled": true
+        },
+        {
+          "text": "Save and Clear",
+          "enabled": true
+        },
+        {
+          "text": "Yes",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Cancel",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Clear Records",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Continue",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Decrease",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Increase",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "No",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "OK",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "On",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Save and Clear",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Yes",
+          "enabled": true
+        }
+      ],
+      "first_seen_label": "control_function_starter_pinion_solenoid_actuator_relay"
+    },
+    "b5d4277b5ab4d11f": {
+      "node_id": "b5d4277b5ab4d11f",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "Turbocharger Bypass Solenoid Valve",
+        "Turbocharger Wastegate Solenoid Valve"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Turbocharger Bypass Solenoid Valve",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Turbocharger Wastegate Solenoid Valve",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "control_function_turbocharger"
+    }
+  },
+  "edges": [
+    {
+      "source_id": "5530ff4c472177cb",
+      "target_id": "c91639577a6e83a3",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:10:41"
+    },
+    {
+      "source_id": "c91639577a6e83a3",
+      "target_id": "9a2a0958b5f82dee",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:10:43"
+    },
+    {
+      "source_id": "9a2a0958b5f82dee",
+      "target_id": "1805ef52ad0e78d2",
+      "source_page_id": "data_list",
+      "target_page_id": "module_submenu",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "module_submenu",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:10:45"
+    },
+    {
+      "source_id": "1805ef52ad0e78d2",
+      "target_id": "eba9ffd57b93d135",
+      "source_page_id": "module_submenu",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "module_submenu",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Control Functions",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:10:46"
+    },
+    {
+      "source_id": "eba9ffd57b93d135",
+      "target_id": "c1824940c4b0c403",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "A/C Compressor Clutch Relay",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:10:48"
+    },
+    {
+      "source_id": "c1824940c4b0c403",
+      "target_id": "eba9ffd57b93d135",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:10:54"
+    },
+    {
+      "source_id": "eba9ffd57b93d135",
+      "target_id": "5c6132db8aa7508a",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Active Grille Air Shutter System",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:10:56"
+    },
+    {
+      "source_id": "5c6132db8aa7508a",
+      "target_id": "eba9ffd57b93d135",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:11:00"
+    },
+    {
+      "source_id": "eba9ffd57b93d135",
+      "target_id": "e24226cf457b2964",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Autostart/Autostop",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:11:03"
+    },
+    {
+      "source_id": "e24226cf457b2964",
+      "target_id": "eba9ffd57b93d135",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:11:09"
+    },
+    {
+      "source_id": "eba9ffd57b93d135",
+      "target_id": "c1824940c4b0c403",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Auxiliary Coolant Pump",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:11:12"
+    },
+    {
+      "source_id": "c1824940c4b0c403",
+      "target_id": "eba9ffd57b93d135",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:11:17"
+    },
+    {
+      "source_id": "eba9ffd57b93d135",
+      "target_id": "3872317636a11cc9",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Camshaft Position Actuator System",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:11:19"
+    },
+    {
+      "source_id": "3872317636a11cc9",
+      "target_id": "eba9ffd57b93d135",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:11:23"
+    },
+    {
+      "source_id": "eba9ffd57b93d135",
+      "target_id": "3d15301462847413",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Compression Test",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:11:26"
+    },
+    {
+      "source_id": "3d15301462847413",
+      "target_id": "eba9ffd57b93d135",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:11:31"
+    },
+    {
+      "source_id": "eba9ffd57b93d135",
+      "target_id": "de5aebe2f074d579",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Cooling Fan",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:11:33"
+    },
+    {
+      "source_id": "de5aebe2f074d579",
+      "target_id": "eba9ffd57b93d135",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:11:37"
+    },
+    {
+      "source_id": "eba9ffd57b93d135",
+      "target_id": "c1824940c4b0c403",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Engine Controls Ignition Relay",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:11:39"
+    },
+    {
+      "source_id": "c1824940c4b0c403",
+      "target_id": "eba9ffd57b93d135",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:11:45"
+    },
+    {
+      "source_id": "eba9ffd57b93d135",
+      "target_id": "22e57a4d142c808c",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Engine Oil Pressure Control Solenoid Valve",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:11:48"
+    },
+    {
+      "source_id": "22e57a4d142c808c",
+      "target_id": "eba9ffd57b93d135",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:11:53"
+    },
+    {
+      "source_id": "eba9ffd57b93d135",
+      "target_id": "f5c447d269756dc9",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Engine Speed/Throttle",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:11:55"
+    },
+    {
+      "source_id": "f5c447d269756dc9",
+      "target_id": "eba9ffd57b93d135",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:11:59"
+    },
+    {
+      "source_id": "eba9ffd57b93d135",
+      "target_id": "3009c5d30593623e",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "EVAP System",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:12:01"
+    },
+    {
+      "source_id": "3009c5d30593623e",
+      "target_id": "eba9ffd57b93d135",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:12:05"
+    },
+    {
+      "source_id": "2aa635c4007c0e81",
+      "target_id": "eba9ffd57b93d135",
+      "source_page_id": "unknown",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "unknown",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:12:16"
+    },
+    {
+      "source_id": "eba9ffd57b93d135",
+      "target_id": "e2300b8a4f975e21",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Fuel System",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:12:18"
+    },
+    {
+      "source_id": "e2300b8a4f975e21",
+      "target_id": "eba9ffd57b93d135",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:12:22"
+    },
+    {
+      "source_id": "2aa635c4007c0e81",
+      "target_id": "eba9ffd57b93d135",
+      "source_page_id": "unknown",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "unknown",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:12:33"
+    },
+    {
+      "source_id": "eba9ffd57b93d135",
+      "target_id": "c1824940c4b0c403",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Heater Coolant Pump",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:12:35"
+    },
+    {
+      "source_id": "c1824940c4b0c403",
+      "target_id": "eba9ffd57b93d135",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:12:41"
+    },
+    {
+      "source_id": "eba9ffd57b93d135",
+      "target_id": "3f8d545302f5ab36",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Ignition Timing",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:12:43"
+    },
+    {
+      "source_id": "3f8d545302f5ab36",
+      "target_id": "eba9ffd57b93d135",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:12:47"
+    },
+    {
+      "source_id": "eba9ffd57b93d135",
+      "target_id": "b113a54ec990dfb3",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Instrument Panel Indicators",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:12:49"
+    },
+    {
+      "source_id": "b113a54ec990dfb3",
+      "target_id": "eba9ffd57b93d135",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:12:53"
+    },
+    {
+      "source_id": "eba9ffd57b93d135",
+      "target_id": "e8bbe7fab79db207",
+      "source_page_id": "data_list",
+      "target_page_id": "data_display",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_display",
+      "action": {
+        "kind": "list_item",
+        "label": "Misfire Graphic",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:12:55"
+    },
+    {
+      "source_id": "e8bbe7fab79db207",
+      "target_id": "eba9ffd57b93d135",
+      "source_page_id": "data_display",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_display",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:12:59"
+    },
+    {
+      "source_id": "eba9ffd57b93d135",
+      "target_id": "e0df5937b2fd3110",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Oxygen Sensor Heaters",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:13:01"
+    },
+    {
+      "source_id": "e0df5937b2fd3110",
+      "target_id": "eba9ffd57b93d135",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:13:05"
+    },
+    {
+      "source_id": "eba9ffd57b93d135",
+      "target_id": "57758fddc73f9860",
+      "source_page_id": "data_list",
+      "target_page_id": "clear_dtcs_confirmation",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "clear_dtcs_confirmation",
+      "action": {
+        "kind": "list_item",
+        "label": "Starter Pinion Solenoid Actuator Relay",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:13:07"
+    },
+    {
+      "source_id": "57758fddc73f9860",
+      "target_id": "eba9ffd57b93d135",
+      "source_page_id": "clear_dtcs_confirmation",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "clear_dtcs_confirmation",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:13:11"
+    },
+    {
+      "source_id": "eba9ffd57b93d135",
+      "target_id": "b5d4277b5ab4d11f",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Turbocharger",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T14:13:13"
+    },
+    {
+      "source_id": "b5d4277b5ab4d11f",
+      "target_id": "eba9ffd57b93d135",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T14:13:16"
+    }
+  ]
+}

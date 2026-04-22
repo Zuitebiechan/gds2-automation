@@ -1,0 +1,456 @@
+{
+  "started_at": "2026-04-20T15:44:24",
+  "completed_at": "2026-04-20T15:44:48",
+  "entry_key": "clear codes",
+  "entry": {
+    "page_key": "dtc.clear.execute",
+    "title": "Execute Clear DTCs",
+    "category": "dtc",
+    "page_kind": "clear_dtcs_execute",
+    "canonical_path": [
+      "Module Diagnostics",
+      "Engine Control Module",
+      "Diagnostic Trouble Codes (DTC)",
+      "DTC Display",
+      "Clear DTCs",
+      "Add All",
+      "OK"
+    ],
+    "route_steps": [
+      {
+        "kind": "list_item",
+        "label": "Module Diagnostics"
+      },
+      {
+        "kind": "list_item",
+        "label": "Engine Control Module"
+      },
+      {
+        "kind": "list_item",
+        "label": "Diagnostic Trouble Codes (DTC)"
+      },
+      {
+        "kind": "list_item",
+        "label": "DTC Display"
+      },
+      {
+        "kind": "button",
+        "label": "Clear DTCs"
+      },
+      {
+        "kind": "button",
+        "label": "Add All"
+      },
+      {
+        "kind": "button",
+        "label": "OK"
+      }
+    ],
+    "target_action": {
+      "kind": "button",
+      "label": "OK"
+    },
+    "expected_page_id": "clear_dtcs_confirmation",
+    "expected_actions": [
+      {
+        "kind": "button",
+        "label": "OK"
+      },
+      {
+        "kind": "button",
+        "label": "Cancel"
+      }
+    ],
+    "success_criteria": {
+      "page_id_any": [
+        "clear_dtcs_confirmation",
+        "data_display",
+        "data_list"
+      ],
+      "variants": [
+        {
+          "name": "confirmation_or_final_prompt",
+          "all_of": [
+            {
+              "kind": "button",
+              "label": "OK"
+            }
+          ],
+          "any_of": [
+            {
+              "kind": "button",
+              "label": "Cancel"
+            },
+            {
+              "kind": "button",
+              "label": "Clear Records"
+            },
+            {
+              "kind": "button",
+              "label": "Save and Clear"
+            },
+            {
+              "kind": "button",
+              "label": "Yes"
+            }
+          ]
+        },
+        {
+          "name": "returned_to_dtc_display",
+          "all_of": [
+            {
+              "kind": "button",
+              "label": "Clear DTCs"
+            },
+            {
+              "kind": "button",
+              "label": "Refresh"
+            }
+          ]
+        },
+        {
+          "name": "returned_to_dtc_menu",
+          "all_of": [
+            {
+              "kind": "list_item",
+              "label": "DTC Display"
+            },
+            {
+              "kind": "list_item",
+              "label": "Specific DTC"
+            }
+          ]
+        }
+      ],
+      "navigation_path_contains_prefix": [
+        "Module Diagnostics",
+        "Engine Control Module",
+        "Diagnostic Trouble Codes (DTC)"
+      ],
+      "requires_executed": [
+        {
+          "kind": "button",
+          "label": "Add All"
+        },
+        {
+          "kind": "button",
+          "label": "OK"
+        }
+      ]
+    },
+    "fallback_strategy": [
+      "navigate to DTC Display",
+      "click Clear DTCs",
+      "click Add All",
+      "click OK",
+      "handle any final confirmation/result prompt"
+    ],
+    "confidence": "explored",
+    "source": "merged_route_graph",
+    "notes": "Executes the Clear DTCs flow through Add All -> OK; final post-OK page may vary and should be live-probe calibrated.",
+    "aliases": [
+      "clear codes",
+      "clear dtc",
+      "clear dtcs",
+      "dtc.clear",
+      "dtc.clear.execute",
+      "erase codes",
+      "execute clear dtcs"
+    ],
+    "created_at": "2026-04-20T15:44:10",
+    "updated_at": "2026-04-20T15:44:10"
+  },
+  "target_action": {
+    "kind": "button",
+    "label": "OK"
+  },
+  "bootstrap_actions": [],
+  "start_snapshot": {
+    "page": {
+      "page_id": "data_list"
+    },
+    "raw_page_id": "data_list",
+    "effective_page_id": "data_list",
+    "observed_actions": [
+      {
+        "kind": "button",
+        "label": "Back"
+      },
+      {
+        "kind": "button",
+        "label": "Home"
+      },
+      {
+        "kind": "button",
+        "label": "Vehicle Menu"
+      },
+      {
+        "kind": "button",
+        "label": "Enter"
+      },
+      {
+        "kind": "list_item",
+        "label": "DTC Display",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Diagnostic Test Status: This Ignition Cycle",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Diagnostic Test Status: Since DTC Clear",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Freeze Frame/Failure Records",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Specific DTC",
+        "list_index": 0
+      }
+    ],
+    "list_items": [
+      "DTC Display",
+      "Diagnostic Test Status: This Ignition Cycle",
+      "Diagnostic Test Status: Since DTC Clear",
+      "Freeze Frame/Failure Records",
+      "Specific DTC"
+    ],
+    "navigation_path": [
+      "Module Diagnostics",
+      "Engine Control Module",
+      "Diagnostic Trouble Codes (DTC)"
+    ]
+  },
+  "success": true,
+  "success_details": {
+    "page_ok": true,
+    "page_id": "clear_dtcs_confirmation",
+    "page_id_any": [
+      "clear_dtcs_confirmation",
+      "data_display",
+      "data_list"
+    ],
+    "missing_all_of": [],
+    "matched_any_of": [],
+    "required_any_of": [],
+    "forbidden_present": [],
+    "path_ok": true,
+    "path_mode": "contains_prefix",
+    "variant_results": [
+      {
+        "page_ok": true,
+        "page_id": "clear_dtcs_confirmation",
+        "page_id_any": [],
+        "missing_all_of": [],
+        "matched_any_of": [
+          {
+            "kind": "button",
+            "label": "Cancel"
+          },
+          {
+            "kind": "button",
+            "label": "Clear Records"
+          },
+          {
+            "kind": "button",
+            "label": "Save and Clear"
+          },
+          {
+            "kind": "button",
+            "label": "Yes"
+          }
+        ],
+        "required_any_of": [
+          {
+            "kind": "button",
+            "label": "Cancel"
+          },
+          {
+            "kind": "button",
+            "label": "Clear Records"
+          },
+          {
+            "kind": "button",
+            "label": "Save and Clear"
+          },
+          {
+            "kind": "button",
+            "label": "Yes"
+          }
+        ],
+        "forbidden_present": [],
+        "path_ok": true,
+        "path_mode": null,
+        "variant_results": [],
+        "name": "confirmation_or_final_prompt"
+      },
+      {
+        "page_ok": true,
+        "page_id": "clear_dtcs_confirmation",
+        "page_id_any": [],
+        "missing_all_of": [
+          {
+            "kind": "button",
+            "label": "Clear DTCs"
+          },
+          {
+            "kind": "button",
+            "label": "Refresh"
+          }
+        ],
+        "matched_any_of": [],
+        "required_any_of": [],
+        "forbidden_present": [],
+        "path_ok": true,
+        "path_mode": null,
+        "variant_results": [],
+        "name": "returned_to_dtc_display"
+      },
+      {
+        "page_ok": true,
+        "page_id": "clear_dtcs_confirmation",
+        "page_id_any": [],
+        "missing_all_of": [
+          {
+            "kind": "list_item",
+            "label": "DTC Display"
+          },
+          {
+            "kind": "list_item",
+            "label": "Specific DTC"
+          }
+        ],
+        "matched_any_of": [],
+        "required_any_of": [],
+        "forbidden_present": [],
+        "path_ok": true,
+        "path_mode": null,
+        "variant_results": [],
+        "name": "returned_to_dtc_menu"
+      }
+    ]
+  },
+  "missing_expected_actions": [],
+  "route_result": {
+    "matched_start_node_id": "076526591125909f",
+    "recovery_actions": [],
+    "planned_path": [
+      {
+        "kind": "list_item",
+        "label": "Module Diagnostics"
+      },
+      {
+        "kind": "list_item",
+        "label": "Engine Control Module"
+      },
+      {
+        "kind": "list_item",
+        "label": "Diagnostic Trouble Codes (DTC)"
+      },
+      {
+        "kind": "list_item",
+        "label": "DTC Display"
+      },
+      {
+        "kind": "button",
+        "label": "Clear DTCs"
+      },
+      {
+        "kind": "button",
+        "label": "Add All"
+      },
+      {
+        "kind": "button",
+        "label": "OK"
+      }
+    ],
+    "executed_actions": [
+      {
+        "kind": "list_item",
+        "label": "DTC Display"
+      },
+      {
+        "kind": "button",
+        "label": "Clear DTCs"
+      },
+      {
+        "kind": "button",
+        "label": "Add All"
+      },
+      {
+        "kind": "button",
+        "label": "OK"
+      }
+    ],
+    "final_page": "clear_dtcs_confirmation",
+    "final_snapshot": {
+      "page": {
+        "page_id": "clear_dtcs_confirmation"
+      },
+      "raw_page_id": "clear_dtcs_confirmation",
+      "effective_page_id": "clear_dtcs_confirmation",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Clear Records"
+        },
+        {
+          "kind": "button",
+          "label": "Back"
+        },
+        {
+          "kind": "button",
+          "label": "Cancel"
+        },
+        {
+          "kind": "button",
+          "label": "Add Bookmark"
+        },
+        {
+          "kind": "button",
+          "label": "Continue"
+        },
+        {
+          "kind": "button",
+          "label": "No"
+        },
+        {
+          "kind": "button",
+          "label": "Increase"
+        },
+        {
+          "kind": "button",
+          "label": "Save and Clear"
+        },
+        {
+          "kind": "button",
+          "label": "OK"
+        },
+        {
+          "kind": "button",
+          "label": "Yes"
+        },
+        {
+          "kind": "button",
+          "label": "On"
+        },
+        {
+          "kind": "button",
+          "label": "Decrease"
+        }
+      ],
+      "list_items": [],
+      "navigation_path": [
+        "Module Diagnostics",
+        "Engine Control Module",
+        "Diagnostic Trouble Codes (DTC)"
+      ]
+    }
+  }
+}

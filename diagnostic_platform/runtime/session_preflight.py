@@ -20,9 +20,12 @@ from .session_backends import ensure_session_capability
 from .session_state import (
     clear_ai_binding,
     clear_navigation_binding,
+    set_connection_epoch,
+    set_session_current_page,
     set_live_data_active,
     set_session_selection,
 )
+from diagnostic_platform.session_observability import emit_session_runtime_event
 from .errors import OperationCancelledError
 from .worker_runtime import WorkerRuntime
 
@@ -83,6 +86,13 @@ def set_network_override(*, orchestrator: Any, session_id: str, connection_epoch
         connection_epoch,
         override["confirmed_at"],
     )
+    emit_session_runtime_event(
+        "session.network_gate.override_set",
+        session=session,
+        operation_kind="network_gate.override_set",
+        reason="user_confirmed_high_latency",
+        connection_epoch=str(connection_epoch) if connection_epoch else None,
+    )
     return override
 
 
@@ -96,6 +106,20 @@ def clear_network_override(*, orchestrator: Any, session_id: str, reason: str = 
             session.network_override.get("connection_epoch")
             if isinstance(session.network_override, dict)
             else None,
+        )
+        emit_session_runtime_event(
+            "session.network_gate.override_invalidated"
+            if reason == "epoch_changed"
+            else "session.network_gate.override_cleared",
+            session=session,
+            operation_kind="network_gate.override_clear",
+            reason=reason,
+            connection_epoch=(
+                str(session.network_override.get("connection_epoch"))
+                if isinstance(session.network_override, dict)
+                and session.network_override.get("connection_epoch") is not None
+                else None
+            ),
         )
     session.network_override = None
     session.updated_at = time.time()
@@ -265,7 +289,7 @@ def _build_start_diagnostics_result(
 
 def _reset_session_runtime_state(runtime: WorkerRuntime, session: Any) -> None:
     """Clear subordinate runtime bindings after backend startup."""
-    set_session_selection(session, module="", data_category="")
+    set_session_selection(session, module="", data_category="", runtime=runtime)
     clear_navigation_binding(runtime, session)
     clear_ai_binding(runtime, session)
     set_live_data_active(runtime, session, False)
@@ -308,14 +332,14 @@ def _read_backend_start_context(
     backend: Any,
     *,
     operation: Any,
-) -> tuple[dict[str, Any], dict[str, Any]]:
+) -> tuple[dict[str, Any], dict[str, Any], str]:
     start_method = getattr(backend, "start")
     start_payload = _call_backend_start(start_method, operation=operation)
     operation.check_cancelled()
     state = backend.get_state()
     state_extra = _state_extra_mapping(state)
     operation.check_cancelled()
-    return start_payload, state_extra
+    return start_payload, state_extra, str(getattr(state, "current_page", "") or "")
 
 
 def run_start_diagnostics(
@@ -333,6 +357,29 @@ def run_start_diagnostics(
         orchestrator=orchestrator,
         backend=backend,
         session_id=session_id,
+    )
+    emit_session_runtime_event(
+        "session.start_diagnostics.started",
+        runtime=runtime,
+        session=session,
+        backend=backend,
+        operation_kind="start_diagnostics",
+        reason="start_diagnostics_requested",
+    )
+    emit_session_runtime_event(
+        "session.network_gate.preflight",
+        runtime=runtime,
+        session=session,
+        backend=backend,
+        operation_kind="network_gate.preflight",
+        reason=str((network_snapshot.get("network_quality") or {}).get("reason") or ""),
+        connection_epoch=(
+            str(network_snapshot.get("connection_epoch"))
+            if network_snapshot.get("connection_epoch") is not None
+            else None
+        ),
+        network_quality=network_snapshot.get("network_quality"),
+        network_override=network_snapshot.get("network_override"),
     )
     network_quality = network_snapshot["network_quality"]
     effective_override = network_snapshot["network_override"]
@@ -358,6 +405,37 @@ def run_start_diagnostics(
             gate.kind,
             network_quality_summary(network_quality),
         )
+        emit_session_runtime_event(
+            "session.network_gate.blocked",
+            runtime=runtime,
+            session=session,
+            backend=backend,
+            operation_kind="network_gate.blocked",
+            status="error",
+            failure_code="network_gate_blocked",
+            failure_domain="session_runtime",
+            reason=str((network_quality or {}).get("reason") or "blocked"),
+            connection_epoch=(
+                str(network_snapshot.get("connection_epoch"))
+                if network_snapshot.get("connection_epoch") is not None
+                else None
+            ),
+            network_quality=network_quality,
+        )
+        emit_session_runtime_event(
+            "session.network_gate.decision_required",
+            runtime=runtime,
+            session=session,
+            backend=backend,
+            operation_kind="network_gate.decision_required",
+            reason="network_quality_blocked",
+            connection_epoch=(
+                str(network_snapshot.get("connection_epoch"))
+                if network_snapshot.get("connection_epoch") is not None
+                else None
+            ),
+            decision=gate.to_dict(),
+        )
         return _decision_required_start_payload(
             session,
             gate=gate,
@@ -370,7 +448,7 @@ def run_start_diagnostics(
             session_id,
             f"Starting {session.backend_name or 'diagnostic'} backend...",
         )
-        start_payload, state_extra = _read_backend_start_context(
+        start_payload, state_extra, current_page = _read_backend_start_context(
             backend,
             operation=operation,
         )
@@ -381,6 +459,8 @@ def run_start_diagnostics(
             state_extra=state_extra,
         )
         _reset_session_runtime_state(runtime, session)
+        set_session_current_page(session, current_page, runtime=runtime)
+        set_connection_epoch(runtime, session, network_snapshot.get("connection_epoch"))
         orchestrator.emit_progress(
             session_id,
             f"{session.backend_name or 'Diagnostic'} backend started",
@@ -396,6 +476,21 @@ def run_start_diagnostics(
             result.get("device") or "-",
             network_quality_summary(network_quality),
         )
+        emit_session_runtime_event(
+            "session.start_diagnostics.completed",
+            runtime=runtime,
+            session=session,
+            backend=backend,
+            operation_kind="start_diagnostics",
+            reason="backend_started",
+            connection_epoch=(
+                str(network_snapshot.get("connection_epoch"))
+                if network_snapshot.get("connection_epoch") is not None
+                else None
+            ),
+            resumed=resumed,
+            result=result,
+        )
         return _started_diagnostics_payload(
             session,
             result=result,
@@ -405,9 +500,31 @@ def run_start_diagnostics(
     except OperationCancelledError:
         reset_backend_startup_state(backend, session_id=session_id, reason="cancel")
         logger.info("SESSION %s start_diagnostics cancelled", session_id)
+        emit_session_runtime_event(
+            "session.start_diagnostics.cancelled",
+            runtime=runtime,
+            session=session,
+            backend=backend,
+            operation_kind="start_diagnostics",
+            status="error",
+            failure_code="cancelled",
+            failure_domain="session_runtime",
+            reason="cancelled",
+        )
         raise
     except Exception:
         reset_backend_startup_state(backend, session_id=session_id, reason="failure")
+        emit_session_runtime_event(
+            "session.start_diagnostics.failed",
+            runtime=runtime,
+            session=session,
+            backend=backend,
+            operation_kind="start_diagnostics",
+            status="error",
+            failure_code="start_failed",
+            failure_domain="session_runtime",
+            reason="start_diagnostics_failed",
+        )
         raise
     finally:
         runtime.finish_operation(operation)

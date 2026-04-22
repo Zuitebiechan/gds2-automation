@@ -100,7 +100,7 @@ Owns GDS2-specific implementation detail, including:
 - native automation helpers
 - navigation controller logic
 - streaming and collector logic
-- workflows such as Data Viewer
+- workflow-style utilities such as interactive navigation helpers
 - deterministic GDS2 orchestration under `src/gds2_orchestration/`
 
 This area should not become the place where future OEM backends are added.

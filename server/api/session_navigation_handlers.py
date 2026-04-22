@@ -19,6 +19,7 @@ from diagnostic_platform.runtime.session_streams import iter_navigation_events
 from server.api.http_utils import internal_error_payload
 from server.api.session_dependencies import (
     _runtime,
+    get_backend,
     get_orchestrator,
 )
 
@@ -50,10 +51,12 @@ def start_navigation_session_for_business(data: dict[str, object]) -> tuple[dict
         orch = get_orchestrator()
         session = orch.get_session(session_id)
         ensure_session_capability(session, BackendCapability.NAVIGATION)
+        backend = get_backend(session_id)
         nav_session = start_navigation(
             _runtime(),
             session,
             goal=goal,
+            backend=backend,
             emit_progress=lambda message: orch.emit_progress(session_id, message),
         )
         session.updated_at = time.time()

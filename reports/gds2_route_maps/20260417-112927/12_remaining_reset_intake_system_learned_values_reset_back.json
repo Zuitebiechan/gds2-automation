@@ -1,0 +1,124 @@
+{
+  "label": "remaining_reset_intake_system_learned_values_reset_back",
+  "timestamp": "2026-04-17T11:30:07",
+  "page": {
+    "page_id": "data_list",
+    "list_item_count": 8,
+    "buttons": [
+      "Vehicle Menu",
+      "Back",
+      "Enter",
+      "Home"
+    ],
+    "evidence": "has list items + Back button, no specific markers",
+    "has_modal": false,
+    "confidence": "medium",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "Home",
+      "enabled": true
+    },
+    {
+      "text": "Vehicle Menu",
+      "enabled": true
+    },
+    {
+      "text": "Enter",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [
+    "Ambient Air Temperature Calculation Reset",
+    "Engine Oil Life Reset",
+    "Fuel Rail Pressure Relief Valve Learned Values Reset",
+    "Fuel Trim Reset",
+    "HO2S Heater Resistance Learned Values Reset",
+    "Intake System Learned Values Reset",
+    "Remote Vehicle Start Disable History Reset",
+    "Throttle Body Idle Air Flow Compensation Reset"
+  ],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Back",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Enter",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Home",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Vehicle Menu",
+      "enabled": true
+    },
+    {
+      "kind": "list_item",
+      "label": "Ambient Air Temperature Calculation Reset",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Engine Oil Life Reset",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Fuel Rail Pressure Relief Valve Learned Values Reset",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Fuel Trim Reset",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "HO2S Heater Resistance Learned Values Reset",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Intake System Learned Values Reset",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Remote Vehicle Start Disable History Reset",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Throttle Body Idle Air Flow Compensation Reset",
+      "list_index": 0
+    }
+  ],
+  "raw_page_id": "data_list",
+  "effective_page_id": "data_list",
+  "node_id": "c91639577a6e83a3"
+}

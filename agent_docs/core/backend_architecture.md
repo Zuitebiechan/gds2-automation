@@ -20,6 +20,7 @@ Current implementation path:
 
 - facade: `backends/gds2/backend.py`
 - runtime bridge: `backends/gds2/controller_runtime.py`
+- registry/path runtime: `backends/gds2/registry_navigation_runtime.py`
 
 ## Canonical Platform Types
 
@@ -155,6 +156,11 @@ The backend field should not be treated as a GUI-owned primary choice in the nor
 - backend-owned AI payload collection
 - navigation bridge
 - generic-action runtime bridge
+
+Current navigation/runtime ownership note:
+
+- `registry_runtime` is the production navigation source for GDS2 backend operations
+- `backends/gds2/controller_runtime.py` now owns controller/state bridging only
 
 Advertised GDS2 capabilities today:
 

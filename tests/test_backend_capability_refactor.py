@@ -555,11 +555,11 @@ def test_session_dependencies_resolve_backend_from_active_session(monkeypatch):
     assert bundle.backend_name == "fake-alpha"
 
 
-def test_session_dependencies_get_data_viewer_from_backend_guided_runtime(monkeypatch):
+def test_session_dependencies_get_navigation_runtime_from_backend(monkeypatch):
     registry = BackendRegistry()
     fake_backend = _backend("fake-alpha", brands=["alpha"])
-    fake_viewer = types.SimpleNamespace(name="guided-runtime")
-    fake_backend.get_guided_runtime = lambda: fake_viewer
+    fake_navigation_runtime = types.SimpleNamespace(name="navigation-runtime")
+    fake_backend.get_navigation_runtime = lambda: fake_navigation_runtime
     registry.register(fake_backend)
 
     runtime = WorkerRuntime()
@@ -573,6 +573,7 @@ def test_session_dependencies_get_data_viewer_from_backend_guided_runtime(monkey
     session.capabilities = [
         BackendCapability.CORE_SESSION.value,
         BackendCapability.READ_DTCS.value,
+        BackendCapability.NAVIGATION.value,
     ]
     orchestrator._sessions[session.session_id] = session
     runtime.set_orchestrator(orchestrator)
@@ -581,9 +582,36 @@ def test_session_dependencies_get_data_viewer_from_backend_guided_runtime(monkey
     monkeypatch.setattr(session_dependencies, "get_worker_runtime", lambda: runtime)
     monkeypatch.setattr(session_dependencies, "get_backend_registry", lambda: registry)
 
-    viewer = session_dependencies.get_data_viewer()
+    navigation_runtime = session_dependencies.get_navigation_runtime()
 
-    assert viewer is fake_viewer
+    assert navigation_runtime is fake_navigation_runtime
+
+
+def test_worker_backend_bundle_populates_navigation_handle_from_backend():
+    registry = BackendRegistry()
+    fake_backend = _backend("fake-alpha", brands=["alpha"])
+    fake_navigation_runtime = object()
+    fake_backend.get_navigation_runtime = lambda: fake_navigation_runtime
+    registry.register(fake_backend)
+
+    runtime = WorkerRuntime()
+    orchestrator = SessionOrchestrator(registry_provider=lambda: registry)
+    session = Session(
+        session_id="session-1",
+        context=SessionContext(brand="alpha"),
+        status=SessionStatus.RUNNING,
+    )
+    session.backend_name = "fake-alpha"
+    orchestrator._sessions[session.session_id] = session
+    runtime.set_orchestrator(orchestrator)
+
+    bundle = runtime.ensure_backend_bundle(
+        session.session_id,
+        descriptor=fake_backend.descriptor,
+        backend_factory=lambda: fake_backend,
+    )
+
+    assert bundle.navigation_handle is fake_navigation_runtime
 
 
 def test_session_dependencies_get_executor_from_backend_action_runtime(monkeypatch):

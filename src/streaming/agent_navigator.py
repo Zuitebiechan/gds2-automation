@@ -191,6 +191,55 @@ class AgentNavigator:
             return result.get('data', {})
         logger.warning(f"get_page_id failed: {result.get('message')}")
         return {}
+
+    def get_navigation_path(self) -> List[str]:
+        """
+        Get the current clickable Navigation Path items from the JavaFX breadcrumb table.
+
+        Returns:
+            Ordered breadcrumb items, for example
+            ["Module Diagnostics", "Engine Control Module", "Control Functions"].
+            Returns an empty list if the agent command fails or the table is not present.
+        """
+        result = self._send_command("get_navigation_path", {})
+        if result.get('success'):
+            return result.get('data', {}).get('items', [])
+        logger.warning(f"get_navigation_path failed: {result.get('message')}")
+        return []
+
+    def click_navigation_path_item(self, text: str) -> Dict[str, Any]:
+        """
+        Click one item in the Navigation Path breadcrumb table by text.
+
+        Args:
+            text: Exact or contains-match breadcrumb label, such as
+                  "Module Diagnostics" or "Engine Control Module".
+
+        Returns:
+            Result dict with success, message, and data.
+        """
+        logger.info(f"Clicking Navigation Path item: {text}")
+        return self._send_command("click_navigation_path_item", {"text": text})
+
+    def debug_navigation_path(self) -> Dict[str, Any]:
+        """
+        Ask the Java Agent for detailed Navigation Path diagnostics.
+
+        Returns:
+            Result dict with candidate tables, chosen table, extracted items,
+            and label/bounds information when supported by the agent.
+        """
+        return self._send_command("debug_navigation_path", {})
+
+    def get_clear_dtcs_selection_state(self) -> Dict[str, Any]:
+        """
+        Get Clear DTCs module selection panel state from the Java Agent.
+
+        Returns:
+            Result dict with availableModules, selectedModules, and button states.
+        """
+        return self._send_command("get_clear_dtcs_selection_state", {})
+
     def wait(self, ms: int) -> Dict[str, Any]:
         """
         Wait for specified milliseconds (executed by Java Agent).

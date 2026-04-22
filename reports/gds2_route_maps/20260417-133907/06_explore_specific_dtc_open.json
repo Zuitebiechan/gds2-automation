@@ -1,0 +1,62 @@
+{
+  "label": "explore_specific_dtc_open",
+  "timestamp": "2026-04-17T13:39:23",
+  "page": {
+    "page_id": "unknown",
+    "list_item_count": 0,
+    "buttons": [
+      "Show DTC Status",
+      "Add Bookmark",
+      "Back"
+    ],
+    "evidence": "no matching rule",
+    "has_modal": false,
+    "confidence": "low",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "Add Bookmark",
+      "enabled": true
+    },
+    {
+      "text": "Show DTC Status",
+      "enabled": true
+    },
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Add Bookmark",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Back",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Show DTC Status",
+      "enabled": true
+    }
+  ],
+  "raw_page_id": "unknown",
+  "effective_page_id": "unknown",
+  "node_id": "fe39a1b4a032525e",
+  "transition_error": "Transition did not settle from data_list within 8.0s"
+}

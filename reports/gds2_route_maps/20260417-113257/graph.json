@@ -1,0 +1,201 @@
+{
+  "version": 1,
+  "created_at": "2026-04-17T11:32:57",
+  "nodes": {
+    "866942450b2aed12": {
+      "node_id": "866942450b2aed12",
+      "page_id": "unknown",
+      "raw_page_id": "unknown",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Delete",
+          "enabled": true
+        },
+        {
+          "text": "Review",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Delete",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Review",
+          "enabled": true
+        }
+      ],
+      "first_seen_label": "session_manager_direct_start"
+    },
+    "36aaeb7ae124173c": {
+      "node_id": "36aaeb7ae124173c",
+      "page_id": "data_display",
+      "raw_page_id": "data_display",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Bookmarks",
+          "enabled": true
+        },
+        {
+          "text": "Create Report",
+          "enabled": true
+        },
+        {
+          "text": "Insert Bookmark",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "authored",
+        "Display Name",
+        "ECU",
+        "Units",
+        "Custom Order"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Bookmarks",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Create Report",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Insert Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "session_manager_direct_review"
+    },
+    "5abe0cee33f3efd9": {
+      "node_id": "5abe0cee33f3efd9",
+      "page_id": "diagnostics_menu",
+      "raw_page_id": "diagnostics_menu",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "Module Diagnostics",
+        "Vehicle Diagnostics",
+        "Session Manager"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Module Diagnostics",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Vehicle Diagnostics",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Session Manager",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "session_manager_direct_review_recover_back"
+    }
+  },
+  "edges": [
+    {
+      "source_id": "866942450b2aed12",
+      "target_id": "36aaeb7ae124173c",
+      "source_page_id": "unknown",
+      "target_page_id": "data_display",
+      "source_raw_page_id": "unknown",
+      "target_raw_page_id": "data_display",
+      "action": {
+        "kind": "button",
+        "label": "Review"
+      },
+      "timestamp": "2026-04-17T11:32:59"
+    },
+    {
+      "source_id": "866942450b2aed12",
+      "target_id": "5abe0cee33f3efd9",
+      "source_page_id": "unknown",
+      "target_page_id": "diagnostics_menu",
+      "source_raw_page_id": "unknown",
+      "target_raw_page_id": "diagnostics_menu",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T11:33:12"
+    }
+  ]
+}

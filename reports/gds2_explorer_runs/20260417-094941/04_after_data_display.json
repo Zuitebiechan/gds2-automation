@@ -1,0 +1,72 @@
+{
+  "label": "after_data_display",
+  "timestamp": "2026-04-17T09:49:52",
+  "page": {
+    "page_id": "data_list",
+    "list_item_count": 21,
+    "buttons": [
+      "Back",
+      "Enter"
+    ],
+    "evidence": "has list items + Back button, no specific markers",
+    "has_modal": false,
+    "confidence": "medium",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "Enter",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [
+    "Engine Data",
+    "Automatic Transmission Data",
+    "Stop/Start System Data",
+    "CMP Actuator Data",
+    "Engine Cooling and HVAC Data",
+    "Cruise Control, PTO and Traction Control Data",
+    "Electrical and Immobilizer Data",
+    "Engine Mechanical Data",
+    "EVAP Data",
+    "Exhaust Aftertreatment Data",
+    "Fuel Alcohol Content Event Data",
+    "Fuel Injector Data",
+    "Fuel System Data - High Pressure",
+    "Fuel System Data - Low Pressure",
+    "Fuel Trim Data",
+    "HO2S Data",
+    "Ignition Data",
+    "Induction Data",
+    "Instrument Cluster Data",
+    "Misfire Data",
+    "TAC Data"
+  ],
+  "latest_json": {
+    "pageContext": {
+      "showingStageCount": 1,
+      "isModalShowing": false,
+      "moduleName": "2017,Buick,Envision,Module Diagnostics,Engine Control Module",
+      "detected": false,
+      "windowTitle": "GDS 2"
+    },
+    "tables": [],
+    "extractionCount": 5396,
+    "tableCount": 0,
+    "extractionDurationMs": 0,
+    "version": "2.0",
+    "timestamp": 1776390593265
+  }
+}

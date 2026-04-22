@@ -1,0 +1,268 @@
+{
+  "label": "regression_prepare_diagnostics_menu",
+  "timestamp": "2026-04-17T11:19:48",
+  "page": {
+    "page_id": "module_list",
+    "list_item_count": 32,
+    "buttons": [
+      "Vehicle Menu",
+      "Back",
+      "Enter",
+      "Home"
+    ],
+    "evidence": "list items contain module code patterns [...]",
+    "has_modal": false,
+    "confidence": "high",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "Home",
+      "enabled": true
+    },
+    {
+      "text": "Vehicle Menu",
+      "enabled": true
+    },
+    {
+      "text": "Enter",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [
+    "[T1] Accessory DC/AC Power Inverter Module",
+    "[K124] Active Safety Control Module",
+    "[T3] Amplifier",
+    "[K9] Body Control Module",
+    "[K17] Electronic Brake Control Module",
+    "[K20] Engine Control Module",
+    "[K109] Frontview Camera Module",
+    "[K26] Headlamp Control Module",
+    "[K74] Human Machine Interface Control Module",
+    "[A26] HVAC Controls",
+    "[K33] HVAC Control Module",
+    "[K36] Inflatable Restraint Sensing and Diagnostic Module",
+    "[P16] Instrument Cluster",
+    "[K84] Keyless Entry Control Module",
+    "[B218L] Left Side Object Detection Control Module",
+    "[K39] Liftgate Control Module",
+    "[B233B] Long Range Radar Sensor Module",
+    "[B119] Multi-Axis Acceleration Sensor Module",
+    "[K182] Parking Assist Control Module",
+    "[K43] Power Steering Control Module",
+    "[A11] Radio",
+    "[A22] Radio Controls",
+    "[K47] Rear Differential Clutch Control Module",
+    "[B218R] Right Side Object Detection Control Module",
+    "[K40D] Seat Memory Control Module - Driver",
+    "[K56] Serial Data Gateway Module",
+    "[K60] Steering Column Lock Control Module",
+    "[B99] Steering Wheel Angle Sensor Module",
+    "[K19] Suspension Control Module",
+    "[K73] Telematics Communication Interface Control Module",
+    "[K71] Transmission Control Module",
+    "[K157] Video Processing Control Module"
+  ],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Back",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Enter",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Home",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Vehicle Menu",
+      "enabled": true
+    },
+    {
+      "kind": "list_item",
+      "label": "[T1] Accessory DC/AC Power Inverter Module",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[K124] Active Safety Control Module",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[T3] Amplifier",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[K9] Body Control Module",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[K17] Electronic Brake Control Module",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[K20] Engine Control Module",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[K109] Frontview Camera Module",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[K26] Headlamp Control Module",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[K74] Human Machine Interface Control Module",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[A26] HVAC Controls",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[K33] HVAC Control Module",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[K36] Inflatable Restraint Sensing and Diagnostic Module",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[P16] Instrument Cluster",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[K84] Keyless Entry Control Module",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[B218L] Left Side Object Detection Control Module",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[K39] Liftgate Control Module",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[B233B] Long Range Radar Sensor Module",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[B119] Multi-Axis Acceleration Sensor Module",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[K182] Parking Assist Control Module",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[K43] Power Steering Control Module",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[A11] Radio",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[A22] Radio Controls",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[K47] Rear Differential Clutch Control Module",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[B218R] Right Side Object Detection Control Module",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[K40D] Seat Memory Control Module - Driver",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[K56] Serial Data Gateway Module",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[K60] Steering Column Lock Control Module",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[B99] Steering Wheel Angle Sensor Module",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[K19] Suspension Control Module",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[K73] Telematics Communication Interface Control Module",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[K71] Transmission Control Module",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "[K157] Video Processing Control Module",
+      "list_index": 0
+    }
+  ],
+  "raw_page_id": "module_list",
+  "effective_page_id": "module_list",
+  "node_id": "f445d3d86846748a"
+}

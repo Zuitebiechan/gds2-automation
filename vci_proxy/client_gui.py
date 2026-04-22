@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import queue
+import socket
 import sys
 import threading
 import tkinter as tk
@@ -31,6 +32,11 @@ except ImportError:
 
 from vci_proxy.reverse_client import ReverseProxyClient
 from vci_proxy.config import ProxyConfig
+from vci_proxy.observability_outbox import ObservabilityOutbox
+from diagnostic_platform.observability_artifacts import (
+    cleanup_product_observability,
+    resolve_product_log_settings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -387,11 +393,21 @@ class VCIProxyTrayApp:
 
     def __init__(self):
         self._config = load_config()
+        self._product_log_settings = resolve_product_log_settings()
+        if self._product_log_settings.enabled:
+            cleanup_product_observability(
+                appdata=os.environ.get("APPDATA", Path.home()),
+                retention_days_raw=self._product_log_settings.retention_days_raw,
+                retention_days_session_trace=self._product_log_settings.retention_days_session_trace,
+                retention_days_incident=self._product_log_settings.retention_days_incident,
+            )
         self._status = "idle"
         self._status_detail = ""
         self._tray: Optional[Any] = None
         self._client: Optional[ReverseProxyClient] = None
         self._client_thread: Optional[threading.Thread] = None
+        self._uploader_thread: Optional[threading.Thread] = None
+        self._uploader_stop_event = threading.Event()
         self._settings_dialog_thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._active_node_assignment: Optional[dict[str, Any]] = None
@@ -523,10 +539,75 @@ class VCIProxyTrayApp:
 
         return cfg
 
+    def _effective_api_base_url(self) -> str:
+        assignment = self._active_node_assignment or {}
+        api_base_url = str(assignment.get("api_base_url") or "").strip()
+        if api_base_url:
+            return api_base_url.rstrip("/")
+        cfg = self._effective_runtime_config()
+        return f"{cfg.get('api_scheme') or 'http'}://{cfg.get('host')}:{int(cfg.get('api_port') or 8080)}"
+
     def _on_node_assignment(self, assignment: dict[str, Any] | None) -> None:
         """Apply one assigned-node override and reconnect the reverse tunnel."""
         self._active_node_assignment = dict(assignment) if assignment else None
         self._restart_client()
+
+    def _client_instance_id(self) -> str:
+        return f"{socket.gethostname()}-tray"
+
+    def _upload_observability_once(self) -> dict[str, int]:
+        if not self._product_log_settings.upload_enabled:
+            return {"queued_count": 0, "uploaded_count": 0}
+        cfg = self._effective_runtime_config()
+        host = str(cfg.get("host") or "").strip()
+        if not host:
+            return {"queued_count": 0, "uploaded_count": 0}
+        api_base_url = self._effective_api_base_url()
+        outbox = ObservabilityOutbox(appdata=os.environ.get("APPDATA", Path.home()))
+        staged = outbox.stage_default_artifacts(client_instance_id=self._client_instance_id())
+        uploaded = outbox.upload_pending(
+            api_base_url=api_base_url,
+            api_token=str(cfg.get("api_token") or "").strip(),
+            max_artifact_mb=self._product_log_settings.max_artifact_mb,
+        )
+        return {
+            "queued_count": int(staged.get("queued_count") or 0),
+            "uploaded_count": int(uploaded.get("uploaded_count") or 0),
+        }
+
+    def _uploader_loop(self) -> None:
+        while not self._uploader_stop_event.is_set():
+            try:
+                result = self._upload_observability_once()
+                if result["queued_count"] or result["uploaded_count"]:
+                    logger.info(
+                        "[GUI_OBS] queued=%s uploaded=%s",
+                        result["queued_count"],
+                        result["uploaded_count"],
+                    )
+            except Exception:
+                logger.exception("[GUI_OBS] upload cycle failed")
+            self._uploader_stop_event.wait(15.0)
+
+    def _start_observability_uploader(self) -> None:
+        if self._uploader_thread and self._uploader_thread.is_alive():
+            return
+        self._uploader_stop_event.clear()
+        self._uploader_thread = _REAL_THREAD(
+            target=self._uploader_loop,
+            daemon=True,
+            name="vci-proxy-observability-uploader",
+        )
+        self._uploader_thread.start()
+
+    def _stop_observability_uploader(self) -> None:
+        self._uploader_stop_event.set()
+        if self._uploader_thread and self._uploader_thread.is_alive():
+            self._uploader_thread.join(timeout=5)
+            if not self._uploader_thread.is_alive():
+                self._uploader_thread = None
+        else:
+            self._uploader_thread = None
 
     # --- Client lifecycle ---
 
@@ -585,6 +666,7 @@ class VCIProxyTrayApp:
 
         self._client_thread = threading.Thread(target=run_client, daemon=True, name="vci-proxy-client")
         self._client_thread.start()
+        self._start_observability_uploader()
 
     def _stop_client(self):
         """Stop the reverse proxy client."""
@@ -607,6 +689,7 @@ class VCIProxyTrayApp:
                 self._client_thread = None
         else:
             self._client_thread = None
+        self._stop_observability_uploader()
         self._client = None
         self._loop = None
         self._on_status_change("idle", "")
@@ -658,10 +741,7 @@ class VCIProxyTrayApp:
             self._show_threadsafe_error("Diagnostics", "Server address is not configured. Open Settings first.")
             return
 
-        scheme = str(self._config.get("api_scheme") or "http").strip().lower() or "http"
-        host = self._config["host"]
-        port = self._config.get("api_port", 8080)
-        api_base = f"{scheme}://{host}:{port}"
+        api_base = self._effective_api_base_url()
         api_token = str(self._config.get("api_token") or "").strip()
 
         def _open():

@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "created_at": "2026-04-17T11:35:56",
+  "nodes": {
+    "42adedc7fa580763": {
+      "node_id": "42adedc7fa580763",
+      "page_id": "loading",
+      "raw_page_id": "loading",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "first_seen_label": "vehicle_data_capture_recovery_start"
+    }
+  },
+  "edges": []
+}

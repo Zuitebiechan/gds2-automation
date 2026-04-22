@@ -1,0 +1,167 @@
+{
+  "version": 1,
+  "created_at": "2026-04-17T10:31:28",
+  "nodes": {
+    "9ae38d362b4e8a8a": {
+      "node_id": "9ae38d362b4e8a8a",
+      "page_id": "main_menu",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Close Application",
+          "enabled": true
+        },
+        {
+          "text": "Diagnostics",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Language",
+          "enabled": true
+        },
+        {
+          "text": "Manage Diagnostic Packages",
+          "enabled": true
+        },
+        {
+          "text": "Preferences",
+          "enabled": true
+        },
+        {
+          "text": "Release Notes",
+          "enabled": true
+        },
+        {
+          "text": "Review Stored Data",
+          "enabled": true
+        },
+        {
+          "text": "Update",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Close Application",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Diagnostics",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Language",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Manage Diagnostic Packages",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Preferences",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Release Notes",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Review Stored Data",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Update",
+          "enabled": true
+        }
+      ],
+      "first_seen_label": "start"
+    },
+    "b45227ef942fd20b": {
+      "node_id": "b45227ef942fd20b",
+      "page_id": "vehicle_selection",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Clear Vehicle Selection",
+          "enabled": true
+        },
+        {
+          "text": "Copy VIN",
+          "enabled": true
+        },
+        {
+          "text": "Disconnect",
+          "enabled": true
+        },
+        {
+          "text": "Read VIN",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Clear Vehicle Selection",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Copy VIN",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Disconnect",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Read VIN",
+          "enabled": true
+        }
+      ],
+      "first_seen_label": "after_click_diagnostics"
+    }
+  },
+  "edges": [
+    {
+      "source_id": "9ae38d362b4e8a8a",
+      "target_id": "b45227ef942fd20b",
+      "source_page_id": "main_menu",
+      "target_page_id": "vehicle_selection",
+      "action": {
+        "kind": "button",
+        "label": "Diagnostics"
+      },
+      "timestamp": "2026-04-17T10:31:29"
+    }
+  ]
+}

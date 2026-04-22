@@ -1,0 +1,7 @@
+{
+  "started_at": "2026-04-21T10:21:59",
+  "completed_at": "2026-04-21T10:21:59",
+  "entry_key": "Engine Data",
+  "success": false,
+  "failure_reason": "[Errno 13] Permission denied: 'C:\\\\Users\\\\shsww\\\\gds2-data\\\\command.tmp'"
+}

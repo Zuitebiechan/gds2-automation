@@ -1,0 +1,149 @@
+{
+  "label": "button_probe_fuel_trim_reset_reset_error_state",
+  "timestamp": "2026-04-17T15:24:46",
+  "page": {
+    "page_id": "data_list",
+    "list_item_count": 5,
+    "buttons": [
+      "Add Bookmark",
+      "Back",
+      "Reset"
+    ],
+    "evidence": "has list items + Back button, no specific markers",
+    "has_modal": false,
+    "confidence": "medium",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "Add Bookmark",
+      "enabled": true
+    },
+    {
+      "text": "Reset",
+      "id": "0",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [
+    "authored",
+    "Display Name",
+    "ECU",
+    "Units",
+    "Custom Order"
+  ],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Add Bookmark",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Back",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Reset",
+      "enabled": true
+    },
+    {
+      "kind": "list_item",
+      "label": "authored",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Display Name",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "ECU",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Units",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Custom Order",
+      "list_index": 0
+    }
+  ],
+  "raw_page_id": "data_list",
+  "effective_page_id": "data_list",
+  "node_id": "5530ff4c472177cb"
+}

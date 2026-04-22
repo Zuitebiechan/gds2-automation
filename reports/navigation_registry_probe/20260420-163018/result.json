@@ -1,0 +1,310 @@
+{
+  "started_at": "2026-04-20T16:28:53",
+  "completed_at": "2026-04-20T16:30:18",
+  "entry_key": "Engine Data",
+  "entry": {
+    "page_key": "data.engine_data",
+    "title": "Data Display / Engine Data",
+    "category": "live_data",
+    "page_kind": "data_display",
+    "canonical_path": [
+      "Module Diagnostics",
+      "Engine Control Module",
+      "Data Display",
+      "Engine Data"
+    ],
+    "route_steps": [
+      {
+        "kind": "list_item",
+        "label": "Module Diagnostics"
+      },
+      {
+        "kind": "list_item",
+        "label": "Engine Control Module"
+      },
+      {
+        "kind": "list_item",
+        "label": "Data Display"
+      },
+      {
+        "kind": "list_item",
+        "label": "Engine Data"
+      }
+    ],
+    "target_action": {
+      "kind": "list_item",
+      "label": "Engine Data"
+    },
+    "expected_page_id": "data_display",
+    "expected_actions": [
+      {
+        "kind": "button",
+        "label": "Create Report"
+      },
+      {
+        "kind": "button",
+        "label": "Clear DTCs"
+      },
+      {
+        "kind": "button",
+        "label": "Add Bookmark"
+      }
+    ],
+    "success_criteria": {
+      "page_id_any": [
+        "data_display"
+      ],
+      "all_of": [
+        {
+          "kind": "button",
+          "label": "Create Report"
+        },
+        {
+          "kind": "button",
+          "label": "Back"
+        }
+      ],
+      "any_of": [
+        {
+          "kind": "button",
+          "label": "Clear DTCs"
+        },
+        {
+          "kind": "button",
+          "label": "Add Bookmark"
+        }
+      ],
+      "navigation_path_contains_prefix": [
+        "Module Diagnostics",
+        "Engine Control Module"
+      ]
+    },
+    "fallback_strategy": [
+      "click breadcrumb Engine Control Module if available",
+      "Back to module submenu",
+      "select Data Display",
+      "select Engine Data"
+    ],
+    "confidence": "verified",
+    "source": "live_debug_20260420",
+    "notes": "",
+    "aliases": [
+      "data display",
+      "data.engine_data",
+      "engine data",
+      "live data",
+      "read live data"
+    ],
+    "created_at": "2026-04-20T16:00:48",
+    "updated_at": "2026-04-20T16:00:48"
+  },
+  "target_action": {
+    "kind": "list_item",
+    "label": "Engine Data"
+  },
+  "bootstrap_actions": [],
+  "start_snapshot": {
+    "page": {
+      "page_id": "loading"
+    },
+    "raw_page_id": "loading",
+    "effective_page_id": "loading",
+    "observed_actions": [
+      {
+        "kind": "button",
+        "label": "Home"
+      },
+      {
+        "kind": "button",
+        "label": "Back"
+      },
+      {
+        "kind": "button",
+        "label": "Enter"
+      },
+      {
+        "kind": "button",
+        "label": "Vehicle Menu"
+      }
+    ],
+    "list_items": [],
+    "navigation_path": [
+      "Vehicle Diagnostics"
+    ]
+  },
+  "success": true,
+  "success_details": {
+    "page_ok": true,
+    "page_id": "data_display",
+    "page_id_any": [
+      "data_display"
+    ],
+    "missing_all_of": [],
+    "matched_any_of": [
+      {
+        "kind": "button",
+        "label": "Clear DTCs"
+      },
+      {
+        "kind": "button",
+        "label": "Add Bookmark"
+      }
+    ],
+    "required_any_of": [
+      {
+        "kind": "button",
+        "label": "Clear DTCs"
+      },
+      {
+        "kind": "button",
+        "label": "Add Bookmark"
+      }
+    ],
+    "forbidden_present": [],
+    "path_ok": true,
+    "path_mode": "contains_prefix",
+    "variant_results": []
+  },
+  "missing_expected_actions": [],
+  "route_result": {
+    "matched_start_node_id": "4fba1b4bb261a6db",
+    "recovery_actions": [
+      {
+        "kind": "wait",
+        "label": "loading",
+        "reason": "waiting for transient loading page to settle",
+        "success": true
+      },
+      {
+        "kind": "wait",
+        "label": "loading",
+        "reason": "waiting for transient loading page to settle",
+        "success": true
+      },
+      {
+        "kind": "runtime",
+        "label": "restart_gds2",
+        "reason": "loading page exceeded watchdog timeout",
+        "success": true
+      },
+      {
+        "kind": "device",
+        "label": "SM2 USB",
+        "reason": "initial Device Explorer requires VCI selection before Vehicle Selection banner is populated",
+        "success": true
+      },
+      {
+        "kind": "wait",
+        "label": "vehicle_selection",
+        "reason": "connected_session",
+        "success": true
+      }
+    ],
+    "planned_path": [
+      {
+        "kind": "list_item",
+        "label": "Module Diagnostics"
+      },
+      {
+        "kind": "list_item",
+        "label": "Engine Control Module"
+      },
+      {
+        "kind": "list_item",
+        "label": "Data Display"
+      },
+      {
+        "kind": "list_item",
+        "label": "Engine Data"
+      }
+    ],
+    "executed_actions": [
+      {
+        "kind": "button",
+        "label": "Diagnostics"
+      },
+      {
+        "kind": "button",
+        "label": "Enter"
+      },
+      {
+        "kind": "list_item",
+        "label": "Module Diagnostics"
+      },
+      {
+        "kind": "list_item",
+        "label": "Engine Control Module"
+      },
+      {
+        "kind": "list_item",
+        "label": "Data Display"
+      },
+      {
+        "kind": "list_item",
+        "label": "Engine Data"
+      }
+    ],
+    "final_page": "data_display",
+    "final_snapshot": {
+      "page": {
+        "page_id": "data_display"
+      },
+      "raw_page_id": "data_display",
+      "effective_page_id": "data_display",
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Clear DTCs"
+        },
+        {
+          "kind": "button",
+          "label": "Add Bookmark"
+        },
+        {
+          "kind": "button",
+          "label": "Create Report"
+        },
+        {
+          "kind": "button",
+          "label": "Back"
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        }
+      ],
+      "list_items": [
+        "authored",
+        "Display Name",
+        "ECU",
+        "Units",
+        "Custom Order"
+      ],
+      "navigation_path": [
+        "Module Diagnostics",
+        "Engine Control Module"
+      ]
+    }
+  }
+}

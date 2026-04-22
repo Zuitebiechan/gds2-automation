@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -59,11 +58,6 @@ def set_orchestrator(orch: BusinessSessionOrchestrator) -> None:
     _runtime().set_orchestrator(orch)
 
 
-def set_data_viewer_getter(getter: Callable[[], Any] | None) -> None:
-    """Inject a lightweight viewer object for tests that bypass GDS2 startup."""
-    _runtime().set_data_viewer_getter(getter)
-
-
 def _get_bound_session():
     runtime = _runtime()
     binding = runtime.get_business_session_binding()
@@ -102,9 +96,9 @@ def _resolve_active_backend_descriptor(
     return session, get_backend_registry().get_descriptor(backend_name)
 
 
-def get_data_viewer() -> Any:
-    """Return the injected viewer when present, otherwise the backend guided runtime."""
-    return _runtime().get_data_viewer(get_backend)
+def get_navigation_runtime() -> Any:
+    """Return the backend-owned navigation runtime handle for the active session."""
+    return _runtime().get_navigation_runtime(get_backend)
 
 
 def get_backend(

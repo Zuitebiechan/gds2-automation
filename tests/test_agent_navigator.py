@@ -117,3 +117,83 @@ def test_agent_navigator_retries_transient_command_file_replace_failure(
 
     assert result == [{"title": "Window-fixed"}]
     assert attempts["count"] >= 2
+
+
+def test_agent_navigator_navigation_path_commands(tmp_path: Path) -> None:
+    nav = AgentNavigator(data_dir=tmp_path, timeout_sec=0.5)
+
+    command_file = tmp_path / "command.json"
+    result_file = tmp_path / "result.json"
+
+    def write_result_for_latest_command() -> None:
+        command = json.loads(command_file.read_text(encoding="utf-8"))
+        result_file.write_text(
+            json.dumps(
+                {
+                    "id": command["id"],
+                    "success": True,
+                    "data": {"items": ["Module Diagnostics", "Engine Control Module"]},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    responses: list[dict] = []
+
+    def responder() -> None:
+        while len(responses) < 2:
+            if not command_file.exists():
+                time.sleep(0.01)
+                continue
+            write_result_for_latest_command()
+            responses.append(json.loads(command_file.read_text(encoding="utf-8")))
+            command_file.unlink(missing_ok=True)
+
+    thread = threading.Thread(target=responder, daemon=True)
+    thread.start()
+
+    assert nav.get_navigation_path() == ["Module Diagnostics", "Engine Control Module"]
+    click_result = nav.click_navigation_path_item("Module Diagnostics")
+    assert click_result["success"] is True
+
+    thread.join(timeout=1.0)
+
+    assert responses[0]["action"] == "get_navigation_path"
+    assert responses[1]["action"] == "click_navigation_path_item"
+    assert responses[1]["params"] == {"text": "Module Diagnostics"}
+
+
+def test_agent_navigator_clear_dtcs_selection_state_command(tmp_path: Path) -> None:
+    nav = AgentNavigator(data_dir=tmp_path, timeout_sec=0.5)
+
+    command_file = tmp_path / "command.json"
+    result_file = tmp_path / "result.json"
+
+    def responder() -> None:
+        while not command_file.exists():
+            time.sleep(0.01)
+        command = json.loads(command_file.read_text(encoding="utf-8"))
+        result_file.write_text(
+            json.dumps(
+                {
+                    "id": command["id"],
+                    "success": True,
+                    "data": {
+                        "selectedModules": {"rows": ["Engine Control Module"]},
+                        "buttons": {"OK": {"enabled": True}},
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        command_file.unlink(missing_ok=True)
+
+    thread = threading.Thread(target=responder, daemon=True)
+    thread.start()
+
+    result = nav.get_clear_dtcs_selection_state()
+
+    thread.join(timeout=1.0)
+
+    assert result["success"] is True
+    assert result["data"]["selectedModules"]["rows"] == ["Engine Control Module"]

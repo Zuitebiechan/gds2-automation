@@ -1,0 +1,210 @@
+{
+  "started_at": "2026-04-20T14:09:37",
+  "mode": "click-breadcrumb",
+  "breadcrumb_item": "Module Diagnostics",
+  "success": true,
+  "page_changed": false,
+  "before_page_info": {
+    "page_id": "data_list",
+    "list_item_count": 8,
+    "buttons": [
+      "Vehicle Menu",
+      "Back",
+      "Enter",
+      "Home"
+    ],
+    "evidence": "has list items + Back button, no specific markers",
+    "has_modal": false,
+    "confidence": "medium",
+    "window_title": "GDS 2"
+  },
+  "before_snapshot": {
+    "page": {
+      "page_id": "data_list"
+    },
+    "raw_page_id": "data_list",
+    "effective_page_id": "data_list",
+    "observed_actions": [
+      {
+        "kind": "button",
+        "label": "Back"
+      },
+      {
+        "kind": "button",
+        "label": "Home"
+      },
+      {
+        "kind": "button",
+        "label": "Vehicle Menu"
+      },
+      {
+        "kind": "button",
+        "label": "Enter"
+      },
+      {
+        "kind": "list_item",
+        "label": "Cylinder Power Balance",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Depressurize Fuel System",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Fuel Injector Balance",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Fuel Pressure",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Fuel Pump Enable",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Fuel Trim Enable",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Fuel Rail Pressure",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Fuel Pressure Regulator",
+        "list_index": 0
+      }
+    ],
+    "list_items": [
+      "Cylinder Power Balance",
+      "Depressurize Fuel System",
+      "Fuel Injector Balance",
+      "Fuel Pressure",
+      "Fuel Pump Enable",
+      "Fuel Trim Enable",
+      "Fuel Rail Pressure",
+      "Fuel Pressure Regulator"
+    ],
+    "navigation_path": [
+      "Module Diagnostics",
+      "Engine Control Module",
+      "Control Functions",
+      "Fuel System"
+    ]
+  },
+  "click_result": {
+    "success": true,
+    "page": "data_list",
+    "choices": null,
+    "selected": "Module Diagnostics",
+    "error": null,
+    "context": {
+      "module": null,
+      "data_category": null,
+      "sub_category": null,
+      "device": null
+    }
+  },
+  "after_page_info": {
+    "page_id": "data_list",
+    "list_item_count": 8,
+    "buttons": [
+      "Vehicle Menu",
+      "Back",
+      "Enter",
+      "Home"
+    ],
+    "evidence": "has list items + Back button, no specific markers",
+    "has_modal": false,
+    "confidence": "medium",
+    "window_title": "GDS 2"
+  },
+  "after_snapshot": {
+    "page": {
+      "page_id": "data_list"
+    },
+    "raw_page_id": "data_list",
+    "effective_page_id": "data_list",
+    "observed_actions": [
+      {
+        "kind": "button",
+        "label": "Back"
+      },
+      {
+        "kind": "button",
+        "label": "Home"
+      },
+      {
+        "kind": "button",
+        "label": "Vehicle Menu"
+      },
+      {
+        "kind": "button",
+        "label": "Enter"
+      },
+      {
+        "kind": "list_item",
+        "label": "Cylinder Power Balance",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Depressurize Fuel System",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Fuel Injector Balance",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Fuel Pressure",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Fuel Pump Enable",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Fuel Trim Enable",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Fuel Rail Pressure",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Fuel Pressure Regulator",
+        "list_index": 0
+      }
+    ],
+    "list_items": [
+      "Cylinder Power Balance",
+      "Depressurize Fuel System",
+      "Fuel Injector Balance",
+      "Fuel Pressure",
+      "Fuel Pump Enable",
+      "Fuel Trim Enable",
+      "Fuel Rail Pressure",
+      "Fuel Pressure Regulator"
+    ],
+    "navigation_path": [
+      "Module Diagnostics",
+      "Engine Control Module",
+      "Control Functions",
+      "Fuel System"
+    ]
+  }
+}

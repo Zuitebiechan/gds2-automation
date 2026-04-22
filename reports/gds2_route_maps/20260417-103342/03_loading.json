@@ -1,0 +1,89 @@
+{
+  "label": "loading",
+  "timestamp": "2026-04-17T10:33:44",
+  "page": {
+    "page_id": "loading",
+    "list_item_count": 0,
+    "buttons": [
+      "Clear Vehicle Selection",
+      "Disconnect",
+      "Back",
+      "Enter",
+      "Copy VIN",
+      "Read VIN"
+    ],
+    "evidence": "Enter + deep-page toolbar buttons with empty list (transition/loading)",
+    "has_modal": false,
+    "confidence": "high",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "Read VIN",
+      "enabled": true
+    },
+    {
+      "text": "Clear Vehicle Selection",
+      "enabled": true
+    },
+    {
+      "text": "Copy VIN",
+      "enabled": true
+    },
+    {
+      "text": "Disconnect",
+      "enabled": true
+    },
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "Enter",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Back",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Clear Vehicle Selection",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Copy VIN",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Disconnect",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Enter",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Read VIN",
+      "enabled": true
+    }
+  ],
+  "node_id": "9673198d963c50ce"
+}

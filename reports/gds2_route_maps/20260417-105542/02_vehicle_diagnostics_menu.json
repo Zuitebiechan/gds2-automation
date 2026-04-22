@@ -1,0 +1,92 @@
+{
+  "label": "vehicle_diagnostics_menu",
+  "timestamp": "2026-04-17T10:55:43",
+  "page": {
+    "page_id": "data_list",
+    "list_item_count": 3,
+    "buttons": [
+      "Vehicle Menu",
+      "Back",
+      "Enter",
+      "Home"
+    ],
+    "evidence": "has list items + Back button, no specific markers",
+    "has_modal": false,
+    "confidence": "medium",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "Back",
+      "enabled": true
+    },
+    {
+      "text": "Home",
+      "enabled": true
+    },
+    {
+      "text": "Vehicle Menu",
+      "enabled": true
+    },
+    {
+      "text": "Enter",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    }
+  ],
+  "list_items": [
+    "Vehicle DTC Information",
+    "Vehicle DTC and ID Information",
+    "Vehicle Data Capture"
+  ],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Back",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Enter",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Home",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Vehicle Menu",
+      "enabled": true
+    },
+    {
+      "kind": "list_item",
+      "label": "Vehicle DTC Information",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Vehicle DTC and ID Information",
+      "list_index": 0
+    },
+    {
+      "kind": "list_item",
+      "label": "Vehicle Data Capture",
+      "list_index": 0
+    }
+  ],
+  "node_id": "13b5b8c65fca7d10"
+}

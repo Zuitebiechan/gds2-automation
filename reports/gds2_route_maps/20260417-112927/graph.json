@@ -1,0 +1,813 @@
+{
+  "version": 1,
+  "created_at": "2026-04-17T11:29:27",
+  "nodes": {
+    "c91639577a6e83a3": {
+      "node_id": "c91639577a6e83a3",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "Ambient Air Temperature Calculation Reset",
+        "Engine Oil Life Reset",
+        "Fuel Rail Pressure Relief Valve Learned Values Reset",
+        "Fuel Trim Reset",
+        "HO2S Heater Resistance Learned Values Reset",
+        "Intake System Learned Values Reset",
+        "Remote Vehicle Start Disable History Reset",
+        "Throttle Body Idle Air Flow Compensation Reset"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Ambient Air Temperature Calculation Reset",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Engine Oil Life Reset",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Rail Pressure Relief Valve Learned Values Reset",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Fuel Trim Reset",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "HO2S Heater Resistance Learned Values Reset",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Intake System Learned Values Reset",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Remote Vehicle Start Disable History Reset",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Throttle Body Idle Air Flow Compensation Reset",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "explore_remaining_reset_functions_start"
+    },
+    "3c110dc72f9fb635": {
+      "node_id": "3c110dc72f9fb635",
+      "page_id": "unknown",
+      "raw_page_id": "unknown",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "text": "Back",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        }
+      ],
+      "first_seen_label": "remaining_reset_engine_oil_life_reset"
+    },
+    "2aa635c4007c0e81": {
+      "node_id": "2aa635c4007c0e81",
+      "page_id": "unknown",
+      "raw_page_id": "unknown",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Continue",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Continue",
+          "enabled": true
+        }
+      ],
+      "first_seen_label": "remaining_reset_engine_oil_life_reset"
+    },
+    "768c7732e1416a4e": {
+      "node_id": "768c7732e1416a4e",
+      "page_id": "unknown",
+      "raw_page_id": "unknown",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        }
+      ],
+      "first_seen_label": "remaining_reset_engine_oil_life_reset_recover_back"
+    },
+    "9587940369e4bdfd": {
+      "node_id": "9587940369e4bdfd",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Release Control",
+          "enabled": true
+        },
+        {
+          "text": "Reset",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "authored",
+        "Display Name",
+        "ECU",
+        "Units",
+        "Custom Order"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Release Control",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Reset",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "remaining_reset_fuel_rail_pressure_relief_valve_learned_values_reset"
+    },
+    "5530ff4c472177cb": {
+      "node_id": "5530ff4c472177cb",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Reset",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "authored",
+        "Display Name",
+        "ECU",
+        "Units",
+        "Custom Order"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Reset",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "remaining_reset_fuel_trim_reset"
+    },
+    "bdf33b8202711835": {
+      "node_id": "bdf33b8202711835",
+      "page_id": "loading",
+      "raw_page_id": "loading",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Release Control",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "authored",
+        "Display Name",
+        "ECU",
+        "Units",
+        "Custom Order"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Release Control",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "remaining_reset_ho2s_heater_resistance_learned_values_reset"
+    },
+    "9e0455704fb3f2cf": {
+      "node_id": "9e0455704fb3f2cf",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Learn",
+          "enabled": true
+        },
+        {
+          "text": "Release Control",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "authored",
+        "Display Name",
+        "ECU",
+        "Units",
+        "Custom Order"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Learn",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Release Control",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "remaining_reset_ho2s_heater_resistance_learned_values_reset"
+    },
+    "f0c803bb5c51c99a": {
+      "node_id": "f0c803bb5c51c99a",
+      "page_id": "data_list",
+      "raw_page_id": "data_list",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Activate",
+          "enabled": true
+        },
+        {
+          "text": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "text": "Back",
+          "enabled": true
+        }
+      ],
+      "list_items": [
+        "authored",
+        "Display Name",
+        "ECU",
+        "Units",
+        "Custom Order"
+      ],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Activate",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Add Bookmark",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "list_item",
+          "label": "authored",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Display Name",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "ECU",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Units",
+          "list_index": 0
+        },
+        {
+          "kind": "list_item",
+          "label": "Custom Order",
+          "list_index": 0
+        }
+      ],
+      "first_seen_label": "remaining_reset_intake_system_learned_values_reset"
+    },
+    "42adedc7fa580763": {
+      "node_id": "42adedc7fa580763",
+      "page_id": "loading",
+      "raw_page_id": "loading",
+      "window_title": "GDS 2",
+      "buttons": [
+        {
+          "text": "Back",
+          "enabled": true
+        },
+        {
+          "text": "Enter",
+          "enabled": true
+        },
+        {
+          "text": "Home",
+          "enabled": true
+        },
+        {
+          "text": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "list_items": [],
+      "observed_actions": [
+        {
+          "kind": "button",
+          "label": "Back",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Home",
+          "enabled": true
+        },
+        {
+          "kind": "button",
+          "label": "Vehicle Menu",
+          "enabled": true
+        }
+      ],
+      "first_seen_label": "remaining_reset_throttle_body_idle_air_flow_compensation_reset"
+    }
+  },
+  "edges": [
+    {
+      "source_id": "2aa635c4007c0e81",
+      "target_id": "c91639577a6e83a3",
+      "source_page_id": "unknown",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "unknown",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T11:29:38"
+    },
+    {
+      "source_id": "c91639577a6e83a3",
+      "target_id": "9587940369e4bdfd",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Fuel Rail Pressure Relief Valve Learned Values Reset",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T11:29:41"
+    },
+    {
+      "source_id": "9587940369e4bdfd",
+      "target_id": "c91639577a6e83a3",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T11:29:45"
+    },
+    {
+      "source_id": "c91639577a6e83a3",
+      "target_id": "5530ff4c472177cb",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Fuel Trim Reset",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T11:29:47"
+    },
+    {
+      "source_id": "5530ff4c472177cb",
+      "target_id": "c91639577a6e83a3",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T11:29:52"
+    },
+    {
+      "source_id": "c91639577a6e83a3",
+      "target_id": "9e0455704fb3f2cf",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "HO2S Heater Resistance Learned Values Reset",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T11:29:55"
+    },
+    {
+      "source_id": "9e0455704fb3f2cf",
+      "target_id": "c91639577a6e83a3",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T11:30:00"
+    },
+    {
+      "source_id": "c91639577a6e83a3",
+      "target_id": "f0c803bb5c51c99a",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Intake System Learned Values Reset",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T11:30:02"
+    },
+    {
+      "source_id": "f0c803bb5c51c99a",
+      "target_id": "c91639577a6e83a3",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T11:30:08"
+    },
+    {
+      "source_id": "c91639577a6e83a3",
+      "target_id": "5530ff4c472177cb",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Remote Vehicle Start Disable History Reset",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T11:30:10"
+    },
+    {
+      "source_id": "5530ff4c472177cb",
+      "target_id": "c91639577a6e83a3",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T11:30:15"
+    },
+    {
+      "source_id": "c91639577a6e83a3",
+      "target_id": "9587940369e4bdfd",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "list_item",
+        "label": "Throttle Body Idle Air Flow Compensation Reset",
+        "list_index": 0
+      },
+      "timestamp": "2026-04-17T11:30:18"
+    },
+    {
+      "source_id": "9587940369e4bdfd",
+      "target_id": "c91639577a6e83a3",
+      "source_page_id": "data_list",
+      "target_page_id": "data_list",
+      "source_raw_page_id": "data_list",
+      "target_raw_page_id": "data_list",
+      "action": {
+        "kind": "button",
+        "label": "Back"
+      },
+      "timestamp": "2026-04-17T11:30:23"
+    }
+  ]
+}

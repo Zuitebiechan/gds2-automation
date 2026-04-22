@@ -1,0 +1,77 @@
+{
+  "started_at": "2026-04-20T14:04:23",
+  "mode": "click-button",
+  "button_text": "OK",
+  "success": true,
+  "page_changed": true,
+  "before_snapshot": {
+    "page": {
+      "page_id": "unknown"
+    },
+    "raw_page_id": "unknown",
+    "effective_page_id": "unknown",
+    "observed_actions": [
+      {
+        "kind": "button",
+        "label": "OK"
+      }
+    ],
+    "list_items": [],
+    "navigation_path": []
+  },
+  "click_result": {
+    "success": true,
+    "page": "diagnostics_menu",
+    "choices": null,
+    "selected": null,
+    "error": null,
+    "context": {
+      "module": null,
+      "data_category": null,
+      "sub_category": null,
+      "device": null
+    }
+  },
+  "after_snapshot": {
+    "page": {
+      "page_id": "diagnostics_menu"
+    },
+    "raw_page_id": "diagnostics_menu",
+    "effective_page_id": "diagnostics_menu",
+    "observed_actions": [
+      {
+        "kind": "button",
+        "label": "Home"
+      },
+      {
+        "kind": "button",
+        "label": "Enter"
+      },
+      {
+        "kind": "list_item",
+        "label": "Module Diagnostics",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Vehicle Diagnostics",
+        "list_index": 0
+      },
+      {
+        "kind": "list_item",
+        "label": "Session Manager",
+        "list_index": 0
+      }
+    ],
+    "list_items": [
+      "Module Diagnostics",
+      "Vehicle Diagnostics",
+      "Session Manager"
+    ],
+    "navigation_path": [
+      "2017",
+      "Buick",
+      "Envision"
+    ]
+  }
+}

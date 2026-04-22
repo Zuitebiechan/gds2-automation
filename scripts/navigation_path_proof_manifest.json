@@ -1,0 +1,20 @@
+{
+  "target": "Fuel Trim Enable",
+  "target_kind": "list_item",
+  "success_buttons": ["Enabled", "Disabled", "Release Control"],
+  "graph_path": "reports/gds2_route_maps/merged_graph.json",
+  "output_root": "reports/navigation_path_proof",
+  "rebuild_graph_each_run": true,
+  "require_target_hidden_at_start": true,
+  "preflight_backtrack_until_target_hidden": true,
+  "preflight_hide_success_buttons": true,
+  "preflight_max_backtracks": 4,
+  "require_min_executed_actions": 4,
+  "max_iterations": 24,
+  "max_backtracks": 8,
+  "notes": [
+    "Local proof only; does not change production API behavior.",
+    "Requires GDS2 to be running with the Java Agent command channel.",
+    "Success means the final page exposes all success_buttons."
+  ]
+}

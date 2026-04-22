@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import json
 import queue
+import threading
+import time
+import uuid
 from dataclasses import dataclass, field
+from types import MethodType
 from typing import Any
 
 from backends.gds2.backend import GDS2DiagnosticBackend
 from backends.gds2.controller_runtime import GDS2ControllerRuntime
+from diagnostic_platform.runtime.navigation_runtime import NavSession, NavSessionStatus
 from src.navigation import GDS2Page, NavigationResult
 from src.streaming.agent_data_collector import AgentSnapshot, DTCInfo
 
@@ -222,6 +227,196 @@ class SimulatedWorkflow:
         }
 
 
+class SimulatedRegistryNavigationRuntime:
+    def __init__(
+        self,
+        *,
+        model: SimulatedGDS2Model,
+        controller: SimulatedNavigationController,
+    ) -> None:
+        self._model = model
+        self._controller = controller
+
+    def ensure_started(self, *, cancel_checker=None):
+        if cancel_checker is not None:
+            cancel_checker()
+        self._model.page = GDS2Page.MODULE_LIST
+        self._model.context["device"] = self._model.device
+        return {
+            "modules": list(self._model.modules),
+            "vin": self._model.vin,
+            "device": self._model.device,
+        }
+
+    def connect_vci(self, device: str) -> None:
+        self._model.device = device
+        self._model.context["device"] = device
+        self.ensure_started()
+
+    def select_module(self, module: str) -> Any:
+        if module not in self._model.modules:
+            raise RuntimeError(f"Unknown module: {module}")
+        self._model.context["module"] = module
+        self._model.page = GDS2Page.DATA_LIST
+        return {
+            "selected_module": module,
+            "data_categories": list(self._model.data_categories),
+        }
+
+    def select_data_category(self, category: str) -> Any:
+        if category not in self._model.data_categories:
+            raise RuntimeError(f"Unknown data category: {category}")
+        self._model.context["data_category"] = category
+        self._model.page = GDS2Page.DATA_DISPLAY
+        return {
+            "selected_data_category": category,
+            "sub_categories": [],
+        }
+
+    def clear_dtcs(self) -> dict[str, object]:
+        if self._model.page != GDS2Page.DATA_DISPLAY:
+            self._model.page = GDS2Page.DATA_DISPLAY
+        self._model.context["data_category"] = "DTC Display"
+        cleared = len(self._model.dtcs)
+        self._model.dtcs = []
+        return {
+            "success": True,
+            "cleared_count": cleared,
+            "message": "Clear DTCs completed",
+            "page_context": self._model.page.value,
+        }
+
+    def detect_current_page(self) -> str:
+        return self._model.page.value
+
+    def go_back(self) -> Any:
+        return self._controller.go_back()
+
+    def start_navigation_session(self, runtime: Any, goal: str) -> Any:
+        session_id = uuid.uuid4().hex[:16]
+        session = NavSession(session_id=session_id, goal=str(goal or "Navigate to Data Display"))
+        session.cleanup_callback = runtime.schedule_navigation_session_cleanup
+
+        def _runner():
+            try:
+                self.ensure_started(cancel_checker=session.check_cancelled)
+                session.event_queue.put(
+                    {
+                        "type": "decision_required",
+                        "decision_id": "module-choice",
+                        "page": "module_list",
+                        "items": list(self._model.modules),
+                    }
+                )
+                session.status = NavSessionStatus.AWAITING_DECISION
+                session.pending_decision_id = "module-choice"
+                session.pending_items = list(self._model.modules)
+                module_payload = session.decision_queue.get(timeout=2.0)
+                selected_module = str((module_payload or {}).get("selected_item") or "")
+                self.select_module(selected_module)
+                session.event_queue.put(
+                    {
+                        "type": "decision_required",
+                        "decision_id": "data-choice",
+                        "page": "data_list",
+                        "items": list(self._model.data_categories),
+                    }
+                )
+                session.status = NavSessionStatus.AWAITING_DECISION
+                session.pending_decision_id = "data-choice"
+                session.pending_items = list(self._model.data_categories)
+                data_payload = session.decision_queue.get(timeout=2.0)
+                selected_category = str((data_payload or {}).get("selected_item") or "")
+                self.select_data_category(selected_category)
+                session.status = NavSessionStatus.COMPLETED
+                session.event_queue.put(
+                    {
+                        "type": "done",
+                        "final_page": "data_display",
+                        "steps": 2,
+                        "selections": {
+                            "module": selected_module,
+                            "data_category": selected_category,
+                        },
+                        "error": None,
+                    }
+                )
+            except Exception as exc:
+                session.status = NavSessionStatus.FAILED
+                session.error = str(exc)
+                session.event_queue.put({"type": "error", "error": str(exc)})
+            finally:
+                if callable(session.cleanup_callback):
+                    session.cleanup_callback(session.session_id)
+
+        thread = threading.Thread(target=_runner, daemon=True, name=f"sim-nav-{session_id}")
+        session.thread = thread
+        runtime.set_navigation_session(session_id, session)
+        thread.start()
+        return session
+
+    def submit_navigation_decision(
+        self,
+        runtime: Any,
+        session_id: str,
+        *,
+        decision_id: str,
+        selected_item: str,
+    ) -> dict[str, Any]:
+        session = runtime.get_navigation_session(session_id)
+        session.status = NavSessionStatus.RUNNING
+        session.pending_decision_id = None
+        session.pending_items = []
+        session.decision_queue.put({"selected_item": selected_item})
+        return {
+            "success": True,
+            "session_id": session_id,
+            "selected_item": selected_item,
+        }
+
+    def abort_navigation_session(self, runtime: Any, session_id: str) -> dict[str, Any]:
+        session = runtime.get_navigation_session(session_id)
+        session.status = NavSessionStatus.ABORTED
+        session.error = "Aborted by user"
+        session.cancel()
+        session.event_queue.put({"type": "error", "error": "Aborted by user"})
+        return {
+            "success": True,
+            "session_id": session_id,
+            "status": "aborted",
+        }
+
+    def get_navigation_session(self, runtime: Any, session_id: str) -> Any:
+        return runtime.get_navigation_session(session_id)
+
+    def recover_data_display(
+        self,
+        *,
+        data_category: str,
+        mode: str,
+        loading_watchdog=None,
+    ) -> dict[str, Any] | None:
+        if self._model.page == GDS2Page.DATA_DISPLAY:
+            return None
+        if self._model.page == GDS2Page.LOADING:
+            return {
+                "ok": True,
+                "mode": mode,
+                "message": "Waiting for GDS2 loading page to finish...",
+            }
+        self._model.page = GDS2Page.DATA_DISPLAY
+        self._model.context["data_category"] = data_category
+        return {
+            "ok": True,
+            "mode": mode,
+            "recovered": True,
+            "recovery_method": "route_reentry",
+            "restart_collection": False,
+            "message": "Recovered Data Display after page drift.",
+            "recovery_actions": [],
+        }
+
+
 def simulated_snapshot_reader() -> dict[str, object]:
     return {
         "connection_epoch": "sim-epoch-1",
@@ -252,9 +447,22 @@ def make_simulated_backend() -> SimulatedGDS2Harness:
     controller = SimulatedNavigationController(model)
     workflow = SimulatedWorkflow(model, controller=controller)
     runtime = GDS2ControllerRuntime(
-        workflow=workflow,
+        controller=controller,
+        state_reader=workflow.get_state,
         snapshot_reader=simulated_snapshot_reader,
     )
+    runtime.read_all_dtcs = MethodType(lambda self: workflow.read_all_dtcs(), runtime)
+    original_build_navigation_runtime = runtime.build_navigation_runtime
+
+    def build_navigation_runtime(self, *, source: str = "registry_runtime"):
+        if source == "registry_runtime":
+            return SimulatedRegistryNavigationRuntime(
+                model=model,
+                controller=controller,
+            )
+        return original_build_navigation_runtime(source=source)
+
+    runtime.build_navigation_runtime = MethodType(build_navigation_runtime, runtime)
     backend = GDS2DiagnosticBackend(runtime=runtime)
     return SimulatedGDS2Harness(
         model=model,

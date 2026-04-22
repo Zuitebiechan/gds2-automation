@@ -6,7 +6,7 @@ import logging
 import re
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from uuid import uuid4
 
 from backends.gds2.action_adapter import GDS2ActionAdapter
@@ -17,6 +17,7 @@ from diagnostic_platform.branch_planning import BranchDecisionRequiredError
 from diagnostic_platform.contracts import (
     BackendActionRuntime,
     BackendCapability,
+    BackendNavigationRuntime,
     BackendState,
     ClearResult,
     DTC,
@@ -28,18 +29,16 @@ from diagnostic_platform.contracts import (
     VehicleContext,
 )
 from diagnostic_platform.runtime.errors import OperationCancelledError
+from diagnostic_platform.session_observability import emit_gds2_ui_event
 from diagnostic_platform.sse import (
     DEFAULT_AGENT_STREAM_SCOPE,
     broadcast_agent_event,
     make_scoped_agent_event_callbacks,
 )
 from backends.gds2.controller_runtime import GDS2ControllerRuntime
-from src.navigation import GDS2Page, NavigationController
+from src.navigation import GDS2Page
 from src.streaming import AgentDataCollector, DiagnosticBuffer
 from src.streaming.agent_data_collector import AgentSnapshot
-
-if TYPE_CHECKING:
-    from src.workflows.data_viewer import DataViewerWorkflow
 
 logger = logging.getLogger(__name__)
 
@@ -79,12 +78,12 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
 
     def __init__(
         self,
-        workflow: DataViewerWorkflow | None = None,
         *,
         runtime: GDS2ControllerRuntime | None = None,
     ) -> None:
         """Initialize the backend and bind it to the existing GDS2 workflow."""
-        self._runtime = runtime or GDS2ControllerRuntime(workflow=workflow)
+        self._runtime = runtime or GDS2ControllerRuntime()
+        self._navigation_runtime_source = "registry_runtime"
         self._active_collector: AgentDataCollector | None = None
         self._active_stream: LiveDataStream | None = None
         self._active_stream_scope: str | None = None
@@ -131,10 +130,11 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
     def start(self, *, cancel_checker: Callable[[], None] | None = None) -> dict[str, Any]:
         """Start GDS2 and auto-connect through the existing workflow."""
         try:
+            navigation_runtime = self._get_navigation_runtime()
             if cancel_checker is None:
-                result = self._runtime.ensure_ready()
+                result = navigation_runtime.ensure_started()
             else:
-                result = self._runtime.ensure_ready(cancel_checker=cancel_checker)
+                result = navigation_runtime.ensure_started(cancel_checker=cancel_checker)
             self._last_start_result = result if isinstance(result, dict) else None
             return dict(self._last_start_result or {})
         except OperationCancelledError:
@@ -163,10 +163,6 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
             self._active_stream_scope = None
             self._latest_live_data = []
             self._stream_error = None
-
-            workflow = getattr(self._runtime, "_workflow", None)
-            if workflow is not None and workflow.get_state().get("data_category"):
-                workflow.stop_monitoring()
         except Exception as exc:  # pragma: no cover - runtime integration wrapper
             raise RuntimeError(f"Failed to stop GDS2 backend: {exc}") from exc
 
@@ -174,9 +170,6 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
         """Best-effort cleanup for interrupted GDS2 startup flows."""
         try:
             self._last_start_result = None
-            workflow = getattr(self._runtime, "_workflow", None)
-            if workflow is not None:
-                workflow.reset_startup_state()
         except Exception as exc:  # pragma: no cover - runtime integration wrapper
             raise RuntimeError(f"Failed to reset GDS2 startup state: {exc}") from exc
 
@@ -184,7 +177,7 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
         """Connect to a VCI device using the existing workflow."""
         try:
             self._last_start_result = None
-            self._get_workflow().connect_device(device)
+            self._get_navigation_runtime().connect_vci(device)
         except Exception as exc:  # pragma: no cover - runtime integration wrapper
             raise RuntimeError(f"Failed to connect GDS2 VCI '{device}': {exc}") from exc
 
@@ -210,7 +203,7 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
         """Select a diagnostic module."""
         try:
             self._last_start_result = None
-            self._get_workflow().select_module(module)
+            self._get_navigation_runtime().select_module(module)
         except Exception as exc:  # pragma: no cover - runtime integration wrapper
             raise RuntimeError(f"Failed to select GDS2 module '{module}': {exc}") from exc
 
@@ -269,7 +262,7 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
         """Select a data category and return any available sub-items."""
         try:
             self._last_start_result = None
-            result = self._get_workflow().select_data_category(category)
+            result = self._get_navigation_runtime().select_data_category(category)
             if isinstance(result, dict):
                 sub_categories = result.get("sub_categories")
                 if isinstance(sub_categories, list):
@@ -279,9 +272,9 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
             raise RuntimeError(f"Failed to select GDS2 data category '{category}': {exc}") from exc
 
     def read_dtcs(self) -> list[DTC]:
-        """Read DTCs through the existing workflow and map them to platform DTC objects."""
+        """Read DTCs through the controller runtime and map them to platform DTC objects."""
         try:
-            result = self._get_workflow().read_all_dtcs()
+            result = self._runtime.read_all_dtcs()
             dtcs: list[DTC] = []
             current_module = self._get_controller().current_module or "Unknown Module"
 
@@ -503,12 +496,12 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
         )
 
     def clear_dtcs(self) -> ClearResult:
-        """Clear DTCs through the existing Data Display workflow."""
+        """Clear DTCs through the registry-driven runtime."""
         if self._active_collector is not None and self._active_collector.is_running:
             raise RuntimeError("Cannot clear GDS2 DTCs while live data streaming is active")
 
         try:
-            outcome = self._get_workflow().clear_dtcs()
+            outcome = self._get_clear_dtcs_navigation_runtime().clear_dtcs()
             if isinstance(outcome, ClearResult):
                 if not outcome.success:
                     raise RuntimeError(outcome.message or "GDS2 clear DTCs failed")
@@ -519,6 +512,13 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
                 message = str(outcome.get("message") or "Clear DTCs completed")
                 if not success:
                     raise RuntimeError(message)
+                if outcome.get("recovery_actions"):
+                    logger.info(
+                        "[GDS2_CLEAR_DTCS] runtime=%s page_context=%s recovery_actions=%s",
+                        "registry_runtime",
+                        outcome.get("page_context"),
+                        outcome.get("recovery_actions"),
+                    )
                 return ClearResult(
                     success=True,
                     cleared_count=int(outcome.get("cleared_count") or 0),
@@ -533,8 +533,16 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
         """Build platform BackendState from the workflow and navigation controller."""
         try:
             state = self._runtime.status()
+            navigation_runtime_status = None
+            runtime_status_reader = getattr(self._get_navigation_runtime(), "get_runtime_status", None)
+            if callable(runtime_status_reader):
+                navigation_runtime_status = runtime_status_reader()
             state.extra = {
                 **state.extra,
+                "navigation_runtime_source": self._navigation_runtime_source,
+                "clear_dtcs_navigation_runtime_source": "registry_runtime",
+                "recovery_navigation_runtime_source": "registry_runtime",
+                "navigation_runtime_status": navigation_runtime_status,
                 "stream_active": bool(
                     self._active_collector is not None and self._active_collector.is_running
                 ),
@@ -591,6 +599,18 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
 
         last_check_ts: list[float] = [0.0]
         last_result: list[dict[str, Any] | None] = [None]
+        recovery_runtime = self._get_recovery_navigation_runtime()
+        loading_watchdog = None
+        if hasattr(recovery_runtime, "_loading_timeout_sec") and hasattr(
+            recovery_runtime,
+            "_max_loading_restarts",
+        ):
+            from backends.gds2.registry_navigation_runtime import LoadingWatchdog
+
+            loading_watchdog = LoadingWatchdog(
+                timeout_sec=float(getattr(recovery_runtime, "_loading_timeout_sec")),
+                max_restarts=int(getattr(recovery_runtime, "_max_loading_restarts")),
+            )
 
         def guard() -> dict[str, Any] | None:
             now = time.time()
@@ -603,79 +623,85 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
                 last_result[0] = None
                 return None
 
+            emit_gds2_ui_event(
+                "page_guard_triggered",
+                operation_kind=f"data_display_guard:{mode}",
+                page=page,
+                reason="page_drift",
+                data_category=data_category,
+                guard_mode=mode,
+            )
+            if page == GDS2Page.J2534_DISCONNECT.value:
+                emit_gds2_ui_event(
+                    "j2534_disconnect_page_seen",
+                    operation_kind=f"data_display_guard:{mode}",
+                    page=page,
+                    reason="j2534_disconnect_seen",
+                    data_category=data_category,
+                    guard_mode=mode,
+                )
+
             last_check_ts[0] = 0.0
 
-            if page == GDS2Page.LOADING.value:
-                last_result[0] = {
-                    "ok": True,
-                    "mode": mode,
-                    "message": "Waiting for GDS2 loading page to finish...",
-                }
-                return last_result[0]
-
-            if page == GDS2Page.J2534_DISCONNECT.value:
-                recovery = self._get_workflow().controller.recover_data_display_connection(
+            recover = getattr(recovery_runtime, "recover_data_display", None)
+            if callable(recover):
+                recovery_event = recover(
                     data_category=data_category,
-                    allow_backtrack=True,
+                    mode=mode,
+                    loading_watchdog=loading_watchdog,
                 )
-                if recovery.success and recovery.page == GDS2Page.DATA_DISPLAY:
-                    recovery_method = (recovery.context or {}).get("recovery_method", "unknown")
-                    if mode == "ai_collect" and recovery_method == "backtrack":
-                        message = (
-                            "Recovered Data Display after reconnect; restarting AI collection "
-                            "window."
+                if recovery_event is not None:
+                    if recovery_event.get("recovery_actions"):
+                        logger.info(
+                            "[GDS2_GUARD] runtime=%s mode=%s page=%s recovery_actions=%s",
+                            "registry_runtime",
+                            mode,
+                            page,
+                            recovery_event.get("recovery_actions"),
                         )
-                    elif mode == "ai_collect":
-                        message = (
-                            "Recovered temporary J2534 disconnect and returned to Data Display."
-                        )
-                    else:
-                        message = "Recovered Data Display after J2534 disconnect."
-                    last_result[0] = {
-                        "ok": True,
-                        "mode": mode,
-                        "recovered": True,
-                        "recovery_method": recovery_method,
-                        "restart_collection": (
-                            mode == "ai_collect" and recovery_method == "backtrack"
-                        ),
-                        "message": message,
-                    }
+                    last_result[0] = dict(recovery_event)
                     return last_result[0]
 
-                if mode == "ai_collect":
-                    last_result[0] = {
-                        "ok": False,
-                        "mode": mode,
-                        "error": (
-                            "Lost communication with J2534 during AI collection and could not "
-                            "restore Data Display in-place. Please reconnect and restart AI "
-                            "Diagnostics."
-                        ),
-                    }
-                    return last_result[0]
-
-                last_result[0] = {
-                    "ok": False,
-                    "mode": mode,
-                    "error": (
-                        "Lost communication with J2534 and could not restore Data Display. "
-                        "Please reconnect and restart live monitoring."
-                    ),
-                }
-                return last_result[0]
-
-            last_result[0] = {
-                "ok": False,
-                "mode": mode,
-                "error": (
-                    f"Data Display guard detected page drift to {page}. "
-                    "Please return to Data Display and retry."
-                ),
-            }
+            last_result[0] = self._legacy_data_display_guard_error(page=page, mode=mode)
             return last_result[0]
 
         return guard
+
+    @staticmethod
+    def _legacy_data_display_guard_error(*, page: str, mode: str) -> dict[str, Any]:
+        if page == GDS2Page.LOADING.value:
+            return {
+                "ok": True,
+                "mode": mode,
+                "message": "Waiting for GDS2 loading page to finish...",
+            }
+        if page == GDS2Page.J2534_DISCONNECT.value:
+            if mode == "ai_collect":
+                return {
+                    "ok": False,
+                    "mode": mode,
+                    "error": (
+                        "Lost communication with J2534 during AI collection and could not "
+                        "restore Data Display in-place. Please reconnect and restart AI "
+                        "Diagnostics."
+                    ),
+                }
+            return {
+                "ok": False,
+                "mode": mode,
+                "error": (
+                    "Lost communication with J2534 and could not restore Data Display. "
+                    "Please reconnect and restart live monitoring."
+                ),
+            }
+        return {
+            "ok": False,
+            "mode": mode,
+            "error": (
+                f"Data Display guard detected page drift to {page}. "
+                "Please return to Data Display and retry."
+            ),
+        }
 
     def _get_cached_start_modules(self) -> list[str]:
         if not isinstance(self._last_start_result, dict):
@@ -696,34 +722,31 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
             raise RuntimeError("Controller get_available_items() returned a non-list value")
         return list(controller.wait_for_list())
 
-    def _get_workflow(self) -> Any:
-        """Return the bound workflow, creating it lazily when needed."""
-        return self._runtime.get_workflow()
-
-    def _get_controller(self) -> NavigationController:
+    def _get_controller(self) -> Any:
         """Return the bound navigation controller, creating the workflow if required."""
         return self._runtime.get_controller()
 
-    def get_guided_runtime(self) -> Any:
-        """Expose the backend-owned guided runtime for selection flows."""
-        return self._get_workflow()
+    def get_navigation_runtime(self) -> BackendNavigationRuntime:
+        return self._get_navigation_runtime()
+
+    def get_navigation_runtime_source(self) -> str:
+        return self._navigation_runtime_source
+
+    def _get_navigation_runtime(self) -> BackendNavigationRuntime:
+        return self._runtime.build_navigation_runtime(source=self._navigation_runtime_source)
+
+    def _get_clear_dtcs_navigation_runtime(self) -> BackendNavigationRuntime:
+        return self._runtime.build_navigation_runtime(source="registry_runtime")
+
+    def _get_recovery_navigation_runtime(self) -> BackendNavigationRuntime:
+        return self._runtime.build_navigation_runtime(source="registry_runtime")
 
     def build_action_runtime(self) -> BackendActionRuntime:
         """Build a backend-owned executor/adapter bridge for generic actions."""
         executor = DeterministicExecutor(policy_guard=PolicyGuard())
-        adapter = GDS2ActionAdapter(self.get_guided_runtime())
+        adapter = GDS2ActionAdapter(self, controller=self._get_controller())
         adapter.register_all(executor)
         return BackendActionRuntime(executor=executor, adapter=adapter)
-
-    @staticmethod
-    def _create_workflow() -> Any:
-        """Lazily import and construct DataViewerWorkflow."""
-        try:
-            from src.workflows.data_viewer import DataViewerWorkflow
-
-            return DataViewerWorkflow()
-        except Exception as exc:  # pragma: no cover - runtime integration wrapper
-            raise RuntimeError(f"Failed to initialize DataViewerWorkflow: {exc}") from exc
 
     def _require_page(self, expected_page: GDS2Page, action: str) -> GDS2Page:
         """Ensure GDS2 is on the expected page before performing an action."""
@@ -738,6 +761,13 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
         current_page = self.detect_current_page()
         if current_page != GDS2Page.DATA_DISPLAY.value:
             self.select_data_category(data_category)
+        emit_gds2_ui_event(
+            "data_display_entered",
+            operation_kind="ensure_data_display",
+            page=GDS2Page.DATA_DISPLAY.value,
+            reason="data_display_ready",
+            data_category=data_category,
+        )
 
     def _snapshot_to_live_data_points(self, snapshot: AgentSnapshot) -> list[LiveDataPoint]:
         timestamp = snapshot.collected_at_s or snapshot.agent_timestamp_s or time.time()

@@ -6,7 +6,6 @@ import pytest
 import diagnostic_platform.runtime.diagnostics_runtime as diagnostics_runtime
 import diagnostic_platform.runtime.navigation_runtime as navigation_runtime
 import diagnostic_platform.runtime.worker_runtime as worker_runtime_module
-from src.workflows.data_viewer import DataViewerWorkflow
 from src.navigation import NavigationController, NavigationResult
 from diagnostic_platform.runtime.diagnostics_runtime import (
     clear_diagnostic_dtcs,
@@ -148,7 +147,11 @@ def test_navigation_runtime_start_registers_session_and_accepts_decision(monkeyp
 
     monkeypatch.setattr(navigation_runtime.threading, "Thread", FakeThread)
 
-    session = start_navigation_session(runtime, goal="Go to Data Display")
+    session = start_navigation_session(
+        runtime,
+        goal="Go to Data Display",
+        controller_factory=lambda: object(),
+    )
     session.status = NavSessionStatus.AWAITING_DECISION
     session.pending_decision_id = "decision-1"
     session.pending_items = ["ECM", "TCM"]
@@ -185,7 +188,11 @@ def test_navigation_runtime_start_defaults_invalid_goal(monkeypatch):
 
     monkeypatch.setattr(navigation_runtime.threading, "Thread", FakeThread)
 
-    session = start_navigation_session(runtime, goal=["bad-goal"])
+    session = start_navigation_session(
+        runtime,
+        goal=["bad-goal"],
+        controller_factory=lambda: object(),
+    )
 
     assert session.goal == "Navigate to Data Display"
 
@@ -394,6 +401,35 @@ def test_run_graph_thread_schedules_cleanup_after_completion(monkeypatch):
     assert scheduled == ["nav-1"]
 
 
+def test_run_graph_thread_uses_controller_factory_when_present(monkeypatch):
+    observed = {}
+    session = NavSession(session_id="nav-1", goal="Navigate to Data Display")
+    controller = object()
+    session.controller_factory = lambda: controller
+
+    def fake_run_navigation_session(nav_session, *, controller=None):
+        observed["session"] = nav_session
+        observed["controller"] = controller
+        return {
+            "current_page": "data_display",
+            "navigation_history": [{"action": "completed"}],
+            "error": None,
+        }
+
+    monkeypatch.setattr(
+        navigation_runtime,
+        "_run_navigation_session",
+        fake_run_navigation_session,
+        raising=False,
+    )
+
+    navigation_runtime._run_graph_thread(session)
+
+    assert observed["session"] is session
+    assert observed["controller"] is controller
+    assert session.status == NavSessionStatus.COMPLETED
+
+
 def test_run_navigation_session_emits_decision_required_events_and_completes():
     session = NavSession(session_id="nav-1", goal="Navigate to Data Display")
     session.decision_queue = queue.Queue(maxsize=4)
@@ -532,169 +568,6 @@ def test_broadcast_agent_event_stringifies_non_json_payload_values() -> None:
         unsubscribe_agent_stream(scope, client_queue)
 
 
-def test_connect_device_retries_empty_module_list_before_failing(monkeypatch):
-    class FakeController:
-        def __init__(self):
-            self.current_page = GDS2Page.MODULE_LIST
-            self.current_data_category = None
-            self.nav = object()
-
-        def detect_current_page(self):
-            return GDS2Page.MODULE_LIST
-
-        def wait_for_list(self, previous_items=None):
-            if not hasattr(self, "_calls"):
-                self._calls = 0
-            self._calls += 1
-            if self._calls == 1:
-                return []
-            return ["[K20] Engine Control Module"]
-
-        def set_context(self, **kwargs):
-            return None
-
-    class FakeMapping:
-        def update_module_list(self, vehicle_id, module_indices):
-            return None
-
-    workflow = DataViewerWorkflow()
-    workflow.controller = FakeController()
-    workflow._mapping = FakeMapping()
-    monkeypatch.setattr(workflow, "_extract_vin", lambda: None)
-
-    result = workflow.connect_device("default")
-
-    assert result["modules"] == ["[K20] Engine Control Module"]
-
-
-def test_connect_device_checks_cancel_before_enter_click(monkeypatch):
-    class FakeController:
-        def __init__(self):
-            self.current_page = GDS2Page.VEHICLE_SELECTION
-            self.current_data_category = None
-            self.nav = object()
-            self.click_enter_called = False
-
-        def detect_current_page(self):
-            return GDS2Page.VEHICLE_SELECTION
-
-        def click_enter(self):
-            self.click_enter_called = True
-            raise AssertionError("click_enter should not be called after cancellation")
-
-    workflow = DataViewerWorkflow()
-    workflow.controller = FakeController()
-    monkeypatch.setattr(workflow, "_wait_for_button_enabled", lambda *args, **kwargs: True)
-    workflow.set_cancel_checker(lambda: (_ for _ in ()).throw(worker_runtime_module.OperationCancelledError("cancelled")))
-
-    with pytest.raises(worker_runtime_module.OperationCancelledError):
-        workflow.connect_device("default")
-
-    assert workflow.controller.click_enter_called is False
-
-
-def test_connect_device_treats_sub_data_list_as_connected_page(monkeypatch):
-    class FakeController:
-        def __init__(self):
-            self.current_page = GDS2Page.SUB_DATA_LIST
-            self.current_data_category = None
-            self.nav = object()
-            self.context = {}
-
-        def detect_current_page(self):
-            return self.current_page
-
-        def wait_for_list(self, previous_items=None):
-            return ["[K20] Engine Control Module"]
-
-        def set_context(self, **kwargs):
-            self.context.update(kwargs)
-
-    class FakeMapping:
-        def update_module_list(self, vehicle_id, module_indices):
-            return None
-
-    workflow = DataViewerWorkflow()
-    workflow.controller = FakeController()
-    workflow._mapping = FakeMapping()
-    monkeypatch.setattr(workflow, "_extract_vin", lambda: None)
-    monkeypatch.setattr(
-        workflow,
-        "_navigate_to_module_list",
-        lambda status: setattr(workflow.controller, "current_page", GDS2Page.MODULE_LIST),
-    )
-
-    result = workflow.connect_device("default")
-
-    assert result["modules"] == ["[K20] Engine Control Module"]
-    assert result["device"] == "Connected Device"
-
-
-def test_connect_device_checks_cancel_after_enter_becomes_enabled(monkeypatch):
-    class FakeController:
-        def __init__(self):
-            self.current_page = GDS2Page.VEHICLE_SELECTION
-            self.current_data_category = None
-            self.nav = object()
-            self.click_enter_called = False
-
-        def detect_current_page(self):
-            return GDS2Page.VEHICLE_SELECTION
-
-        def click_enter(self):
-            self.click_enter_called = True
-            raise AssertionError("click_enter should not be called after cancellation")
-
-    workflow = DataViewerWorkflow()
-    workflow.controller = FakeController()
-    monkeypatch.setattr(workflow, "_wait_for_button_enabled", lambda *args, **kwargs: True)
-
-    checks = {"count": 0}
-
-    def cancel_after_wait():
-        checks["count"] += 1
-        if checks["count"] >= 2:
-            raise worker_runtime_module.OperationCancelledError("cancelled")
-
-    workflow.set_cancel_checker(cancel_after_wait)
-
-    with pytest.raises(worker_runtime_module.OperationCancelledError):
-        workflow.connect_device("default")
-
-    assert workflow.controller.click_enter_called is False
-
-
-def test_navigate_to_module_list_checks_cancel_after_enter_becomes_enabled(monkeypatch):
-    class FakeController:
-        def __init__(self):
-            self.current_page = GDS2Page.VEHICLE_SELECTION
-            self.current_data_category = None
-            self.nav = object()
-            self.click_enter_called = False
-
-        def click_enter(self):
-            self.click_enter_called = True
-            raise AssertionError("click_enter should not be called after cancellation")
-
-    workflow = DataViewerWorkflow()
-    workflow.controller = FakeController()
-    monkeypatch.setattr(workflow, "_wait_for_button_enabled", lambda *args, **kwargs: True)
-
-    checks = {"count": 0}
-
-    def cancel_after_wait():
-        checks["count"] += 1
-        if checks["count"] >= 2:
-            raise worker_runtime_module.OperationCancelledError("cancelled")
-
-    workflow.set_cancel_checker(cancel_after_wait)
-
-    with pytest.raises(worker_runtime_module.OperationCancelledError):
-        workflow._navigate_to_module_list_from(GDS2Page.VEHICLE_SELECTION, lambda msg: None)
-
-    assert workflow.controller.click_enter_called is False
-
-
 def test_go_home_returns_actual_transition_page(monkeypatch):
     class FakeNav:
         def click_button(self, button_text):
@@ -712,42 +585,3 @@ def test_go_home_returns_actual_transition_page(monkeypatch):
     assert controller.current_page == GDS2Page.VEHICLE_SELECTION
 
 
-def test_navigate_to_main_menu_keeps_going_after_transient_vehicle_selection(monkeypatch):
-    class FakeNav:
-        def __init__(self):
-            self.calls = 0
-
-        def get_buttons(self):
-            self.calls += 1
-            return [{"text": "Home", "enabled": True}]
-
-    class FakeController:
-        def __init__(self):
-            self.nav = FakeNav()
-            self.detect_calls = 0
-
-        def detect_current_page(self):
-            self.detect_calls += 1
-            if self.detect_calls == 1:
-                return GDS2Page.MODULE_SUBMENU
-            return GDS2Page.MAIN_MENU
-
-        def go_home(self):
-            return NavigationResult(
-                success=True,
-                page=GDS2Page.VEHICLE_SELECTION,
-                context={},
-            )
-
-        def get_visible_buttons(self):
-            return ["Home"]
-
-    workflow = DataViewerWorkflow()
-    workflow.controller = FakeController()
-    status_messages = []
-    monkeypatch.setattr(workflow, "_sleep", lambda *args, **kwargs: None)
-
-    workflow._navigate_to_main_menu(status_messages.append)
-
-    assert workflow.controller.detect_calls >= 2
-    assert "At Main Menu" in status_messages

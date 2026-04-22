@@ -981,6 +981,43 @@ def test_platform_diagnostics_runtime_stays_backend_neutral():
     assert "GDS2Page" not in source
 
 
+def test_platform_runtime_modules_do_not_import_legacy_navigation_brains():
+    runtime_module_names = [
+        "diagnostic_platform.runtime.navigation_runtime",
+        "diagnostic_platform.runtime.session_actions",
+        "diagnostic_platform.runtime.session_decisions",
+        "diagnostic_platform.runtime.worker_runtime",
+    ]
+    for module_name in runtime_module_names:
+        module = importlib.import_module(module_name)
+        source = inspect.getsource(module)
+        assert "src.workflows.data_viewer" not in source
+        assert "from src.navigation" not in source
+        assert "import src.navigation" not in source
+
+
+def test_gds2_backend_modules_do_not_reference_data_viewer_workflow():
+    backend_module_names = [
+        "backends.gds2.backend",
+        "backends.gds2.action_adapter",
+        "backends.gds2.controller_runtime",
+        "backends.gds2.registry_navigation_runtime",
+    ]
+    for module_name in backend_module_names:
+        module = importlib.import_module(module_name)
+        source = inspect.getsource(module)
+        assert "DataViewerWorkflow" not in source
+        assert "src.workflows.data_viewer" not in source
+
+
+def test_registry_navigation_runtime_no_longer_delegates_production_navigation_to_legacy():
+    runtime_module = importlib.import_module("backends.gds2.registry_navigation_runtime")
+    source = inspect.getsource(runtime_module)
+
+    assert "_legacy_runtime" not in source
+    assert "_require_legacy_runtime" not in source
+
+
 def test_platform_ai_runtime_is_payload_only():
     ai_engine_module = importlib.import_module("src.diagnosis.ai_engine")
     source = inspect.getsource(ai_engine_module)

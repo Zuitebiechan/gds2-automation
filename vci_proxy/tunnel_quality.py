@@ -5,9 +5,11 @@ import math
 import os
 import time
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from diagnostic_platform.observability import utc_now_iso
 
 DEFAULT_WINDOW_SIZE = 5
 DEFAULT_FRESHNESS_SECONDS = 10.0
@@ -15,8 +17,7 @@ DEFAULT_HYSTERESIS_WINDOWS = 2
 
 
 def _utc_iso(ts: float | None = None) -> str:
-    value = time.time() if ts is None else ts
-    return datetime.fromtimestamp(value, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    return utc_now_iso(ts)
 
 
 def _parse_utc_iso(value: object) -> float | None:

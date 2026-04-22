@@ -191,6 +191,10 @@ def test_start_client_builds_reverse_proxy_client_and_starts_thread(monkeypatch,
             observed["join_timeout"] = timeout
 
     monkeypatch.setattr(client_gui, "ReverseProxyClient", _FakeClient)
+    monkeypatch.setattr(client_gui, "ObservabilityOutbox", lambda appdata=None: types.SimpleNamespace(
+        stage_default_artifacts=lambda **kwargs: {"queued_count": 0},
+        upload_pending=lambda **kwargs: {"uploaded_count": 0},
+    ))
     monkeypatch.setattr(client_gui.threading, "Thread", _FakeThread)
     monkeypatch.setattr(client_gui.ProxyConfig, "from_args", lambda **kwargs: kwargs)
 
@@ -221,6 +225,88 @@ def test_start_client_builds_reverse_proxy_client_and_starts_thread(monkeypatch,
     }
     assert callable(observed["on_status_change"])
     assert app._client_thread.started is True
+
+
+def test_upload_observability_once_stages_and_uploads_outbox(monkeypatch, tmp_path) -> None:
+    client_gui = _import_client_gui(monkeypatch, tmp_path)
+    observed: dict[str, object] = {}
+
+    class _FakeOutbox:
+        def __init__(self, appdata=None):
+            observed["appdata"] = appdata
+
+        def stage_default_artifacts(self, **kwargs):
+            observed["stage_kwargs"] = kwargs
+            return {"queued_count": 2}
+
+        def upload_pending(self, **kwargs):
+            observed["upload_kwargs"] = kwargs
+            return {"uploaded_count": 1}
+
+    monkeypatch.setattr(client_gui, "ObservabilityOutbox", _FakeOutbox)
+    monkeypatch.setattr(client_gui.socket, "gethostname", lambda: "host-1")
+
+    app = client_gui.VCIProxyTrayApp()
+    app._config = {
+        "api_scheme": "https",
+        "host": "diag.example",
+        "port": 9000,
+        "api_port": 8080,
+        "api_token": "api-secret",
+        "auth_token": "secret",
+        "dll_path": "",
+        "tls_enabled": False,
+        "tls_ca_file": "",
+        "tls_server_name": "",
+    }
+
+    result = app._upload_observability_once()
+
+    assert result == {"queued_count": 2, "uploaded_count": 1}
+    assert observed["stage_kwargs"]["client_instance_id"] == "host-1-tray"
+    assert observed["upload_kwargs"]["api_base_url"] == "https://diag.example:8080"
+    assert observed["upload_kwargs"]["api_token"] == "api-secret"
+
+
+def test_upload_observability_once_prefers_assigned_api_base_over_tunnel_host(monkeypatch, tmp_path) -> None:
+    client_gui = _import_client_gui(monkeypatch, tmp_path)
+    observed: dict[str, object] = {}
+
+    class _FakeOutbox:
+        def __init__(self, appdata=None):
+            pass
+
+        def stage_default_artifacts(self, **kwargs):
+            return {"queued_count": 0}
+
+        def upload_pending(self, **kwargs):
+            observed["upload_kwargs"] = kwargs
+            return {"uploaded_count": 0}
+
+    monkeypatch.setattr(client_gui, "ObservabilityOutbox", _FakeOutbox)
+    monkeypatch.setattr(client_gui.socket, "gethostname", lambda: "host-1")
+
+    app = client_gui.VCIProxyTrayApp()
+    app._config = {
+        "api_scheme": "http",
+        "host": "tunnel.example.com",
+        "port": 9000,
+        "api_port": 8080,
+        "api_token": "api-secret",
+        "auth_token": "secret",
+        "dll_path": "",
+        "tls_enabled": False,
+        "tls_ca_file": "",
+        "tls_server_name": "",
+    }
+    app._active_node_assignment = {
+        "api_base_url": "https://api.customer-node.example.com:443",
+        "tunnel_host": "tunnel.customer-node.example.com",
+    }
+
+    app._upload_observability_once()
+
+    assert observed["upload_kwargs"]["api_base_url"] == "https://api.customer-node.example.com:443"
 
 
 def test_stop_client_waits_for_graceful_shutdown(monkeypatch, tmp_path) -> None:

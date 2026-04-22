@@ -17,6 +17,14 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Callable, Optional
 
+from diagnostic_platform.observability import (
+    LogContext,
+    emit_event,
+    generate_request_id,
+    get_local_observability_root,
+    get_product_log_writer,
+)
+
 from .j2534_driver import (
     J2534Driver,
     discover_j2534_drivers,
@@ -304,13 +312,22 @@ class RemoteJ2534Driver:
         self._lock = Lock()
         self.dll_path = dll_path
 
-    def _call(self, method: str, *args: Any) -> Any:
+    def _call(self, method: str, *args: Any, log_context: dict[str, Any] | None = None) -> Any:
         with self._lock:
-            self._conn.send({"method": method, "args": args})
+            self._conn.send({"method": method, "args": args, "log_context": log_context or {}})
             response = self._conn.recv()
         if not response.get("ok"):
             raise RuntimeError(str(response.get("error") or "worker call failed"))
         return response.get("result")
+
+    def call_with_context(
+        self,
+        method: str,
+        args: tuple[Any, ...],
+        *,
+        log_context: dict[str, Any] | None = None,
+    ) -> Any:
+        return self._call(method, *args, log_context=log_context)
 
     def close_connection(self) -> None:
         try:
@@ -386,6 +403,35 @@ class J2534WorkerController:
         self.process: subprocess.Popen[str] | None = None
         self.driver: RemoteJ2534Driver | None = None
         self.log_file: Path | None = None
+        self._observability_writer = get_product_log_writer(
+            "j2534_worker_controller",
+            root=get_local_observability_root() / "raw",
+        )
+
+    def _emit_controller_event(
+        self,
+        event_type: str,
+        *,
+        status: str = "ok",
+        failure_code: str | None = None,
+        failure_domain: str = "unknown",
+        reason: str | None = None,
+        **extra: object,
+    ) -> None:
+        emit_event(
+            self._observability_writer,
+            component="j2534_worker_controller",
+            event_type=event_type,
+            context=LogContext(operation_kind="j2534_worker"),
+            status=status,
+            failure_code=failure_code,
+            failure_domain=failure_domain,
+            reason=reason,
+            impact_scope="j2534_worker",
+            dll_path=self.dll_path,
+            target_arch=self.target_arch,
+            **extra,
+        )
 
     def start(self) -> RemoteJ2534Driver:
         if self.driver is not None:
@@ -422,6 +468,13 @@ class J2534WorkerController:
                 self.address[1],
                 self.log_file,
             )
+            self._emit_controller_event(
+                "worker.lifecycle.spawn_started",
+                reason="spawn_started",
+                launch_mode=launch_spec.mode,
+                command=list(cmd),
+                log_file=str(self.log_file),
+            )
 
             try:
                 self.process = subprocess.Popen(
@@ -429,6 +482,16 @@ class J2534WorkerController:
                     cwd=str(Path(__file__).resolve().parents[1]),
                 )
             except OSError as exc:
+                self._emit_controller_event(
+                    "worker.lifecycle.spawn_failed",
+                    status="error",
+                    failure_code="spawn_failed",
+                    failure_domain="local_worker_rpc",
+                    reason=str(exc),
+                    launch_mode=launch_spec.mode,
+                    command=list(cmd),
+                    log_file=str(self.log_file),
+                )
                 failures.append(
                     WorkerLaunchFailure(
                         target_arch=launch_spec.target_arch,
@@ -451,12 +514,29 @@ class J2534WorkerController:
                     break
                 try:
                     self.driver = RemoteJ2534Driver(self.address, self.authkey, dll_path=self.dll_path)
+                    self._emit_controller_event(
+                        "worker.lifecycle.connected",
+                        reason="rpc_connected",
+                        launch_mode=launch_spec.mode,
+                        log_file=str(self.log_file),
+                    )
                     return self.driver
                 except Exception as exc:  # pragma: no cover - retry loop
                     last_error = exc
                     time.sleep(0.1)
 
             exit_code = self.process.poll() if self.process is not None else None
+            self._emit_controller_event(
+                "worker.lifecycle.spawn_failed",
+                status="error",
+                failure_code="startup_failed",
+                failure_domain="local_worker_rpc",
+                reason=str(last_error or f"timed out after {_WORKER_CONNECT_TIMEOUT_S:.1f}s"),
+                exit_code=exit_code,
+                launch_mode=launch_spec.mode,
+                command=list(cmd),
+                log_file=str(self.log_file),
+            )
             failures.append(
                 WorkerLaunchFailure(
                     target_arch=launch_spec.target_arch,
@@ -472,6 +552,11 @@ class J2534WorkerController:
         raise RuntimeError(_format_worker_launch_failures(self.dll_path, failures))
 
     def stop(self) -> None:
+        self._emit_controller_event(
+            "worker.lifecycle.stop_requested",
+            reason="stop_requested",
+            log_file=str(self.log_file) if self.log_file is not None else None,
+        )
         driver = self.driver
         self.driver = None
         if driver is not None:
@@ -496,6 +581,12 @@ class J2534WorkerController:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=5)
+        self._emit_controller_event(
+            "worker.lifecycle.stopped",
+            reason="stopped",
+            exit_code=process.returncode,
+            log_file=str(self.log_file) if self.log_file is not None else None,
+        )
 
 
 def create_driver_runtime(dll_path: Optional[str]) -> tuple[RemoteJ2534Driver, Callable[[], None]]:
@@ -526,40 +617,140 @@ def serve_worker(host: str, port: int, authkey: bytes, dll_path: str, *, log_fil
     """Serve one local RPC worker loop backed by a real J2534 DLL."""
     _configure_worker_logging(log_file)
     logger.info("J2534 worker starting dll=%s host=%s port=%s", dll_path, host, port)
+    observability_writer = get_product_log_writer(
+        "j2534_worker",
+        root=get_local_observability_root() / "raw",
+    )
+
+    def _worker_event(
+        event_type: str,
+        *,
+        log_context: dict[str, Any] | None = None,
+        status: str = "ok",
+        failure_code: str | None = None,
+        failure_domain: str = "unknown",
+        reason: str | None = None,
+        impact_scope: str = "j2534_worker",
+        **extra: object,
+    ) -> None:
+        payload = dict(log_context or {})
+        emit_event(
+            observability_writer,
+            component="j2534_worker",
+            event_type=event_type,
+            context=LogContext(
+                connection_epoch=payload.get("connection_epoch"),
+                proxy_seq=payload.get("proxy_seq"),
+                worker_request_id=payload.get("worker_request_id"),
+                operation_kind=payload.get("operation_kind") or payload.get("msg_name"),
+            ),
+            status=status,
+            failure_code=failure_code,
+            failure_domain=failure_domain,
+            reason=reason,
+            impact_scope=impact_scope,
+            msg_name=payload.get("msg_name"),
+            channel_id=payload.get("channel_id"),
+            **extra,
+        )
+
+    def _emit_parent_disconnected(log_context: dict[str, Any] | None, exc: Exception) -> None:
+        _worker_event(
+            "worker.lifecycle.parent_disconnected",
+            log_context=log_context,
+            status="error",
+            failure_code=type(exc).__name__,
+            failure_domain="local_worker_rpc",
+            reason=str(exc),
+        )
+
+    _worker_event(
+        "worker.lifecycle.starting",
+        reason="worker_starting",
+        dll_path=dll_path,
+        host=host,
+        port=port,
+    )
     listener: Listener | None = None
     conn = None
     try:
         driver = J2534Driver(dll_path)
         listener = Listener((host, port), authkey=authkey)
+        _worker_event(
+            "worker.lifecycle.listener_ready",
+            reason="listener_ready",
+            dll_path=dll_path,
+            host=host,
+            port=port,
+        )
         conn = listener.accept()
         while True:
             try:
                 request = conn.recv()
             except (EOFError, ConnectionResetError, BrokenPipeError, OSError) as exc:
                 logger.info("J2534 worker parent disconnected while waiting for requests: %s", exc)
+                _emit_parent_disconnected(None, exc)
                 break
             method = str(request.get("method") or "")
             args = tuple(request.get("args") or ())
+            log_context = dict(request.get("log_context") or {})
+            if method != "__shutdown__":
+                log_context.setdefault("worker_request_id", generate_request_id())
+            _worker_event(
+                "worker.rpc.received",
+                log_context=log_context,
+                reason="rpc_received",
+                rpc_method=method,
+            )
             if method == "__shutdown__":
                 try:
                     conn.send({"ok": True, "result": None})
                 except (EOFError, ConnectionResetError, BrokenPipeError, OSError) as exc:
                     logger.info("J2534 worker parent disconnected during shutdown ack: %s", exc)
+                    _emit_parent_disconnected(log_context, exc)
+                _worker_event(
+                    "worker.lifecycle.shutdown",
+                    log_context=log_context,
+                    reason="shutdown_requested",
+                )
                 break
             try:
                 result = getattr(driver, method)(*args)
                 response = {"ok": True, "result": result}
+                _worker_event(
+                    "worker.rpc.returned",
+                    log_context=log_context,
+                    reason="rpc_returned",
+                    rpc_method=method,
+                )
             except Exception as exc:
                 response = {
                     "ok": False,
                     "error": f"{type(exc).__name__}: {exc}",
                 }
+                _worker_event(
+                    "worker.rpc.failed",
+                    log_context=log_context,
+                    status="error",
+                    failure_code=type(exc).__name__,
+                    failure_domain="local_j2534_driver",
+                    reason=str(exc),
+                    rpc_method=method,
+                )
             try:
                 conn.send(response)
             except (EOFError, ConnectionResetError, BrokenPipeError, OSError) as exc:
                 logger.info("J2534 worker parent disconnected while sending response: %s", exc)
+                _emit_parent_disconnected(log_context, exc)
                 break
     except Exception:
+        _worker_event(
+            "worker.lifecycle.crashed",
+            status="error",
+            failure_code="worker_fatal_error",
+            failure_domain="local_worker_rpc",
+            reason="worker_fatal_error",
+        )
         logger.exception("J2534 worker fatal error")
         raise
     finally:

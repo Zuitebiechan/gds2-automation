@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Any
 
+from diagnostic_platform.session_observability import emit_gds2_ui_event
 from diagnostic_platform.runtime.errors import OperationCancelledError
 
 logger = logging.getLogger(__name__)
@@ -116,6 +117,8 @@ class NavigationController:
             "device": None,
         }
         self._cancel_checker = None
+        self._last_detection_mode = "unknown"
+        self._last_detection_confidence = "unknown"
 
     def set_cancel_checker(self, cancel_checker) -> None:
         self._cancel_checker = cancel_checker
@@ -129,6 +132,41 @@ class NavigationController:
         while time.time() < deadline:
             self._check_cancel()
             time.sleep(min(poll_interval, max(0.0, deadline - time.time())))
+
+    def _emit_ui_event(
+        self,
+        event_type: str,
+        *,
+        reason: str | None = None,
+        page: GDS2Page | None = None,
+        status: str = "ok",
+        failure_code: str | None = None,
+        **extra: object,
+    ) -> None:
+        emit_gds2_ui_event(
+            event_type,
+            operation_kind="gds2_navigation",
+            status=status,
+            failure_code=failure_code,
+            reason=reason,
+            page=(page or self._current_page).value if (page or self._current_page) is not None else None,
+            module=str(self._context.get("module") or "") or None,
+            data_category=str(self._context.get("data_category") or "") or None,
+            **extra,
+        )
+
+    def _record_page_detection(self, old_page: GDS2Page, new_page: GDS2Page) -> None:
+        if new_page == GDS2Page.UNKNOWN:
+            return
+        self._emit_ui_event(
+            "page.detected",
+            reason=self._last_detection_mode,
+            page=new_page,
+            detection_mode=self._last_detection_mode,
+            confidence=self._last_detection_confidence,
+            page_before=old_page.value,
+            page_after=new_page.value,
+        )
 
     @property
     def nav(self):
@@ -239,6 +277,7 @@ class NavigationController:
             for attempt in range(1 + retries):
                 self._check_cancel()
                 try:
+                    old_page = self._current_page
                     # 0. Native Device Explorer (Win32 dialog) takes precedence.
                     # Java Agent cannot see this dialog, so without this check
                     # page detection may incorrectly return UNKNOWN.
@@ -247,6 +286,9 @@ class NavigationController:
 
                         if DeviceExplorerController().is_visible():
                             self._current_page = GDS2Page.DEVICE_EXPLORER
+                            self._last_detection_mode = "native"
+                            self._last_detection_confidence = "high"
+                            self._record_page_detection(old_page, self._current_page)
                             return self._current_page
                     except Exception as native_err:
                         logger.debug(f"Native dialog visibility check failed: {native_err}")
@@ -255,12 +297,14 @@ class NavigationController:
                     page = self._detect_via_agent()
                     if page != GDS2Page.UNKNOWN:
                         self._current_page = page
+                        self._record_page_detection(old_page, page)
                         return page
 
                     # 2. Fallback to heuristic (for older Agent JARs without get_page_id)
                     page = self._detect_via_heuristic()
                     if page != GDS2Page.UNKNOWN:
                         self._current_page = page
+                        self._record_page_detection(old_page, page)
                         return page
 
                     # Still UNKNOWN - retry if attempts remain
@@ -300,6 +344,8 @@ class NavigationController:
 
             page_id = page_info.get('page_id', 'unknown')
             confidence = page_info.get('confidence', 'none')
+            self._last_detection_mode = "agent"
+            self._last_detection_confidence = str(confidence or "none")
 
             logger.debug("Agent page detection: %s (confidence=%s)", page_id, confidence)
 
@@ -449,6 +495,8 @@ class NavigationController:
         (older JAR versions).
         """
         try:
+            self._last_detection_mode = "heuristic"
+            self._last_detection_confidence = "heuristic"
             button_texts, items = self._load_heuristic_page_state()
 
             # Detection rules - ORDER MATTERS!
@@ -875,6 +923,18 @@ class NavigationController:
         """Get list items from current page."""
         return self.nav.get_list_items(list_index)
 
+    def get_navigation_path(self) -> List[str]:
+        """Get breadcrumb labels from the Navigation Path table when present."""
+        with self._lock:
+            try:
+                items = self.nav.get_navigation_path()
+            except OperationCancelledError:
+                raise
+            except Exception as exc:
+                logger.debug("Failed to read Navigation Path: %s", exc)
+                return []
+            return [str(item).strip() for item in items if str(item).strip()]
+
     def wait_for_list(self, list_index: int = 0, max_attempts: int = 15,
                       previous_items: Optional[List[str]] = None) -> List[str]:
         """
@@ -1128,6 +1188,63 @@ class NavigationController:
                 page=new_page,
                 context=self._context.copy(),
             )
+
+    def click_navigation_path_item(self, item_text: str) -> NavigationResult:
+        """
+        Click one item from the Navigation Path breadcrumb table.
+
+        This is a best-effort jump-to-ancestor primitive. The caller should
+        still verify whether the page actually changed and fall back to Back
+        or Home when needed.
+        """
+        with self._lock:
+            self._check_cancel()
+            try:
+                old_page = self.detect_current_page(retries=0)
+                result = self.nav.click_navigation_path_item(item_text)
+                if not result.get('success'):
+                    return NavigationResult(
+                        success=False,
+                        page=self._current_page,
+                        error=f"Failed to click navigation path '{item_text}': {result.get('message')}",
+                        selected=item_text,
+                        context=self._context.copy(),
+                    )
+
+                try:
+                    if old_page == GDS2Page.UNKNOWN:
+                        new_page = self.wait_for_page_stable(timeout=3.0, stable_duration=0.6)
+                    else:
+                        new_page = self._wait_for_transition_or_detect(
+                            old_page,
+                            timeout=3.0,
+                            timeout_message=(
+                                f"Page did not transition after clicking navigation path '{item_text}'"
+                            ),
+                            detect_retries=0,
+                        )
+                except TimeoutError:
+                    new_page = self.detect_current_page(retries=1, retry_delay=0.5)
+
+                if new_page != old_page and old_page != GDS2Page.UNKNOWN:
+                    self._history.append(old_page)
+                self._current_page = new_page
+                return NavigationResult(
+                    success=True,
+                    page=new_page,
+                    selected=item_text,
+                    context=self._context.copy(),
+                )
+            except OperationCancelledError:
+                raise
+            except Exception as exc:
+                return NavigationResult(
+                    success=False,
+                    page=self._current_page,
+                    error=f"Navigation Path click failed for '{item_text}': {exc}",
+                    selected=item_text,
+                    context=self._context.copy(),
+                )
 
     def _resolve_recovery_start_page(self) -> tuple[GDS2Page, Optional[str]]:
         """Resolve the current recovery page, waiting out transient loading when needed."""
@@ -1526,6 +1643,13 @@ class NavigationController:
                 if new_page in (GDS2Page.DIAGNOSTICS_MENU, GDS2Page.MODULE_LIST, GDS2Page.VEHICLE_SELECTION):
                     choices = self.get_list_items()
 
+                self._emit_ui_event(
+                    "device_selected",
+                    reason=device_name,
+                    page=new_page,
+                    selected_device=device_name,
+                )
+
                 return NavigationResult(
                     success=True,
                     page=new_page,
@@ -1533,6 +1657,7 @@ class NavigationController:
                     choices=choices,
                     context=self._context.copy(),
                 )
+                
 
             except OperationCancelledError:
                 raise
@@ -1647,6 +1772,12 @@ class NavigationController:
                 if device_controller.find_dialog(timeout_sec=5.0):
                     devices = device_controller.get_device_names()
                     self._current_page = GDS2Page.DEVICE_EXPLORER
+                    self._emit_ui_event(
+                        "device_explorer_opened",
+                        reason="select_device_clicked",
+                        page=GDS2Page.DEVICE_EXPLORER,
+                        devices=list(devices),
+                    )
 
                     return NavigationResult(
                         success=True,
@@ -1700,6 +1831,21 @@ class NavigationController:
                 new_page = self._retry_enter_from_vehicle_selection(new_page)
                 new_page = self._return_to_diagnostics_menu(new_page)
 
+                if new_page == GDS2Page.VEHICLE_SELECTION:
+                    self._emit_ui_event(
+                        "vehicle_selection_failed_to_progress",
+                        status="error",
+                        failure_code="enter_no_transition",
+                        reason="enter_did_not_progress",
+                        page=new_page,
+                    )
+                else:
+                    self._emit_ui_event(
+                        "click_enter",
+                        reason="enter_clicked",
+                        page=new_page,
+                    )
+
                 choices = self.get_list_items() if self._page_has_list_choices(new_page) else None
 
                 return NavigationResult(
@@ -1713,6 +1859,13 @@ class NavigationController:
                 raise
             except Exception as e:
                 logger.exception(f"click_enter failed: {e}")
+                self._emit_ui_event(
+                    "vehicle_selection_failed_to_progress",
+                    status="error",
+                    failure_code="click_enter_exception",
+                    reason=str(e),
+                    page=self._current_page,
+                )
                 return NavigationResult(
                     success=False,
                     page=self._current_page,

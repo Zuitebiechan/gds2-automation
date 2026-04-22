@@ -213,7 +213,14 @@ Behavior:
 
 ## Direct Navigation Flow
 
-The standalone `/api/navigate/*` surface uses the same navigation runtime but is not bound to a business session.
+The standalone `/api/navigate/*` surface uses the same backend-owned navigation runtime as session-bound navigation, but is not bound to a business session.
+
+Current binding rule:
+
+1. The worker must already have one active backend bundle.
+2. The route resolves that bundle's `navigation_handle`.
+3. If no active backend navigation runtime is available, `POST /api/navigate/start` returns `409 Conflict`.
+4. The route must not create an ephemeral backend/controller/viewer as fallback.
 
 ## DTC Read Flow
 
@@ -256,6 +263,12 @@ Sequence:
 6. Otherwise, treat the current `Data Display` context as authoritative and avoid hidden module/category reselection.
 7. Call backend clear-DTC behavior.
 8. Return normalized clear result payload with `cleared_count`, `message`, and final page context.
+
+Current GDS2 implementation note:
+
+- clear-DTC execution and recovery-heavy page handling now run through the backend-owned registry runtime
+- the registry runtime is responsible for Clear DTCs same-page verification, loading restart policy, device-explorer recovery, J2534 disconnect handling, and navigation-path correction before resuming the requested clear flow
+- backend state now exposes `navigation_runtime_status`, which records the latest route target, matched state/policy trace, recovery actions, and terminal reason for the most recent registry-runtime operation
 
 ### Direct diagnostics
 

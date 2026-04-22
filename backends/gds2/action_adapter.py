@@ -1,4 +1,4 @@
-"""GDS2 action adapter bridging deterministic actions to the existing workflow."""
+"""GDS2 action adapter bridging deterministic actions to the backend facade."""
 
 from __future__ import annotations
 
@@ -14,16 +14,17 @@ logger = logging.getLogger(__name__)
 
 
 class GDS2ActionAdapter:
-    """Adapt the GDS2 workflow/controller pair into deterministic step handlers."""
+    """Adapt the GDS2 backend/controller pair into deterministic step handlers."""
 
     def __init__(
         self,
-        workflow: Any,
+        backend: Any,
         *,
+        controller: Any,
         collector_factory: Callable[[], Any] | None = None,
     ) -> None:
-        self._workflow = workflow
-        self._controller = workflow.controller
+        self._backend = backend
+        self._controller = controller
         self._collector_factory = collector_factory
         self._active_collector: Any = None
 
@@ -49,7 +50,7 @@ class GDS2ActionAdapter:
 
     def _handle_start_diagnostics(self, step: ActionStep, state: UIState) -> dict[str, Any]:
         logger.info("GDS2Adapter: START_DIAGNOSTICS")
-        result = self._workflow.start()
+        result = self._backend.start()
         return {"success": True, **result}
 
     def _handle_select_device(self, step: ActionStep, state: UIState) -> dict[str, Any]:
@@ -66,13 +67,18 @@ class GDS2ActionAdapter:
     def _handle_connect_device(self, step: ActionStep, state: UIState) -> dict[str, Any]:
         device_name = step.args["device_name"]
         logger.info("GDS2Adapter: CONNECT_DEVICE -> %s", device_name)
-        result = self._workflow.connect_device(device_name)
-        return {"success": True, **result}
+        self._backend.connect_vci(device_name)
+        return {"success": True, "device": device_name}
 
     def _handle_select_module(self, step: ActionStep, state: UIState) -> dict[str, Any]:
         module_name = step.args["module_name"]
         logger.info("GDS2Adapter: SELECT_MODULE -> %s", module_name)
-        return {"success": True, **self._coerce_mapping_result(self._workflow.select_module(module_name))}
+        self._backend.select_module(module_name)
+        return {
+            "success": True,
+            "selected_module": module_name,
+            "data_categories": self._backend.get_data_categories(),
+        }
 
     def _handle_select_data_category(
         self,
@@ -83,7 +89,8 @@ class GDS2ActionAdapter:
         logger.info("GDS2Adapter: SELECT_DATA_CATEGORY -> %s", category_name)
         return {
             "success": True,
-            **self._coerce_mapping_result(self._workflow.select_data_category(category_name)),
+            "selected_data_category": category_name,
+            "items": self._backend.select_data_category(category_name),
         }
 
     def _handle_select_sub_category(
@@ -103,7 +110,22 @@ class GDS2ActionAdapter:
 
     def _handle_read_dtcs(self, step: ActionStep, state: UIState) -> dict[str, Any]:
         logger.info("GDS2Adapter: READ_DTCS")
-        return {"success": True, **self._coerce_mapping_result(self._workflow.read_all_dtcs())}
+        dtcs = self._backend.read_dtcs()
+        return {
+            "success": True,
+            "dtcs": [
+                {
+                    "code": dtc.code,
+                    "control_module": dtc.module,
+                    "module": dtc.module,
+                    "status": dtc.status,
+                    "description": dtc.description,
+                    "source_backend": dtc.source_backend,
+                }
+                for dtc in dtcs
+            ],
+            "dtc_count": len(dtcs),
+        }
 
     def _handle_start_live_stream(self, step: ActionStep, state: UIState) -> dict[str, Any]:
         if self._collector_factory is None:
@@ -122,7 +144,9 @@ class GDS2ActionAdapter:
         if self._active_collector is not None:
             self._active_collector.stop()
             self._active_collector = None
-        self._workflow.stop_monitoring()
+        stop_session = getattr(self._backend, "stop_live_data_session", None)
+        if callable(stop_session):
+            stop_session()
         return {"success": True, "streaming": False}
 
     def _handle_go_home(self, step: ActionStep, state: UIState) -> dict[str, Any]:
@@ -149,7 +173,9 @@ class GDS2ActionAdapter:
             if self._active_collector is not None:
                 self._active_collector.stop()
                 self._active_collector = None
-            self._workflow.stop_monitoring()
+            stop_session = getattr(self._backend, "stop_live_data_session", None)
+            if callable(stop_session):
+                stop_session()
         except Exception as exc:
             logger.warning("Cleanup error during abort: %s", exc)
 
@@ -185,12 +211,5 @@ class GDS2ActionAdapter:
             list_items=list_items,
             context=context,
         )
-
-    @staticmethod
-    def _coerce_mapping_result(result: Any) -> dict[str, Any]:
-        if isinstance(result, dict):
-            return result
-        return {}
-
 
 __all__ = ["GDS2ActionAdapter"]

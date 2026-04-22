@@ -71,9 +71,10 @@ The runtime package is split by concern:
 Today:
 
 - `backends/gds2/backend.py` exposes the GDS2 backend descriptor, capability list, core contract methods, live-data/AI collection, navigation/action bridges, and state adaptation
-- `backends/gds2/controller_runtime.py` bridges the backend facade to the underlying GDS2 workflow/controller stack
+- `backends/gds2/controller_runtime.py` bridges the backend facade to the underlying GDS2 controller stack and runtime state readers
+- `backends/gds2/registry_navigation_runtime.py` owns registry/path-driven clear-DTC and recovery-heavy runtime behavior
 - `backends/gds2/planner.py` owns GDS2-specific constrained branch planning heuristics
-- `backends/gds2/action_adapter.py` owns the deterministic action adapter that bridges executor steps to the GDS2 workflow/controller
+- `backends/gds2/action_adapter.py` owns the deterministic action adapter that bridges executor steps to the GDS2 backend facade plus low-level controller
 - `backends/gds2/action_runtime.py` owns GDS2-specific UI state, page capability rules, and policy validation for deterministic actions
 
 Future OEM implementations should be added as new siblings under `backends/`, not as branches inside the GDS2 code.
@@ -91,7 +92,7 @@ Major areas:
 | `src/native/` | native automation helpers |
 | `src/navigation/` | page model and navigation controller logic |
 | `src/streaming/` | data collectors and streaming buffers |
-| `src/workflows/` | workflow abstractions such as Data Viewer |
+| `src/workflows/` | workflow-style utility wrappers such as interactive navigation helpers |
 | `src/gds2_orchestration/` | compatibility exports for legacy deterministic GDS2 orchestration import paths |
 
 The former `src/agentic` namespace has already been removed. Planner and action-adapter ownership now lives under `backends/gds2/`, while `src/gds2_orchestration/` remains as a legacy compatibility layer.

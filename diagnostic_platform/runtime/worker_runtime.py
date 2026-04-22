@@ -103,6 +103,7 @@ class WorkerSessionBinding:
     navigation_session_id: str | None = None
     ai_session_id: str | None = None
     live_data_active: bool = False
+    connection_epoch: str | None = None
 
 
 @dataclass
@@ -115,8 +116,6 @@ class WorkerRuntime:
     action_runtime: BackendActionRuntime | None = None
     executor: Any | None = None
     adapter: Any | None = None
-    data_viewer_getter: Callable[[], Any] | None = None
-    data_viewer: Any | None = None
     ai_engine: AIEngine | None = None
     business_session_binding: WorkerSessionBinding = field(
         default_factory=WorkerSessionBinding,
@@ -155,9 +154,10 @@ class WorkerRuntime:
                 self.action_runtime = None
                 self.executor = None
                 self.adapter = None
-                self.data_viewer = None
             if bundle.backend is None:
                 bundle.backend = backend_factory()
+            if bundle.navigation_handle is None and hasattr(bundle.backend, "get_navigation_runtime"):
+                bundle.navigation_handle = bundle.backend.get_navigation_runtime()
             self.backend = bundle.backend
             return bundle
 
@@ -179,7 +179,6 @@ class WorkerRuntime:
             self.action_runtime = None
             self.executor = None
             self.adapter = None
-            self.data_viewer = None
 
     def get_backend(self, factory: Callable[[], Any]) -> Any:
         if self.active_backend_bundle is not None and self.active_backend_bundle.backend is not None:
@@ -193,45 +192,26 @@ class WorkerRuntime:
 
         return self.backend
 
-    def set_data_viewer_getter(self, getter: Callable[[], Any] | None) -> None:
-        with self.state_lock:
-            self.data_viewer_getter = getter
-            self.data_viewer = None
-            self.backend = None
-            self.executor = None
-            self.adapter = None
+    def get_navigation_runtime(self, backend_factory: Callable[[], Any]) -> Any:
+        bundle = self.active_backend_bundle
+        if bundle is not None and bundle.navigation_handle is not None:
+            return bundle.navigation_handle
 
-    def has_data_viewer_getter(self) -> bool:
-        return self.data_viewer_getter is not None
+        backend = self.get_backend(backend_factory)
+        runtime_getter = getattr(backend, "get_navigation_runtime", None)
+        if not callable(runtime_getter):
+            raise RuntimeError(
+                f"Backend '{getattr(backend, 'name', 'unknown')}' does not expose a navigation runtime"
+            )
 
-    def get_data_viewer(self, backend_factory: Callable[[], Any]) -> Any:
-        if self.data_viewer_getter is None:
-            if self.data_viewer is not None:
-                return self.data_viewer
-
-            with self.state_lock:
-                if self.data_viewer is None:
-                    backend = self.get_backend(backend_factory)
-                    guided_runtime_getter = getattr(backend, "get_guided_runtime", None)
-                    if not callable(guided_runtime_getter):
-                        raise RuntimeError(
-                            f"Backend '{getattr(backend, 'name', 'unknown')}' does not expose a guided runtime"
-                        )
-                    self.data_viewer = guided_runtime_getter()
-                    if self.data_viewer is None:
-                        raise RuntimeError("Backend guided runtime getter returned None")
-            return self.data_viewer
-
-        if self.data_viewer is not None:
-            return self.data_viewer
+        runtime = runtime_getter()
+        if runtime is None:
+            raise RuntimeError("Backend navigation runtime getter returned None")
 
         with self.state_lock:
-            if self.data_viewer is None:
-                self.data_viewer = self.data_viewer_getter()
-                if self.data_viewer is None:
-                    raise RuntimeError("Injected data viewer getter returned None")
-
-        return self.data_viewer
+            if self.active_backend_bundle is not None:
+                self.active_backend_bundle.navigation_handle = runtime
+        return runtime
 
     def get_action_runtime(
         self,
@@ -336,6 +316,7 @@ class WorkerRuntime:
                 navigation_session_id=binding.navigation_session_id,
                 ai_session_id=binding.ai_session_id,
                 live_data_active=binding.live_data_active,
+                connection_epoch=binding.connection_epoch,
             )
 
     def clear_business_session(self, session_id: str | None = None) -> None:
@@ -421,6 +402,18 @@ class WorkerRuntime:
         with self.state_lock:
             binding = self.business_session_binding
             return binding.session_id == session_id and binding.live_data_active
+
+    def set_connection_epoch(self, session_id: str, connection_epoch: str | None) -> None:
+        with self.state_lock:
+            self.bind_business_session(session_id)
+            self.business_session_binding.connection_epoch = connection_epoch
+
+    def get_connection_epoch(self, session_id: str) -> str | None:
+        with self.state_lock:
+            binding = self.business_session_binding
+            if binding.session_id != session_id:
+                return None
+            return binding.connection_epoch
 
 
 _WORKER_RUNTIME = WorkerRuntime()

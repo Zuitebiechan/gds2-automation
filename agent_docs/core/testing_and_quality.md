@@ -27,7 +27,6 @@ This document does not restate the full architecture. For design context, read `
 | `tests/test_proxy_benchmark.py` | proxy benchmark behavior |
 | `tests/test_server_layout.py` | Flask/server layout and blueprint wiring |
 | `tests/test_repo_layout_consistency.py` | repository/documentation consistency and stale-technology guards |
-| `tests/test_data_viewer_workflow.py` | GDS2 workflow behavior |
 | `tests/test_read_data_display_agent.py` | read-data workflow wrapper success and error propagation |
 | `tests/test_interactive_workflow.py` | step-by-step navigation workflow behavior and report parsing |
 | `tests/test_agent_data_collector.py` | Java agent data collection behavior |
@@ -65,7 +64,7 @@ python -m pytest tests\test_backend_capability_architecture.py tests\test_backen
 Run the focused GDS2/runtime regressions:
 
 ```bash
-python -m pytest tests\test_gds2_controller_runtime.py tests\test_data_viewer_workflow.py tests\test_read_data_display_agent.py tests\test_interactive_workflow.py tests\test_agent_data_collector.py tests\test_diagnostic_buffer.py tests\test_agent_navigator.py tests\test_diagnostics_window.py tests\test_device_explorer.py tests\test_llm_client.py tests\test_ai_engine.py tests\test_vehicle_mapping.py -q
+python -m pytest tests\test_gds2_controller_runtime.py tests\test_read_data_display_agent.py tests\test_interactive_workflow.py tests\test_agent_data_collector.py tests\test_diagnostic_buffer.py tests\test_agent_navigator.py tests\test_diagnostics_window.py tests\test_device_explorer.py tests\test_llm_client.py tests\test_ai_engine.py tests\test_vehicle_mapping.py -q
 ```
 
 ### If you change `vci_proxy/`
@@ -91,6 +90,21 @@ Run:
 ```bash
 python -m pytest tests\test_repo_layout_consistency.py -q
 ```
+
+## Registry Runtime Release Gate
+
+Before finalizing GDS2 registry-runtime rollout, run at minimum:
+
+```bash
+python -m pytest tests\test_backend_capability_architecture.py tests\test_backend_capability_refactor.py tests\test_runtime_session_layers.py tests\test_runtime_diagnostics_navigation.py tests\test_session_api_handlers.py tests\test_gds2_controller_runtime.py tests\test_navigation_registry_probe.py tests\test_simulated_session_api_flow.py tests\test_simulated_system_flow.py -q
+python -m py_compile backends\gds2\backend.py backends\gds2\controller_runtime.py backends\gds2\registry_navigation_runtime.py
+```
+
+Operational rollout work should also confirm:
+
+- `navigation_runtime_status` is present in backend state
+- route target, recovery actions, recovery action counts, and terminal reason are populated after navigation-heavy operations
+- the troubleshooting flow in `agent_docs/ops/gds2_registry_runtime_rollout.md` is sufficient to explain a failed route without interactive debugging
 
 ## Documentation Quality Rules
 

@@ -1,0 +1,139 @@
+{
+  "label": "explore_manage_packages_start",
+  "timestamp": "2026-04-17T11:46:07",
+  "page": {
+    "page_id": "main_menu",
+    "list_item_count": 0,
+    "buttons": [
+      "Release Notes",
+      "Language",
+      "Diagnostics",
+      "Manage Diagnostic Packages",
+      "Review Stored Data",
+      "Preferences",
+      "Update",
+      "Home",
+      "Close Application"
+    ],
+    "evidence": "buttons 'Diagnostics' + 'Update' present",
+    "has_modal": true,
+    "confidence": "high",
+    "window_title": "GDS 2"
+  },
+  "buttons": [
+    {
+      "text": "Manage Diagnostic Packages",
+      "enabled": true
+    },
+    {
+      "text": "Review Stored Data",
+      "enabled": true
+    },
+    {
+      "text": "Preferences",
+      "enabled": true
+    },
+    {
+      "text": "Release Notes",
+      "enabled": true
+    },
+    {
+      "text": "Language",
+      "enabled": true
+    },
+    {
+      "text": "Diagnostics",
+      "enabled": true
+    },
+    {
+      "text": "Update",
+      "enabled": true
+    },
+    {
+      "text": "Close Application",
+      "enabled": true
+    },
+    {
+      "text": "Home",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "",
+      "enabled": true
+    },
+    {
+      "text": "是",
+      "enabled": true
+    },
+    {
+      "text": "否",
+      "enabled": true
+    }
+  ],
+  "list_items": [],
+  "latest_json": {},
+  "observed_actions": [
+    {
+      "kind": "button",
+      "label": "Close Application",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Diagnostics",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Home",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Language",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Manage Diagnostic Packages",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Preferences",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Release Notes",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Review Stored Data",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "Update",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "否",
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "label": "是",
+      "enabled": true
+    }
+  ],
+  "raw_page_id": "main_menu",
+  "effective_page_id": "main_menu",
+  "node_id": "0d7a31cfa67e626d"
+}

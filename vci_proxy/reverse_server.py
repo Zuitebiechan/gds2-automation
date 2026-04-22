@@ -18,6 +18,13 @@ import argparse
 import ssl
 from typing import Optional
 
+from diagnostic_platform.observability import (
+    LogContext,
+    emit_event,
+    get_product_log_writer,
+    read_active_session_snapshot,
+)
+
 from .config import ProxyConfig
 from .cache_read_msgs import ReadMsgsCache
 from .cache_filter_dedup import FilterDeduplicationCache
@@ -119,6 +126,7 @@ class ReverseProxyServer:
         self._tunnel_quality = TunnelQualityTracker()
         self._last_quality_signature: tuple | None = None
         self._seen_auth_signatures: dict[tuple[int, bytes], int] = {}
+        self._observability_writer = get_product_log_writer("reverse_server")
 
         # P1-1: ReadMsgs BUFFER_EMPTY cache
         self._read_cache = ReadMsgsCache(self.config.read_msgs_cache)
@@ -126,6 +134,101 @@ class ReverseProxyServer:
         self._filter_cache = FilterDeduplicationCache(self.config.filter_dedup)
         # Generalized read-only IOCTL cache (replaces VBATT-only cache)
         self._ioctl_cache = IoctlCache(self.config.ioctl_cache)
+
+    def _current_observability_context(
+        self,
+        *,
+        connection_epoch: str | None = None,
+        operation_kind: str = "reverse_tunnel",
+    ) -> LogContext:
+        snapshot = read_active_session_snapshot() or {}
+        return LogContext(
+            session_id=str(snapshot.get("session_id") or "") or None,
+            connection_epoch=connection_epoch or self._connection_epoch,
+            operation_kind=str(snapshot.get("operation_kind") or operation_kind),
+            page=str(snapshot.get("current_page") or "") or None,
+            module=str(snapshot.get("selected_module") or "") or None,
+            data_category=str(snapshot.get("selected_data_category") or "") or None,
+        )
+
+    def _emit_tunnel_event(
+        self,
+        event_type: str,
+        *,
+        connection_epoch: str | None = None,
+        operation_kind: str = "reverse_tunnel",
+        status: str = "ok",
+        failure_code: str | None = None,
+        failure_domain: str = "unknown",
+        reason: str | None = None,
+        impact_scope: str = "reverse_tunnel",
+        **extra: object,
+    ) -> None:
+        emit_event(
+            self._observability_writer,
+            component="reverse_server",
+            event_type=event_type,
+            context=self._current_observability_context(
+                connection_epoch=connection_epoch,
+                operation_kind=operation_kind,
+            ),
+            status=status,
+            failure_code=failure_code,
+            failure_domain=failure_domain,
+            reason=reason,
+            impact_scope=impact_scope,
+            **extra,
+        )
+
+    def _emit_proxy_request_event(
+        self,
+        event_type: str,
+        *,
+        dll_seq: int,
+        msg_name: str,
+        proxy_seq: int | None = None,
+        status: str = "ok",
+        failure_code: str | None = None,
+        failure_domain: str = "unknown",
+        reason: str | None = None,
+        duration_ms: float | None = None,
+        hw_ms: float | None = None,
+        network_ms: float | None = None,
+        cache_hit: bool | None = None,
+        **extra: object,
+    ) -> None:
+        base_context = self._current_observability_context(
+            connection_epoch=self._connection_epoch,
+            operation_kind=f"j2534:{msg_name}",
+        )
+        emit_event(
+            self._observability_writer,
+            component="reverse_server",
+            event_type=event_type,
+            context=LogContext(
+                session_id=base_context.session_id,
+                connection_epoch=base_context.connection_epoch,
+                dll_seq=dll_seq,
+                proxy_seq=proxy_seq,
+                worker_request_id=base_context.worker_request_id,
+                operation_kind=base_context.operation_kind,
+                page=base_context.page,
+                module=base_context.module,
+                data_category=base_context.data_category,
+                request_id=base_context.request_id,
+            ),
+            status=status,
+            failure_code=failure_code,
+            failure_domain=failure_domain,
+            reason=reason,
+            duration_ms=duration_ms,
+            hw_ms=hw_ms,
+            network_ms=network_ms,
+            impact_scope="proxy_request",
+            msg_name=msg_name,
+            cache_hit=cache_hit,
+            **extra,
+        )
 
     def _build_tls_server_context(self) -> ssl.SSLContext | None:
         """Build optional TLS listener context for inbound reverse clients."""
@@ -449,6 +552,14 @@ class ReverseProxyServer:
         # Authenticate before accepting the connection
         if not await self._authenticate_vci(reader, writer):
             logger.warning("VCI tunnel authentication failed: %s", addr)
+            self._emit_tunnel_event(
+                "tunnel.auth.failed",
+                status="error",
+                failure_code="auth_failed",
+                failure_domain="cloud_proxy_tunnel",
+                reason="authentication_failed",
+                remote_addr=str(addr),
+            )
             writer.close()
             return
 
@@ -461,6 +572,16 @@ class ReverseProxyServer:
                 addr,
                 decision_reason,
             )
+            self._emit_tunnel_event(
+                "tunnel.lifecycle.rejected",
+                connection_epoch=self._connection_epoch,
+                status="error",
+                failure_code="tunnel_rejected",
+                failure_domain="cloud_proxy_tunnel",
+                reason=decision_reason,
+                remote_addr=str(addr),
+                existing_addr=str(existing_addr),
+            )
             writer.close()
             return
 
@@ -472,6 +593,16 @@ class ReverseProxyServer:
                 existing_addr,
                 addr,
                 decision_reason,
+            )
+            self._emit_tunnel_event(
+                "tunnel.lifecycle.replaced",
+                connection_epoch=self._connection_epoch,
+                status="error",
+                failure_code="tunnel_replaced",
+                failure_domain="cloud_proxy_tunnel",
+                reason=decision_reason,
+                remote_addr=str(addr),
+                existing_addr=str(existing_addr),
             )
             old_writer = self.vci_writer
             self.vci_connected.clear()
@@ -493,6 +624,12 @@ class ReverseProxyServer:
         self._connection_epoch = local_epoch
         self._tunnel_quality.mark_connected(local_epoch)
         self._write_tunnel_quality_snapshot()
+        self._emit_tunnel_event(
+            "tunnel.lifecycle.connected",
+            connection_epoch=local_epoch,
+            reason="tunnel_connected",
+            remote_addr=str(addr),
+        )
         self.vci_connected.set()
         self._probe_task = asyncio.create_task(self._probe_loop(local_epoch))
 
@@ -567,6 +704,15 @@ class ReverseProxyServer:
                 addr,
                 local_epoch,
                 disconnect_reason,
+            )
+            self._emit_tunnel_event(
+                "tunnel.lifecycle.disconnected",
+                connection_epoch=local_epoch,
+                status="error" if disconnect_reason != "handler_exit" else "ok",
+                failure_code=disconnect_reason.split(":", 1)[0] if disconnect_reason else None,
+                failure_domain="cloud_proxy_tunnel",
+                reason=disconnect_reason,
+                remote_addr=str(addr),
             )
             writer.close()
             if owns_current_tunnel:
@@ -675,11 +821,29 @@ class ReverseProxyServer:
 
     def _write_tunnel_quality_snapshot(self) -> None:
         snapshot = self._tunnel_quality.snapshot()
-        write_tunnel_quality_snapshot(snapshot)
+        try:
+            write_tunnel_quality_snapshot(snapshot)
+        except PermissionError as exc:
+            logger.warning("Failed to persist tunnel quality snapshot: %s", exc)
+        except OSError as exc:
+            logger.warning("Failed to persist tunnel quality snapshot: %s", exc)
         signature = self._quality_signature(snapshot)
         if signature == self._last_quality_signature:
             return
         self._last_quality_signature = signature
+        self._emit_tunnel_event(
+            "tunnel.quality.changed",
+            connection_epoch=snapshot.get("connection_epoch"),
+            status="error" if not snapshot.get("connected") else "ok",
+            failure_code="quality_blocked" if snapshot.get("status") == "blocked" else None,
+            failure_domain="cloud_proxy_tunnel" if snapshot.get("status") == "blocked" else "unknown",
+            reason=str(snapshot.get("reason") or ""),
+            network_grade=snapshot.get("grade"),
+            tunnel_status=snapshot.get("status"),
+            tunnel_connected=bool(snapshot.get("connected")),
+            tunnel_fresh=bool(snapshot.get("fresh")),
+            probe_failures=int(snapshot.get("probe_failures") or 0),
+        )
         if not self._should_log_tunnel_quality(snapshot):
             return
 
@@ -766,6 +930,16 @@ class ReverseProxyServer:
             duration_ms = (time.monotonic() - started_at) * 1000.0
             network_ms = max(0.0, duration_ms - float(hw_ms or 0.0))
             self._tunnel_quality.record_probe(network_ms)
+            self._emit_tunnel_event(
+                "tunnel.probe.success",
+                connection_epoch=connection_epoch,
+                operation_kind="tunnel_probe",
+                duration_ms=duration_ms,
+                hw_ms=hw_ms,
+                network_ms=network_ms,
+                reason="probe_ok",
+                probe_sequence=sequence,
+            )
             logger.debug(
                 "[TUNNEL_PROBE] success epoch=%s seq=%s duration=%s hw=%s network=%s",
                 connection_epoch,
@@ -780,6 +954,17 @@ class ReverseProxyServer:
         except Exception as exc:
             self.response_futures.pop(sequence, None)
             self._tunnel_quality.record_probe_failure(reason="probe_failures")
+            self._emit_tunnel_event(
+                "tunnel.probe.failure",
+                connection_epoch=connection_epoch,
+                operation_kind="tunnel_probe",
+                status="error",
+                failure_code="probe_failure",
+                failure_domain="cloud_proxy_tunnel",
+                reason=str(exc) or type(exc).__name__.lower(),
+                probe_sequence=sequence,
+                probe_failures=self._tunnel_quality.probe_failures,
+            )
             logger.warning(
                 "[TUNNEL_PROBE] failure epoch=%s seq=%s error=%s failures=%s",
                 connection_epoch,
@@ -828,10 +1013,23 @@ class ReverseProxyServer:
 
                 msg_name = MSG_NAMES.get(msg_type, f"0x{msg_type:04x}")
                 started_at_s = time.time()
+                self._emit_proxy_request_event(
+                    "proxy.request.received_from_dll",
+                    dll_seq=sequence,
+                    msg_name=msg_name,
+                    reason="received_from_dll",
+                )
 
                 # Try serving from cache
                 cached, ioctl_id = self._try_serve_cached(msg_type, body, sequence)
                 if cached is not None:
+                    self._emit_proxy_request_event(
+                        "proxy.request.cache_decision",
+                        dll_seq=sequence,
+                        msg_name=msg_name,
+                        cache_hit=True,
+                        reason="cache_hit",
+                    )
                     resp_type, resp_body = decode_benchmark_response(cached)
                     self._record_benchmark_event(
                         started_at_s=started_at_s,
@@ -845,7 +1043,21 @@ class ReverseProxyServer:
                     )
                     writer.write(cached)
                     await writer.drain()
+                    self._emit_proxy_request_event(
+                        "proxy.request.replied_to_dll",
+                        dll_seq=sequence,
+                        msg_name=msg_name,
+                        cache_hit=True,
+                        reason="cache_reply",
+                    )
                     continue
+                self._emit_proxy_request_event(
+                    "proxy.request.cache_decision",
+                    dll_seq=sequence,
+                    msg_name=msg_name,
+                    cache_hit=False,
+                    reason="cache_miss",
+                )
 
                 # Invalidate caches as needed
                 self._invalidate_caches(msg_type, body)
@@ -864,15 +1076,33 @@ class ReverseProxyServer:
                             raise ConnectionError("VCI 连接已断开")
                         self.vci_writer.write(new_header + body)
                         await self.vci_writer.drain()
+                    self._emit_proxy_request_event(
+                        "proxy.request.forwarded_to_tunnel",
+                        dll_seq=sequence,
+                        proxy_seq=new_seq,
+                        msg_name=msg_name,
+                        reason="forwarded_to_tunnel",
+                    )
                 except Exception as e:
                     logger.error(f"转发请求失败: {e}")
                     self.response_futures.pop(new_seq, None)
+                    self._emit_proxy_request_event(
+                        "proxy.request.failed",
+                        dll_seq=sequence,
+                        proxy_seq=new_seq,
+                        msg_name=msg_name,
+                        status="error",
+                        failure_code="forward_failed",
+                        failure_domain="cloud_proxy_tunnel",
+                        reason=str(e),
+                    )
                     break
 
                 # 等待响应
                 try:
                     resp_type, resp_body, hw_ms = await asyncio.wait_for(future, timeout=30.0)
                     fwd_ms = (time.monotonic() - fwd_start) * 1000
+                    network_ms = max(0.0, fwd_ms - float(hw_ms or 0.0))
 
                     self._record_in_caches(msg_type, body, resp_type, resp_body, ioctl_id)
                     self._record_benchmark_event(
@@ -886,6 +1116,16 @@ class ReverseProxyServer:
                         status="success",
                         hw_ms=hw_ms,
                     )
+                    self._emit_proxy_request_event(
+                        "proxy.request.response_received",
+                        dll_seq=sequence,
+                        proxy_seq=new_seq,
+                        msg_name=msg_name,
+                        duration_ms=fwd_ms,
+                        hw_ms=hw_ms,
+                        network_ms=network_ms,
+                        reason="response_received",
+                    )
 
                     # 发送响应给客户端（使用原始 sequence）
                     resp_header = struct.pack('>IIHI', MAGIC,
@@ -893,6 +1133,16 @@ class ReverseProxyServer:
                                              resp_type, sequence)
                     writer.write(resp_header + resp_body)
                     await writer.drain()
+                    self._emit_proxy_request_event(
+                        "proxy.request.replied_to_dll",
+                        dll_seq=sequence,
+                        proxy_seq=new_seq,
+                        msg_name=msg_name,
+                        duration_ms=fwd_ms,
+                        hw_ms=hw_ms,
+                        network_ms=network_ms,
+                        reason="reply_sent",
+                    )
 
                     if fwd_ms > 1000:
                         logger.warning(
@@ -915,6 +1165,17 @@ class ReverseProxyServer:
                         resp_body=b"",
                         cache_hit=False,
                         status=reason.lower(),
+                    )
+                    self._emit_proxy_request_event(
+                        "proxy.request.timeout" if isinstance(e, asyncio.TimeoutError) else "proxy.request.failed",
+                        dll_seq=sequence,
+                        proxy_seq=new_seq,
+                        msg_name=msg_name,
+                        status="error",
+                        failure_code="timeout" if isinstance(e, asyncio.TimeoutError) else "vci_disconnected",
+                        failure_domain="cloud_proxy_tunnel",
+                        reason="wait_response_timeout" if isinstance(e, asyncio.TimeoutError) else "wait_response_connection_lost",
+                        duration_ms=fwd_ms,
                     )
                     logger.error(f"[PROXY] {msg_name} seq={sequence} {reason} after {fwd_ms:.0f}ms")
                     break
