@@ -138,3 +138,28 @@ def test_session_logs_upload_handler_ingests_artifact(monkeypatch, tmp_path: Pat
     assert response_payload["success"] is True
     assert response_payload["deduped"] is False
     assert Path(response_payload["artifact_path"]).exists()
+
+
+def test_session_logs_upload_handler_rejects_artifact_over_limit(monkeypatch, tmp_path: Path) -> None:
+    payload = {
+        "client_instance_id": "client-1",
+        "connection_epoch": "epoch-1",
+        "artifact_id": "artifact-big",
+        "artifact_name": "big.jsonl",
+        "artifact_type": "raw",
+        "session_id": "session-1",
+        "content_base64": base64.b64encode(b"a" * (2 * 1024 * 1024)).decode("ascii"),
+    }
+    _install_fake_flask_stack(monkeypatch, payload)
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
+    monkeypatch.setenv("PRODUCT_LOG_MAX_ARTIFACT_MB", "1")
+
+    session_api = importlib.import_module("server.api.session")
+
+    response_payload, status = session_api.session_logs_upload()
+
+    assert status == 400
+    assert response_payload == {
+        "success": False,
+        "error": "artifact exceeds PRODUCT_LOG_MAX_ARTIFACT_MB",
+    }

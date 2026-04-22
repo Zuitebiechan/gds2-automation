@@ -192,6 +192,35 @@ def test_observability_outbox_queues_and_uploads_pending_artifacts(tmp_path: Pat
     assert observed["headers"]["X-api-token"] == "api-secret"
 
 
+def test_observability_outbox_stages_pretty_printed_json_artifacts(tmp_path: Path) -> None:
+    appdata = tmp_path / "AppData"
+    local_root = appdata / "VCI_Proxy" / "observability"
+    trace_dir = local_root / "session_traces"
+    incident_dir = local_root / "incidents"
+    trace_dir.mkdir(parents=True)
+    incident_dir.mkdir(parents=True)
+
+    (trace_dir / "trace.json").write_text(
+        json.dumps({"trace_id": "trace:session-7", "session_id": "session-7", "connection_epoch": "epoch-7"}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (incident_dir / "incident.json").write_text(
+        json.dumps({"incident_id": "incident-7", "session_id": "session-7", "connection_epoch": "epoch-7"}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    outbox = ObservabilityOutbox(appdata=appdata)
+    staged = outbox.stage_default_artifacts(
+        client_instance_id="client-7",
+        local_root=local_root,
+        min_age_seconds=0,
+    )
+
+    assert staged["queued_count"] == 2
+    manifests = outbox.list_pending()
+    assert {manifest["session_id"] for manifest in manifests} == {"session-7"}
+
+
 def test_cleanup_product_observability_preserves_pending_outbox(tmp_path: Path) -> None:
     programdata = tmp_path / "ProgramData"
     appdata = tmp_path / "AppData"

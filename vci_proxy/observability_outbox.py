@@ -36,10 +36,27 @@ def _read_jsonl_first_context(path: Path) -> tuple[str | None, str | None]:
         text = path.read_text(encoding="utf-8")
     except Exception:
         return None, None
+    stripped = text.strip()
+    if not stripped:
+        return None, None
+    try:
+        payload = json.loads(stripped)
+        if isinstance(payload, dict):
+            session_id = payload.get("session_id")
+            connection_epoch = payload.get("connection_epoch")
+            return (
+                str(session_id) if session_id not in (None, "") else None,
+                str(connection_epoch) if connection_epoch not in (None, "") else None,
+            )
+    except Exception:
+        pass
     for line in text.splitlines():
         if not line.strip():
             continue
-        payload = json.loads(line)
+        try:
+            payload = json.loads(line)
+        except Exception:
+            continue
         session_id = payload.get("session_id")
         connection_epoch = payload.get("connection_epoch")
         return (

@@ -154,6 +154,7 @@ def ingest_uploaded_artifact(
     payload: dict[str, Any],
     *,
     cloud_root: str | Path | None = None,
+    max_artifact_mb: int = 50,
 ) -> dict[str, Any]:
     cloud_root_path = _resolve_cloud_root(cloud_root)
     client_instance_id = str(payload.get("client_instance_id") or "").strip()
@@ -170,7 +171,10 @@ def ingest_uploaded_artifact(
     manifest_path = target_dir / f"{_safe_name(artifact_id)}.manifest.json"
     deduped = artifact_path.exists()
     if not deduped:
-        artifact_path.write_bytes(base64.b64decode(content_base64.encode("ascii")))
+        artifact_bytes = base64.b64decode(content_base64.encode("ascii"))
+        if len(artifact_bytes) > max(1, int(max_artifact_mb)) * 1024 * 1024:
+            raise ValueError("artifact exceeds PRODUCT_LOG_MAX_ARTIFACT_MB")
+        artifact_path.write_bytes(artifact_bytes)
         _atomic_write_json(
             manifest_path,
             {

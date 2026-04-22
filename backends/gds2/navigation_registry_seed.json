@@ -143,6 +143,232 @@
       "notes": " Success criteria normalized for flexible live probing."
     },
     {
+      "page_key": "diagnostics.vehicle_diagnostics",
+      "title": "Diagnostics / Vehicle Diagnostics",
+      "category": "bootstrap",
+      "page_kind": "diagnostics_menu",
+      "canonical_path": [
+        "Vehicle Diagnostics"
+      ],
+      "route_steps": [
+        {
+          "kind": "button",
+          "label": "Diagnostics",
+          "optional": true
+        },
+        {
+          "kind": "device",
+          "label": "SM2 USB",
+          "optional": true
+        },
+        {
+          "kind": "button",
+          "label": "Enter",
+          "optional": true
+        },
+        {
+          "kind": "list_item",
+          "label": "Vehicle Diagnostics"
+        }
+      ],
+      "target_action": {
+        "kind": "list_item",
+        "label": "Vehicle Diagnostics"
+      },
+      "expected_page_id": "data_list",
+      "expected_actions": [
+        {
+          "kind": "list_item",
+          "label": "Vehicle DTC Information"
+        },
+        {
+          "kind": "list_item",
+          "label": "Vehicle DTC and ID Information"
+        }
+      ],
+      "fallback_strategy": [
+        "Home",
+        "click Diagnostics",
+        "select SM2 USB if Device Explorer appears",
+        "select Vehicle Diagnostics"
+      ],
+      "confidence": "explored",
+      "source": "merged_route_graph",
+      "aliases": [
+        "Vehicle Diagnostics",
+        "vehicle diagnostics root"
+      ],
+      "success_criteria": {
+        "page_id_any": [
+          "data_list"
+        ],
+        "all_of": [
+          {
+            "kind": "list_item",
+            "label": "Vehicle DTC Information"
+          },
+          {
+            "kind": "list_item",
+            "label": "Vehicle DTC and ID Information"
+          }
+        ],
+        "navigation_path_contains_prefix": [
+          "Vehicle Diagnostics"
+        ]
+      },
+      "notes": "Guided vehicle branch root. The GUI should pause here and let the user choose the next vehicle-level item."
+    },
+    {
+      "page_key": "vehicle_dtc.information",
+      "title": "Vehicle DTC Information",
+      "category": "dtc",
+      "page_kind": "data_display",
+      "canonical_path": [
+        "Vehicle Diagnostics",
+        "Vehicle DTC Information"
+      ],
+      "route_steps": [
+        {
+          "kind": "list_item",
+          "label": "Vehicle Diagnostics"
+        },
+        {
+          "kind": "list_item",
+          "label": "Vehicle DTC Information"
+        }
+      ],
+      "target_action": {
+        "kind": "list_item",
+        "label": "Vehicle DTC Information"
+      },
+      "expected_page_id": "data_display",
+      "expected_actions": [
+        {
+          "kind": "button",
+          "label": "Back"
+        },
+        {
+          "kind": "button",
+          "label": "Create Report"
+        }
+      ],
+      "fallback_strategy": [
+        "navigate to Vehicle Diagnostics root",
+        "select Vehicle DTC Information"
+      ],
+      "confidence": "explored",
+      "source": "merged_route_graph",
+      "aliases": [
+        "Vehicle DTC Information",
+        "Vehicle DTCs"
+      ],
+      "success_criteria": {
+        "page_id_any": [
+          "data_display",
+          "data_list"
+        ],
+        "all_of": [
+          {
+            "kind": "button",
+            "label": "Back"
+          }
+        ],
+        "any_of": [
+          {
+            "kind": "button",
+            "label": "Create Report"
+          },
+          {
+            "kind": "button",
+            "label": "Refresh"
+          },
+          {
+            "kind": "button",
+            "label": "Details"
+          }
+        ],
+        "navigation_path_contains_prefix": [
+          "Vehicle Diagnostics"
+        ]
+      },
+      "notes": "Vehicle DTC shortcut target. Alias 'Vehicle DTCs' intentionally lands here directly."
+    },
+    {
+      "page_key": "vehicle_dtc_and_id.information",
+      "title": "Vehicle DTC and ID Information",
+      "category": "dtc",
+      "page_kind": "data_display",
+      "canonical_path": [
+        "Vehicle Diagnostics",
+        "Vehicle DTC and ID Information"
+      ],
+      "route_steps": [
+        {
+          "kind": "list_item",
+          "label": "Vehicle Diagnostics"
+        },
+        {
+          "kind": "list_item",
+          "label": "Vehicle DTC and ID Information"
+        }
+      ],
+      "target_action": {
+        "kind": "list_item",
+        "label": "Vehicle DTC and ID Information"
+      },
+      "expected_page_id": "data_display",
+      "expected_actions": [
+        {
+          "kind": "button",
+          "label": "Back"
+        },
+        {
+          "kind": "button",
+          "label": "Create Report"
+        }
+      ],
+      "fallback_strategy": [
+        "navigate to Vehicle Diagnostics root",
+        "select Vehicle DTC and ID Information"
+      ],
+      "confidence": "explored",
+      "source": "merged_route_graph",
+      "aliases": [
+        "Vehicle DTC and ID Information",
+        "Vehicle DTC and ID"
+      ],
+      "success_criteria": {
+        "page_id_any": [
+          "data_display",
+          "data_list"
+        ],
+        "all_of": [
+          {
+            "kind": "button",
+            "label": "Back"
+          }
+        ],
+        "any_of": [
+          {
+            "kind": "button",
+            "label": "Create Report"
+          },
+          {
+            "kind": "button",
+            "label": "Refresh"
+          },
+          {
+            "kind": "button",
+            "label": "Details"
+          }
+        ],
+        "navigation_path_contains_prefix": [
+          "Vehicle Diagnostics"
+        ]
+      },
+      "notes": "Vehicle DTC alternate detail target kept as a backend-owned route alias."
+    },
+    {
       "page_key": "module.engine_control_module",
       "title": "Engine Control Module",
       "category": "module",

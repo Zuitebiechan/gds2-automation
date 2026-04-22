@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from diagnostic_platform.observability import get_cloud_observability_root
-from diagnostic_platform.observability_artifacts import ingest_uploaded_artifact
+from diagnostic_platform.observability_artifacts import ingest_uploaded_artifact, resolve_product_log_settings
 from server.api.http_utils import internal_error_payload
 
 logger = logging.getLogger(__name__)
@@ -15,9 +15,11 @@ logger = logging.getLogger(__name__)
 
 def upload_session_logs(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
     try:
+        settings = resolve_product_log_settings()
         result = ingest_uploaded_artifact(
             data,
             cloud_root=get_cloud_observability_root(),
+            max_artifact_mb=settings.max_artifact_mb,
         )
         return {
             "success": True,

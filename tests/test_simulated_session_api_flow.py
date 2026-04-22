@@ -168,6 +168,123 @@ def test_simulated_navigation_session_handlers_reach_data_display(monkeypatch) -
     assert runtime.get_navigation_session_id(session.session_id) is None
 
 
+def test_simulated_navigation_session_handlers_pause_at_vehicle_diagnostics_root(monkeypatch) -> None:
+    runtime = WorkerRuntime()
+    session = _session(
+        "session-vehicle-guided",
+        capabilities=[BackendCapability.NAVIGATION],
+    )
+    orchestrator = _FakeOrchestrator(session)
+    harness = make_simulated_backend()
+
+    _bind_simulated_dependencies(
+        monkeypatch,
+        runtime=runtime,
+        orchestrator=orchestrator,
+        backend=harness.backend,
+        ai_engine=FakeAIEngine(),
+    )
+
+    payload, status = session_navigation_handlers.start_navigation_session_for_business(
+        {
+            "session_id": session.session_id,
+            "goal": "Vehicle Diagnostics",
+        }
+    )
+
+    assert status == 200
+    assert payload["success"] is True
+
+    event_iterator = session_navigation_handlers.stream_navigation_events(
+        session.session_id,
+        sse_response=lambda iterator: iterator,
+    )
+
+    seen_decision = False
+    seen_done = False
+    for message in event_iterator:
+        if message.startswith(":"):
+            continue
+
+        event_type, event_payload = _parse_sse_event(message)
+        if event_type == "decision_required":
+            seen_decision = True
+            assert event_payload["page"] == "vehicle_diagnostics_menu"
+            assert event_payload["items"] == [
+                "Vehicle DTC Information",
+                "Vehicle DTC and ID Information",
+            ]
+            submit_payload, submit_status = (
+                session_navigation_handlers.submit_navigation_decision_for_business(
+                    {
+                        "session_id": session.session_id,
+                        "decision_id": event_payload["decision_id"],
+                        "selected_item": "Vehicle DTC Information",
+                    }
+                )
+            )
+            assert submit_status == 200
+            assert submit_payload["selected_item"] == "Vehicle DTC Information"
+        elif event_type == "done":
+            seen_done = True
+            assert event_payload["final_page"] == "data_display"
+            assert event_payload["selections"] == {
+                "selected_item": "Vehicle DTC Information",
+            }
+
+    assert seen_decision is True
+    assert seen_done is True
+    assert harness.model.context["vehicle_item"] == "Vehicle DTC Information"
+    assert harness.model.context["module"] is None
+
+
+def test_simulated_navigation_session_handlers_vehicle_dtcs_shortcut_reaches_vehicle_target(monkeypatch) -> None:
+    runtime = WorkerRuntime()
+    session = _session(
+        "session-vehicle-dtcs",
+        capabilities=[BackendCapability.NAVIGATION],
+    )
+    orchestrator = _FakeOrchestrator(session)
+    harness = make_simulated_backend()
+
+    _bind_simulated_dependencies(
+        monkeypatch,
+        runtime=runtime,
+        orchestrator=orchestrator,
+        backend=harness.backend,
+        ai_engine=FakeAIEngine(),
+    )
+
+    payload, status = session_navigation_handlers.start_navigation_session_for_business(
+        {
+            "session_id": session.session_id,
+            "goal": "Vehicle DTCs",
+        }
+    )
+
+    assert status == 200
+    assert payload["success"] is True
+
+    events = list(
+        session_navigation_handlers.stream_navigation_events(
+            session.session_id,
+            sse_response=lambda iterator: iterator,
+        )
+    )
+    decoded = [
+        _parse_sse_event(message)
+        for message in events
+        if not message.startswith(":")
+    ]
+
+    assert [event_type for event_type, _ in decoded] == ["connected", "done"]
+    done_payload = decoded[-1][1]
+    assert done_payload["final_page"] == "data_display"
+    assert done_payload["selections"] == {"selected_item": "Vehicle DTC Information"}
+    assert harness.model.context["vehicle_item"] == "Vehicle DTC Information"
+    assert harness.model.context["module"] is None
+
+
 def test_simulated_session_handlers_run_ai_and_clear_dtcs_after_navigation(monkeypatch) -> None:
     runtime = WorkerRuntime()
     session = _session(

@@ -76,6 +76,9 @@ static char g_component_instance_id[128] = {0};
 static unsigned long g_readmsgs_buffer_empty_count = 0;
 static double g_readmsgs_buffer_empty_last_emit_ms = 0.0;
 
+static double get_time_ms(void);
+static const char* error_name(long code);
+
 static void ensure_dir_tree(const char* dir_path) {
     char temp[MAX_PATH];
     char* p;

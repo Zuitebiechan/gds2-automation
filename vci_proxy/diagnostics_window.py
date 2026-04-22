@@ -1705,7 +1705,7 @@ class DiagnosticsWindow:
             self._set_server_connected(False)
             self._refresh_action_buttons()
             self._set_status_text("Session connected but no module list returned.")
-            self._set_session_hint("连接成功但模块列表为空，请重试 Start Agent Diagnostics。")
+            self._set_session_hint("Module Diagnostics connected, but no module list was returned. Retry the guided branch.")
             self._append_agent_message("agent", "连接成功但没有拿到模块列表。")
             return
 
@@ -1850,7 +1850,7 @@ class DiagnosticsWindow:
                     self._show_decision_modal(decision)
             self._session_status_var.set("Module selection requires your decision.")
             self._set_status_text("Session awaiting module decision...")
-            self._set_session_hint("Module 存在多个候选，请在下方 AI Agent Dialogue 下拉框中选择。")
+            self._set_session_hint("Multiple module candidates are available. Choose one in Guided Diagnostics Output.")
             return
 
         result = payload.get("result") or {}
@@ -1891,7 +1891,7 @@ class DiagnosticsWindow:
                     self._show_decision_modal(decision)
             self._session_status_var.set("Data category selection requires your decision.")
             self._set_status_text("Session awaiting category decision...")
-            self._set_session_hint("Category 存在多个候选，请在下方 AI Agent Dialogue 下拉框中选择。")
+            self._set_session_hint("Multiple category candidates are available. Choose one in Guided Diagnostics Output.")
             return
 
         self._set_server_connected(True)
@@ -2674,7 +2674,7 @@ class DiagnosticsWindow:
         if decision:
             if not self._prompt_decision(decision):
                 self._show_decision_modal(decision)
-            self._set_session_hint("出现歧义，请在 AI Agent Dialogue 下拉框中选择一个候选项。")
+            self._set_session_hint("A branch decision is required. Choose one option in Guided Diagnostics Output.")
         else:
             self._session_status_var.set("Decision required but no details received.")
 
@@ -2740,7 +2740,7 @@ class DiagnosticsWindow:
                     if not self._prompt_decision(decision):
                         self._show_decision_modal(decision)
                 self._session_status_var.set("More decisions required...")
-                self._set_session_hint("仍有歧义，请继续在 AI Agent Dialogue 下拉框中选择。")
+                self._set_session_hint("More branch decisions are required. Continue choosing in Guided Diagnostics Output.")
                 return
 
             # Decision resolved and session is resumable/running.

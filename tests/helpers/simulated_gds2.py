@@ -28,12 +28,17 @@ class SimulatedGDS2Model:
     data_categories: list[str] = field(
         default_factory=lambda: ["Engine Data", "Transmission Data"]
     )
+    vehicle_diagnostics_items: list[str] = field(
+        default_factory=lambda: ["Vehicle DTC Information", "Vehicle DTC and ID Information"]
+    )
     context: dict[str, str | None] = field(
         default_factory=lambda: {
             "device": "VCI Proxy (Simulated)",
             "module": None,
             "data_category": None,
             "sub_category": None,
+            "vehicle_branch": None,
+            "vehicle_item": None,
         }
     )
     dtcs: list[dict[str, str]] = field(
@@ -95,9 +100,11 @@ class SimulatedNavigationController:
         del list_index
         page = self._model.page
         if page == GDS2Page.DIAGNOSTICS_MENU:
-            return ["Module Diagnostics"]
+            return ["Module Diagnostics", "Vehicle Diagnostics"]
         if page == GDS2Page.MODULE_LIST:
             return list(self._model.modules)
+        if page == GDS2Page.DATA_LIST and self._model.context.get("vehicle_branch") == "vehicle_diagnostics":
+            return list(self._model.vehicle_diagnostics_items)
         if page == GDS2Page.MODULE_SUBMENU:
             return list(self._model.module_submenu)
         if page == GDS2Page.DATA_LIST:
@@ -132,10 +139,26 @@ class SimulatedNavigationController:
         self._check_cancel()
         page = self._model.page
         if page == GDS2Page.DIAGNOSTICS_MENU and item_text == "Module Diagnostics":
+            self._model.context["vehicle_branch"] = None
+            self._model.context["vehicle_item"] = None
             self._model.page = GDS2Page.MODULE_LIST
+        elif page == GDS2Page.DIAGNOSTICS_MENU and item_text == "Vehicle Diagnostics":
+            self._model.context["vehicle_branch"] = "vehicle_diagnostics"
+            self._model.context["vehicle_item"] = None
+            self._model.page = GDS2Page.DATA_LIST
         elif page == GDS2Page.MODULE_LIST and item_text in self._model.modules:
+            self._model.context["vehicle_branch"] = None
+            self._model.context["vehicle_item"] = None
             self._model.context["module"] = item_text
             self._model.page = GDS2Page.MODULE_SUBMENU
+        elif (
+            page == GDS2Page.DATA_LIST
+            and self._model.context.get("vehicle_branch") == "vehicle_diagnostics"
+            and item_text in self._model.vehicle_diagnostics_items
+        ):
+            self._model.context["vehicle_item"] = item_text
+            self._model.context["data_category"] = item_text
+            self._model.page = GDS2Page.DATA_DISPLAY
         elif page == GDS2Page.MODULE_SUBMENU and "data display" in item_text.lower():
             self._model.page = GDS2Page.DATA_LIST
         elif page == GDS2Page.DATA_LIST and item_text in self._model.data_categories:
@@ -175,6 +198,8 @@ class SimulatedWorkflow:
             self._cancel_checker()
         self._model.page = GDS2Page.MODULE_LIST
         self._model.context["device"] = self._model.device
+        self._model.context["vehicle_branch"] = None
+        self._model.context["vehicle_item"] = None
         return {
             "modules": list(self._model.modules),
             "vin": self._model.vin,
@@ -200,6 +225,8 @@ class SimulatedWorkflow:
     def select_module(self, module_name: str) -> dict[str, object]:
         if module_name not in self._model.modules:
             raise RuntimeError(f"Unknown module: {module_name}")
+        self._model.context["vehicle_branch"] = None
+        self._model.context["vehicle_item"] = None
         self._model.context["module"] = module_name
         self._model.page = GDS2Page.DATA_LIST
         return {"data_categories": list(self._model.data_categories)}
@@ -207,6 +234,8 @@ class SimulatedWorkflow:
     def select_data_category(self, category: str) -> dict[str, object]:
         if category not in self._model.data_categories:
             raise RuntimeError(f"Unknown data category: {category}")
+        self._model.context["vehicle_branch"] = None
+        self._model.context["vehicle_item"] = None
         self._model.context["data_category"] = category
         self._model.page = GDS2Page.DATA_DISPLAY
         return {"monitoring": True, "sub_categories": None}
@@ -299,6 +328,58 @@ class SimulatedRegistryNavigationRuntime:
 
         def _runner():
             try:
+                normalized_goal = str(goal or "").strip().lower()
+                if normalized_goal in {"vehicle diagnostics", "vehicle diagnostics root", "diagnostics.vehicle_diagnostics"}:
+                    self._model.page = GDS2Page.DATA_LIST
+                    self._model.context["vehicle_branch"] = "vehicle_diagnostics"
+                    self._model.context["vehicle_item"] = None
+                    session.event_queue.put(
+                        {
+                            "type": "decision_required",
+                            "decision_id": "vehicle-choice",
+                            "page": "vehicle_diagnostics_menu",
+                            "items": list(self._model.vehicle_diagnostics_items),
+                        }
+                    )
+                    session.status = NavSessionStatus.AWAITING_DECISION
+                    session.pending_decision_id = "vehicle-choice"
+                    session.pending_items = list(self._model.vehicle_diagnostics_items)
+                    vehicle_payload = session.decision_queue.get(timeout=2.0)
+                    selected_vehicle_item = str((vehicle_payload or {}).get("selected_item") or "")
+                    self._controller.select_list_item(selected_vehicle_item)
+                    session.status = NavSessionStatus.COMPLETED
+                    session.event_queue.put(
+                        {
+                            "type": "done",
+                            "final_page": "data_display",
+                            "steps": 2,
+                            "selections": {
+                                "selected_item": selected_vehicle_item,
+                            },
+                            "error": None,
+                        }
+                    )
+                    return
+
+                if normalized_goal in {"vehicle dtcs", "vehicle dtc information", "vehicle_dtc.information"}:
+                    self._model.page = GDS2Page.DATA_LIST
+                    self._model.context["vehicle_branch"] = "vehicle_diagnostics"
+                    self._model.context["vehicle_item"] = None
+                    self._controller.select_list_item("Vehicle DTC Information")
+                    session.status = NavSessionStatus.COMPLETED
+                    session.event_queue.put(
+                        {
+                            "type": "done",
+                            "final_page": "data_display",
+                            "steps": 2,
+                            "selections": {
+                                "selected_item": "Vehicle DTC Information",
+                            },
+                            "error": None,
+                        }
+                    )
+                    return
+
                 self.ensure_started(cancel_checker=session.check_cancelled)
                 session.event_queue.put(
                     {

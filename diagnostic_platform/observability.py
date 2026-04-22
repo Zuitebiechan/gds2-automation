@@ -571,7 +571,10 @@ class ActiveSessionSnapshotStore:
         return read_active_session_snapshot(self.path)
 
     def clear(self) -> None:
-        self.path.unlink(missing_ok=True)
+        try:
+            self.path.unlink(missing_ok=True)
+        except OSError:
+            return
 
 
 __all__ = [

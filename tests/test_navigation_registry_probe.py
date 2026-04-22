@@ -21,6 +21,7 @@ from backends.gds2.registry_navigation_runtime import (
 )
 from backends.gds2.registry_navigation_runtime import RegistryNavigationRuntime
 from backends.gds2.registry_navigation_runtime import evaluate_success_criteria
+from diagnostic_platform.runtime.navigation_runtime import NavSession
 
 
 def test_vehicle_selection_status_connected_prefers_enter() -> None:
@@ -427,6 +428,86 @@ def test_registry_navigation_runtime_clear_dtcs_uses_registry_entries(monkeypatc
     assert status["last_route"]["recovery_action_counts"] == {
         "navigation_path:Engine Control Module": 1
     }
+
+
+def test_registry_navigation_runtime_guided_vehicle_root_emits_decision_and_completes(monkeypatch) -> None:
+    class _Controller:
+        def __init__(self) -> None:
+            self.selected_items: list[str] = []
+
+        def detect_current_page(self):
+            return "data_list" if not self.selected_items else "data_display"
+
+        def wait_for_list(self):
+            return ["Vehicle DTC Information", "Vehicle DTC and ID Information"]
+
+        def select_list_item(self, label):
+            self.selected_items.append(label)
+            return type("R", (), {"success": True})()
+
+    controller = _Controller()
+    runtime = RegistryNavigationRuntime(
+        controller=controller,
+        route_navigator=type("_Navigator", (), {"graph": {}})(),
+        entries=[
+            {"page_key": "diagnostics.vehicle_diagnostics", "aliases": ["Vehicle Diagnostics"]},
+        ],
+    )
+    monkeypatch.setattr(
+        runtime,
+        "execute_registry_route",
+        lambda **kwargs: {
+            "final_page": "data_list",
+            "executed_actions": [{"kind": "list_item", "label": "Vehicle Diagnostics"}],
+        },
+    )
+
+    session = NavSession(session_id="nav-vehicle", goal="Vehicle Diagnostics")
+    session.decision_queue.put({"selected_item": "Vehicle DTC Information"})
+
+    final = runtime._run_navigation_session(session)
+    events = []
+    while not session.event_queue.empty():
+        events.append(session.event_queue.get_nowait())
+
+    assert any(
+        event["type"] == "decision_required"
+        and event["page"] == "vehicle_diagnostics_menu"
+        and event["items"] == ["Vehicle DTC Information", "Vehicle DTC and ID Information"]
+        for event in events
+    )
+    assert events[-1]["type"] == "done"
+    assert final["current_page"] == "data_display"
+    assert final["selections"] == {"selected_item": "Vehicle DTC Information"}
+    assert controller.selected_items == ["Vehicle DTC Information"]
+
+
+def test_registry_navigation_runtime_vehicle_dtcs_alias_uses_registry_route(monkeypatch) -> None:
+    runtime = RegistryNavigationRuntime(
+        controller=object(),
+        route_navigator=type("_Navigator", (), {"graph": {}})(),
+        entries=[
+            {"page_key": "vehicle_dtc.information", "aliases": ["Vehicle DTCs"]},
+        ],
+    )
+    executed: list[str] = []
+
+    monkeypatch.setattr(
+        runtime,
+        "execute_registry_route",
+        lambda **kwargs: executed.append(kwargs["entry"]["page_key"]) or {
+            "final_page": "data_display",
+            "executed_actions": [{"kind": "list_item", "label": "Vehicle DTC Information"}],
+        },
+    )
+
+    session = NavSession(session_id="nav-vehicle-dtcs", goal="Vehicle DTCs")
+
+    final = runtime._run_navigation_session(session)
+
+    assert executed == ["vehicle_dtc.information"]
+    assert final["current_page"] == "data_display"
+    assert final["selections"] == {}
 
 
 def test_registry_navigation_runtime_recover_data_display_uses_registry_route(monkeypatch) -> None:

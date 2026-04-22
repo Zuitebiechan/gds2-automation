@@ -1527,6 +1527,64 @@ class RegistryNavigationRuntime:
         )
         return final
 
+    def _visible_navigation_items(self) -> list[str]:
+        items: list[Any] = []
+        if hasattr(self._controller, "wait_for_list"):
+            try:
+                items = list(self._controller.wait_for_list() or [])
+            except Exception:
+                items = []
+        if not items and hasattr(self._controller, "get_list_items"):
+            try:
+                items = list(self._controller.get_list_items(0) or [])
+            except Exception:
+                items = []
+        return [_display_text(item) for item in items if _display_text(item)]
+
+    def _run_vehicle_diagnostics_guided_session(
+        self,
+        session: Any,
+        *,
+        entry: dict[str, Any],
+    ) -> dict[str, Any]:
+        route_result = self.execute_registry_route(
+            entry=entry,
+            max_iterations=self._route_max_iterations,
+            max_backtracks=self._route_max_backtracks,
+            cancel_checker=session.check_cancelled,
+        )
+        history = list(route_result.get("executed_actions") or [])
+        current_page = str(route_result.get("final_page") or self.detect_current_page())
+        items = self._visible_navigation_items()
+        selected_item = self._await_navigation_decision(
+            session,
+            page="vehicle_diagnostics_menu",
+            items=items,
+        )
+        self._emit_progress_event(
+            session,
+            page="vehicle_diagnostics_menu",
+            action="select_vehicle_diagnostics_item",
+        )
+        result = self._controller.select_list_item(selected_item)
+        if not getattr(result, "success", False):
+            error = getattr(result, "error", None) or f"Failed to select vehicle diagnostics item {selected_item!r}"
+            raise RuntimeError(str(error))
+        current_page = self.detect_current_page()
+        self._append_navigation_history(
+            history,
+            page="vehicle_diagnostics_menu",
+            action="select_vehicle_diagnostics_item",
+            to_page=current_page,
+            selected_item=selected_item,
+        )
+        return self._complete_navigation_session(
+            session,
+            current_page=current_page,
+            navigation_history=history,
+            selections={"selected_item": selected_item},
+        )
+
     def _run_navigation_session_thread(self, runtime: Any, session: Any) -> None:
         from diagnostic_platform.runtime.navigation_runtime import NavSessionStatus
 
@@ -1574,8 +1632,19 @@ class RegistryNavigationRuntime:
     def _run_navigation_session(self, session: Any) -> dict[str, Any]:
         history: list[dict[str, Any]] = []
         selections: dict[str, str] = {}
+        normalized_goal = session.goal.strip().lower()
 
-        if session.goal.strip().lower() not in {
+        if normalized_goal in {
+            "vehicle diagnostics",
+            "vehicle diagnostics root",
+            "diagnostics.vehicle_diagnostics",
+        }:
+            return self._run_vehicle_diagnostics_guided_session(
+                session,
+                entry=self._require_entry("diagnostics.vehicle_diagnostics"),
+            )
+
+        if normalized_goal not in {
             "navigate to data display",
             "go to data display",
             "data display",

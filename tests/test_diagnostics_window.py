@@ -168,6 +168,46 @@ def test_on_start_clicked_routes_through_module_guided_intent() -> None:
     assert window._last_workflow_intent == "start_module_guided"
 
 
+def test_on_vehicle_diagnostics_clicked_routes_through_vehicle_guided_intent() -> None:
+    window = _build_window(current_page="module_list")
+    calls: list[tuple[str, str, str]] = []
+    window._start_workflow_navigation = lambda goal, *, status_text, hint, message: calls.append(
+        (goal, status_text, hint)
+    )
+
+    window._on_vehicle_diagnostics_clicked()
+
+    assert window._workflow_goal == "vehicle_guided"
+    assert window._last_workflow_intent == "start_vehicle_guided"
+    assert calls == [
+        (
+            "Vehicle Diagnostics",
+            "Starting vehicle diagnostics navigation...",
+            "Navigating to the Vehicle Diagnostics branch...",
+        )
+    ]
+
+
+def test_on_vehicle_dtcs_clicked_routes_through_vehicle_shortcut_intent() -> None:
+    window = _build_window(current_page="module_list")
+    calls: list[tuple[str, str, str]] = []
+    window._start_workflow_navigation = lambda goal, *, status_text, hint, message: calls.append(
+        (goal, status_text, hint)
+    )
+
+    window._on_vehicle_dtcs_clicked()
+
+    assert window._workflow_goal == "vehicle_dtcs"
+    assert window._last_workflow_intent == "run_vehicle_dtcs"
+    assert calls == [
+        (
+            "Vehicle DTCs",
+            "Starting vehicle DTC navigation...",
+            "Navigating to the Vehicle DTCs shortcut...",
+        )
+    ]
+
+
 def test_handle_session_status_result_disables_clear_dtcs_while_session_ai_active() -> None:
     window = _build_window(current_page="")
 
