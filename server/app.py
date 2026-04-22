@@ -178,8 +178,6 @@ def _extract_request_session_id() -> str | None:
             request_json = get_json(silent=True)
         except Exception:
             request_json = None
-    if not isinstance(request_json, dict):
-        request_json = getattr(request, "json", None)
     if isinstance(request_json, dict):
         session_id = request_json.get("session_id")
         if isinstance(session_id, str) and session_id.strip():

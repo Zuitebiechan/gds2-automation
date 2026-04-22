@@ -116,6 +116,32 @@ def test_api_failure_logger_emits_only_for_api_error_responses(monkeypatch, capl
     assert "API POST /api/session/start -> 502 endpoint=session_start remote=10.0.0.5" in caplog.text
 
 
+def test_extract_request_session_id_falls_back_to_query_args_without_touching_request_json(monkeypatch):
+    _install_fake_flask_stack(monkeypatch)
+    server_app = importlib.import_module("server.app")
+
+    class _ArgsLike:
+        def get(self, key, default=None):
+            if key == "session_id":
+                return "session-get-1"
+            return default
+
+    class _Request:
+        args = _ArgsLike()
+
+        @staticmethod
+        def get_json(silent=False):
+            raise RuntimeError("json parsing should fail safely")
+
+        @property
+        def json(self):
+            raise AssertionError("request.json must not be accessed")
+
+    monkeypatch.setattr(server_app, "request", _Request())
+
+    assert server_app._extract_request_session_id() == "session-get-1"
+
+
 def test_root_app_delegates_to_server_package(monkeypatch):
     _install_fake_flask_stack(monkeypatch)
     fake_server_pkg = types.ModuleType("server")
