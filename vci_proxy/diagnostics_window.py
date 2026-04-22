@@ -16,6 +16,7 @@ import re
 import threading
 import tkinter as tk
 from datetime import datetime
+from pathlib import Path
 from tkinter import ttk, messagebox
 from typing import Any, Callable, Optional
 from urllib.parse import urlparse
@@ -29,6 +30,7 @@ class DiagnosticsWindow:
     POLL_INTERVAL_MS = 100
     SESSION_STATUS_POLL_INTERVAL_MS = 1500
     BOOTSTRAP_ASSIGNMENT_RETRY_LIMIT = 1
+    _NAVIGATION_REGISTRY_PATH = Path(__file__).resolve().parents[1] / "backends" / "gds2" / "navigation_registry_seed.json"
 
     def __init__(
         self,
@@ -68,6 +70,9 @@ class DiagnosticsWindow:
         self._vin = ""
         self._cached_payload_id = ""
         self._auto_ai_start_scheduled = False
+        self._workflow_goal = "none"
+        self._last_workflow_intent = ""
+        self._navigation_registry_aliases: set[str] | None = None
 
         # Session flow state
         self._session_id: Optional[str] = None
@@ -149,6 +154,32 @@ class DiagnosticsWindow:
         if client_time_zone:
             payload["client_time_zone"] = client_time_zone
         return payload
+
+    def _load_navigation_registry_aliases(self) -> set[str]:
+        cached_aliases = getattr(self, "_navigation_registry_aliases", None)
+        if cached_aliases is not None:
+            return cached_aliases
+
+        aliases: set[str] = set()
+        try:
+            raw = json.loads(self._NAVIGATION_REGISTRY_PATH.read_text(encoding="utf-8"))
+            for entry in raw.get("entries") or []:
+                for value in [entry.get("page_key"), *(entry.get("aliases") or [])]:
+                    text = str(value or "").strip().lower()
+                    if text:
+                        aliases.add(text)
+        except Exception:
+            aliases = set()
+
+        self._navigation_registry_aliases = aliases
+        return aliases
+
+    def _navigation_goal_available(self, goal: str) -> bool:
+        normalized_goal = str(goal or "").strip().lower()
+        if not normalized_goal:
+            return False
+        aliases = self._load_navigation_registry_aliases()
+        return normalized_goal in aliases
 
     # ------------------------------------------------------------------
     # Window lifecycle
@@ -263,37 +294,46 @@ class DiagnosticsWindow:
     def _build_start_section(self, parent: ttk.Frame) -> None:
         frame = ttk.Frame(parent, style="Card.TFrame", padding=(0, 0, 0, 12))
         frame.grid(row=1, column=0, sticky="ew")
-        frame.columnconfigure(3, weight=1)
+        frame.columnconfigure(4, weight=1)
 
         self._start_button = ttk.Button(
             frame,
-            text="▶ Start Agent Diagnostics",
+            text="Module Diagnostics",
             style="Big.TButton",
             command=self._on_start_clicked,
             state=tk.DISABLED,
         )
         self._start_button.grid(row=0, column=0, sticky="w", padx=(0, 16))
 
+        self._vehicle_diagnostics_button = ttk.Button(
+            frame,
+            text="Vehicle Diagnostics",
+            style="Big.TButton",
+            command=self._on_vehicle_diagnostics_clicked,
+            state=tk.DISABLED,
+        )
+        self._vehicle_diagnostics_button.grid(row=0, column=1, sticky="w", padx=(0, 16))
+
         self._ai_diagnose_button = ttk.Button(
             frame,
-            text="✨ AI Diagnostics",
+            text="AI Diagnosis",
             style="Big.TButton",
             command=self._on_ai_diagnose_clicked,
             state=tk.DISABLED,
         )
-        self._ai_diagnose_button.grid(row=0, column=1, sticky="w", padx=(0, 16))
+        self._ai_diagnose_button.grid(row=0, column=2, sticky="w", padx=(0, 16))
 
         self._clear_dtc_button = ttk.Button(
             frame,
-            text="🧹 Clear DTCs",
+            text="Clear DTCs",
             style="Big.TButton",
             command=self._on_clear_dtcs_clicked,
             state=tk.DISABLED,
         )
-        self._clear_dtc_button.grid(row=0, column=2, sticky="w", padx=(0, 16))
+        self._clear_dtc_button.grid(row=0, column=3, sticky="w", padx=(0, 16))
 
         self._status_label = ttk.Label(frame, textvariable=self._status_message, style="Status.TLabel")
-        self._status_label.grid(row=0, column=3, sticky="w")
+        self._status_label.grid(row=0, column=4, sticky="w")
 
     def _build_session_section(self, parent: ttk.Frame) -> None:
         frame = ttk.LabelFrame(parent, text="Session Diagnostics (New)", padding=(12, 6))
@@ -333,7 +373,7 @@ class DiagnosticsWindow:
 
     def _build_agent_dialog_section(self, parent: ttk.Frame) -> None:
         """Chat-like dialogue panel for AI agent progress and user choices."""
-        frame = ttk.LabelFrame(parent, text="AI Agent Dialogue", padding=12)
+        frame = ttk.LabelFrame(parent, text="Guided Diagnostics Output", padding=12)
         frame.grid(row=3, column=0, sticky="nsew", pady=(0, 12))
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(0, weight=1)
@@ -382,7 +422,10 @@ class DiagnosticsWindow:
         self._agent_prompt_submit_button.grid(row=0, column=2, sticky="e")
 
         self._set_agent_prompt(None, "", [])
-        self._append_agent_message("agent", "Ready. Start Session -> Start Agent Diagnostics.")
+        self._append_agent_message(
+            "agent",
+            "Ready. Start Session, then choose Module Diagnostics or Vehicle Diagnostics.",
+        )
 
     def _build_dtc_section(self, parent: ttk.Frame) -> None:
         dtc_frame = ttk.LabelFrame(parent, text="Fault Codes (DTCs)", padding=12)
@@ -418,11 +461,8 @@ class DiagnosticsWindow:
         dtc_scroll.grid(row=1, column=1, sticky="ns")
         self._dtc_tree.configure(yscrollcommand=dtc_scroll.set)
 
-        # Agentic-only mode: keep widgets for compatibility, hide legacy panel.
-        dtc_frame.grid_remove()
-
     def _build_live_data_section(self, parent: ttk.Frame) -> None:
-        live_frame = ttk.LabelFrame(parent, text="Live Data", padding=12)
+        live_frame = ttk.LabelFrame(parent, text="Guided Diagnostics Workspace", padding=12)
         live_frame.grid(row=5, column=0, sticky="nsew")
         live_frame.columnconfigure(1, weight=1)
         live_frame.rowconfigure(4, weight=1)
@@ -476,32 +516,40 @@ class DiagnosticsWindow:
         secondary_controls = ttk.Frame(live_frame, style="Card.TFrame")
         secondary_controls.grid(row=3, column=0, columnspan=3, sticky="w", pady=(0, 10))
 
-        ttk.Label(secondary_controls, text="Actions:", style="Subtle.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        ttk.Label(secondary_controls, text="Shortcuts:", style="Subtle.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 8))
 
         self._read_dtc_button = ttk.Button(
             secondary_controls,
-            text="Read DTCs",
+            text="Module DTCs",
             command=self._on_read_dtcs_clicked,
             state=tk.DISABLED,
         )
         self._read_dtc_button.grid(row=0, column=1, sticky="w", padx=(0, 8))
 
+        self._vehicle_dtc_button = ttk.Button(
+            secondary_controls,
+            text="Vehicle DTCs",
+            command=self._on_vehicle_dtcs_clicked,
+            state=tk.DISABLED,
+        )
+        self._vehicle_dtc_button.grid(row=0, column=2, sticky="w", padx=(0, 8))
+
         self._start_stream_button = ttk.Button(
             secondary_controls,
-            text="▶ Start Stream",
+            text="Start Stream",
             command=self._on_start_stream_clicked,
             state=tk.DISABLED,
         )
-        self._start_stream_button.grid(row=0, column=2, sticky="w", padx=(0, 8))
+        self._start_stream_button.grid(row=0, column=3, sticky="w", padx=(0, 8))
         self._start_stream_button.grid_remove()
 
         self._stop_stream_button = ttk.Button(
             secondary_controls,
-            text="⏹ Stop",
+            text="Stop",
             command=self._on_stop_stream_clicked,
             state=tk.DISABLED,
         )
-        self._stop_stream_button.grid(row=0, column=3, sticky="w")
+        self._stop_stream_button.grid(row=0, column=4, sticky="w")
         self._stop_stream_button.grid_remove()
 
         # Row 4+: live table
@@ -520,9 +568,6 @@ class DiagnosticsWindow:
         live_scroll = ttk.Scrollbar(live_frame, orient=tk.VERTICAL, command=self._live_tree.yview)
         live_scroll.grid(row=4, column=2, sticky="ns")
         self._live_tree.configure(yscrollcommand=live_scroll.set)
-
-        # Agentic-only mode: keep widgets for compatibility, hide legacy panel.
-        live_frame.grid_remove()
 
     def _build_ai_result_section(self, parent: ttk.Frame) -> None:
         ai_frame = ttk.LabelFrame(parent, text="AI Diagnosis Result", padding=12)
@@ -795,6 +840,16 @@ class DiagnosticsWindow:
             or self._session_ai_active
             or self._session_navigation_active
         )
+        vehicle_goal_available = self._navigation_goal_available("vehicle diagnostics")
+        vehicle_dtc_goal_available = self._navigation_goal_available("vehicle dtcs")
+
+        self._start_button.configure(
+            state=tk.NORMAL if session_mode and not session_busy else tk.DISABLED
+        )
+        if hasattr(self, "_vehicle_diagnostics_button"):
+            self._vehicle_diagnostics_button.configure(
+                state=tk.NORMAL if session_mode and not session_busy and vehicle_goal_available else tk.DISABLED
+            )
 
         can_select_module = session_mode and has_module and not session_busy
         self._select_module_button.configure(
@@ -806,7 +861,7 @@ class DiagnosticsWindow:
             state=tk.NORMAL if can_select_category else tk.DISABLED
         )
 
-        can_run_actions = (
+        can_run_module_actions = (
             has_module
             and has_category
             and (not session_mode or self._session_category_confirmed)
@@ -814,44 +869,39 @@ class DiagnosticsWindow:
         )
 
         self._read_dtc_button.configure(
-            state=tk.NORMAL if can_run_actions else tk.DISABLED
+            state=tk.NORMAL if can_run_module_actions else tk.DISABLED
         )
-        can_clear_dtcs = can_run_actions and session_mode and self._current_page == "data_display"
+        if hasattr(self, "_vehicle_dtc_button"):
+            self._vehicle_dtc_button.configure(
+                state=tk.NORMAL if session_mode and not session_busy and vehicle_dtc_goal_available else tk.DISABLED
+            )
+
+        can_clear_dtcs = (
+            session_mode
+            and has_category
+            and self._current_page == "data_display"
+            and not session_busy
+        )
         self._clear_dtc_button.configure(
             state=tk.NORMAL if can_clear_dtcs else tk.DISABLED
         )
         # Legacy controls hidden in agentic-only mode.
         self._start_stream_button.configure(state=tk.DISABLED)
         self._ai_diagnose_button.configure(
-            state=tk.NORMAL if can_run_actions else tk.DISABLED
+            state=tk.NORMAL if can_run_module_actions else tk.DISABLED
         )
 
     def _can_auto_start_ai(self) -> bool:
-        """Return whether the main workflow can auto-start AI safely."""
-        return (
-            bool(self._selected_module.get().strip())
-            and bool(self._selected_data_category.get().strip())
-            and (not self._session_id or self._session_category_confirmed)
-            and not self._stream_active
-            and not self._ai_sse_running
-            and not self._auto_ai_start_scheduled
-        )
+        """Auto-start is intentionally disabled for the redesigned guided workflow."""
+        return False
 
     def _schedule_auto_ai_start(self, reason: str) -> None:
-        """Schedule main-path AI auto-start once after reaching Data Display."""
-        if not self._can_auto_start_ai():
+        """Surface readiness guidance without implicitly launching AI diagnosis."""
+        self._auto_ai_start_scheduled = False
+        if not reason:
             return
-
-        self._auto_ai_start_scheduled = True
         self._set_session_hint(reason)
         self._append_agent_message("agent", reason)
-
-        def _run() -> None:
-            self._auto_ai_start_scheduled = False
-            if self._can_auto_start_ai():
-                self._on_ai_diagnose_clicked()
-
-        self._root.after(500, _run)
 
     def _error_message(self, payload: dict[str, Any], fallback: str) -> str:
         value = payload.get("error") if isinstance(payload, dict) else None
@@ -898,17 +948,17 @@ class DiagnosticsWindow:
         if is_running:
             if recovered:
                 self._set_session_hint(
-                    "Recovered the existing session after reconnect. Continue with Start Agent Diagnostics."
+                    "Recovered the existing session after reconnect. Choose Module Diagnostics or Vehicle Diagnostics."
                 )
                 self._append_agent_message(
                     "agent",
-                    f"Recovered existing session (ID={sid_preview}...). Continue with Start Agent Diagnostics.",
+                    f"Recovered existing session (ID={sid_preview}...). Choose Module Diagnostics or Vehicle Diagnostics.",
                 )
             else:
-                self._set_session_hint("Session started. Continue with Start Agent Diagnostics.")
+                self._set_session_hint("Session started. Choose Module Diagnostics or Vehicle Diagnostics.")
                 self._append_agent_message(
                     "agent",
-                    f"Session started (ID={sid_preview}...). Continue with Start Agent Diagnostics.",
+                    f"Session started (ID={sid_preview}...). Choose Module Diagnostics or Vehicle Diagnostics.",
                 )
         else:
             if recovered:
@@ -1135,12 +1185,56 @@ class DiagnosticsWindow:
             callback_event="navigate_start_result",
         )
 
-    def _on_start_clicked(self) -> None:
+    def _start_workflow_navigation(self, goal: str, *, status_text: str, hint: str, message: str) -> None:
+        if not self._session_id:
+            self._set_status_text("Please start a session first.")
+            self._set_session_hint("Start Session first, then choose a diagnostics branch.")
+            self._append_agent_message("agent", "Session is not active yet. Start Session first.")
+            return
+        self._session_navigation_active = True
+        self._set_status_text(status_text)
+        self._set_session_hint(hint)
+        self._append_agent_message("agent", message)
+        self._refresh_action_buttons()
+        self._api_call(
+            "POST",
+            "/api/session/navigate/start",
+            json_data={"session_id": self._session_id, "goal": goal},
+            callback_event="navigate_start_result",
+        )
+
+    def _emit_workflow_intent(self, intent: str) -> None:
+        self._last_workflow_intent = intent
+        intent = str(intent or "").strip().lower()
+        if intent == "start_module_guided":
+            self._workflow_goal = "module_guided"
+            self._start_module_diagnostics_flow()
+            return
+        if intent == "start_vehicle_guided":
+            self._workflow_goal = "vehicle_guided"
+            self._start_workflow_navigation(
+                "Vehicle Diagnostics",
+                status_text="Starting vehicle diagnostics navigation...",
+                hint="Navigating to the Vehicle Diagnostics branch...",
+                message="Starting Vehicle Diagnostics guidance...",
+            )
+            return
+        if intent == "run_vehicle_dtcs":
+            self._workflow_goal = "vehicle_dtcs"
+            self._start_workflow_navigation(
+                "Vehicle DTCs",
+                status_text="Starting vehicle DTC navigation...",
+                hint="Navigating to the Vehicle DTCs shortcut...",
+                message="Starting Vehicle DTCs shortcut...",
+            )
+            return
+        raise ValueError(f"Unsupported workflow intent: {intent}")
+
+    def _start_module_diagnostics_flow(self) -> None:
         self._start_button.configure(state=tk.DISABLED)
-        self._set_status_text("Connecting...")
+        self._set_status_text("Preparing Module Diagnostics...")
         self._set_server_connected(False)
 
-        # Reset dependent controls until start succeeds.
         self._read_dtc_button.configure(state=tk.DISABLED)
         self._select_module_button.configure(state=tk.DISABLED)
         self._select_data_category_button.configure(state=tk.DISABLED)
@@ -1152,24 +1246,35 @@ class DiagnosticsWindow:
         self._selected_data_category.set("")
         self._session_category_confirmed = False
         self._refresh_action_buttons()
-        self._set_session_hint("Hint: 请先 Start Session，再执行 Start Agent Diagnostics。")
+        self._set_session_hint("Start Session first, then continue with Module Diagnostics.")
         self._set_agent_prompt(None, "", [])
 
         if not self._session_id:
+            self._session_navigation_active = False
             self._start_button.configure(state=tk.DISABLED)
             self._set_status_text("Please start a session first.")
-            self._set_session_hint("请先点击 Start Session，并在需要时完成决策选择。")
-            self._append_agent_message("agent", "未检测到 Session。请先点击 Start Session。")
+            self._set_session_hint("Start Session first, then choose Module Diagnostics.")
+            self._append_agent_message("agent", "Session is not active yet. Start Session first.")
             return
 
-        self._set_session_hint("正在自动导航到诊断页面...")
-        self._append_agent_message("agent", "正在启动诊断导航流程...")
+        self._session_navigation_active = True
+        self._refresh_action_buttons()
+        self._append_agent_message("agent", "Starting Module Diagnostics guidance...")
         self._api_call(
             "POST",
             "/api/session/start_diagnostics",
             json_data={"session_id": self._session_id},
             callback_event="session_start_exec_result",
         )
+
+    def _on_start_clicked(self) -> None:
+        self._emit_workflow_intent("start_module_guided")
+
+    def _on_vehicle_diagnostics_clicked(self) -> None:
+        self._emit_workflow_intent("start_vehicle_guided")
+
+    def _on_vehicle_dtcs_clicked(self) -> None:
+        self._emit_workflow_intent("run_vehicle_dtcs")
 
     def _on_ai_diagnose_clicked(self) -> None:
         module = self._selected_module.get().strip()
@@ -1464,7 +1569,7 @@ class DiagnosticsWindow:
             self._stop_stream_button.configure(state=tk.DISABLED)
             self._refresh_action_buttons()
             self._set_server_connected(True)
-            self._set_status_text(f"Connected — VIN: {vin}. Select module and data category.")
+            self._set_status_text(f"Module Diagnostics ready — VIN: {vin}. Select a module and data category.")
             self._set_session_hint("Hint: 选择 Module 后点 Select，再选择 Data Category。")
             self._append_agent_message("agent", "启动成功。请选择 Module，再选择 Data Category。")
             self._vin = vin
@@ -1477,6 +1582,7 @@ class DiagnosticsWindow:
 
     def _handle_session_start_exec_result(self, payload: dict[str, Any]) -> None:
         """Handle session-mode start diagnostics via /api/session/execute."""
+        self._session_navigation_active = False
         self._start_button.configure(state=tk.NORMAL)
 
         if payload.get("success"):
@@ -1543,7 +1649,7 @@ class DiagnosticsWindow:
             self._stop_stream_button.configure(state=tk.DISABLED)
             self._refresh_action_buttons()
             self._set_server_connected(True)
-            self._set_status_text(f"Session ready — VIN: {vin}. Select module and data category.")
+            self._set_status_text(f"Module Diagnostics ready — VIN: {vin}. Select a module and data category.")
             self._set_session_hint("Session 已就绪：选择 Module -> Select，再选择 Category -> Select。")
             self._start_button.configure(state=tk.NORMAL)
             self._append_agent_message("agent", "已到模块列表。请从下拉框选择一个 Module。")
@@ -1612,7 +1718,7 @@ class DiagnosticsWindow:
         self._stop_stream_button.configure(state=tk.DISABLED)
         self._refresh_action_buttons()
         self._set_server_connected(True)
-        self._set_status_text(f"Connected — VIN: {vin}. Select module and data category.")
+        self._set_status_text(f"Module Diagnostics ready — VIN: {vin}. Select a module and data category.")
         self._set_session_hint("模块列表已加载：请选择 Module 并点击 Select。")
         self._append_agent_message("agent", "设备连接完成。请先选择模块。")
         self._prompt_module_choices(modules)
@@ -1796,7 +1902,7 @@ class DiagnosticsWindow:
         self._start_stream_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
         self._ai_diagnose_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
         self._refresh_action_buttons()
-        self._schedule_auto_ai_start("数据分类已确认，自动开始 AI 诊断...")
+        self._schedule_auto_ai_start("Data category confirmed. AI Diagnosis is ready when you choose it.")
 
     def _handle_live_start_result(self, payload: dict[str, Any]) -> None:
         if payload.get("success"):
@@ -2694,7 +2800,7 @@ class DiagnosticsWindow:
                     self._start_stream_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
                     self._ai_diagnose_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
                     self._set_status_text("Decision applied. Data category resolved.")
-                    self._schedule_auto_ai_start("Category 已确定，自动开始 AI 诊断...")
+                    self._schedule_auto_ai_start("Category resolved. AI Diagnosis is ready when you choose it.")
                 elif resume_action == "select_sub_category":
                     self._session_category_confirmed = True
                     has_category = bool(self._selected_data_category.get().strip())
@@ -2702,7 +2808,7 @@ class DiagnosticsWindow:
                     self._start_stream_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
                     self._ai_diagnose_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
                     self._set_status_text("Decision applied. Sub-data category resolved.")
-                    self._schedule_auto_ai_start("Sub-data 已确定，自动开始 AI 诊断...")
+                    self._schedule_auto_ai_start("Sub-data category resolved. AI Diagnosis is ready when you choose it.")
 
                 self._session_status_var.set("Decision applied. Continuing...")
                 self._refresh_action_buttons()
@@ -2744,6 +2850,7 @@ class DiagnosticsWindow:
     def _handle_navigate_start_result(self, payload: dict[str, Any]) -> None:
         self._start_button.configure(state=tk.NORMAL)
         if not payload.get("success"):
+            self._session_navigation_active = False
             error_text = self._error_message(payload, "Failed to start navigation.")
             self._set_server_connected(False)
             self._set_status_text(f"Navigate start failed: {error_text}")
@@ -2802,6 +2909,7 @@ class DiagnosticsWindow:
 
     def _handle_navigate_done(self, payload: dict[str, Any]) -> None:
         self._stop_navigate_sse_thread()
+        self._session_navigation_active = False
 
         final_page = payload.get("final_page", "unknown")
         steps = payload.get("steps", 0)
@@ -2849,15 +2957,16 @@ class DiagnosticsWindow:
 
         if self._session_category_confirmed and final_page == "data_display":
             self._navigate_session_id = None
-            self._schedule_auto_ai_start("导航完成，自动开始 AI 诊断...")
+            self._schedule_auto_ai_start("Navigation complete. Review the context, then run AI Diagnosis if needed.")
             return
         else:
-            self._set_session_hint("导航完成。请选择 Module 和 Data Category。")
+            self._set_session_hint("Navigation complete. Review the current branch context and choose the next action.")
 
         self._navigate_session_id = None
 
     def _handle_navigate_error(self, payload: dict[str, Any]) -> None:
         self._stop_navigate_sse_thread()
+        self._session_navigation_active = False
         error = payload.get("error", "Unknown error")
         self._request_session_status_refresh()
         self._set_status_text(f"Navigation error: {error}")
