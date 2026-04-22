@@ -214,7 +214,7 @@ class GDS2ControllerRuntime:
             restart_runtime=self._restart_registry_runtime,
             read_dtcs_snapshot=self.read_all_dtcs,
             state_reader=self._read_state_snapshot,
-            default_device_name="SM2 USB",
+            default_device_name="VCI Proxy (Remote)",
         )
 
     def _restart_registry_runtime(

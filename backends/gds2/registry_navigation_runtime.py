@@ -40,6 +40,7 @@ DEFAULT_GRAPH_PATH = ROOT / "reports" / "gds2_route_maps" / "merged_graph.json"
 DEFAULT_REPORT_ROOT = ROOT / "reports" / "navigation_registry_probe"
 GDS2_AGENT_DIR = Path("C:/tools/gds2-agent")
 GDS2_AGENT_LAUNCHER = GDS2_AGENT_DIR / "launch-gds2-with-agent.bat"
+DEFAULT_VCI_DEVICE_NAME = "VCI Proxy (Remote)"
 
 
 @dataclass
@@ -532,12 +533,19 @@ def decide_vehicle_selection_action(page_info: dict[str, Any], labels: set[str])
     return "unknown"
 
 
+def normalize_default_vci_name(device_name: str | None) -> str:
+    normalized = str(device_name or "").strip()
+    if not normalized or normalized.lower() == "default":
+        return DEFAULT_VCI_DEVICE_NAME
+    return normalized
+
+
 def handle_vehicle_selection(
     *,
     controller: NavigationController,
     route_navigator: GDS2RouteNavigator,
     recovery_actions: list[dict[str, Any]],
-    device_name: str = "SM2 USB",
+    device_name: str = DEFAULT_VCI_DEVICE_NAME,
     page_states: list[dict[str, Any]] | None = None,
     recovery_policies: list[dict[str, Any]] | None = None,
 ) -> bool:
@@ -562,7 +570,7 @@ def handle_vehicle_selection(
     if not next_action:
         next_action = decide_vehicle_selection_action(page_info, labels)
     params = dict((selected_policy or {}).get("params") or {})
-    device_name = str(params.get("device_name") or device_name)
+    device_name = normalize_default_vci_name(params.get("device_name") or device_name)
 
     if next_action == "wait":
         recovery_actions.append(
@@ -633,11 +641,11 @@ def handle_vehicle_selection(
 def handle_device_explorer(
     *,
     recovery_actions: list[dict[str, Any]],
-    device_name: str = "SM2 USB",
+    device_name: str = DEFAULT_VCI_DEVICE_NAME,
     policy: dict[str, Any] | None = None,
 ) -> bool:
     params = dict((policy or {}).get("params") or {})
-    device_name = str(params.get("device_name") or device_name)
+    device_name = normalize_default_vci_name(params.get("device_name") or device_name)
     device_controller = DeviceExplorerController()
     if not device_controller.find_dialog(timeout_sec=float(params.get("dialog_timeout_sec") or 2.0)):
         return False
@@ -699,7 +707,7 @@ def recover_to_registry_common_ancestor(
     route_navigator: GDS2RouteNavigator,
     target_path: list[str],
     max_backtracks: int,
-    device_name: str = "SM2 USB",
+    device_name: str = DEFAULT_VCI_DEVICE_NAME,
     page_states: list[dict[str, Any]] | None = None,
     recovery_policies: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
@@ -802,7 +810,7 @@ class RegistryNavigationRuntime:
         restart_runtime: Callable[..., tuple[NavigationController, GDS2RouteNavigator]] | None = None,
         read_dtcs_snapshot: Callable[[], dict[str, Any]] | None = None,
         state_reader: Callable[[], dict[str, Any]] | None = None,
-        default_device_name: str = "SM2 USB",
+        default_device_name: str = DEFAULT_VCI_DEVICE_NAME,
         route_max_iterations: int = 40,
         route_max_backtracks: int = 12,
     ) -> None:
@@ -816,7 +824,7 @@ class RegistryNavigationRuntime:
         self._restart_runtime = restart_runtime or restart_gds2_runtime
         self._read_dtcs_snapshot = read_dtcs_snapshot
         self._state_reader = state_reader
-        self._default_device_name = str(default_device_name or "SM2 USB")
+        self._default_device_name = normalize_default_vci_name(default_device_name)
         self._route_max_iterations = route_max_iterations
         self._route_max_backtracks = route_max_backtracks
         self._last_runtime_status: dict[str, Any] = {
@@ -912,7 +920,7 @@ class RegistryNavigationRuntime:
             raise
 
     def connect_vci(self, device: str) -> None:
-        self._default_device_name = str(device or self._default_device_name or "SM2 USB")
+        self._default_device_name = normalize_default_vci_name(device or self._default_device_name)
         self.ensure_started()
         self._set_runtime_status(
             status="ready",
@@ -2050,7 +2058,7 @@ def bootstrap_engine_data_baseline(
         try:
             harness = GDS2ExplorerHarness(navigator=navigator)
             result = harness.run_mainline(
-                device_name="SM2 USB",
+                device_name=DEFAULT_VCI_DEVICE_NAME,
                 module_name="Engine Control Module",
                 data_category="Engine Data",
                 submenu_item="Data Display",

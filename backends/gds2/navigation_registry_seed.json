@@ -3,7 +3,7 @@
   "backend": "gds2",
   "generated_from": "manual_seed_from_exploration_and_navigation_path_proof",
   "vehicle_profile": {
-    "device": "SM2 USB",
+    "device": "VCI Proxy (Remote)",
     "module": "Engine Control Module",
     "default_data_category": "Engine Data"
   },
@@ -80,7 +80,7 @@
         },
         {
           "kind": "device",
-          "label": "SM2 USB",
+          "label": "VCI Proxy (Remote)",
           "optional": true
         },
         {
@@ -107,7 +107,7 @@
       "fallback_strategy": [
         "Home",
         "click Diagnostics",
-        "select SM2 USB if Device Explorer appears",
+        "select VCI Proxy (Remote) if Device Explorer appears",
         "select Module Diagnostics"
       ],
       "confidence": "verified",
@@ -158,7 +158,7 @@
         },
         {
           "kind": "device",
-          "label": "SM2 USB",
+          "label": "VCI Proxy (Remote)",
           "optional": true
         },
         {
@@ -189,7 +189,7 @@
       "fallback_strategy": [
         "Home",
         "click Diagnostics",
-        "select SM2 USB if Device Explorer appears",
+        "select VCI Proxy (Remote) if Device Explorer appears",
         "select Vehicle Diagnostics"
       ],
       "confidence": "explored",
@@ -2629,7 +2629,7 @@
       "action_hint": "select_device",
       "confidence": "verified",
       "source": "live_probe_20260420",
-      "notes": "Red banner or no-device-selected state; select SM2 USB before continuing."
+      "notes": "Red banner or no-device-selected state; select VCI Proxy (Remote) before continuing."
     },
     {
       "state_key": "loading.deep_page",
@@ -2680,14 +2680,14 @@
   ],
   "recovery_policies": [
     {
-      "policy_key": "device_explorer.select_sm2_usb",
+      "policy_key": "device_explorer.select_default_proxy_vci",
       "applies_to": [
         "device_explorer.visible",
         "vehicle_selection.disconnected"
       ],
       "action_key": "select_device_and_continue",
       "params": {
-        "device_name": "SM2 USB",
+        "device_name": "VCI Proxy (Remote)",
         "dialog_timeout_sec": 5.0,
         "post_continue_wait_sec": 1.5
       },
@@ -2695,7 +2695,7 @@
       "timeout_sec": 10.0,
       "resume_original_task": true,
       "source": "live_probe_20260420",
-      "notes": "Select the local test VCI and continue into Vehicle Selection."
+      "notes": "Select the default proxy VCI and continue into Vehicle Selection."
     },
     {
       "policy_key": "vehicle_selection.connected_enter",

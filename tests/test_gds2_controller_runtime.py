@@ -184,7 +184,7 @@ def test_controller_runtime_builds_registry_navigation_runtime(monkeypatch):
     assert nav_runtime is not None
     assert created["entries"] == [{"page_key": "dtc.clear.execute", "aliases": []}]
     assert callable(created["state_reader"])
-    assert created["default_device_name"] == "SM2 USB"
+    assert created["default_device_name"] == "VCI Proxy (Remote)"
 
 
 def test_gds2_backend_clear_dtcs_delegates_to_workflow():

@@ -14,6 +14,7 @@ from backends.gds2.registry_navigation_runtime import (
     LoadingWatchdog,
     handle_j2534_disconnect,
     match_page_states,
+    normalize_default_vci_name,
     policy_for_state,
     recover_to_registry_common_ancestor,
     run_probe,
@@ -160,6 +161,13 @@ def test_j2534_disconnect_policy_clicks_ok_when_available() -> None:
 def test_vehicle_selection_status_falls_back_to_buttons_when_status_missing() -> None:
     assert decide_vehicle_selection_action({}, {"Enter", "Back"}) == "enter"
     assert decide_vehicle_selection_action({}, {"Select Device", "Back"}) == "select_device"
+
+
+def test_normalize_default_vci_name_prefers_proxy_remote() -> None:
+    assert normalize_default_vci_name("") == "VCI Proxy (Remote)"
+    assert normalize_default_vci_name(None) == "VCI Proxy (Remote)"
+    assert normalize_default_vci_name("default") == "VCI Proxy (Remote)"
+    assert normalize_default_vci_name("SM2 USB") == "SM2 USB"
 
 
 def test_success_criteria_supports_all_any_and_path_prefix() -> None:
