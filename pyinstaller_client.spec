@@ -31,17 +31,22 @@ python_root = Path(sysconfig.get_paths()['stdlib']).resolve().parent
 python_dll_dir = python_root / 'DLLs'
 tk_root = python_root / 'tcl'
 
-tk_datas = []
-for relative in (
-    'tcl8.6',
-    'tk8.6',
-    'tcl8',
-    'dde1.4',
-    'reg1.3',
-):
-    source = tk_root / relative
-    if source.exists():
-        tk_datas.append((str(source), f'tcl/{relative}'))
+def collect_tree_contents(source_dir: Path, dest_root: str) -> list[tuple[str, str]]:
+    entries: list[tuple[str, str]] = []
+    if not source_dir.exists():
+        return entries
+    for path in source_dir.rglob('*'):
+        if not path.is_file():
+            continue
+        relative_parent = path.relative_to(source_dir).parent.as_posix()
+        destination = dest_root if relative_parent == '.' else f'{dest_root}/{relative_parent}'
+        entries.append((str(path), destination))
+    return entries
+
+tk_datas = (
+    collect_tree_contents(tk_root / 'tcl8.6', '_tcl_data')
+    + collect_tree_contents(tk_root / 'tk8.6', '_tk_data')
+)
 
 tk_binaries = []
 for dll_name in ('_tkinter.pyd', 'tcl86t.dll', 'tk86t.dll'):
@@ -84,9 +89,6 @@ a = Analysis(
         'vci_proxy.diagnostics_window',
         'pystray._win32',
         'tkinter',
-        'tkinter.ttk',
-        'tkinter.filedialog',
-        'tkinter.messagebox',
         '_tkinter',
         'PIL',
         'PIL.Image',
@@ -98,7 +100,7 @@ a = Analysis(
         'certifi',
         'idna',
     ],
-    hookspath=[],
+    hookspath=['pyinstaller_hooks'],
     hooksconfig={},
     runtime_hooks=['scripts/runtime_hook_tkinter.py'],
     excludes=[
