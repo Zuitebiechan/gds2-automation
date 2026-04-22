@@ -16,12 +16,38 @@ from pathlib import Path
 import sysconfig
 
 import PIL
+import tkinter
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 
 # Pillow needs native extension modules (e.g. PIL._imaging.pyd) and plugin data.
 # Collect them explicitly to avoid runtime ImportError in packaged exe.
 pil_datas = collect_data_files('PIL')
 pil_binaries = collect_dynamic_libs('PIL')
+
+# tkinter/Tcl/Tk packaging on Windows can be flaky with newer Python builds.
+# Force-include the extension module, Tcl/Tk DLLs, and runtime script data so
+# the packaged client can actually open its Tk windows.
+python_root = Path(sysconfig.get_paths()['stdlib']).resolve().parent
+python_dll_dir = python_root / 'DLLs'
+tk_root = python_root / 'tcl'
+
+tk_datas = []
+for relative in (
+    'tcl8.6',
+    'tk8.6',
+    'tcl8',
+    'dde1.4',
+    'reg1.3',
+):
+    source = tk_root / relative
+    if source.exists():
+        tk_datas.append((str(source), f'tcl/{relative}'))
+
+tk_binaries = []
+for dll_name in ('_tkinter.pyd', 'tcl86t.dll', 'tk86t.dll'):
+    source = python_dll_dir / dll_name
+    if source.exists():
+        tk_binaries.append((str(source), '.'))
 
 # On some Windows/Python combinations (especially mixed global/venv installs),
 # collect_dynamic_libs('PIL') may miss Pillow extension binaries.
@@ -45,8 +71,8 @@ for pyd in matching_pyds:
 a = Analysis(
     ['vci_proxy/client_gui.py'],
     pathex=['.'],
-    binaries=pil_binaries,
-    datas=pil_datas,
+    binaries=pil_binaries + tk_binaries,
+    datas=pil_datas + tk_datas,
     hiddenimports=[
         'vci_proxy',
         'vci_proxy.protocol',
@@ -57,6 +83,11 @@ a = Analysis(
         'vci_proxy.reverse_client',
         'vci_proxy.diagnostics_window',
         'pystray._win32',
+        'tkinter',
+        'tkinter.ttk',
+        'tkinter.filedialog',
+        'tkinter.messagebox',
+        '_tkinter',
         'PIL',
         'PIL.Image',
         'PIL.ImageDraw',
@@ -69,7 +100,7 @@ a = Analysis(
     ],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=['scripts/runtime_hook_tkinter.py'],
     excludes=[
         # RPA layer — not needed for proxy client
         'pywinauto',
