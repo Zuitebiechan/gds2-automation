@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from typing import Any, Iterable
 
 DEFAULT_SEED_PATH = Path(__file__).with_name("navigation_registry_seed.json")
 DEFAULT_REGISTRY_PATH = Path("data/gds2_navigation_registry.sqlite")
+REGISTRY_BUILDER_VERSION = "2"
 ALLOWED_ROUTE_KINDS = {"button", "device", "list_item"}
 ALLOWED_ROUTE_TRANSITIONS = {"clear_dtcs_selection_state"}
 ALLOWED_POLICY_ACTION_KEYS = {
@@ -65,13 +67,21 @@ class RecoveryPolicyEntry:
     notes: str
 
 
+class ClosingConnection(sqlite3.Connection):
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
+
+
 def load_seed(path: str | Path = DEFAULT_SEED_PATH) -> dict[str, Any]:
     seed_path = Path(path)
     return json.loads(seed_path.read_text(encoding="utf-8"))
 
 
 def connect_registry(path: str | Path = DEFAULT_REGISTRY_PATH) -> sqlite3.Connection:
-    connection = sqlite3.connect(Path(path))
+    connection = sqlite3.connect(Path(path), factory=ClosingConnection)
     connection.row_factory = sqlite3.Row
     return connection
 
@@ -161,21 +171,20 @@ def rebuild_registry_database(
     seed = load_seed(seed_path)
     with connect_registry(output) as connection:
         initialize_schema(connection)
-        write_seed(connection, seed)
+        write_seed(connection, seed, seed_path=seed_path)
         connection.commit()
     return output
 
 
-def write_seed(connection: sqlite3.Connection, seed: dict[str, Any]) -> None:
+def write_seed(
+    connection: sqlite3.Connection,
+    seed: dict[str, Any],
+    *,
+    seed_path: str | Path = DEFAULT_SEED_PATH,
+) -> None:
     validate_seed(seed)
     now = datetime.now().isoformat(timespec="seconds")
-    metadata = {
-        "schema_version": str(seed.get("schema_version", 1)),
-        "backend": str(seed.get("backend", "gds2")),
-        "vehicle_profile": json.dumps(seed.get("vehicle_profile") or {}, ensure_ascii=False, sort_keys=True),
-        "generated_from": str(seed.get("generated_from") or "navigation_registry_seed.json"),
-        "generated_at": now,
-    }
+    metadata = build_registry_metadata(seed, seed_path=seed_path, generated_at=now)
     connection.executemany(
         "INSERT OR REPLACE INTO registry_metadata(key, value) VALUES (?, ?)",
         sorted(metadata.items()),
@@ -293,6 +302,70 @@ def write_seed(connection: sqlite3.Connection, seed: dict[str, Any]) -> None:
                 now,
             ),
         )
+
+
+def build_registry_metadata(
+    seed: dict[str, Any],
+    *,
+    seed_path: str | Path = DEFAULT_SEED_PATH,
+    generated_at: str | None = None,
+) -> dict[str, str]:
+    metadata = {
+        "schema_version": str(seed.get("schema_version", 1)),
+        "backend": str(seed.get("backend", "gds2")),
+        "vehicle_profile": json.dumps(seed.get("vehicle_profile") or {}, ensure_ascii=False, sort_keys=True),
+        "generated_from": str(seed.get("generated_from") or Path(seed_path).name),
+        "seed_fingerprint": build_seed_fingerprint(seed),
+        "generator_fingerprint": build_file_fingerprint(Path(__file__)),
+        "builder_version": REGISTRY_BUILDER_VERSION,
+    }
+    if generated_at:
+        metadata["generated_at"] = generated_at
+    return metadata
+
+
+def build_seed_fingerprint(seed: dict[str, Any]) -> str:
+    payload = json.dumps(seed, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def build_file_fingerprint(path: str | Path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def read_registry_metadata(connection: sqlite3.Connection) -> dict[str, str]:
+    rows = connection.execute(
+        "SELECT key, value FROM registry_metadata ORDER BY key",
+    ).fetchall()
+    return {
+        str(row["key"]): str(row["value"])
+        for row in rows
+    }
+
+
+def registry_requires_rebuild(
+    *,
+    registry_path: str | Path = DEFAULT_REGISTRY_PATH,
+    seed_path: str | Path = DEFAULT_SEED_PATH,
+) -> bool:
+    registry = Path(registry_path)
+    if not registry.exists():
+        return True
+
+    try:
+        expected = build_registry_metadata(load_seed(seed_path), seed_path=seed_path)
+        connection = connect_registry(registry)
+        try:
+            actual = read_registry_metadata(connection)
+        finally:
+            connection.close()
+    except (OSError, json.JSONDecodeError, sqlite3.Error, ValueError):
+        return True
+
+    for key, expected_value in expected.items():
+        if actual.get(key) != expected_value:
+            return True
+    return False
 
 
 def validate_seed(seed: dict[str, Any]) -> None:

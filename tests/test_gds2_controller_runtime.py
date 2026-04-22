@@ -164,6 +164,11 @@ def test_controller_runtime_builds_registry_navigation_runtime(monkeypatch):
     monkeypatch.setattr(controller_runtime_module, "lookup_recovery_policy", lambda _connection, _key: None)
     monkeypatch.setattr(
         controller_runtime_module,
+        "registry_requires_rebuild",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        controller_runtime_module,
         "DEFAULT_REGISTRY_PATH",
         type("_Path", (), {"exists": lambda self: True})(),
     )
@@ -185,6 +190,52 @@ def test_controller_runtime_builds_registry_navigation_runtime(monkeypatch):
     assert created["entries"] == [{"page_key": "dtc.clear.execute", "aliases": []}]
     assert callable(created["state_reader"])
     assert created["default_device_name"] == "VCI Proxy (Remote)"
+
+
+def test_controller_runtime_rebuilds_stale_registry_before_loading(monkeypatch):
+    workflow = _make_workflow()
+    rebuild_calls = []
+
+    monkeypatch.setattr(
+        controller_runtime_module,
+        "load_or_rebuild_graph",
+        lambda _path: {"version": 1, "nodes": {}, "edges": []},
+    )
+
+    class _Connection:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    registry_path = Path("data/test_registry.sqlite")
+    monkeypatch.setattr(
+        controller_runtime_module,
+        "registry_requires_rebuild",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        controller_runtime_module,
+        "rebuild_registry_database",
+        lambda **kwargs: rebuild_calls.append(kwargs["output_path"]),
+    )
+    monkeypatch.setattr(controller_runtime_module, "connect_registry", lambda _path: _Connection())
+    monkeypatch.setattr(controller_runtime_module, "list_entries", lambda _connection: [])
+    monkeypatch.setattr(controller_runtime_module, "list_page_states", lambda _connection: [])
+    monkeypatch.setattr(controller_runtime_module, "list_recovery_policies", lambda _connection: [])
+    monkeypatch.setattr(controller_runtime_module, "lookup_recovery_policy", lambda _connection, _key: None)
+    monkeypatch.setattr(controller_runtime_module, "DEFAULT_REGISTRY_PATH", registry_path)
+    monkeypatch.setattr(controller_runtime_module, "RegistryNavigationRuntime", lambda **kwargs: MagicMock())
+
+    runtime = GDS2ControllerRuntime(
+        controller=workflow.controller,
+        state_reader=workflow.get_state,
+    )
+
+    runtime.build_navigation_runtime(source="registry_runtime")
+
+    assert rebuild_calls == [registry_path]
 
 
 def test_gds2_backend_clear_dtcs_delegates_to_workflow():

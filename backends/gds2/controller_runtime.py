@@ -13,6 +13,7 @@ from backends.gds2.navigation_registry import (
     list_page_states,
     list_recovery_policies,
     lookup_recovery_policy,
+    registry_requires_rebuild,
     rebuild_registry_database,
 )
 from backends.gds2.registry_navigation_runtime import (
@@ -172,7 +173,7 @@ class GDS2ControllerRuntime:
 
     def _build_registry_navigation_runtime(self) -> BackendNavigationRuntime:
         registry_path = DEFAULT_REGISTRY_PATH
-        if not registry_path.exists():
+        if registry_requires_rebuild(registry_path=registry_path):
             rebuild_registry_database(output_path=registry_path)
 
         with connect_registry(registry_path) as connection:

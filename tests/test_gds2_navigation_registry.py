@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
 from backends.gds2.navigation_registry import (
     DEFAULT_SEED_PATH,
+    REGISTRY_BUILDER_VERSION,
+    build_registry_metadata,
     connect_registry,
     load_seed,
     list_entries,
@@ -13,7 +16,9 @@ from backends.gds2.navigation_registry import (
     lookup_page_state,
     lookup_recovery_policy,
     lookup_entry,
+    read_registry_metadata,
     rebuild_registry_database,
+    registry_requires_rebuild,
 )
 
 
@@ -112,7 +117,43 @@ def test_navigation_registry_seed_has_page_states_and_recovery_policies() -> Non
     assert "vehicle_selection.disconnected" in state_keys
     assert "loading.deep_page" in state_keys
     assert "loading.restart_after_timeout" in policy_keys
-    assert "device_explorer.select_sm2_usb" in policy_keys
+    assert "device_explorer.select_default_proxy_vci" in policy_keys
+
+
+def test_navigation_registry_metadata_matches_current_seed(tmp_path: Path) -> None:
+    db_path = tmp_path / "registry.sqlite"
+    rebuild_registry_database(output_path=db_path, seed_path=DEFAULT_SEED_PATH)
+
+    with connect_registry(db_path) as connection:
+        metadata = read_registry_metadata(connection)
+
+    expected = build_registry_metadata(load_seed(DEFAULT_SEED_PATH), seed_path=DEFAULT_SEED_PATH)
+
+    assert metadata["builder_version"] == REGISTRY_BUILDER_VERSION
+    assert metadata["seed_fingerprint"] == expected["seed_fingerprint"]
+    assert metadata["vehicle_profile"] == expected["vehicle_profile"]
+    assert registry_requires_rebuild(registry_path=db_path, seed_path=DEFAULT_SEED_PATH) is False
+
+
+def test_navigation_registry_requires_rebuild_when_seed_or_metadata_changes(tmp_path: Path) -> None:
+    db_path = tmp_path / "registry.sqlite"
+    seed_path = tmp_path / "seed.json"
+    seed = load_seed(DEFAULT_SEED_PATH)
+    seed_path.write_text(json.dumps(seed, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    rebuild_registry_database(output_path=db_path, seed_path=seed_path)
+    assert registry_requires_rebuild(registry_path=db_path, seed_path=seed_path) is False
+
+    seed["vehicle_profile"]["device"] = "SM2 USB"
+    seed_path.write_text(json.dumps(seed, ensure_ascii=False, indent=2), encoding="utf-8")
+    assert registry_requires_rebuild(registry_path=db_path, seed_path=seed_path) is True
+
+    rebuild_registry_database(output_path=db_path, seed_path=seed_path)
+    with connect_registry(db_path) as connection:
+        connection.execute("UPDATE registry_metadata SET value = ? WHERE key = 'builder_version'", ("0",))
+        connection.commit()
+
+    assert registry_requires_rebuild(registry_path=db_path, seed_path=seed_path) is True
 
 
 def test_navigation_registry_policy_lookup_roundtrip(tmp_path: Path) -> None:
@@ -132,7 +173,7 @@ def test_navigation_registry_policy_lookup_roundtrip(tmp_path: Path) -> None:
     assert connected is not None
     assert connected["action_hint"] == "click_enter"
     assert len(states) >= 3
-    assert any(policy["policy_key"] == "device_explorer.select_sm2_usb" for policy in policies)
+    assert any(policy["policy_key"] == "device_explorer.select_default_proxy_vci" for policy in policies)
 
 
 def test_navigation_registry_ecm_scoped_routes_are_absolute() -> None:
