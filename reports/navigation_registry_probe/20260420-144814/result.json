@@ -1,7 +1,0 @@
-{
-  "started_at": "2026-04-20T14:48:14",
-  "completed_at": "2026-04-20T14:48:14",
-  "entry_key": "Fuel Trim Enable",
-  "success": false,
-  "failure_reason": "Registry route to 'control.fuel_trim_enable' is stuck on vehicle_selection"
-}

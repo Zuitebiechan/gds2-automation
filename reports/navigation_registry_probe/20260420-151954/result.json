@@ -1,7 +1,0 @@
-{
-  "started_at": "2026-04-20T15:19:54",
-  "completed_at": "2026-04-20T15:19:54",
-  "entry_key": "clear codes",
-  "success": false,
-  "failure_reason": "Registry route to 'dtc.clear' did not converge within 32 steps"
-}
