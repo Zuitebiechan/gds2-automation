@@ -309,6 +309,72 @@ def test_upload_observability_once_prefers_assigned_api_base_over_tunnel_host(mo
     assert observed["upload_kwargs"]["api_base_url"] == "https://api.customer-node.example.com:443"
 
 
+def test_sync_cloud_logs_once_uses_api_base_and_token(monkeypatch, tmp_path) -> None:
+    client_gui = _import_client_gui(monkeypatch, tmp_path)
+    observed: dict[str, object] = {}
+
+    def _fake_sync(**kwargs):
+        observed["kwargs"] = kwargs
+        return {"mirrored_count": 1, "skipped_count": 0}
+
+    monkeypatch.setattr(
+        client_gui,
+        "sync_cloud_logs_to_local",
+        _fake_sync,
+    )
+
+    app = client_gui.VCIProxyTrayApp()
+    app._config = {
+        "api_scheme": "https",
+        "host": "diag.example",
+        "port": 9000,
+        "api_port": 8080,
+        "api_token": "api-secret",
+        "auth_token": "secret",
+        "dll_path": "",
+        "tls_enabled": False,
+        "tls_ca_file": "",
+        "tls_server_name": "",
+    }
+
+    result = app._sync_cloud_logs_once()
+
+    assert result == {"mirrored_count": 1, "skipped_count": 0}
+    assert observed["kwargs"]["api_base_url"] == "https://diag.example:8080"
+    assert observed["kwargs"]["api_token"] == "api-secret"
+    assert observed["kwargs"]["max_batch_bytes"] == 5 * 1024 * 1024
+
+
+def test_sync_cloud_logs_once_skips_when_api_token_missing(monkeypatch, tmp_path) -> None:
+    client_gui = _import_client_gui(monkeypatch, tmp_path)
+    called: list[bool] = []
+
+    monkeypatch.setattr(
+        client_gui,
+        "sync_cloud_logs_to_local",
+        lambda **kwargs: called.append(True) or {"mirrored_count": 99, "skipped_count": 0},
+    )
+
+    app = client_gui.VCIProxyTrayApp()
+    app._config = {
+        "api_scheme": "https",
+        "host": "diag.example",
+        "port": 9000,
+        "api_port": 8080,
+        "api_token": "",
+        "auth_token": "secret",
+        "dll_path": "",
+        "tls_enabled": False,
+        "tls_ca_file": "",
+        "tls_server_name": "",
+    }
+
+    result = app._sync_cloud_logs_once()
+
+    assert result == {"mirrored_count": 0, "skipped_count": 0}
+    assert called == []
+
+
 def test_stop_client_waits_for_graceful_shutdown(monkeypatch, tmp_path) -> None:
     client_gui = _import_client_gui(monkeypatch, tmp_path)
     observed: dict[str, object] = {}

@@ -9,6 +9,7 @@ from pathlib import Path
 from diagnostic_platform.observability import JsonlWriter, emit_event
 from diagnostic_platform.observability_artifacts import (
     cleanup_product_observability,
+    export_cloud_log_artifacts,
     get_cloud_incidents_dir,
     get_cloud_session_traces_dir,
     ingest_uploaded_artifact,
@@ -208,6 +209,9 @@ def test_observability_outbox_stages_pretty_printed_json_artifacts(tmp_path: Pat
         json.dumps({"incident_id": "incident-7", "session_id": "session-7", "connection_epoch": "epoch-7"}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    stale = time.time() - 10
+    os.utime(trace_dir / "trace.json", (stale, stale))
+    os.utime(incident_dir / "incident.json", (stale, stale))
 
     outbox = ObservabilityOutbox(appdata=appdata)
     staged = outbox.stage_default_artifacts(
@@ -260,3 +264,140 @@ def test_cleanup_product_observability_preserves_pending_outbox(tmp_path: Path) 
     assert pending_artifact.exists()
     assert not uploaded_manifest.exists()
     assert not orphan_artifact.exists()
+
+
+def test_export_cloud_log_artifacts_returns_changed_files_and_cursor(tmp_path: Path) -> None:
+    cloud_root = tmp_path / "ProgramData" / "RPA_Diagnostic" / "observability" / "cloud"
+    project_root = tmp_path / "repo"
+    raw_file = cloud_root / "raw" / "server.jsonl"
+    compat_file = project_root / "logs" / "flask_api.log"
+    raw_file.parent.mkdir(parents=True, exist_ok=True)
+    compat_file.parent.mkdir(parents=True, exist_ok=True)
+    raw_file.write_text('{"event":"raw"}\n', encoding="utf-8")
+    compat_file.write_text("compat-log\n", encoding="utf-8")
+
+    result = export_cloud_log_artifacts(
+        {"cursor_mtime_ns": 0, "cursor_path": "", "max_files": 10},
+        cloud_root=cloud_root,
+        project_root=project_root,
+    )
+
+    relative_paths = {item["relative_path"] for item in result["files"]}
+    assert result["success"] is True
+    assert "observability/cloud/raw/server.jsonl" in relative_paths
+    assert "compat/logs/flask_api.log" in relative_paths
+    assert result["next_cursor_mtime_ns"] >= 0
+    assert isinstance(result["next_cursor_path"], str)
+
+
+def test_export_cloud_log_artifacts_respects_cursor_and_max_files(tmp_path: Path, monkeypatch) -> None:
+    cloud_root = tmp_path / "ProgramData" / "RPA_Diagnostic" / "observability" / "cloud"
+    raw_dir = cloud_root / "raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    first = raw_dir / "a.jsonl"
+    second = raw_dir / "b.jsonl"
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "home"))
+    first.write_text("a\n", encoding="utf-8")
+    second.write_text("b\n", encoding="utf-8")
+    now_ns = time.time_ns()
+    os.utime(first, ns=(now_ns, now_ns))
+    os.utime(second, ns=(now_ns + 100, now_ns + 100))
+
+    first_page = export_cloud_log_artifacts(
+        {"cursor_mtime_ns": 0, "cursor_path": "", "max_files": 1},
+        cloud_root=cloud_root,
+        project_root=tmp_path / "repo",
+    )
+    second_page = export_cloud_log_artifacts(
+        {
+            "cursor_mtime_ns": first_page["next_cursor_mtime_ns"],
+            "cursor_path": first_page["next_cursor_path"],
+            "max_files": 10,
+        },
+        cloud_root=cloud_root,
+        project_root=tmp_path / "repo",
+    )
+
+    assert len(first_page["files"]) == 1
+    assert first_page["has_more"] is True
+    assert [item["relative_path"] for item in second_page["files"]] == [
+        "observability/cloud/raw/b.jsonl"
+    ]
+
+
+def test_export_cloud_log_artifacts_respects_max_batch_bytes(tmp_path: Path, monkeypatch) -> None:
+    cloud_root = tmp_path / "ProgramData" / "RPA_Diagnostic" / "observability" / "cloud"
+    raw_dir = cloud_root / "raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "home"))
+
+    first = raw_dir / "a.jsonl"
+    second = raw_dir / "b.jsonl"
+    first.write_text("a" * 1024, encoding="utf-8")
+    second.write_text("b" * 1024, encoding="utf-8")
+    now_ns = time.time_ns()
+    os.utime(first, ns=(now_ns, now_ns))
+    os.utime(second, ns=(now_ns + 100, now_ns + 100))
+
+    first_page = export_cloud_log_artifacts(
+        {
+            "cursor_mtime_ns": 0,
+            "cursor_path": "",
+            "max_files": 10,
+            "max_batch_bytes": 1500,
+        },
+        cloud_root=cloud_root,
+        project_root=tmp_path / "repo",
+    )
+    second_page = export_cloud_log_artifacts(
+        {
+            "cursor_mtime_ns": first_page["next_cursor_mtime_ns"],
+            "cursor_path": first_page["next_cursor_path"],
+            "max_files": 10,
+            "max_batch_bytes": 1500,
+        },
+        cloud_root=cloud_root,
+        project_root=tmp_path / "repo",
+    )
+
+    assert [item["relative_path"] for item in first_page["files"]] == [
+        "observability/cloud/raw/a.jsonl"
+    ]
+    assert first_page["has_more"] is True
+    assert [item["relative_path"] for item in second_page["files"]] == [
+        "observability/cloud/raw/b.jsonl"
+    ]
+
+
+def test_export_cloud_log_artifacts_skips_single_file_over_batch_cap(tmp_path: Path, monkeypatch) -> None:
+    cloud_root = tmp_path / "ProgramData" / "RPA_Diagnostic" / "observability" / "cloud"
+    raw_dir = cloud_root / "raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "home"))
+
+    oversized = raw_dir / "oversized.jsonl"
+    oversized.write_text("x" * 2048, encoding="utf-8")
+
+    page = export_cloud_log_artifacts(
+        {
+            "cursor_mtime_ns": 0,
+            "cursor_path": "",
+            "max_files": 10,
+            "max_batch_bytes": 1024,
+        },
+        cloud_root=cloud_root,
+        project_root=tmp_path / "repo",
+    )
+
+    assert page["files"] == []
+    assert page["skipped_files"] == [
+        {
+            "relative_path": "observability/cloud/raw/oversized.jsonl",
+            "mtime_ns": page["next_cursor_mtime_ns"],
+            "size_bytes": 2048,
+            "reason": "file_exceeds_max_batch_bytes",
+        }
+    ]
