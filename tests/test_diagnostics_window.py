@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import tkinter as tk
+from tkinter import messagebox
 
 from vci_proxy.diagnostics_window import DiagnosticsWindow
 
@@ -21,6 +22,7 @@ class _Widget:
     def __init__(self) -> None:
         self.state = None
         self.values = None
+        self.visible = True
 
     def configure(self, **kwargs) -> None:
         if "state" in kwargs:
@@ -28,12 +30,39 @@ class _Widget:
         if "values" in kwargs:
             self.values = kwargs["values"]
 
+    def grid(self, *args, **kwargs) -> None:
+        self.visible = True
+
+    def grid_remove(self) -> None:
+        self.visible = False
+
+
+class _Tree:
+    def __init__(self) -> None:
+        self.rows: list[tuple[str, str, str, str]] = []
+        self.headings: dict[str, str] = {}
+
+    def get_children(self, _item: str = "") -> list[int]:
+        return list(range(len(self.rows)))
+
+    def delete(self, item_id: int) -> None:
+        if 0 <= item_id < len(self.rows):
+            self.rows[item_id] = ("", "", "", "")
+
+    def insert(self, _parent: str, _index: str, values: tuple[str, str, str, str]) -> None:
+        self.rows.append(values)
+
+    def heading(self, key: str, text: str) -> None:
+        self.headings[key] = text
+
 
 def _build_window(*, current_page: str = "") -> DiagnosticsWindow:
     window = DiagnosticsWindow.__new__(DiagnosticsWindow)
     window._selected_module = _Var("ECM")
     window._selected_data_category = _Var("Diagnostic Data Display")
     window._session_id = "session-123"
+    window._active_branch = ""
+    window._action_output_mode = "dtc"
     window._stream_active = False
     window._ai_sse_running = False
     window._ai_start_pending = False
@@ -43,17 +72,26 @@ def _build_window(*, current_page: str = "") -> DiagnosticsWindow:
     window._session_navigation_active = False
     window._session_category_confirmed = True
     window._current_page = current_page
+    window._vehicle_dtc_ready = False
+    window._vehicle_dtc_status_message = ""
     window._session_status_refresh_inflight = False
     window._server_connected = None
     window._status_message = _Var("")
+    window._session_status_var = _Var("")
     window._session_hint_var = _Var("")
+    window._flow_step_title = _Var("")
+    window._flow_step_hint = _Var("")
     window._dtc_count_text = _Var("")
+    window._dtc_tree = _Tree()
+    window._module_label = _Widget()
+    window._data_label = _Widget()
     window._select_module_button = _Widget()
     window._select_data_category_button = _Widget()
+    window._session_start_button = _Widget()
+    window._session_abort_button = _Widget()
     window._start_button = _Widget()
     window._vehicle_diagnostics_button = _Widget()
     window._read_dtc_button = _Widget()
-    window._vehicle_dtc_button = _Widget()
     window._clear_dtc_button = _Widget()
     window._start_stream_button = _Widget()
     window._ai_diagnose_button = _Widget()
@@ -61,43 +99,89 @@ def _build_window(*, current_page: str = "") -> DiagnosticsWindow:
     window._data_combo = _Widget()
     window._workflow_goal = "none"
     window._last_workflow_intent = ""
-    window._navigation_goal_available = lambda goal: goal in {"vehicle diagnostics", "vehicle dtcs"}
+    window._active_assignment = None
+    window._navigate_session_id = "nav-123"
     window._agent_messages = []
     window._append_agent_message = lambda role, message: window._agent_messages.append((role, message))
     window._set_status_text = lambda message: window._status_message.set(message)
     window._set_server_connected = lambda connected: setattr(window, "_server_connected", connected)
+    window._stop_session_sse_thread = lambda: None
+    window._close_decision_modal = lambda: None
+    window._set_agent_prompt = lambda kind, label, options, **kwargs: None
     return window
 
 
-def test_refresh_action_buttons_keeps_clear_dtcs_disabled_off_data_display() -> None:
-    window = _build_window(current_page="module_list")
-
-    window._refresh_action_buttons()
-
-    assert window._read_dtc_button.state == tk.NORMAL
-    assert window._clear_dtc_button.state == tk.DISABLED
-
-
-def test_refresh_action_buttons_enables_branch_buttons_when_session_ready() -> None:
+def test_refresh_action_buttons_shows_step_one_before_branch_selection() -> None:
     window = _build_window(current_page="module_list")
 
     window._refresh_action_buttons()
 
     assert window._start_button.state == tk.NORMAL
     assert window._vehicle_diagnostics_button.state == tk.NORMAL
-    assert window._vehicle_dtc_button.state == tk.NORMAL
+    assert window._module_combo.visible is False
+    assert window._data_combo.visible is False
+    assert window._read_dtc_button.visible is False
+    assert window._clear_dtc_button.visible is False
 
 
-def test_refresh_action_buttons_enables_clear_dtcs_on_data_display() -> None:
+def test_refresh_action_buttons_enables_module_actions_only_when_module_branch_ready() -> None:
     window = _build_window(current_page="data_display")
+    window._active_branch = "module"
+    window._selected_module.set("ECM")
+    window._selected_data_category.set("Engine Data")
+    window._session_category_confirmed = True
 
     window._refresh_action_buttons()
 
+    assert window._module_combo.visible is True
+    assert window._data_combo.visible is True
+    assert window._ai_diagnose_button.visible is True
+    assert window._ai_diagnose_button.state == tk.NORMAL
+    assert window._read_dtc_button.visible is True
+    assert window._read_dtc_button.state == tk.NORMAL
+    assert window._clear_dtc_button.visible is True
     assert window._clear_dtc_button.state == tk.NORMAL
+
+
+def test_refresh_action_buttons_enables_vehicle_actions_only_on_vehicle_page() -> None:
+    window = _build_window(current_page="data_display")
+    window._active_branch = "vehicle"
+    window._selected_data_category.set("Vehicle DTC Information")
+    window._vehicle_dtc_ready = True
+
+    window._refresh_action_buttons()
+
+    assert window._module_combo.visible is False
+    assert window._data_combo.visible is False
+    assert window._ai_diagnose_button.visible is False
+    assert window._read_dtc_button.visible is True
+    assert window._read_dtc_button.state == tk.NORMAL
+    assert window._clear_dtc_button.visible is True
+    assert window._clear_dtc_button.state == tk.NORMAL
+
+
+def test_refresh_action_buttons_disables_vehicle_actions_until_vehicle_dtc_ready() -> None:
+    window = _build_window(current_page="data_display")
+    window._active_branch = "vehicle"
+    window._selected_data_category.set("Vehicle DTC Information")
+    window._vehicle_dtc_ready = False
+    window._vehicle_dtc_status_message = "Vehicle DTC Information is still loading."
+
+    window._refresh_action_buttons()
+
+    assert window._read_dtc_button.visible is True
+    assert window._read_dtc_button.state == tk.DISABLED
+    assert window._clear_dtc_button.visible is True
+    assert window._clear_dtc_button.state == tk.DISABLED
+    assert window._flow_step_hint.get() == "Vehicle DTC Information is still loading."
 
 
 def test_handle_session_status_result_updates_current_page_and_button_state() -> None:
     window = _build_window(current_page="")
+    window._active_branch = "module"
+    window._selected_module.set("ECM")
+    window._selected_data_category.set("Engine Data")
+    window._session_category_confirmed = True
 
     window._handle_session_status_result(
         {
@@ -113,6 +197,71 @@ def test_handle_session_status_result_updates_current_page_and_button_state() ->
 
     assert window._current_page == "data_display"
     assert window._clear_dtc_button.state == tk.NORMAL
+
+
+def test_handle_session_status_result_resets_stale_missing_session() -> None:
+    window = _build_window(current_page="data_display")
+
+    window._handle_session_status_result(
+        {
+            "success": False,
+            "error": "'Session session-123 not found'",
+        }
+    )
+
+    assert window._session_id is None
+    assert window._selected_module.get() == ""
+    assert window._selected_data_category.get() == ""
+    assert window._session_start_button.state == tk.NORMAL
+    assert window._session_abort_button.state == tk.DISABLED
+    assert window._status_message.get() == "Session refresh failed: session expired on the server. Please start a new session."
+
+
+def test_handle_dtcs_result_resets_stale_missing_session() -> None:
+    window = _build_window(current_page="data_display")
+
+    window._handle_dtcs_result(
+        {
+            "success": False,
+            "error": "'Session session-123 not found'",
+        }
+    )
+
+    assert window._session_id is None
+    assert window._selected_module.get() == ""
+    assert window._selected_data_category.get() == ""
+    assert window._session_start_button.state == tk.NORMAL
+    assert window._session_abort_button.state == tk.DISABLED
+    assert window._status_message.get() == "Read DTCs failed: session expired on the server. Please start a new session."
+
+
+def test_handle_dtcs_result_uses_vehicle_summary_mode_labels_and_count() -> None:
+    window = _build_window(current_page="data_display")
+
+    window._handle_dtcs_result(
+        {
+            "success": True,
+            "result": {
+                "dtcs": [
+                    {
+                        "code": "30",
+                        "module": "Engine Control Module",
+                        "status": "DTCs Stored",
+                        "description": "DLC Pin: 6,14",
+                    }
+                ],
+                "dtc_count": 30,
+                "dtc_display_mode": "vehicle_summary",
+                "page_context": "data_display",
+            },
+        }
+    )
+
+    assert window._dtc_tree.headings["code"] == "DTC Count"
+    assert window._dtc_tree.headings["module"] == "Control Module"
+    assert window._dtc_tree.headings["status"] == "Module Status"
+    assert window._dtc_tree.headings["description"] == "DLC Pin"
+    assert window._dtc_count_text.get() == "Vehicle summary: 30 DTC(s) across 1 module row(s)"
 
 
 def test_on_clear_dtcs_clicked_posts_session_clear_request() -> None:
@@ -137,8 +286,59 @@ def test_on_clear_dtcs_clicked_posts_session_clear_request() -> None:
     ]
 
 
+def test_on_read_dtcs_clicked_uses_session_only_payload_for_vehicle_branch() -> None:
+    window = _build_window(current_page="data_display")
+    window._active_branch = "vehicle"
+    window._selected_module.set("")
+    window._selected_data_category.set("Vehicle DTC Information")
+    window._vehicle_dtc_ready = True
+    calls: list[tuple[str, str, dict[str, object]]] = []
+    window._api_call = lambda method, endpoint, **kwargs: calls.append((method, endpoint, kwargs))
+
+    window._on_read_dtcs_clicked()
+
+    assert calls == [
+        (
+            "POST",
+            "/api/session/dtcs",
+            {
+                "json_data": {
+                    "session_id": "session-123",
+                },
+                "callback_event": "dtcs_result",
+            },
+        )
+    ]
+
+
+def test_on_read_dtcs_clicked_blocks_vehicle_branch_while_dtc_table_loading() -> None:
+    window = _build_window(current_page="data_display")
+    window._active_branch = "vehicle"
+    window._selected_module.set("")
+    window._selected_data_category.set("Vehicle DTC Information")
+    window._vehicle_dtc_ready = False
+    window._vehicle_dtc_status_message = "Vehicle DTC Information is still loading."
+    calls: list[tuple[str, str, dict[str, object]]] = []
+    warnings: list[tuple[str, str]] = []
+    window._api_call = lambda method, endpoint, **kwargs: calls.append((method, endpoint, kwargs))
+
+    original = messagebox.showwarning
+    messagebox.showwarning = lambda title, message: warnings.append((title, message))
+    try:
+        window._on_read_dtcs_clicked()
+    finally:
+        messagebox.showwarning = original
+
+    assert calls == []
+    assert warnings == [("Vehicle DTC Loading", "Vehicle DTC Information is still loading.")]
+
+
 def test_refresh_action_buttons_disables_clear_dtcs_while_ai_pending() -> None:
     window = _build_window(current_page="data_display")
+    window._active_branch = "module"
+    window._selected_module.set("ECM")
+    window._selected_data_category.set("Engine Data")
+    window._session_category_confirmed = True
     window._ai_start_pending = True
 
     window._refresh_action_buttons()
@@ -188,28 +388,12 @@ def test_on_vehicle_diagnostics_clicked_routes_through_vehicle_guided_intent() -
     ]
 
 
-def test_on_vehicle_dtcs_clicked_routes_through_vehicle_shortcut_intent() -> None:
-    window = _build_window(current_page="module_list")
-    calls: list[tuple[str, str, str]] = []
-    window._start_workflow_navigation = lambda goal, *, status_text, hint, message: calls.append(
-        (goal, status_text, hint)
-    )
-
-    window._on_vehicle_dtcs_clicked()
-
-    assert window._workflow_goal == "vehicle_dtcs"
-    assert window._last_workflow_intent == "run_vehicle_dtcs"
-    assert calls == [
-        (
-            "Vehicle DTCs",
-            "Starting vehicle DTC navigation...",
-            "Navigating to the Vehicle DTCs shortcut...",
-        )
-    ]
-
-
 def test_handle_session_status_result_disables_clear_dtcs_while_session_ai_active() -> None:
     window = _build_window(current_page="")
+    window._active_branch = "module"
+    window._selected_module.set("ECM")
+    window._selected_data_category.set("Engine Data")
+    window._session_category_confirmed = True
 
     window._handle_session_status_result(
         {
@@ -225,6 +409,105 @@ def test_handle_session_status_result_disables_clear_dtcs_while_session_ai_activ
 
     assert window._current_page == "data_display"
     assert window._clear_dtc_button.state == tk.DISABLED
+
+
+def test_handle_session_status_result_enables_vehicle_actions_when_vehicle_dtc_ready() -> None:
+    window = _build_window(current_page="")
+    window._active_branch = "vehicle"
+    window._selected_data_category.set("Vehicle DTC Information")
+
+    window._handle_session_status_result(
+        {
+            "success": True,
+            "active_ai_session_id": "",
+            "active_navigation_session_id": "",
+            "live_data_active": False,
+            "backend_state_summary": {
+                "current_page": "data_display",
+                "vehicle_dtc_status": {
+                    "applicable": True,
+                    "ready": True,
+                    "message": "Vehicle DTC Information is ready.",
+                },
+            },
+        }
+    )
+
+    assert window._current_page == "data_display"
+    assert window._read_dtc_button.state == tk.NORMAL
+    assert window._clear_dtc_button.state == tk.NORMAL
+
+
+def test_handle_session_status_result_keeps_vehicle_actions_disabled_while_dtc_loading() -> None:
+    window = _build_window(current_page="")
+    window._active_branch = "vehicle"
+    window._selected_data_category.set("Vehicle DTC Information")
+
+    window._handle_session_status_result(
+        {
+            "success": True,
+            "active_ai_session_id": "",
+            "active_navigation_session_id": "",
+            "live_data_active": False,
+            "backend_state_summary": {
+                "current_page": "data_display",
+                "vehicle_dtc_status": {
+                    "applicable": True,
+                    "ready": False,
+                    "message": "Vehicle DTC Information is still loading.",
+                },
+            },
+        }
+    )
+
+    assert window._current_page == "data_display"
+    assert window._read_dtc_button.state == tk.DISABLED
+    assert window._clear_dtc_button.state == tk.DISABLED
+    assert window._flow_step_hint.get() == "Vehicle DTC Information is still loading."
+
+
+def test_handle_navigate_decision_required_auto_submits_vehicle_dtc_information() -> None:
+    window = _build_window(current_page="data_list")
+    window._active_branch = "vehicle"
+    submitted: list[tuple[str, str]] = []
+    window._navigate_submit_decision = lambda decision_id, selected_item: submitted.append(
+        (decision_id, selected_item)
+    )
+
+    window._handle_navigate_decision_required(
+        {
+            "decision_id": "decision-vehicle",
+            "page": "vehicle_diagnostics_menu",
+            "items": ["Vehicle DTC Information", "Vehicle DTC and ID Information"],
+        }
+    )
+
+    assert submitted == [("decision-vehicle", "Vehicle DTC Information")]
+
+
+def test_handle_navigate_decision_required_uses_modal_for_manual_choices() -> None:
+    window = _build_window(current_page="module_list")
+    window._active_branch = "module"
+    shown: list[dict[str, object]] = []
+    window._show_navigation_decision_modal = lambda payload: shown.append(payload)
+
+    window._handle_navigate_decision_required(
+        {
+            "decision_id": "decision-module",
+            "page": "module_list",
+            "items": ["ECM", "TCM"],
+            "prompt": "Choose a module",
+        }
+    )
+
+    assert shown == [
+        {
+            "decision_id": "decision-module",
+            "page": "module_list",
+            "items": ["ECM", "TCM"],
+            "prompt": "Choose a module",
+        }
+    ]
 
 
 def test_handle_session_status_result_surfaces_pending_decision() -> None:

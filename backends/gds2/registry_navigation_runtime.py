@@ -24,6 +24,7 @@ from backends.gds2.navigation_registry import (
 )
 from backends.gds2.route_graph import load_graph, merge_graph_files
 from backends.gds2.route_navigator import GDS2RouteNavigator
+from backends.gds2.vehicle_dtc_status import is_vehicle_dtc_information_label
 from diagnostic_platform.session_observability import emit_gds2_ui_event
 from diagnostic_platform.runtime.errors import OperationCancelledError
 from diagnostic_platform.safe_utils import (
@@ -809,6 +810,7 @@ class RegistryNavigationRuntime:
         max_loading_restarts: int = 1,
         restart_runtime: Callable[..., tuple[NavigationController, GDS2RouteNavigator]] | None = None,
         read_dtcs_snapshot: Callable[[], dict[str, Any]] | None = None,
+        read_dtc_count: Callable[[], int] | None = None,
         state_reader: Callable[[], dict[str, Any]] | None = None,
         default_device_name: str = DEFAULT_VCI_DEVICE_NAME,
         route_max_iterations: int = 40,
@@ -823,6 +825,7 @@ class RegistryNavigationRuntime:
         self._max_loading_restarts = max_loading_restarts
         self._restart_runtime = restart_runtime or restart_gds2_runtime
         self._read_dtcs_snapshot = read_dtcs_snapshot
+        self._read_dtc_count_callback = read_dtc_count
         self._state_reader = state_reader
         self._default_device_name = normalize_default_vci_name(default_device_name)
         self._route_max_iterations = route_max_iterations
@@ -929,14 +932,23 @@ class RegistryNavigationRuntime:
         )
 
     def select_module(self, module: str) -> Any:
-        entry = self._require_entry(module)
+        entry = self._lookup_entry(module)
         try:
-            route_result = self.execute_registry_route(
-                entry=entry,
-                max_iterations=self._route_max_iterations,
-                max_backtracks=self._route_max_backtracks,
-            )
-            final_snapshot = dict(route_result.get("final_snapshot") or {})
+            if entry is not None:
+                route_result = self.execute_registry_route(
+                    entry=entry,
+                    max_iterations=self._route_max_iterations,
+                    max_backtracks=self._route_max_backtracks,
+                )
+                final_snapshot = dict(route_result.get("final_snapshot") or {})
+            else:
+                route_result = self._route_navigator.navigate_to_action(
+                    str(module),
+                    kind="list_item",
+                    max_backtracks=self._route_max_backtracks,
+                    max_iterations=self._route_max_iterations,
+                )
+                final_snapshot = dict(route_result.get("final_snapshot") or {})
             final_page = str(route_result.get("final_page") or "")
             if final_page == "module_submenu":
                 data_display_item = self._resolve_data_display_item()
@@ -962,7 +974,7 @@ class RegistryNavigationRuntime:
                 last_operation="select_module",
                 last_result=copy.deepcopy(result),
                 last_route=self._build_route_status(
-                    entry=entry,
+                    entry=entry or {"page_key": str(module), "canonical_path": []},
                     route_result=route_result,
                     terminal_reason="selected_module",
                 ),
@@ -974,9 +986,9 @@ class RegistryNavigationRuntime:
                 last_operation="select_module",
                 last_error=str(exc),
                 last_route={
-                    "route_target_page_key": entry.get("page_key"),
-                    "route_target_category": entry.get("category"),
-                    "canonical_path": list(entry.get("canonical_path") or []),
+                    "route_target_page_key": (entry or {}).get("page_key") or str(module),
+                    "route_target_category": (entry or {}).get("category") or "",
+                    "canonical_path": list((entry or {}).get("canonical_path") or []),
                     "terminal_reason": "failed_select_module",
                 },
             )
@@ -1053,11 +1065,35 @@ class RegistryNavigationRuntime:
         dtc_display_entry = self._require_entry("dtc.display")
         clear_entry = self._require_entry("dtc.clear.execute")
         try:
-            display_result = self.execute_registry_route(
-                entry=dtc_display_entry,
-                max_iterations=self._route_max_iterations,
-                max_backtracks=self._route_max_backtracks,
-            )
+            initial_snapshot = self.capture_runtime_snapshot()
+            active_clear_entry = clear_entry
+            if self._is_data_display_direct_clear_context(initial_snapshot):
+                display_result = {
+                    "matched_start_node_id": None,
+                    "recovery_actions": [],
+                    "planned_path": [],
+                    "executed_actions": [],
+                    "final_page": str(initial_snapshot.get("effective_page_id") or "unknown"),
+                    "final_snapshot": dict(initial_snapshot),
+                    "state_trace": [],
+                }
+                if self._is_vehicle_dtc_direct_clear_context(initial_snapshot):
+                    active_clear_entry = self._build_vehicle_dtc_clear_entry(clear_entry)
+                else:
+                    active_clear_entry = self._build_data_display_clear_entry(
+                        clear_entry,
+                        navigation_path=[
+                            str(item).strip()
+                            for item in initial_snapshot.get("navigation_path") or []
+                            if str(item).strip()
+                        ],
+                    )
+            else:
+                display_result = self.execute_registry_route(
+                    entry=dtc_display_entry,
+                    max_iterations=self._route_max_iterations,
+                    max_backtracks=self._route_max_backtracks,
+                )
 
             pre_clear_count = self._read_dtc_count(default=0)
             current_snapshot = self.capture_runtime_snapshot()
@@ -1074,7 +1110,7 @@ class RegistryNavigationRuntime:
                     last_operation="clear_dtcs",
                     last_result=copy.deepcopy(result),
                     last_route=self._build_route_status(
-                        entry=clear_entry,
+                        entry=active_clear_entry,
                         route_result=display_result,
                         terminal_reason="no_dtcs",
                     ),
@@ -1082,7 +1118,7 @@ class RegistryNavigationRuntime:
                 return result
 
             route_result = self.execute_registry_route(
-                entry=clear_entry,
+                entry=active_clear_entry,
                 max_iterations=self._route_max_iterations,
                 max_backtracks=self._route_max_backtracks,
             )
@@ -1113,7 +1149,7 @@ class RegistryNavigationRuntime:
                     "page_context": final_page,
                 },
                 last_route=self._build_route_status(
-                    entry=clear_entry,
+                    entry=active_clear_entry,
                     route_result=route_result,
                     terminal_reason="clear_dtcs_completed",
                     merged_recovery_actions=recovery_actions,
@@ -1440,6 +1476,98 @@ class RegistryNavigationRuntime:
         except Exception:
             return {}
 
+    @staticmethod
+    def _is_data_display_direct_clear_context(snapshot: dict[str, Any]) -> bool:
+        return (
+            str(snapshot.get("effective_page_id") or "") == "data_display"
+            and "Clear DTCs" in snapshot_action_labels(snapshot, kind="button")
+        )
+
+    def _is_vehicle_dtc_direct_clear_context(self, snapshot: dict[str, Any]) -> bool:
+        if not self._is_data_display_direct_clear_context(snapshot):
+            return False
+
+        state = self._read_runtime_state()
+        if is_vehicle_dtc_information_label(state.get("data_category")):
+            return True
+
+        navigation_path = [
+            str(item).strip()
+            for item in snapshot.get("navigation_path") or []
+            if str(item).strip()
+        ]
+        return bool(navigation_path) and str(navigation_path[0]).strip().casefold() == "vehicle diagnostics"
+
+    @staticmethod
+    def _build_data_display_clear_entry(
+        clear_entry: dict[str, Any],
+        *,
+        page_key: str = "data_display.clear.execute",
+        title: str = "Execute Clear DTCs From Current Data Display",
+        navigation_path: list[str] | None = None,
+        success_criteria: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        add_all_step = next(
+            (
+                dict(step)
+                for step in clear_entry.get("route_steps") or []
+                if str(step.get("label") or "").strip() == "Add All"
+            ),
+            {"kind": "button", "label": "Add All"},
+        )
+        return {
+            "page_key": page_key,
+            "title": title,
+            "category": "dtc",
+            "page_kind": "clear_dtcs_execute",
+            "canonical_path": [
+                *list(navigation_path or ["Data Display"]),
+                "Clear DTCs",
+                "Add All",
+                "OK",
+                "OK",
+            ],
+            "route_steps": [
+                {"kind": "button", "label": "Clear DTCs"},
+                add_all_step,
+                {"kind": "button", "label": "OK"},
+                {"kind": "button", "label": "OK"},
+            ],
+            "target_action": {"kind": "button", "label": "OK"},
+            "expected_page_id": "data_display",
+            "success_criteria": copy.deepcopy(
+                success_criteria
+                or {
+                    "page_id_any": ["data_display", "data_list"],
+                    "requires_executed": [{"kind": "button", "label": "Add All"}],
+                }
+            ),
+            "source": "runtime_synthetic",
+        }
+
+    @classmethod
+    def _build_vehicle_dtc_clear_entry(cls, clear_entry: dict[str, Any]) -> dict[str, Any]:
+        return cls._build_data_display_clear_entry(
+            clear_entry,
+            page_key="vehicle_dtc.clear.execute",
+            title="Execute Clear DTCs From Vehicle DTC Information",
+            navigation_path=["Vehicle Diagnostics", "Vehicle DTC Information"],
+            success_criteria={
+                "page_id_any": ["data_display"],
+                "all_of": [
+                    {"kind": "button", "label": "Refresh"},
+                    {"kind": "button", "label": "Back"},
+                ],
+                "any_of": [
+                    {"kind": "button", "label": "Clear DTCs"},
+                    {"kind": "button", "label": "Create Report"},
+                    {"kind": "button", "label": "Details"},
+                ],
+                "navigation_path_contains_prefix": ["Vehicle Diagnostics"],
+                "requires_executed": [{"kind": "button", "label": "Add All"}],
+            },
+        )
+
     def _resolve_data_display_item(self) -> str:
         items = self._controller.wait_for_list() if hasattr(self._controller, "wait_for_list") else []
         for item in items or []:
@@ -1721,6 +1849,11 @@ class RegistryNavigationRuntime:
         )
 
     def _read_dtc_count(self, *, default: int) -> int:
+        if callable(self._read_dtc_count_callback):
+            try:
+                return int(self._read_dtc_count_callback() or 0)
+            except Exception:
+                pass
         if not callable(self._read_dtcs_snapshot):
             return default
         try:

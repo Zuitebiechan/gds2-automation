@@ -155,7 +155,7 @@ if /I "%VCI_PROXY_TLS_ENABLED%"=="1" if defined VCI_PROXY_TLS_CA set "VCI_PROXY_
 if /I "%VCI_PROXY_TLS_ENABLED%"=="1" if /I "%VCI_PROXY_TLS_REQUIRE_CLIENT_CERT%"=="1" set "VCI_PROXY_TLS_ARGS=%VCI_PROXY_TLS_ARGS% --tls-require-client-cert"
 
 echo [1/3] Starting VCI Proxy reverse server...
-start "VCI-Proxy-Server" /D "%PROJECT_DIR%" /MIN "%ComSpec%" /c ""%PYTHON_EXE%" -m vci_proxy.reverse_server --vci-port %VCI_PROXY_PORT% --proxy-port %VCI_PROXY_LOCAL_PROXY_PORT% --auth-token "%VCI_PROXY_AUTH_TOKEN%"%VCI_PROXY_TLS_ARGS% > "%LOG_DIR%\vci_proxy.log" 2>&1"
+start "VCI-Proxy-Server" /D "%PROJECT_DIR%" /MIN "%ComSpec%" /c ""%PYTHON_EXE%" -m vci_proxy.reverse_server --listen-port %VCI_PROXY_PORT% --proxy-port %VCI_PROXY_LOCAL_PROXY_PORT% --auth-token "%VCI_PROXY_AUTH_TOKEN%"%VCI_PROXY_TLS_ARGS% > "%LOG_DIR%\vci_proxy.log" 2>&1"
 call :wait_for_port 127.0.0.1 %VCI_PROXY_PORT% 15
 if errorlevel 1 (
     echo       [WARN] Port %VCI_PROXY_PORT% did not become ready in time. Check %LOG_DIR%\vci_proxy.log

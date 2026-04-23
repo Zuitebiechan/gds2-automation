@@ -16,6 +16,8 @@ import time
 import logging
 import argparse
 import ssl
+import signal
+import os
 from typing import Optional
 
 from diagnostic_platform.observability import (
@@ -120,11 +122,15 @@ class ReverseProxyServer:
         self.request_queue = asyncio.Queue()
         self.response_futures: dict[int, asyncio.Future] = {}
         self.sequence = 0
+        self._shutting_down = False
+        self._vci_server: asyncio.AbstractServer | None = None
+        self._proxy_server: asyncio.AbstractServer | None = None
         self._probe_task: asyncio.Task | None = None
         self._connection_counter = 0
         self._connection_epoch: str | None = None
         self._tunnel_quality = TunnelQualityTracker()
         self._last_quality_signature: tuple | None = None
+        self._last_snapshot_write_error: str | None = None
         self._seen_auth_signatures: dict[tuple[int, bytes], int] = {}
         self._observability_writer = get_product_log_writer("reverse_server")
 
@@ -141,7 +147,10 @@ class ReverseProxyServer:
         connection_epoch: str | None = None,
         operation_kind: str = "reverse_tunnel",
     ) -> LogContext:
-        snapshot = read_active_session_snapshot() or {}
+        if self._shutting_down:
+            snapshot: dict[str, object] = {}
+        else:
+            snapshot = read_active_session_snapshot() or {}
         return LogContext(
             session_id=str(snapshot.get("session_id") or "") or None,
             connection_epoch=connection_epoch or self._connection_epoch,
@@ -164,21 +173,27 @@ class ReverseProxyServer:
         impact_scope: str = "reverse_tunnel",
         **extra: object,
     ) -> None:
-        emit_event(
-            self._observability_writer,
-            component="reverse_server",
-            event_type=event_type,
-            context=self._current_observability_context(
-                connection_epoch=connection_epoch,
-                operation_kind=operation_kind,
-            ),
-            status=status,
-            failure_code=failure_code,
-            failure_domain=failure_domain,
-            reason=reason,
-            impact_scope=impact_scope,
-            **extra,
-        )
+        try:
+            emit_event(
+                self._observability_writer,
+                component="reverse_server",
+                event_type=event_type,
+                context=self._current_observability_context(
+                    connection_epoch=connection_epoch,
+                    operation_kind=operation_kind,
+                ),
+                status=status,
+                failure_code=failure_code,
+                failure_domain=failure_domain,
+                reason=reason,
+                impact_scope=impact_scope,
+                **extra,
+            )
+        except Exception:
+            if self._shutting_down:
+                logger.debug("Skipping tunnel observability during shutdown", exc_info=True)
+                return
+            logger.warning("Failed to emit tunnel observability event: %s", event_type, exc_info=True)
 
     def _emit_proxy_request_event(
         self,
@@ -197,38 +212,44 @@ class ReverseProxyServer:
         cache_hit: bool | None = None,
         **extra: object,
     ) -> None:
-        base_context = self._current_observability_context(
-            connection_epoch=self._connection_epoch,
-            operation_kind=f"j2534:{msg_name}",
-        )
-        emit_event(
-            self._observability_writer,
-            component="reverse_server",
-            event_type=event_type,
-            context=LogContext(
-                session_id=base_context.session_id,
-                connection_epoch=base_context.connection_epoch,
-                dll_seq=dll_seq,
-                proxy_seq=proxy_seq,
-                worker_request_id=base_context.worker_request_id,
-                operation_kind=base_context.operation_kind,
-                page=base_context.page,
-                module=base_context.module,
-                data_category=base_context.data_category,
-                request_id=base_context.request_id,
-            ),
-            status=status,
-            failure_code=failure_code,
-            failure_domain=failure_domain,
-            reason=reason,
-            duration_ms=duration_ms,
-            hw_ms=hw_ms,
-            network_ms=network_ms,
-            impact_scope="proxy_request",
-            msg_name=msg_name,
-            cache_hit=cache_hit,
-            **extra,
-        )
+        try:
+            base_context = self._current_observability_context(
+                connection_epoch=self._connection_epoch,
+                operation_kind=f"j2534:{msg_name}",
+            )
+            emit_event(
+                self._observability_writer,
+                component="reverse_server",
+                event_type=event_type,
+                context=LogContext(
+                    session_id=base_context.session_id,
+                    connection_epoch=base_context.connection_epoch,
+                    dll_seq=dll_seq,
+                    proxy_seq=proxy_seq,
+                    worker_request_id=base_context.worker_request_id,
+                    operation_kind=base_context.operation_kind,
+                    page=base_context.page,
+                    module=base_context.module,
+                    data_category=base_context.data_category,
+                    request_id=base_context.request_id,
+                ),
+                status=status,
+                failure_code=failure_code,
+                failure_domain=failure_domain,
+                reason=reason,
+                duration_ms=duration_ms,
+                hw_ms=hw_ms,
+                network_ms=network_ms,
+                impact_scope="proxy_request",
+                msg_name=msg_name,
+                cache_hit=cache_hit,
+                **extra,
+            )
+        except Exception:
+            if self._shutting_down:
+                logger.debug("Skipping proxy observability during shutdown", exc_info=True)
+                return
+            logger.warning("Failed to emit proxy observability event: %s", event_type, exc_info=True)
 
     def _build_tls_server_context(self) -> ssl.SSLContext | None:
         """Build optional TLS listener context for inbound reverse clients."""
@@ -256,13 +277,13 @@ class ReverseProxyServer:
         """启动服务器"""
         # 启动 VCI 监听服务
         tls_context = self._build_tls_server_context()
-        vci_server = await asyncio.start_server(
+        self._vci_server = await asyncio.start_server(
             self._handle_vci_connection, '0.0.0.0', self.listen_port, ssl=tls_context
         )
         logger.info(f"等待 VCI Proxy 连接到端口 {self.listen_port}...")
 
         # 启动代理服务
-        proxy_server = await asyncio.start_server(
+        self._proxy_server = await asyncio.start_server(
             self._handle_proxy_connection, '127.0.0.1', self.proxy_port
         )
         logger.info(f"代理服务监听端口 {self.proxy_port}")
@@ -292,10 +313,51 @@ class ReverseProxyServer:
         print(f"\n等待本地 VCI Proxy 连接到端口 {self.listen_port}...")
         print(f"连接后，可以通过 localhost:{self.proxy_port} 访问 J2534 设备\n")
 
-        await asyncio.gather(
-            vci_server.serve_forever(),
-            proxy_server.serve_forever()
-        )
+        try:
+            await asyncio.gather(
+                self._vci_server.serve_forever(),
+                self._proxy_server.serve_forever()
+            )
+        except asyncio.CancelledError:
+            self._shutting_down = True
+            logger.info("ReverseProxyServer shutdown requested")
+        finally:
+            await self._shutdown_servers()
+
+    async def _shutdown_servers(self) -> None:
+        if self._shutting_down:
+            if self._vci_server is None and self._proxy_server is None:
+                return
+        self._shutting_down = True
+        self._cancel_pending_futures()
+        await self._cancel_probe_task_async()
+        self.vci_connected.clear()
+
+        writer = self.vci_writer
+        self.vci_reader = None
+        self.vci_writer = None
+        if writer is not None:
+            try:
+                writer.close()
+            except Exception:
+                pass
+            wait_closed = getattr(writer, "wait_closed", None)
+            if callable(wait_closed):
+                try:
+                    await wait_closed()
+                except Exception:
+                    pass
+
+        for server in (self._vci_server, self._proxy_server):
+            if server is None:
+                continue
+            server.close()
+            try:
+                await server.wait_closed()
+            except Exception:
+                pass
+        self._vci_server = None
+        self._proxy_server = None
 
     def _cancel_pending_futures(self):
         """取消所有挂起的 Future（VCI 断开时调用）"""
@@ -606,7 +668,7 @@ class ReverseProxyServer:
             )
             old_writer = self.vci_writer
             self.vci_connected.clear()
-            self._cancel_probe_task()
+            await self._cancel_probe_task_async()
             self._cancel_pending_futures()
             self.vci_reader = None
             self.vci_writer = None
@@ -673,6 +735,9 @@ class ReverseProxyServer:
                 else:
                     logger.warning(f"收到未知消息: type={msg_type:#x}, seq={sequence}")
 
+        except asyncio.CancelledError:
+            self._shutting_down = True
+            disconnect_reason = "shutdown_cancelled"
         except asyncio.IncompleteReadError as exc:
             disconnect_reason = f"eof expected={exc.expected} partial={len(exc.partial)}"
         except (ConnectionResetError, BrokenPipeError, OSError) as exc:
@@ -685,8 +750,8 @@ class ReverseProxyServer:
             owns_current_tunnel = self.vci_writer is writer
             if owns_current_tunnel:
                 self.vci_connected.clear()
-                self._cancel_probe_task()
                 self._cancel_pending_futures()
+                await self._cancel_probe_task_async()
                 self._tunnel_quality.mark_disconnected(local_epoch)
                 self._write_tunnel_quality_snapshot()
                 self.vci_reader = None
@@ -698,22 +763,35 @@ class ReverseProxyServer:
                     local_epoch,
                     self._connection_epoch,
                 )
-            logger.log(
-                logging.ERROR if disconnect_reason.startswith("exception:") else logging.WARNING,
-                "VCI tunnel disconnected: addr=%s epoch=%s reason=%s",
-                addr,
-                local_epoch,
-                disconnect_reason,
-            )
-            self._emit_tunnel_event(
-                "tunnel.lifecycle.disconnected",
-                connection_epoch=local_epoch,
-                status="error" if disconnect_reason != "handler_exit" else "ok",
-                failure_code=disconnect_reason.split(":", 1)[0] if disconnect_reason else None,
-                failure_domain="cloud_proxy_tunnel",
-                reason=disconnect_reason,
-                remote_addr=str(addr),
-            )
+            shutdown_disconnect = self._shutting_down and disconnect_reason in {
+                "handler_exit",
+                "shutdown_cancelled",
+                "cancelled",
+            }
+            if shutdown_disconnect:
+                logger.info(
+                    "VCI tunnel handler stopping during server shutdown: addr=%s epoch=%s reason=%s",
+                    addr,
+                    local_epoch,
+                    disconnect_reason,
+                )
+            else:
+                logger.log(
+                    logging.ERROR if disconnect_reason.startswith("exception:") else logging.WARNING,
+                    "VCI tunnel disconnected: addr=%s epoch=%s reason=%s",
+                    addr,
+                    local_epoch,
+                    disconnect_reason,
+                )
+                self._emit_tunnel_event(
+                    "tunnel.lifecycle.disconnected",
+                    connection_epoch=local_epoch,
+                    status="error" if disconnect_reason != "handler_exit" else "ok",
+                    failure_code=disconnect_reason.split(":", 1)[0] if disconnect_reason else None,
+                    failure_domain="cloud_proxy_tunnel",
+                    reason=disconnect_reason,
+                    remote_addr=str(addr),
+                )
             writer.close()
             if owns_current_tunnel:
                 print(f"\n*** VCI Proxy 已断开 ***\n")
@@ -823,10 +901,11 @@ class ReverseProxyServer:
         snapshot = self._tunnel_quality.snapshot()
         try:
             write_tunnel_quality_snapshot(snapshot)
+            self._last_snapshot_write_error = None
         except PermissionError as exc:
-            logger.warning("Failed to persist tunnel quality snapshot: %s", exc)
+            self._log_tunnel_quality_snapshot_error(exc)
         except OSError as exc:
-            logger.warning("Failed to persist tunnel quality snapshot: %s", exc)
+            self._log_tunnel_quality_snapshot_error(exc)
         signature = self._quality_signature(snapshot)
         if signature == self._last_quality_signature:
             return
@@ -870,6 +949,13 @@ class ReverseProxyServer:
             return True
         return snapshot.get("status") != "healthy"
 
+    def _log_tunnel_quality_snapshot_error(self, exc: Exception) -> None:
+        message = str(exc)
+        if self._last_snapshot_write_error == message:
+            return
+        self._last_snapshot_write_error = message
+        logger.warning("Failed to persist tunnel quality snapshot: %s", exc)
+
     @staticmethod
     def _quality_signature(snapshot: dict) -> tuple:
         return (
@@ -888,10 +974,23 @@ class ReverseProxyServer:
             return "n/a"
         return f"{float(value):.1f}ms"
 
-    def _cancel_probe_task(self) -> None:
-        if self._probe_task is not None:
-            self._probe_task.cancel()
-            self._probe_task = None
+    def _cancel_probe_task(self) -> asyncio.Task | None:
+        task = self._probe_task
+        self._probe_task = None
+        if task is not None:
+            task.cancel()
+        return task
+
+    async def _cancel_probe_task_async(self) -> None:
+        task = self._cancel_probe_task()
+        if task is None:
+            return
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.debug("probe task cleanup failed", exc_info=True)
 
     async def _probe_loop(self, connection_epoch: str) -> None:
         try:
@@ -1180,12 +1279,55 @@ class ReverseProxyServer:
                     logger.error(f"[PROXY] {msg_name} seq={sequence} {reason} after {fwd_ms:.0f}ms")
                     break
 
+        except asyncio.CancelledError:
+            self._shutting_down = True
+            logger.info("Proxy client handler stopping during server shutdown: %s", addr)
         except asyncio.IncompleteReadError:
             logger.debug("Proxy client disconnected: %s", addr)
         except Exception as e:
             logger.error(f"代理连接错误: {e}")
         finally:
             writer.close()
+
+
+def _run_server_until_stopped(server: ReverseProxyServer) -> None:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    main_task = loop.create_task(server.start())
+    previous_sigint_handler = signal.getsignal(signal.SIGINT)
+    stop_requested = False
+
+    def _handle_sigint(signum, frame):
+        nonlocal stop_requested
+        if stop_requested:
+            print("\n强制停止服务器...")
+            os._exit(130)
+        stop_requested = True
+        server._shutting_down = True
+        print("\n停止服务器...")
+        if not main_task.done():
+            loop.call_soon_threadsafe(main_task.cancel)
+
+    signal.signal(signal.SIGINT, _handle_sigint)
+    try:
+        try:
+            loop.run_until_complete(main_task)
+        except asyncio.CancelledError:
+            pass
+
+        pending = [task for task in asyncio.all_tasks(loop) if not task.done()]
+        if pending:
+            for task in pending:
+                task.cancel()
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        if hasattr(loop, "shutdown_default_executor"):
+            loop.run_until_complete(loop.shutdown_default_executor())
+    finally:
+        signal.signal(signal.SIGINT, previous_sigint_handler)
+        asyncio.set_event_loop(None)
+        loop.close()
 
 
 def main():
@@ -1267,9 +1409,9 @@ def main():
     )
 
     try:
-        asyncio.run(server.start())
+        _run_server_until_stopped(server)
     except KeyboardInterrupt:
-        print("\n停止服务器...")
+        print("\n强制停止服务器...")
 
 
 if __name__ == '__main__':

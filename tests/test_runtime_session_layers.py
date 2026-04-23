@@ -17,6 +17,7 @@ from diagnostic_platform.runtime.session_actions import (
     handle_ai_stream_terminal_event,
     handle_live_data_stream_terminal_event,
     navigation_status_payload,
+    read_dtcs,
     resolve_session_vehicle_context,
     start_navigation,
     submit_navigation_decision as submit_business_navigation_decision,
@@ -264,6 +265,56 @@ def test_clear_dtcs_uses_current_context_without_hidden_reselection(monkeypatch)
     backend.select_module.assert_not_called()
     backend.select_data_category.assert_not_called()
     backend.clear_dtcs.assert_called_once_with()
+
+
+def test_read_dtcs_uses_current_data_display_without_hidden_reselection(monkeypatch):
+    _runtime, _, session, _ = _start_gds2_session(monkeypatch)
+    session.selected_module = "[K20] Engine Control Module"
+    session.selected_data_category = "Engine Data"
+
+    backend = MagicMock()
+    backend.get_state.return_value = types.SimpleNamespace(
+        current_page="data_display",
+        current_module="",
+        current_data_category="",
+    )
+    backend.detect_current_page.return_value = "data_display"
+    backend.read_dtcs.return_value = [
+        types.SimpleNamespace(
+            code="P0001",
+            module="[K20] Engine Control Module",
+            status="current",
+            description="Example fault",
+            source_backend="gds2",
+        )
+    ]
+
+    payload = read_dtcs(
+        session,
+        {
+            "session_id": session.session_id,
+            "module": session.selected_module,
+            "data_category": session.selected_data_category,
+        },
+        backend=backend,
+        emit_progress=lambda _message: None,
+    )
+
+    assert payload["dtc_count"] == 1
+    assert payload["page_context"] == "data_display"
+    assert payload["dtcs"] == [
+        {
+            "code": "P0001",
+            "control_module": "[K20] Engine Control Module",
+            "module": "[K20] Engine Control Module",
+            "status": "current",
+            "description": "Example fault",
+            "source_backend": "gds2",
+        }
+    ]
+    backend.select_module.assert_not_called()
+    backend.select_data_category.assert_not_called()
+    backend.read_dtcs.assert_called_once_with()
 
 
 def test_clear_dtcs_explicit_context_selects_module_and_category(monkeypatch):

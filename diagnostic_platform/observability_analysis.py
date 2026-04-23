@@ -127,19 +127,31 @@ def _discover_artifacts(cloud_root: Path | None, local_root: Path | None) -> tup
     return raw_paths, aux_paths
 
 
-def _read_event_file(path: Path) -> list[dict[str, Any]]:
+def _iter_text_lines(path: Path) -> Iterable[tuple[int, str]]:
     if path.suffix == ".gz":
-        text = gzip.open(path, "rt", encoding="utf-8").read()
-    else:
-        text = path.read_text(encoding="utf-8")
-    rows: list[dict[str, Any]] = []
-    for line in text.splitlines():
+        with gzip.open(path, "rt", encoding="utf-8") as handle:
+            for line_number, line in enumerate(handle, start=1):
+                yield line_number, line
+        return
+
+    with path.open("rt", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            yield line_number, line
+
+
+def _iter_event_file(path: Path) -> Iterable[dict[str, Any]]:
+    resolved_path = str(path.resolve())
+    for line_number, line in _iter_text_lines(path):
         if not line.strip():
             continue
         payload = json.loads(line)
-        payload["source_artifact"] = str(path.resolve())
-        rows.append(payload)
-    return rows
+        payload["source_artifact"] = resolved_path
+        payload["source_line"] = line_number
+        yield payload
+
+
+def _read_event_file(path: Path) -> list[dict[str, Any]]:
+    return list(_iter_event_file(path))
 
 
 def _read_snapshot(path: Path | None) -> dict[str, Any]:
@@ -196,6 +208,55 @@ def _expand_related_events(
             ):
                 selected.append(event)
                 changed = True
+
+    return _sort_events(selected)
+
+
+def _stream_related_events(
+    raw_paths: list[Path],
+    *,
+    session_id: str | None,
+    connection_epoch: str | None,
+) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    selected_keys: set[tuple[str, int]] = set()
+    changed = True
+
+    while changed:
+        changed = False
+        dll_seqs = {event.get("dll_seq") for event in selected if event.get("dll_seq") is not None}
+        proxy_seqs = {event.get("proxy_seq") for event in selected if event.get("proxy_seq") is not None}
+        worker_ids = {
+            event.get("worker_request_id")
+            for event in selected
+            if event.get("worker_request_id") not in (None, "")
+        }
+        epochs = {
+            event.get("connection_epoch")
+            for event in selected
+            if event.get("connection_epoch") not in (None, "")
+        }
+
+        for raw_path in raw_paths:
+            for event in _iter_event_file(raw_path):
+                event_key = (
+                    str(event.get("source_artifact") or ""),
+                    int(event.get("source_line") or 0),
+                )
+                if event_key in selected_keys:
+                    continue
+
+                if (
+                    (session_id and event.get("session_id") == session_id)
+                    or (connection_epoch and event.get("connection_epoch") == connection_epoch)
+                    or (event.get("dll_seq") in dll_seqs if event.get("dll_seq") is not None else False)
+                    or (event.get("proxy_seq") in proxy_seqs if event.get("proxy_seq") is not None else False)
+                    or (event.get("worker_request_id") in worker_ids if event.get("worker_request_id") else False)
+                    or (event.get("connection_epoch") in epochs if event.get("connection_epoch") else False)
+                ):
+                    selected.append(event)
+                    selected_keys.add(event_key)
+                    changed = True
 
     return _sort_events(selected)
 
@@ -277,9 +338,23 @@ def assemble_session_trace(
     loaded_events = list(events or [])
     if events is None:
         raw_paths, aux_paths = _discover_artifacts(cloud_root_path, local_root_path)
-        for raw_path in raw_paths:
-            loaded_events.extend(_read_event_file(raw_path))
-            source_artifacts.append(str(raw_path.resolve()))
+        if session_id or connection_epoch:
+            loaded_events.extend(
+                _stream_related_events(
+                    raw_paths,
+                    session_id=session_id,
+                    connection_epoch=connection_epoch,
+                )
+            )
+            source_artifacts.extend(
+                str(Path(event["source_artifact"]).resolve())
+                for event in loaded_events
+                if event.get("source_artifact")
+            )
+        else:
+            for raw_path in raw_paths:
+                loaded_events.extend(_read_event_file(raw_path))
+                source_artifacts.append(str(raw_path.resolve()))
         snapshot_path = aux_paths[0] if aux_paths else None
         snapshot = _read_snapshot(snapshot_path)
         if snapshot_path is not None:

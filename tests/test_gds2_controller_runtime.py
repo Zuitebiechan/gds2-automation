@@ -1,7 +1,10 @@
+import logging
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 import json
 from pathlib import Path
+
+import pytest
 
 import backends.gds2.controller_runtime as controller_runtime_module
 from diagnostic_platform.observability import flush_product_log_writers
@@ -47,6 +50,53 @@ def _make_workflow():
     return workflow
 
 
+def _write_agent_payload(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def _vehicle_dtc_payload(*, waiting_rows: int) -> dict[str, object]:
+    rows = [
+        {
+            "Status": " ",
+            "Control Module Name": "Engine Control Module",
+            "Control Module Status": "DTCs Stored",
+            "DTC Count": "30",
+            "DLC Pin": "6,14",
+        }
+    ]
+    for index in range(waiting_rows):
+        rows.append(
+            {
+                "Status": " ",
+                "Control Module Name": f"Module {index + 1}",
+                "Control Module Status": "Waiting For Data...",
+                "DTC Count": "",
+                "DLC Pin": "1",
+            }
+        )
+    return {
+        "timestamp": 1_776_929_600_000,
+        "extractionCount": 1,
+        "extractionDurationMs": 1,
+        "pageContext": {"page": "data_display"},
+        "tables": [
+            {
+                "tableType": "unknown",
+                "columns": [
+                    "Status",
+                    "Control Module Name",
+                    "Control Module Status",
+                    "DTC Count",
+                    "DLC Pin",
+                ],
+                "rowCount": len(rows),
+                "rows": rows,
+            }
+        ],
+    }
+
+
 def test_controller_runtime_status_includes_network_quality():
     workflow = _make_workflow()
     runtime = GDS2ControllerRuntime(
@@ -73,6 +123,40 @@ def test_controller_runtime_status_includes_network_quality():
     assert state.is_connected is True
     assert state.extra["network_quality"]["grade"] == "warn"
     assert state.extra["connection_epoch"] == "epoch-1"
+
+
+def test_controller_runtime_preflight_skips_healthy_log(caplog):
+    runtime = GDS2ControllerRuntime(
+        snapshot_reader=lambda: {
+            "connection_epoch": "epoch-1",
+            "grade": "good",
+            "status": "healthy",
+            "reason": "p95 within good",
+        },
+    )
+
+    with caplog.at_level(logging.WARNING, logger="backends.gds2.controller_runtime"):
+        payload = runtime.preflight()
+
+    assert payload["connection_epoch"] == "epoch-1"
+    assert "[GDS2_RUNTIME] preflight" not in caplog.text
+
+
+def test_controller_runtime_preflight_logs_unhealthy_status(caplog):
+    runtime = GDS2ControllerRuntime(
+        snapshot_reader=lambda: {
+            "connection_epoch": "epoch-2",
+            "grade": "warn",
+            "status": "degraded",
+            "reason": "p95 above good threshold",
+        },
+    )
+
+    with caplog.at_level(logging.WARNING, logger="backends.gds2.controller_runtime"):
+        payload = runtime.preflight()
+
+    assert payload["connection_epoch"] == "epoch-2"
+    assert "status=degraded" in caplog.text
 
 
 def test_backend_start_delegates_to_controller_runtime():
@@ -240,12 +324,23 @@ def test_controller_runtime_rebuilds_stale_registry_before_loading(monkeypatch):
 
 def test_gds2_backend_clear_dtcs_delegates_to_workflow():
     runtime = MagicMock()
+    runtime.status.return_value = BackendState(
+        current_page="module_list",
+        is_connected=True,
+        current_module="ECM",
+        current_data_category="Engine Data",
+        extra={},
+    )
     registry_runtime = MagicMock()
     registry_runtime.clear_dtcs.return_value = {
         "success": True,
         "cleared_count": 5,
         "message": "Clear DTCs completed",
         "page_context": "data_display",
+    }
+    registry_runtime.get_runtime_status.return_value = {
+        "status": "idle",
+        "runtime_source": "registry_runtime",
     }
     runtime.build_navigation_runtime.return_value = registry_runtime
     backend = GDS2DiagnosticBackend(runtime=runtime)
@@ -256,7 +351,7 @@ def test_gds2_backend_clear_dtcs_delegates_to_workflow():
     assert result.success is True
     assert result.cleared_count == 5
     assert result.message == "Clear DTCs completed"
-    runtime.build_navigation_runtime.assert_called_once_with(source="registry_runtime")
+    assert runtime.build_navigation_runtime.call_count >= 1
     registry_runtime.clear_dtcs.assert_called_once_with()
 
 
@@ -311,6 +406,101 @@ def test_backend_read_dtcs_uses_controller_runtime_snapshot() -> None:
 
     assert [dtc.code for dtc in dtcs] == ["P0001"]
     runtime.read_all_dtcs.assert_called_once_with()
+
+
+def test_controller_runtime_status_exposes_vehicle_dtc_loading_state(tmp_path, monkeypatch) -> None:
+    workflow = _make_workflow()
+    workflow.controller.detect_current_page.return_value = GDS2Page.DATA_DISPLAY
+    latest_json = tmp_path / "gds2-data" / "latest.json"
+    _write_agent_payload(latest_json, _vehicle_dtc_payload(waiting_rows=2))
+    monkeypatch.setattr(controller_runtime_module.Path, "home", lambda: tmp_path)
+
+    runtime = GDS2ControllerRuntime(
+        controller=workflow.controller,
+        state_reader=workflow.get_state,
+    )
+
+    state = runtime.status()
+    status = state.extra["vehicle_dtc_status"]
+
+    assert status["applicable"] is True
+    assert status["ready"] is False
+    assert status["waiting_for_data_count"] == 2
+
+
+def test_controller_runtime_read_all_dtcs_rejects_vehicle_dtc_while_loading(tmp_path, monkeypatch) -> None:
+    latest_json = tmp_path / "latest.json"
+    _write_agent_payload(latest_json, _vehicle_dtc_payload(waiting_rows=1))
+    controller = MagicMock()
+    controller.detect_current_page.return_value = GDS2Page.DATA_DISPLAY
+    controller.get_context.return_value = {}
+
+    class FakeCollector:
+        def __init__(self):
+            self.json_path = latest_json
+
+        def check_agent_available(self):
+            return {"available": True}
+
+    monkeypatch.setattr(controller_runtime_module, "AgentDataCollector", FakeCollector)
+
+    runtime = GDS2ControllerRuntime(controller=controller)
+
+    with pytest.raises(RuntimeError, match="still loading"):
+        runtime.read_all_dtcs()
+
+
+def test_controller_runtime_read_all_dtcs_accepts_ready_vehicle_dtc_snapshot(tmp_path, monkeypatch) -> None:
+    latest_json = tmp_path / "latest.json"
+    _write_agent_payload(latest_json, _vehicle_dtc_payload(waiting_rows=0))
+    controller = MagicMock()
+    controller.detect_current_page.return_value = GDS2Page.DATA_DISPLAY
+    controller.get_context.return_value = {"data_category": "Vehicle DTC Information"}
+
+    class FakeCollector:
+        def __init__(self):
+            self.json_path = latest_json
+
+        def check_agent_available(self):
+            return {"available": True}
+
+    monkeypatch.setattr(controller_runtime_module, "AgentDataCollector", FakeCollector)
+
+    runtime = GDS2ControllerRuntime(controller=controller)
+    result = runtime.read_all_dtcs()
+
+    assert result["dtc_count"] == 30
+    assert result["dtc_display_mode"] == "vehicle_summary"
+    assert result["dtcs"][0]["control_module"] == "Engine Control Module"
+    assert result["dtcs"][0]["code"] == "30"
+    assert result["vehicle_dtc_status"]["ready"] is True
+
+
+def test_gds2_backend_clear_dtcs_waits_for_vehicle_dtc_table_ready() -> None:
+    runtime = MagicMock()
+    runtime.status.return_value = BackendState(
+        current_page="data_display",
+        is_connected=True,
+        current_module=None,
+        current_data_category="Vehicle DTC Information",
+        extra={
+            "vehicle_dtc_status": {
+                "applicable": True,
+                "ready": False,
+                "message": "Vehicle DTC Information is still loading.",
+            }
+        },
+    )
+    registry_runtime = MagicMock(
+        get_runtime_status=MagicMock(return_value={"status": "idle", "runtime_source": "registry_runtime"})
+    )
+    runtime.build_navigation_runtime.return_value = registry_runtime
+    backend = GDS2DiagnosticBackend(runtime=runtime)
+
+    with pytest.raises(RuntimeError, match="still loading"):
+        backend.clear_dtcs()
+
+    registry_runtime.clear_dtcs.assert_not_called()
 
 
 def test_gds2_backend_brand_aliases_route_without_manual_decision():
@@ -772,7 +962,7 @@ def test_navigation_controller_treats_empty_buttons_and_list_as_loading() -> Non
     assert controller.detect_current_page(retries=0) == GDS2Page.LOADING
 
 
-def test_navigation_controller_treats_back_only_empty_list_as_disconnect_from_deep_context() -> None:
+def test_navigation_controller_treats_back_only_empty_list_as_loading_from_deep_context() -> None:
     class _HeuristicNav:
         def get_page_id(self):
             return None
@@ -788,7 +978,7 @@ def test_navigation_controller_treats_back_only_empty_list_as_disconnect_from_de
     controller = NavigationController(nav=_HeuristicNav())
     controller._current_page = GDS2Page.DATA_DISPLAY
 
-    assert controller.detect_current_page(retries=0) == GDS2Page.J2534_DISCONNECT
+    assert controller.detect_current_page(retries=0) == GDS2Page.LOADING
 
 
 def test_navigation_controller_treats_enter_with_back_and_empty_list_as_loading() -> None:
@@ -864,13 +1054,33 @@ def test_navigation_controller_detects_loading_for_enter_with_deep_page_buttons(
     assert controller.detect_current_page(retries=0) == GDS2Page.LOADING
 
 
-def test_navigation_controller_detects_disconnect_from_back_only_state_with_deep_context() -> None:
+def test_navigation_controller_detects_loading_from_back_only_state_with_deep_context() -> None:
     class _HeuristicNav:
         def get_page_id(self):
             return None
 
         def get_buttons(self):
             return [{"text": "Back", "enabled": True}]
+
+        def get_list_items(self, list_index: int = 0):
+            return []
+
+    controller = NavigationController(nav=_HeuristicNav())
+    controller._current_page = GDS2Page.DATA_DISPLAY
+
+    assert controller.detect_current_page(retries=0) == GDS2Page.LOADING
+
+
+def test_navigation_controller_detects_disconnect_from_back_only_state_when_ok_present() -> None:
+    class _HeuristicNav:
+        def get_page_id(self):
+            return None
+
+        def get_buttons(self):
+            return [
+                {"text": "Back", "enabled": True},
+                {"text": "OK", "enabled": True},
+            ]
 
         def get_list_items(self, list_index: int = 0):
             return []

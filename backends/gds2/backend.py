@@ -36,6 +36,8 @@ from diagnostic_platform.sse import (
     make_scoped_agent_event_callbacks,
 )
 from backends.gds2.controller_runtime import GDS2ControllerRuntime
+from backends.gds2.vehicle_dtc_status import vehicle_dtc_not_ready_message
+from backends.gds2.vehicle_dtc_status import is_vehicle_dtc_information_label
 from src.navigation import GDS2Page
 from src.streaming import AgentDataCollector, DiagnosticBuffer
 from src.streaming.agent_data_collector import AgentSnapshot
@@ -274,7 +276,7 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
     def read_dtcs(self) -> list[DTC]:
         """Read DTCs through the controller runtime and map them to platform DTC objects."""
         try:
-            result = self._runtime.read_all_dtcs()
+            result = self.read_dtcs_with_metadata()
             dtcs: list[DTC] = []
             current_module = self._get_controller().current_module or "Unknown Module"
 
@@ -292,6 +294,28 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
             return dtcs
         except Exception as exc:  # pragma: no cover - runtime integration wrapper
             raise RuntimeError(f"Failed to read GDS2 DTCs: {exc}") from exc
+
+    def read_dtcs_with_metadata(self) -> dict[str, Any]:
+        result = self._runtime.read_all_dtcs()
+        current_module = self._get_controller().current_module or "Unknown Module"
+        dtcs = [
+            {
+                "code": str(raw_dtc.get("code", "")).strip(),
+                "control_module": str(raw_dtc.get("control_module") or current_module),
+                "module": str(raw_dtc.get("control_module") or current_module),
+                "status": str(raw_dtc.get("status") or "unknown"),
+                "description": str(raw_dtc.get("description") or ""),
+                "source_backend": self.name,
+            }
+            for raw_dtc in result.get("dtcs", [])
+        ]
+        return {
+            "dtcs": dtcs,
+            "dtc_count": int(result.get("dtc_count") or len(dtcs)),
+            "page_context": result.get("page_context"),
+            "vehicle_dtc_status": dict(result.get("vehicle_dtc_status") or {}),
+            "dtc_display_mode": str(result.get("dtc_display_mode") or "dtc_detail"),
+        }
 
     def start_live_data(self) -> LiveDataStream:
         """Start AgentDataCollector streaming from the current Data Display page."""
@@ -501,6 +525,20 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
             raise RuntimeError("Cannot clear GDS2 DTCs while live data streaming is active")
 
         try:
+            state = self.get_state()
+            vehicle_dtc_status = {}
+            if isinstance(getattr(state, "extra", None), dict):
+                vehicle_dtc_status = dict(state.extra.get("vehicle_dtc_status") or {})
+            if (
+                state.current_page == GDS2Page.DATA_DISPLAY.value
+                and (
+                    vehicle_dtc_status.get("applicable")
+                    or is_vehicle_dtc_information_label(state.current_data_category)
+                )
+                and not vehicle_dtc_status.get("ready")
+            ):
+                raise RuntimeError(vehicle_dtc_not_ready_message(vehicle_dtc_status))
+
             outcome = self._get_clear_dtcs_navigation_runtime().clear_dtcs()
             if isinstance(outcome, ClearResult):
                 if not outcome.success:

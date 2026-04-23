@@ -146,6 +146,24 @@ def read_diagnostic_dtcs(
         state = backend.get_state()
         current_page = getattr(state, "current_page", current_page)
 
+    detailed_reader = getattr(backend, "read_dtcs_with_metadata", None)
+    if callable(detailed_reader):
+        raw_result = detailed_reader()
+        if isinstance(raw_result, dict):
+            result = dict(raw_result)
+            page_context = _strip_optional_text(result.get("page_context")) or getattr(backend.get_state(), "current_page", current_page)
+            payload = {
+                "success": True,
+                "dtcs": list(result.get("dtcs") or []),
+                "dtc_count": int(result.get("dtc_count") or len(result.get("dtcs") or [])),
+                "page_context": page_context,
+            }
+            if result.get("dtc_display_mode"):
+                payload["dtc_display_mode"] = result.get("dtc_display_mode")
+            if result.get("vehicle_dtc_status"):
+                payload["vehicle_dtc_status"] = result.get("vehicle_dtc_status")
+            return payload
+
     dtcs = backend.read_dtcs()
     page_context = getattr(backend.get_state(), "current_page", current_page)
     return {

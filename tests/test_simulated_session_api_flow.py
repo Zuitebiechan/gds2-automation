@@ -138,53 +138,10 @@ def _drive_navigation_to_data_display(
     assert seen_done is True
 
 
-def test_simulated_navigation_session_handlers_reach_data_display(monkeypatch) -> None:
-    runtime = WorkerRuntime()
-    session = _session(
-        "session-simulated",
-        capabilities=[BackendCapability.NAVIGATION],
-    )
-    orchestrator = _FakeOrchestrator(session)
-    harness = make_simulated_backend()
-
-    _bind_simulated_dependencies(
-        monkeypatch,
-        runtime=runtime,
-        orchestrator=orchestrator,
-        backend=harness.backend,
-        ai_engine=FakeAIEngine(),
-    )
-
-    _drive_navigation_to_data_display(
-        monkeypatch,
-        runtime=runtime,
-        session=session,
-        harness=harness,
-    )
-
-    assert session.selected_module == "ECM"
-    assert session.selected_data_category == "Engine Data"
-    assert harness.model.page.value == "data_display"
-    assert runtime.get_navigation_session_id(session.session_id) is None
-
-
-def test_simulated_navigation_session_handlers_pause_at_vehicle_diagnostics_root(monkeypatch) -> None:
-    runtime = WorkerRuntime()
-    session = _session(
-        "session-vehicle-guided",
-        capabilities=[BackendCapability.NAVIGATION],
-    )
-    orchestrator = _FakeOrchestrator(session)
-    harness = make_simulated_backend()
-
-    _bind_simulated_dependencies(
-        monkeypatch,
-        runtime=runtime,
-        orchestrator=orchestrator,
-        backend=harness.backend,
-        ai_engine=FakeAIEngine(),
-    )
-
+def _drive_vehicle_diagnostics_to_information(
+    *,
+    session: Session,
+) -> None:
     payload, status = session_navigation_handlers.start_navigation_session_for_business(
         {
             "session_id": session.session_id,
@@ -234,14 +191,12 @@ def test_simulated_navigation_session_handlers_pause_at_vehicle_diagnostics_root
 
     assert seen_decision is True
     assert seen_done is True
-    assert harness.model.context["vehicle_item"] == "Vehicle DTC Information"
-    assert harness.model.context["module"] is None
 
 
-def test_simulated_navigation_session_handlers_vehicle_dtcs_shortcut_reaches_vehicle_target(monkeypatch) -> None:
+def test_simulated_navigation_session_handlers_reach_data_display(monkeypatch) -> None:
     runtime = WorkerRuntime()
     session = _session(
-        "session-vehicle-dtcs",
+        "session-simulated",
         capabilities=[BackendCapability.NAVIGATION],
     )
     orchestrator = _FakeOrchestrator(session)
@@ -255,34 +210,115 @@ def test_simulated_navigation_session_handlers_vehicle_dtcs_shortcut_reaches_veh
         ai_engine=FakeAIEngine(),
     )
 
-    payload, status = session_navigation_handlers.start_navigation_session_for_business(
-        {
-            "session_id": session.session_id,
-            "goal": "Vehicle DTCs",
-        }
+    _drive_navigation_to_data_display(
+        monkeypatch,
+        runtime=runtime,
+        session=session,
+        harness=harness,
+    )
+
+    assert session.selected_module == "ECM"
+    assert session.selected_data_category == "Engine Data"
+    assert harness.model.page.value == "data_display"
+    assert runtime.get_navigation_session_id(session.session_id) is None
+
+
+def test_simulated_navigation_session_handlers_pause_at_vehicle_diagnostics_root(monkeypatch) -> None:
+    runtime = WorkerRuntime()
+    session = _session(
+        "session-vehicle-guided",
+        capabilities=[BackendCapability.NAVIGATION],
+    )
+    orchestrator = _FakeOrchestrator(session)
+    harness = make_simulated_backend()
+
+    _bind_simulated_dependencies(
+        monkeypatch,
+        runtime=runtime,
+        orchestrator=orchestrator,
+        backend=harness.backend,
+        ai_engine=FakeAIEngine(),
+    )
+
+    _drive_vehicle_diagnostics_to_information(session=session)
+    assert harness.model.context["vehicle_item"] == "Vehicle DTC Information"
+    assert harness.model.context["module"] is None
+
+
+def test_simulated_session_handlers_read_vehicle_dtcs_after_vehicle_diagnostics(monkeypatch) -> None:
+    runtime = WorkerRuntime()
+    session = _session(
+        "session-vehicle-read",
+        capabilities=[
+            BackendCapability.NAVIGATION,
+            BackendCapability.READ_DTCS,
+        ],
+    )
+    orchestrator = _FakeOrchestrator(session)
+    harness = make_simulated_backend()
+
+    _bind_simulated_dependencies(
+        monkeypatch,
+        runtime=runtime,
+        orchestrator=orchestrator,
+        backend=harness.backend,
+        ai_engine=FakeAIEngine(),
+    )
+
+    _drive_vehicle_diagnostics_to_information(session=session)
+
+    payload, status = session_live_data_handlers.read_session_dtcs(
+        {"session_id": session.session_id}
     )
 
     assert status == 200
     assert payload["success"] is True
-
-    events = list(
-        session_navigation_handlers.stream_navigation_events(
-            session.session_id,
-            sse_response=lambda iterator: iterator,
-        )
-    )
-    decoded = [
-        _parse_sse_event(message)
-        for message in events
-        if not message.startswith(":")
-    ]
-
-    assert [event_type for event_type, _ in decoded] == ["connected", "done"]
-    done_payload = decoded[-1][1]
-    assert done_payload["final_page"] == "data_display"
-    assert done_payload["selections"] == {"selected_item": "Vehicle DTC Information"}
+    assert payload["result"]["dtc_count"] == 2
+    assert payload["result"]["page_context"] == "data_display"
+    assert [dtc["code"] for dtc in payload["result"]["dtcs"]] == ["P0001", "P0002"]
     assert harness.model.context["vehicle_item"] == "Vehicle DTC Information"
     assert harness.model.context["module"] is None
+
+
+def test_simulated_session_handlers_clear_vehicle_dtcs_after_vehicle_diagnostics(monkeypatch) -> None:
+    runtime = WorkerRuntime()
+    session = _session(
+        "session-vehicle-clear",
+        capabilities=[
+            BackendCapability.NAVIGATION,
+            BackendCapability.CLEAR_DTCS,
+        ],
+    )
+    orchestrator = _FakeOrchestrator(session)
+    harness = make_simulated_backend()
+
+    _bind_simulated_dependencies(
+        monkeypatch,
+        runtime=runtime,
+        orchestrator=orchestrator,
+        backend=harness.backend,
+        ai_engine=FakeAIEngine(),
+    )
+
+    _drive_vehicle_diagnostics_to_information(session=session)
+
+    clear_payload, clear_status = session_live_data_handlers.clear_session_dtcs(
+        {"session_id": session.session_id}
+    )
+
+    assert clear_status == 200
+    assert clear_payload == {
+        "success": True,
+        "session_id": "session-vehicle-clear",
+        "result": {
+            "success": True,
+            "cleared_count": 2,
+            "message": "Clear DTCs completed",
+            "page_context": "data_display",
+        },
+    }
+    assert harness.model.dtc_count == 0
+    assert harness.model.context["vehicle_item"] == "Vehicle DTC Information"
 
 
 def test_simulated_session_handlers_run_ai_and_clear_dtcs_after_navigation(monkeypatch) -> None:
@@ -367,6 +403,7 @@ def test_simulated_session_handlers_run_ai_and_clear_dtcs_after_navigation(monke
         },
     }
     assert harness.model.dtc_count == 0
+    assert harness.model.context["data_category"] == "Engine Data"
     assert ("session-simulated", "AI diagnosis started: ECM / Engine Data") in orchestrator.progress
     assert ("session-simulated", "Clear DTCs completed (2 codes)") in orchestrator.progress
 

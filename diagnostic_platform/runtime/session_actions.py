@@ -657,25 +657,50 @@ def read_dtcs(
     context = resolve_session_vehicle_context(session, data, backend=backend)
     state, current_page = _read_backend_state_and_page(backend)
 
-    module_name = context.get("module", "")
-    data_category = context.get("data_category", "")
+    # Reading DTCs from the active Data Display should not silently re-run
+    # module/category navigation just because backend context bookkeeping is blank.
+    if current_page != "data_display":
+        module_name = context.get("module", "")
+        data_category = context.get("data_category", "")
 
-    state, current_page = _maybe_select_module_for_session(
-        session,
-        backend=backend,
-        state=state,
-        current_page=current_page,
-        module_name=module_name,
-    )
-    _maybe_select_data_category_for_session(
-        session,
-        backend=backend,
-        state=state,
-        data_category=data_category,
-    )
+        state, current_page = _maybe_select_module_for_session(
+            session,
+            backend=backend,
+            state=state,
+            current_page=current_page,
+            module_name=module_name,
+        )
+        _maybe_select_data_category_for_session(
+            session,
+            backend=backend,
+            state=state,
+            data_category=data_category,
+        )
+
+    detailed_reader = getattr(backend, "read_dtcs_with_metadata", None)
+    if callable(detailed_reader):
+        raw_read_result = detailed_reader()
+        if isinstance(raw_read_result, dict):
+            read_result = dict(raw_read_result)
+            dtcs_payload = list(read_result.get("dtcs") or [])
+            dtc_count = int(read_result.get("dtc_count") or len(dtcs_payload))
+            page_context = _strip_optional_text(read_result.get("page_context")) or _detect_backend_page(backend)
+            set_session_current_page(session, page_context)
+            emit_progress(f"Read DTCs completed ({dtc_count} codes)")
+            payload = {
+                "dtcs": dtcs_payload,
+                "dtc_count": dtc_count,
+                "page_context": page_context,
+            }
+            if read_result.get("dtc_display_mode"):
+                payload["dtc_display_mode"] = read_result.get("dtc_display_mode")
+            if read_result.get("vehicle_dtc_status"):
+                payload["vehicle_dtc_status"] = read_result.get("vehicle_dtc_status")
+            return payload
 
     dtcs = backend.read_dtcs()
     page_context = _detect_backend_page(backend)
+    set_session_current_page(session, page_context)
     emit_progress(f"Read DTCs completed ({len(dtcs)} codes)")
     return {
         "dtcs": [

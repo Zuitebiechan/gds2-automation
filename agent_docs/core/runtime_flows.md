@@ -237,6 +237,12 @@ Sequence:
 3. Call backend DTC read behavior.
 4. Return normalized DTC entries.
 
+Current GDS2 implementation note:
+
+- on `Vehicle DTC Information`, the Java Agent summary table is treated as the source of truth
+- `Read DTCs` waits for that summary table to be ready; rows still reporting `Waiting For Data...` keep the operation unavailable
+- Vehicle summary reads return `dtc_display_mode=vehicle_summary`, with `DTC Count`, control module, module status, and DLC pin mapped into the normalized payload
+
 ### Direct diagnostics
 
 Entry:
@@ -267,6 +273,7 @@ Sequence:
 Current GDS2 implementation note:
 
 - clear-DTC execution and recovery-heavy page handling now run through the backend-owned registry runtime
+- on `Vehicle DTC Information`, `Clear DTCs` stays on the Vehicle Diagnostics branch and executes `Clear DTCs -> Add All -> OK -> OK` from the current page after the summary table is ready
 - the registry runtime is responsible for Clear DTCs same-page verification, loading restart policy, device-explorer recovery, J2534 disconnect handling, and navigation-path correction before resuming the requested clear flow
 - backend state now exposes `navigation_runtime_status`, which records the latest route target, matched state/policy trace, recovery actions, and terminal reason for the most recent registry-runtime operation
 

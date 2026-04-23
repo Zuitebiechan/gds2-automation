@@ -59,6 +59,11 @@ def summarize_backend_state(backend: Any) -> dict[str, Any] | None:
         "is_connected": getattr(state, "is_connected", None),
         "current_module": getattr(state, "current_module", None),
         "current_data_category": getattr(state, "current_data_category", None),
+        "vehicle_dtc_status": (
+            dict(getattr(state, "extra", {}).get("vehicle_dtc_status") or {})
+            if isinstance(getattr(state, "extra", None), dict)
+            else {}
+        ),
     }
 
 

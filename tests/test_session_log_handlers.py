@@ -166,6 +166,64 @@ def test_session_logs_upload_handler_rejects_artifact_over_limit(monkeypatch, tm
     }
 
 
+def test_session_logs_upload_handler_streams_uploaded_jsonl_without_read_text(monkeypatch, tmp_path: Path) -> None:
+    payload_bytes = (
+        json.dumps(
+            {
+                "schema_version": "observability.v1",
+                "ts": "2026-04-22T00:00:00Z",
+                "component": "reverse_client",
+                "component_instance_id": "reverse_client:pid:startup",
+                "event_type": "proxy.request.client_received",
+                "session_id": "session-stream",
+                "connection_epoch": "epoch-stream",
+                "proxy_seq": 20,
+                "status": "ok",
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "schema_version": "observability.v1",
+                "ts": "2026-04-22T00:00:01Z",
+                "component": "session_runtime",
+                "component_instance_id": "session_runtime:pid:startup",
+                "event_type": "session.lifecycle.completed",
+                "session_id": "session-stream",
+                "connection_epoch": "epoch-stream",
+                "status": "ok",
+            }
+        )
+    ).encode("utf-8")
+    payload = {
+        "client_instance_id": "client-stream",
+        "connection_epoch": "epoch-stream",
+        "artifact_id": "artifact-stream",
+        "artifact_name": "stream.jsonl",
+        "artifact_type": "raw",
+        "content_base64": base64.b64encode(payload_bytes).decode("ascii"),
+    }
+    _install_fake_flask_stack(monkeypatch, payload)
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
+
+    session_api = importlib.import_module("server.api.session")
+
+    original_read_text = Path.read_text
+
+    def _guarded_read_text(self: Path, *args, **kwargs):
+        if self.suffix in {".jsonl", ".gz"}:
+            raise AssertionError("jsonl artifacts should be streamed, not read_text() into memory")
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", _guarded_read_text)
+
+    response_payload, status = session_api.session_logs_upload()
+
+    assert status == 201
+    assert response_payload["success"] is True
+    assert response_payload["deduped"] is False
+
+
 def test_session_logs_sync_handler_returns_sync_payload(monkeypatch, tmp_path: Path) -> None:
     payload = {
         "cursor_mtime_ns": 0,

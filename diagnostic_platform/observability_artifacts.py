@@ -195,17 +195,24 @@ def materialize_session_artifacts(
 
 
 def _discover_connection_context_from_artifact(path: Path) -> tuple[str | None, str | None]:
-    text = path.read_text(encoding="utf-8")
-    for line in text.splitlines():
-        if not line.strip():
-            continue
-        payload = json.loads(line)
-        session_id = payload.get("session_id")
-        connection_epoch = payload.get("connection_epoch")
-        return (
-            str(session_id) if session_id not in (None, "") else None,
-            str(connection_epoch) if connection_epoch not in (None, "") else None,
-        )
+    if path.suffix == ".gz":
+        import gzip
+
+        handle = gzip.open(path, "rt", encoding="utf-8")
+    else:
+        handle = path.open("rt", encoding="utf-8")
+
+    with handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            payload = json.loads(line)
+            session_id = payload.get("session_id")
+            connection_epoch = payload.get("connection_epoch")
+            return (
+                str(session_id) if session_id not in (None, "") else None,
+                str(connection_epoch) if connection_epoch not in (None, "") else None,
+            )
     return None, None
 
 

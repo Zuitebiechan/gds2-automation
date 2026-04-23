@@ -62,6 +62,41 @@ def test_write_snapshot_round_trips_payload(tmp_path):
     assert actual == expected
 
 
+def test_write_snapshot_retries_transient_replace_permission_error(monkeypatch, tmp_path):
+    path = tmp_path / "ProgramData" / "VCI_Proxy" / "tunnel_quality.json"
+    snapshot = {
+        "connection_epoch": "epoch-retry",
+        "connected": True,
+        "fresh": True,
+        "updated_at": "2026-03-27T00:00:00Z",
+        "source": "probe",
+        "sample_count": 1,
+        "network_ms": {"last": 10.0, "p50": 10.0, "p95": 10.0},
+        "grade": "good",
+        "status": "healthy",
+        "reason": "ok",
+        "probe_failures": 0,
+    }
+
+    real_replace = __import__("os").replace
+    attempts: list[str] = []
+
+    def _flaky_replace(src, dst):
+        if not attempts:
+            attempts.append("failed")
+            raise PermissionError("snapshot locked")
+        attempts.append("succeeded")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr("vci_proxy.tunnel_quality.os.replace", _flaky_replace)
+    monkeypatch.setattr("vci_proxy.tunnel_quality.time.sleep", lambda _seconds: None)
+
+    write_tunnel_quality_snapshot(snapshot, path)
+
+    assert attempts == ["failed", "succeeded"]
+    assert read_tunnel_quality_snapshot(path)["connection_epoch"] == "epoch-retry"
+
+
 def test_read_snapshot_recomputes_freshness_from_updated_at(tmp_path):
     path = tmp_path / "ProgramData" / "VCI_Proxy" / "tunnel_quality.json"
     path.parent.mkdir(parents=True, exist_ok=True)

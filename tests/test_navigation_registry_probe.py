@@ -438,6 +438,141 @@ def test_registry_navigation_runtime_clear_dtcs_uses_registry_entries(monkeypatc
     }
 
 
+def test_registry_navigation_runtime_clear_dtcs_stays_on_vehicle_dtc_branch(monkeypatch) -> None:
+    runtime = RegistryNavigationRuntime(
+        controller=object(),
+        route_navigator=type(
+            "_Navigator",
+            (),
+            {
+                "graph": {},
+                "capture_settled_snapshot": lambda self: {
+                    "effective_page_id": "data_display",
+                    "observed_actions": [
+                        {"kind": "button", "label": "Clear DTCs"},
+                        {"kind": "button", "label": "Refresh"},
+                        {"kind": "button", "label": "Back"},
+                    ],
+                    "navigation_path": ["Vehicle Diagnostics"],
+                },
+            },
+        )(),
+        entries=[
+            {"page_key": "dtc.display", "aliases": ["DTC Display"]},
+            {"page_key": "dtc.clear.execute", "aliases": ["clear dtcs"]},
+        ],
+        read_dtc_count=(lambda counts=iter([30, 0]): next(counts)),
+        state_reader=lambda: {"data_category": "Vehicle DTC Information"},
+    )
+    executed: list[str] = []
+
+    def fake_execute(*, entry, max_iterations, max_backtracks):
+        executed.append(str(entry["page_key"]))
+        return {
+            "final_page": "data_display",
+            "recovery_actions": [],
+            "final_snapshot": {
+                "effective_page_id": "data_display",
+                "observed_actions": [
+                    {"kind": "button", "label": "Clear DTCs"},
+                    {"kind": "button", "label": "Refresh"},
+                    {"kind": "button", "label": "Back"},
+                ],
+                "navigation_path": ["Vehicle Diagnostics"],
+            },
+        }
+
+    monkeypatch.setattr(runtime, "execute_registry_route", fake_execute)
+
+    result = runtime.clear_dtcs()
+
+    assert executed == ["vehicle_dtc.clear.execute"]
+    assert result["success"] is True
+    assert result["cleared_count"] == 30
+    status = runtime.get_runtime_status()
+    assert status["last_route"]["route_target_page_key"] == "vehicle_dtc.clear.execute"
+
+
+def test_registry_navigation_runtime_clear_dtcs_executes_in_place_from_current_data_display(monkeypatch) -> None:
+    runtime = RegistryNavigationRuntime(
+        controller=object(),
+        route_navigator=type(
+            "_Navigator",
+            (),
+            {
+                "graph": {},
+                "capture_settled_snapshot": lambda self: {
+                    "effective_page_id": "data_display",
+                    "observed_actions": [
+                        {"kind": "button", "label": "Clear DTCs"},
+                        {"kind": "button", "label": "Refresh"},
+                        {"kind": "button", "label": "Back"},
+                    ],
+                    "navigation_path": [
+                        "Module Diagnostics",
+                        "Engine Control Module",
+                        "Data Display",
+                        "Engine Data",
+                    ],
+                },
+            },
+        )(),
+        entries=[
+            {"page_key": "dtc.display", "aliases": ["DTC Display"]},
+            {"page_key": "dtc.clear.execute", "aliases": ["clear dtcs"]},
+        ],
+        read_dtc_count=(lambda counts=iter([2, 0]): next(counts)),
+        state_reader=lambda: {"data_category": "Engine Data"},
+    )
+    executed: list[str] = []
+    route_paths: list[list[str]] = []
+
+    def fake_execute(*, entry, max_iterations, max_backtracks):
+        executed.append(str(entry["page_key"]))
+        route_paths.append(list(entry.get("canonical_path") or []))
+        return {
+            "final_page": "data_display",
+            "recovery_actions": [],
+            "final_snapshot": {
+                "effective_page_id": "data_display",
+                "observed_actions": [
+                    {"kind": "button", "label": "Clear DTCs"},
+                    {"kind": "button", "label": "Refresh"},
+                    {"kind": "button", "label": "Back"},
+                ],
+                "navigation_path": [
+                    "Module Diagnostics",
+                    "Engine Control Module",
+                    "Data Display",
+                    "Engine Data",
+                ],
+            },
+        }
+
+    monkeypatch.setattr(runtime, "execute_registry_route", fake_execute)
+
+    result = runtime.clear_dtcs()
+
+    assert executed == ["data_display.clear.execute"]
+    assert route_paths == [
+        [
+            "Module Diagnostics",
+            "Engine Control Module",
+            "Data Display",
+            "Engine Data",
+            "Clear DTCs",
+            "Add All",
+            "OK",
+            "OK",
+        ]
+    ]
+    assert result["success"] is True
+    assert result["cleared_count"] == 2
+    status = runtime.get_runtime_status()
+    assert status["last_route"]["route_target_page_key"] == "data_display.clear.execute"
+    assert status["last_route"]["canonical_path"] == route_paths[0]
+
+
 def test_registry_navigation_runtime_guided_vehicle_root_emits_decision_and_completes(monkeypatch) -> None:
     class _Controller:
         def __init__(self) -> None:
@@ -516,6 +651,80 @@ def test_registry_navigation_runtime_vehicle_dtcs_alias_uses_registry_route(monk
     assert executed == ["vehicle_dtc.information"]
     assert final["current_page"] == "data_display"
     assert final["selections"] == {}
+
+
+def test_registry_navigation_runtime_select_module_falls_back_to_visible_list_item(monkeypatch) -> None:
+    runtime = RegistryNavigationRuntime(
+        controller=object(),
+        route_navigator=type(
+            "_Navigator",
+            (),
+            {
+                "graph": {},
+                "navigate_to_action": lambda self, label, kind=None, max_backtracks=None, max_iterations=None: {
+                    "matched_start_node_id": None,
+                    "planned_path": [],
+                    "executed_actions": [{"kind": "list_item", "label": label}],
+                    "recovery_actions": [],
+                    "final_page": "data_list",
+                    "final_snapshot": {
+                        "effective_page_id": "data_list",
+                        "list_items": ["Engine Data", "Body Data"],
+                    },
+                },
+            },
+        )(),
+        entries=[],
+    )
+
+    result = runtime.select_module("[K9] Body Control Module")
+
+    assert result == {
+        "selected_module": "[K9] Body Control Module",
+        "data_categories": ["Engine Data", "Body Data"],
+    }
+
+
+def test_registry_navigation_runtime_select_module_falls_back_from_data_display(monkeypatch) -> None:
+    calls: list[tuple[str, str | None, int | None, int | None]] = []
+    runtime = RegistryNavigationRuntime(
+        controller=object(),
+        route_navigator=type(
+            "_Navigator",
+            (),
+            {
+                "graph": {},
+                "navigate_to_action": lambda self, label, kind=None, max_backtracks=None, max_iterations=None: (
+                    calls.append((label, kind, max_backtracks, max_iterations))
+                    or {
+                        "matched_start_node_id": "module_list",
+                        "planned_path": [{"kind": "button", "label": "Back"}],
+                        "executed_actions": [
+                            {"kind": "button", "label": "Back"},
+                            {"kind": "list_item", "label": label},
+                        ],
+                        "recovery_actions": [{"kind": "button", "label": "Back"}],
+                        "final_page": "data_list",
+                        "final_snapshot": {
+                            "effective_page_id": "data_list",
+                            "list_items": ["Body Data"],
+                        },
+                    }
+                ),
+            },
+        )(),
+        entries=[],
+        route_max_backtracks=6,
+        route_max_iterations=18,
+    )
+
+    result = runtime.select_module("[K9] Body Control Module")
+
+    assert calls == [("[K9] Body Control Module", "list_item", 6, 18)]
+    assert result == {
+        "selected_module": "[K9] Body Control Module",
+        "data_categories": ["Body Data"],
+    }
 
 
 def test_registry_navigation_runtime_recover_data_display_uses_registry_route(monkeypatch) -> None:

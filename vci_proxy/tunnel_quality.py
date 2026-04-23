@@ -148,12 +148,31 @@ def write_tunnel_quality_snapshot(snapshot: dict[str, Any], path: str | Path | N
     snapshot_path = Path(path) if path is not None else get_tunnel_quality_snapshot_path()
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
     normalized = normalize_tunnel_quality_snapshot(snapshot)
-    temp_path = snapshot_path.with_suffix(snapshot_path.suffix + ".tmp")
-    temp_path.write_text(
-        json.dumps(normalized, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    os.replace(temp_path, snapshot_path)
+    payload = json.dumps(normalized, ensure_ascii=False, indent=2)
+    last_error: Exception | None = None
+
+    # Windows can transiently deny os.replace if another process briefly opens
+    # the snapshot without delete sharing. Retry with unique temp paths.
+    for attempt in range(3):
+        temp_path = snapshot_path.with_name(
+            f"{snapshot_path.name}.{os.getpid()}.{time.time_ns()}.tmp"
+        )
+        try:
+            temp_path.write_text(payload, encoding="utf-8")
+            os.replace(temp_path, snapshot_path)
+            return snapshot_path
+        except (PermissionError, OSError) as exc:
+            last_error = exc
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            if attempt >= 2:
+                raise
+            time.sleep(0.05 * (attempt + 1))
+
+    if last_error is not None:
+        raise last_error
     return snapshot_path
 
 

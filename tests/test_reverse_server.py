@@ -250,6 +250,193 @@ def test_handle_vci_connection_treats_midstream_connection_reset_as_clean_discon
     assert not any(record.exc_info for record in caplog.records)
 
 
+def test_handle_vci_connection_skips_disconnect_event_during_shutdown(monkeypatch) -> None:
+    async def _run() -> None:
+        server = ReverseProxyServer(config=ProxyConfig.from_args(auth_token="secret"))
+        auth_frame = ProtocolEncoder.encode_auth_req(123, b"x" * 32, sequence=7)
+        reader = _StepReader(
+            auth_frame[:HEADER_SIZE],
+            auth_frame[HEADER_SIZE:],
+            asyncio.CancelledError(),
+        )
+        writer = _FakeWriter(peername=("61.173.158.139", 6535))
+        emitted: list[str] = []
+
+        monkeypatch.setattr(
+            "vci_proxy.reverse_server.verify_signature",
+            lambda token, timestamp, signature: (True, "ok"),
+        )
+
+        async def _probe_loop(epoch: str) -> None:
+            return None
+
+        server._probe_loop = _probe_loop
+        server._write_tunnel_quality_snapshot = lambda: None
+        server._emit_tunnel_event = lambda event_type, **kwargs: emitted.append(event_type)
+        server._shutting_down = True
+
+        await server._handle_vci_connection(reader, writer)
+
+        assert "tunnel.lifecycle.disconnected" not in emitted
+
+    asyncio.run(_run())
+
+
+def test_handle_proxy_connection_skips_cancelled_shutdown(monkeypatch) -> None:
+    async def _run() -> None:
+        server = ReverseProxyServer()
+        server.vci_connected.set()
+        server.vci_writer = _FakeWriter(peername=("10.0.0.9", 9000))
+        server._connection_epoch = "epoch-1"
+        server._shutting_down = True
+        proxy_reader = _StepReader(asyncio.CancelledError())
+        proxy_writer = _FakeWriter(peername=("127.0.0.1", 50000))
+
+        await server._handle_proxy_connection(proxy_reader, proxy_writer)
+
+        assert proxy_writer.closed is True
+
+    asyncio.run(_run())
+
+
+def test_emit_proxy_request_event_is_best_effort_during_shutdown(monkeypatch, caplog) -> None:
+    server = ReverseProxyServer()
+    server._shutting_down = True
+    monkeypatch.setattr(
+        reverse_server_module,
+        "emit_event",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("writer unavailable")),
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="vci_proxy.reverse_server"):
+        server._emit_proxy_request_event(
+            "proxy.request.replied_to_dll",
+            dll_seq=1,
+            msg_name="PING_REQ",
+            reason="cache_reply",
+        )
+
+    assert "Skipping proxy observability during shutdown" in caplog.text
+
+
+def test_start_handles_cancelled_gather_as_graceful_shutdown(monkeypatch) -> None:
+    events: list[str] = []
+
+    class _FakeServer:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def serve_forever(self) -> None:
+            return None
+
+        def close(self) -> None:
+            events.append(f"close:{self.name}")
+
+        async def wait_closed(self) -> None:
+            events.append(f"wait_closed:{self.name}")
+
+    created: list[_FakeServer] = []
+
+    async def _fake_start_server(*args, **kwargs):
+        name = "vci" if not created else "proxy"
+        server = _FakeServer(name)
+        created.append(server)
+        return server
+
+    async def _fake_gather(*args, **kwargs):
+        for awaitable in args:
+            close = getattr(awaitable, "close", None)
+            if callable(close):
+                close()
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr("vci_proxy.reverse_server.asyncio.start_server", _fake_start_server)
+    monkeypatch.setattr("vci_proxy.reverse_server.asyncio.gather", _fake_gather)
+
+    server = ReverseProxyServer(config=ProxyConfig.from_args(auth_token="secret"))
+
+    asyncio.run(server.start())
+
+    assert server._shutting_down is True
+    assert events == [
+        "close:vci",
+        "wait_closed:vci",
+        "close:proxy",
+        "wait_closed:proxy",
+    ]
+
+
+def test_run_server_until_stopped_ignores_repeated_sigint(monkeypatch, capsys) -> None:
+    class _FakeTask:
+        def __init__(self) -> None:
+            self.cancel_calls = 0
+
+        def cancel(self):
+            self.cancel_calls += 1
+
+        def done(self):
+            return False
+
+    class _DoneAwaitable:
+        def __await__(self):
+            if False:
+                yield None
+            return None
+
+    class _FakeLoop:
+        def __init__(self) -> None:
+            self.main_task = _FakeTask()
+            self.created_coro = None
+
+        def create_task(self, coro):
+            self.created_coro = coro
+            return self.main_task
+
+        def call_soon_threadsafe(self, callback, *args):
+            callback(*args)
+
+        def run_until_complete(self, awaitable):
+            if awaitable is self.main_task:
+                return None
+            return None
+
+        def shutdown_asyncgens(self):
+            return _DoneAwaitable()
+
+        def shutdown_default_executor(self):
+            return _DoneAwaitable()
+
+        def close(self):
+            if self.created_coro is not None:
+                self.created_coro.close()
+            return None
+
+    fake_loop = _FakeLoop()
+    signal_handlers: dict[object, object] = {}
+
+    monkeypatch.setattr(reverse_server_module.asyncio, "new_event_loop", lambda: fake_loop)
+    monkeypatch.setattr(reverse_server_module.asyncio, "set_event_loop", lambda loop: None)
+    monkeypatch.setattr(reverse_server_module.asyncio, "all_tasks", lambda loop: set())
+    monkeypatch.setattr(reverse_server_module.signal, "getsignal", lambda signum: "previous")
+    monkeypatch.setattr(reverse_server_module.signal, "signal", lambda signum, handler: signal_handlers.setdefault(signum, handler))
+    monkeypatch.setattr(reverse_server_module.os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
+
+    server = ReverseProxyServer()
+    reverse_server_module._run_server_until_stopped(server)
+
+    sigint = reverse_server_module.signal.SIGINT
+    handler = signal_handlers[sigint]
+    handler(sigint, None)
+    with pytest.raises(SystemExit) as exc:
+        handler(sigint, None)
+
+    captured = capsys.readouterr()
+    assert "停止服务器..." in captured.out
+    assert "强制停止服务器..." in captured.out
+    assert fake_loop.main_task.cancel_calls == 1
+    assert exc.value.code == 130
+
+
 def test_handle_vci_connection_emits_observability_connected_and_disconnected_events(
     monkeypatch,
     tmp_path,
@@ -553,6 +740,36 @@ def test_write_tunnel_quality_snapshot_tolerates_permission_error(monkeypatch, c
     assert "Failed to persist tunnel quality snapshot: denied" in caplog.text
 
 
+def test_write_tunnel_quality_snapshot_deduplicates_repeated_permission_errors(monkeypatch, caplog) -> None:
+    server = ReverseProxyServer()
+    server._tunnel_quality = types.SimpleNamespace(
+        snapshot=lambda: {
+            "connection_epoch": "epoch-4",
+            "connected": True,
+            "fresh": True,
+            "updated_at": "2026-04-15T00:00:00Z",
+            "source": "probe",
+            "sample_count": 1,
+            "network_ms": {"last": 1.0, "p50": 1.0, "p95": 1.0},
+            "grade": "good",
+            "status": "healthy",
+            "reason": "ok",
+            "probe_failures": 0,
+        }
+    )
+    monkeypatch.setattr(
+        reverse_server_module,
+        "write_tunnel_quality_snapshot",
+        lambda snapshot: (_ for _ in ()).throw(PermissionError("denied")),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="vci_proxy.reverse_server"):
+        server._write_tunnel_quality_snapshot()
+        server._write_tunnel_quality_snapshot()
+
+    assert caplog.text.count("Failed to persist tunnel quality snapshot: denied") == 1
+
+
 def test_invalidate_caches_clears_channel_and_filter_entries() -> None:
     events: list[tuple[str, int]] = []
     server = ReverseProxyServer()
@@ -604,12 +821,11 @@ def test_main_disables_windows_quick_edit_before_starting_server(monkeypatch) ->
         ),
     )
 
-    def _fake_asyncio_run(coro):
-        events.append("run")
-        coro.close()
-        return None
-
-    monkeypatch.setattr(reverse_server_module.asyncio, "run", _fake_asyncio_run)
+    monkeypatch.setattr(
+        reverse_server_module,
+        "_run_server_until_stopped",
+        lambda server: events.append("run"),
+    )
 
     reverse_server_module.main()
 

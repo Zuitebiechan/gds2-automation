@@ -61,6 +61,16 @@ DEFAULT_CONFIG = {
     "tls_server_name": "",
 }
 
+TUNNEL_RESTART_KEYS = (
+    "host",
+    "port",
+    "auth_token",
+    "dll_path",
+    "tls_enabled",
+    "tls_ca_file",
+    "tls_server_name",
+)
+
 
 def format_driver_label(
     driver: dict[str, Any],
@@ -107,6 +117,13 @@ def save_config(cfg: dict) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(normalize_config(cfg), f, indent=2)
+
+
+def tunnel_restart_required(previous: dict | None, updated: dict | None) -> bool:
+    """Return True when saved settings require a reverse-client restart."""
+    previous_cfg = normalize_config(previous)
+    updated_cfg = normalize_config(updated)
+    return any(previous_cfg.get(key) != updated_cfg.get(key) for key in TUNNEL_RESTART_KEYS)
 
 
 # ---------------------------------------------------------------------------
@@ -732,18 +749,26 @@ class VCIProxyTrayApp:
     def _run_settings_dialog(self) -> None:
         """Open settings dialog outside the tray callback thread."""
         logger.info("[GUI_CTRL] opening settings dialog")
-        self._stop_client()
         try:
             result = self._run_on_ui_thread(lambda: ConfigDialog(self._config).show())
             if result:
-                logger.info("[GUI_CTRL] settings updated, restarting client")
-                self._config = normalize_config({**self._config, **result})
+                previous_config = normalize_config(self._config)
+                updated_config = normalize_config({**self._config, **result})
+                needs_restart = tunnel_restart_required(previous_config, updated_config)
+                logger.info(
+                    "[GUI_CTRL] settings updated restart_required=%s",
+                    needs_restart,
+                )
+                self._config = updated_config
                 save_config(self._config)
-                self._start_client()
-            elif self._has_required_config():
-                logger.info("[GUI_CTRL] settings dialog cancelled, restoring previous client")
-                # User cancelled but had previous config — restart with old config
-                self._start_client()
+                if needs_restart:
+                    logger.info("[GUI_CTRL] applying updated tunnel settings")
+                    self._restart_client()
+                elif not (self._client_thread and self._client_thread.is_alive()) and self._has_required_config():
+                    logger.info("[GUI_CTRL] settings saved while client was stopped, starting client")
+                    self._start_client()
+            else:
+                logger.info("[GUI_CTRL] settings dialog cancelled")
         finally:
             self._settings_dialog_thread = None
 

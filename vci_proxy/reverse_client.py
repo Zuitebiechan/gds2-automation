@@ -484,7 +484,6 @@ class ReverseProxyClient:
                             attempt_label,
                             server_hostname,
                         )
-                    self._notify_status("connected", f"{self.server_host}:{self.server_port}")
                     backoff_seconds = 5.0
 
                     if await self._send_registration(reader, writer, attempt_label=attempt_label):
@@ -493,6 +492,7 @@ class ReverseProxyClient:
                             self._instance_id,
                             attempt_label,
                         )
+                        self._notify_status("connected", f"{self.server_host}:{self.server_port}")
                         self._emit_client_event(
                             "reverse_client.lifecycle.registration_succeeded",
                             reason="registration_succeeded",

@@ -85,16 +85,6 @@ class NavigationController:
         "数据展示",
     )
 
-    _PRIOR_DISCONNECT_CONTEXT = frozenset(
-        {
-            GDS2Page.DATA_DISPLAY,
-            GDS2Page.DATA_LIST,
-            GDS2Page.SUB_DATA_LIST,
-            GDS2Page.MODULE_SUBMENU,
-            GDS2Page.J2534_DISCONNECT,
-        }
-    )
-
     def __init__(self, nav=None):
         """
         Initialize navigation controller.
@@ -430,14 +420,14 @@ class NavigationController:
         if not self._is_back_only_empty_list_state(button_texts):
             return None
 
+        # In heuristic fallback mode, Back-only empty states are usually transient
+        # loading between deep pages. Bias toward LOADING unless we see an explicit
+        # disconnect marker, otherwise we spuriously trigger disconnect recovery.
         if "OK" in button_texts:
             return GDS2Page.J2534_DISCONNECT
 
-        if self._current_page in self._PRIOR_DISCONNECT_CONTEXT:
-            return GDS2Page.J2534_DISCONNECT
-
         logger.debug(
-            "Ambiguous Back-only empty-list state from %s -> treating as LOADING",
+            "Back-only empty-list heuristic state from %s without OK -> treating as LOADING",
             self._current_page.value,
         )
         return GDS2Page.LOADING

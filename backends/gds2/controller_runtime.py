@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -24,6 +25,11 @@ from backends.gds2.registry_navigation_runtime import (
     restart_gds2_runtime,
 )
 from backends.gds2.route_navigator import GDS2RouteNavigator
+from backends.gds2.vehicle_dtc_status import (
+    build_vehicle_dtc_summary_rows,
+    evaluate_vehicle_dtc_status,
+    vehicle_dtc_not_ready_message,
+)
 from src.navigation import GDS2Page, NavigationController
 from src.streaming import AgentDataCollector
 from src.streaming.agent_data_collector import _parse_agent_json
@@ -32,6 +38,7 @@ from vci_proxy.tunnel_quality import read_tunnel_quality_snapshot
 
 logger = logging.getLogger(__name__)
 _AGENT_JSON_ENCODINGS = ("gbk", "utf-8", "utf-8-sig", "latin-1", "cp1252")
+_AGENT_STATUS_MAX_AGE_SECONDS = 10.0
 class GDS2ControllerRuntime:
     _CONNECTED_PAGES = {
         GDS2Page.VEHICLE_SELECTION,
@@ -77,13 +84,14 @@ class GDS2ControllerRuntime:
 
     def preflight(self) -> dict[str, Any]:
         network_quality = self.get_network_quality()
-        logger.info(
-            "[GDS2_RUNTIME] preflight epoch=%s grade=%s status=%s reason=%s",
-            network_quality.get("connection_epoch"),
-            network_quality.get("grade"),
-            network_quality.get("status"),
-            network_quality.get("reason"),
-        )
+        if str(network_quality.get("status") or "").strip().lower() != "healthy":
+            logger.warning(
+                "[GDS2_RUNTIME] preflight epoch=%s grade=%s status=%s reason=%s",
+                network_quality.get("connection_epoch"),
+                network_quality.get("grade"),
+                network_quality.get("status"),
+                network_quality.get("reason"),
+            )
         return {
             "network_quality": network_quality,
             "connection_epoch": network_quality.get("connection_epoch"),
@@ -113,6 +121,7 @@ class GDS2ControllerRuntime:
         context = self._controller.get_context()
         state_snapshot = self._read_state_snapshot()
         device = context.get("device") or state_snapshot.get("device")
+        vehicle_dtc_status = self._read_vehicle_dtc_status(current_page=page_value)
 
         return BackendState(
             current_page=page_value,
@@ -127,6 +136,7 @@ class GDS2ControllerRuntime:
                 "sub_category": context.get("sub_category"),
                 "network_quality": network_quality,
                 "connection_epoch": connection_epoch,
+                "vehicle_dtc_status": vehicle_dtc_status,
             },
         )
 
@@ -153,12 +163,40 @@ class GDS2ControllerRuntime:
 
         snapshot = _parse_agent_json(self._load_agent_json_payload(collector.json_path))
         self._ensure_agent_snapshot_matches_page(snapshot.page_context)
+        vehicle_dtc_status = evaluate_vehicle_dtc_status(snapshot)
+        if vehicle_dtc_status.get("applicable") and not vehicle_dtc_status.get("ready"):
+            raise RuntimeError(vehicle_dtc_not_ready_message(vehicle_dtc_status))
+        if vehicle_dtc_status.get("applicable"):
+            summary_rows = build_vehicle_dtc_summary_rows(snapshot)
+            self._runtime_state.update(self.get_controller().get_context())
+            return {
+                "dtcs": summary_rows,
+                "dtc_count": int(vehicle_dtc_status.get("total_dtc_count") or 0),
+                "page_context": snapshot.page_context,
+                "vehicle_dtc_status": vehicle_dtc_status,
+                "dtc_display_mode": "vehicle_summary",
+            }
         self._runtime_state.update(self.get_controller().get_context())
         return {
             "dtcs": [dtc.to_dict() for dtc in snapshot.dtcs],
             "dtc_count": len(snapshot.dtcs),
             "page_context": snapshot.page_context,
+            "vehicle_dtc_status": vehicle_dtc_status,
+            "dtc_display_mode": "dtc_detail",
         }
+
+    def read_current_dtc_count(self) -> int:
+        collector = AgentDataCollector()
+        availability = collector.check_agent_available()
+        if not availability.get("available"):
+            raise RuntimeError("Java Agent not available. Start GDS2 with agent.")
+
+        snapshot = _parse_agent_json(self._load_agent_json_payload(collector.json_path))
+        self._ensure_agent_snapshot_matches_page(snapshot.page_context)
+        vehicle_dtc_status = evaluate_vehicle_dtc_status(snapshot)
+        if vehicle_dtc_status.get("applicable"):
+            return int(vehicle_dtc_status.get("total_dtc_count") or 0)
+        return len(snapshot.dtcs)
 
     def build_navigation_runtime(
         self,
@@ -214,6 +252,7 @@ class GDS2ControllerRuntime:
             ),
             restart_runtime=self._restart_registry_runtime,
             read_dtcs_snapshot=self.read_all_dtcs,
+            read_dtc_count=self.read_current_dtc_count,
             state_reader=self._read_state_snapshot,
             default_device_name="VCI Proxy (Remote)",
         )
@@ -289,5 +328,36 @@ class GDS2ControllerRuntime:
     def _ensure_controller_helpers(self) -> None:
         if self._controller is not None and not hasattr(self._controller, "get_available_items"):
             setattr(self._controller, "get_available_items", self._controller.wait_for_list)
+
+    def _read_vehicle_dtc_status(self, *, current_page: str) -> dict[str, Any]:
+        if str(current_page or "").strip().lower() != GDS2Page.DATA_DISPLAY.value:
+            return evaluate_vehicle_dtc_status(None)
+
+        json_path = Path.home() / "gds2-data" / "latest.json"
+        try:
+            mtime = json_path.stat().st_mtime
+        except OSError:
+            return {
+                **evaluate_vehicle_dtc_status(None),
+                "message": vehicle_dtc_not_ready_message(),
+                "reason": "agent_snapshot_missing",
+            }
+
+        if time.time() - mtime > _AGENT_STATUS_MAX_AGE_SECONDS:
+            return {
+                **evaluate_vehicle_dtc_status(None),
+                "message": vehicle_dtc_not_ready_message(),
+                "reason": "agent_snapshot_stale",
+            }
+
+        try:
+            snapshot = _parse_agent_json(self._load_agent_json_payload(json_path))
+        except RuntimeError:
+            return {
+                **evaluate_vehicle_dtc_status(None),
+                "message": vehicle_dtc_not_ready_message(),
+                "reason": "agent_snapshot_unreadable",
+            }
+        return evaluate_vehicle_dtc_status(snapshot)
 
 __all__ = ["GDS2ControllerRuntime"]

@@ -483,6 +483,7 @@ def test_on_settings_cancel_does_not_restart_client_when_auth_token_is_missing(m
         "auth_token": "",
         "dll_path": "",
     }
+    app._client_thread = types.SimpleNamespace(is_alive=lambda: True)
     app._stop_client = lambda: observed.setdefault("stopped", True)
     app._start_client = lambda: observed.setdefault("started", True)
     monkeypatch.setattr(client_gui, "ConfigDialog", _FakeDialog)
@@ -490,8 +491,8 @@ def test_on_settings_cancel_does_not_restart_client_when_auth_token_is_missing(m
 
     app._on_settings()
 
-    assert observed["stopped"] is True
     assert observed["dialog_config"]["auth_token"] == ""
+    assert "stopped" not in observed
     assert "started" not in observed
 
 
@@ -527,21 +528,68 @@ def test_run_settings_dialog_preserves_existing_tls_config(monkeypatch, tmp_path
         "tls_ca_file": "C:/certs/ca.pem",
         "tls_server_name": "diag.example",
     }
+    app._client_thread = types.SimpleNamespace(is_alive=lambda: True)
     monkeypatch.setattr(client_gui, "ConfigDialog", _FakeDialog)
     monkeypatch.setattr(client_gui, "save_config", lambda cfg: observed.setdefault("saved", dict(cfg)))
     monkeypatch.setattr(app, "_start_client", lambda: observed.setdefault("started", True))
-    monkeypatch.setattr(app, "_stop_client", lambda: observed.setdefault("stopped", True))
+    monkeypatch.setattr(app, "_restart_client", lambda: observed.setdefault("restarted", True))
     monkeypatch.setattr(app, "_run_on_ui_thread", lambda callback, timeout=None: callback())
 
     app._run_settings_dialog()
 
-    assert observed["stopped"] is True
     assert observed["saved"]["tls_enabled"] is True
     assert observed["saved"]["tls_ca_file"] == "C:/certs/ca.pem"
     assert observed["saved"]["tls_server_name"] == "diag.example"
     assert observed["saved"]["api_scheme"] == "https"
     assert observed["saved"]["api_token"] == "api-secret"
-    assert observed["started"] is True
+    assert "started" not in observed
+    assert "restarted" not in observed
+
+
+def test_run_settings_dialog_restarts_client_when_tunnel_settings_change(monkeypatch, tmp_path) -> None:
+    client_gui = _import_client_gui(monkeypatch, tmp_path)
+    observed: dict[str, object] = {}
+
+    class _FakeDialog:
+        def __init__(self, config):
+            observed["dialog_config"] = dict(config)
+
+        def show(self):
+            return {
+                "api_scheme": "http",
+                "host": "diag.example",
+                "port": 9000,
+                "api_port": 8080,
+                "api_token": "",
+                "auth_token": "updated-secret",
+                "dll_path": "",
+            }
+
+    app = client_gui.VCIProxyTrayApp()
+    app._config = {
+        "api_scheme": "http",
+        "host": "diag.example",
+        "port": 9000,
+        "api_port": 8080,
+        "api_token": "",
+        "auth_token": "secret",
+        "dll_path": "",
+        "tls_enabled": False,
+        "tls_ca_file": "",
+        "tls_server_name": "",
+    }
+    app._client_thread = types.SimpleNamespace(is_alive=lambda: True)
+    monkeypatch.setattr(client_gui, "ConfigDialog", _FakeDialog)
+    monkeypatch.setattr(client_gui, "save_config", lambda cfg: observed.setdefault("saved", dict(cfg)))
+    monkeypatch.setattr(app, "_restart_client", lambda: observed.setdefault("restarted", True))
+    monkeypatch.setattr(app, "_start_client", lambda: observed.setdefault("started", True))
+    monkeypatch.setattr(app, "_run_on_ui_thread", lambda callback, timeout=None: callback())
+
+    app._run_settings_dialog()
+
+    assert observed["saved"]["auth_token"] == "updated-secret"
+    assert observed["restarted"] is True
+    assert "started" not in observed
 
 
 def test_run_prompts_for_settings_when_auth_token_is_missing(monkeypatch, tmp_path) -> None:

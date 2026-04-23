@@ -11,6 +11,7 @@ from typing import Any
 
 from backends.gds2.backend import GDS2DiagnosticBackend
 from backends.gds2.controller_runtime import GDS2ControllerRuntime
+from backends.gds2.vehicle_dtc_status import is_vehicle_dtc_information_label
 from diagnostic_platform.runtime.navigation_runtime import NavSession, NavSessionStatus
 from src.navigation import GDS2Page, NavigationResult
 from src.streaming.agent_data_collector import AgentSnapshot, DTCInfo
@@ -305,7 +306,6 @@ class SimulatedRegistryNavigationRuntime:
     def clear_dtcs(self) -> dict[str, object]:
         if self._model.page != GDS2Page.DATA_DISPLAY:
             self._model.page = GDS2Page.DATA_DISPLAY
-        self._model.context["data_category"] = "DTC Display"
         cleared = len(self._model.dtcs)
         self._model.dtcs = []
         return {
@@ -532,6 +532,28 @@ def make_simulated_backend() -> SimulatedGDS2Harness:
         state_reader=workflow.get_state,
         snapshot_reader=simulated_snapshot_reader,
     )
+    original_status = runtime.status
+
+    def status(self):
+        state = original_status()
+        if (
+            state.current_page == GDS2Page.DATA_DISPLAY.value
+            and is_vehicle_dtc_information_label(model.context.get("data_category"))
+        ):
+            state.extra = {
+                **(state.extra if isinstance(state.extra, dict) else {}),
+                "vehicle_dtc_status": {
+                    "applicable": True,
+                    "ready": True,
+                    "reason": "ready",
+                    "message": "Vehicle DTC Information is ready.",
+                    "row_count": 2,
+                    "waiting_for_data_count": 0,
+                },
+            }
+        return state
+
+    runtime.status = MethodType(status, runtime)
     runtime.read_all_dtcs = MethodType(lambda self: workflow.read_all_dtcs(), runtime)
     original_build_navigation_runtime = runtime.build_navigation_runtime
 
