@@ -8,6 +8,7 @@ import pytest
 
 from backends.gds2.registry_navigation_runtime import (
     clear_dtcs_state_matches,
+    data_display_recovery_targets,
     decide_vehicle_selection_action,
     executed_actions_available,
     first_pending_route_step,
@@ -156,6 +157,87 @@ def test_j2534_disconnect_policy_clicks_ok_when_available() -> None:
     ) is True
     assert controller.clicked == ["OK"]
     assert recovery_actions[0]["reason"] == "j2534_disconnect soft recovery"
+
+
+def test_j2534_disconnect_policy_uses_legacy_data_display_recovery() -> None:
+    class _Result:
+        success = True
+        page = type("P", (), {"value": "data_display"})()
+        context = {"recovery_method": "backtrack"}
+
+    class _Controller:
+        current_data_category = None
+        current_sub_category = None
+
+        def __init__(self) -> None:
+            self.context_updates = []
+            self.calls = []
+
+        def set_context(self, **kwargs):
+            self.context_updates.append(dict(kwargs))
+
+        def recover_data_display_connection(self, **kwargs):
+            self.calls.append(dict(kwargs))
+            return _Result()
+
+    recovery_actions = []
+    controller = _Controller()
+
+    assert handle_j2534_disconnect(
+        controller=controller,
+        recovery_actions=recovery_actions,
+        policy={
+            "params": {
+                "soft_retry_attempts": 3,
+                "ok_timeout_sec": 2.0,
+                "backtrack_attempts": 2,
+                "retry_delays": [0.0, 1.5, 3.0],
+            }
+        },
+        recovery_data_category="Engine Data",
+        recovery_sub_category="Fuel System",
+        use_legacy_data_display_recovery=True,
+    ) is True
+    assert controller.context_updates == [{"data_category": "Engine Data", "sub_category": "Fuel System"}]
+    assert controller.calls == [
+        {
+            "data_category": "Engine Data",
+            "soft_retry_attempts": 3,
+            "ok_timeout": 2.0,
+            "allow_backtrack": True,
+            "backtrack_attempts": 2,
+            "retry_delays": [0.0, 1.5, 3.0],
+        }
+    ]
+    assert recovery_actions == [
+        {
+            "kind": "button",
+            "label": "Back",
+            "reason": "j2534_disconnect fallback backtrack",
+            "success": True,
+        }
+    ]
+
+
+def test_data_display_recovery_targets_use_canonical_path_before_context() -> None:
+    class _Controller:
+        current_data_category = "Stale Data"
+        current_sub_category = "Stale Sub"
+
+    data_category, sub_category = data_display_recovery_targets(
+        {
+            "page_kind": "data_display",
+            "canonical_path": [
+                "Module Diagnostics",
+                "Engine Control Module",
+                "Data Display",
+                "Fuel Trim Data",
+            ],
+        },
+        controller=_Controller(),
+    )
+
+    assert (data_category, sub_category) == ("Fuel Trim Data", None)
 
 
 def test_vehicle_selection_status_falls_back_to_buttons_when_status_missing() -> None:
@@ -747,10 +829,11 @@ def test_registry_navigation_runtime_recover_data_display_uses_registry_route(mo
         ],
     )
 
-    monkeypatch.setattr(
-        runtime,
-        "execute_registry_route",
-        lambda **kwargs: {
+    calls = []
+
+    def _execute_registry_route(**kwargs):
+        calls.append(dict(kwargs))
+        return {
             "final_page": "data_display",
             "recovery_actions": [
                 {
@@ -760,11 +843,13 @@ def test_registry_navigation_runtime_recover_data_display_uses_registry_route(mo
                 }
             ],
             "final_snapshot": {},
-        },
-    )
+        }
+
+    monkeypatch.setattr(runtime, "execute_registry_route", _execute_registry_route)
 
     result = runtime.recover_data_display(data_category="Engine Data", mode="stream")
 
+    assert calls[0]["recovery_data_category"] == "Engine Data"
     assert result == {
         "ok": True,
         "mode": "stream",
@@ -1015,7 +1100,7 @@ def test_script_run_probe_uses_registry_navigation_runtime_class(monkeypatch) ->
         def capture_runtime_snapshot(self):
             return {"effective_page_id": "diagnostics_menu", "observed_actions": [], "navigation_path": []}
 
-        def execute_registry_route(self, *, entry, max_iterations, max_backtracks):
+        def execute_registry_route(self, *, entry, max_iterations, max_backtracks, **_kwargs):
             return {
                 "final_snapshot": {
                     "effective_page_id": "data_display",

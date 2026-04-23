@@ -667,15 +667,128 @@ def handle_device_explorer(
     return bool(selected and continued)
 
 
+def data_display_recovery_targets(
+    entry: dict[str, Any],
+    *,
+    controller: NavigationController | Any | None = None,
+) -> tuple[str | None, str | None]:
+    if str(entry.get("page_kind") or "").strip() != "data_display":
+        return None, None
+
+    canonical_path = [
+        str(item).strip()
+        for item in entry.get("canonical_path") or []
+        if str(item).strip()
+    ]
+    data_category: str | None = None
+    sub_category: str | None = None
+    if "Data Display" in canonical_path:
+        data_index = canonical_path.index("Data Display")
+        if data_index + 1 < len(canonical_path):
+            data_category = canonical_path[data_index + 1]
+        if data_index + 2 < len(canonical_path):
+            sub_category = canonical_path[data_index + 2]
+
+    if controller is not None:
+        current_data_category = str(getattr(controller, "current_data_category", "") or "").strip()
+        current_sub_category = str(getattr(controller, "current_sub_category", "") or "").strip()
+        if not data_category and current_data_category:
+            data_category = current_data_category
+        if (
+            not sub_category
+            and current_sub_category
+            and current_data_category
+            and current_data_category == data_category
+        ):
+            sub_category = current_sub_category
+
+    return data_category, sub_category
+
+
+def _legacy_j2534_recovery_action(result: Any) -> dict[str, Any] | None:
+    context = getattr(result, "context", {}) or {}
+    recovery_method = str(context.get("recovery_method") or "").strip()
+    if recovery_method == "soft_ok":
+        return {
+            "kind": "button",
+            "label": "OK",
+            "reason": "j2534_disconnect soft recovery",
+            "success": True,
+        }
+    if recovery_method == "backtrack":
+        return {
+            "kind": "button",
+            "label": "Back",
+            "reason": "j2534_disconnect fallback backtrack",
+            "success": True,
+        }
+    if recovery_method == "loading_wait":
+        return {
+            "kind": "wait",
+            "label": "loading",
+            "reason": "j2534_disconnect loading wait",
+            "success": True,
+        }
+    return None
+
+
 def handle_j2534_disconnect(
     *,
     controller: NavigationController,
     recovery_actions: list[dict[str, Any]],
     policy: dict[str, Any] | None = None,
+    recovery_data_category: str | None = None,
+    recovery_sub_category: str | None = None,
+    use_legacy_data_display_recovery: bool = False,
 ) -> bool:
     params = dict((policy or {}).get("params") or {})
     soft_retry_attempts = int(params.get("soft_retry_attempts") or 1)
     ok_timeout_sec = float(params.get("ok_timeout_sec") or 2.0)
+    backtrack_attempts = int(params.get("backtrack_attempts") or 2)
+    retry_delays_value = params.get("retry_delays")
+    retry_delays = (
+        [float(delay) for delay in retry_delays_value]
+        if isinstance(retry_delays_value, list)
+        else None
+    )
+    if use_legacy_data_display_recovery and hasattr(controller, "recover_data_display_connection"):
+        if hasattr(controller, "set_context"):
+            context_updates: dict[str, Any] = {}
+            if recovery_data_category:
+                context_updates["data_category"] = recovery_data_category
+            if recovery_sub_category:
+                context_updates["sub_category"] = recovery_sub_category
+            if context_updates:
+                controller.set_context(**context_updates)
+        legacy_result = controller.recover_data_display_connection(
+            data_category=recovery_data_category,
+            soft_retry_attempts=soft_retry_attempts,
+            ok_timeout=ok_timeout_sec,
+            allow_backtrack=True,
+            backtrack_attempts=backtrack_attempts,
+            retry_delays=retry_delays,
+        )
+        mapped_action = _legacy_j2534_recovery_action(legacy_result)
+        if mapped_action is not None:
+            recovery_actions.append(mapped_action)
+        legacy_page = str(
+            getattr(getattr(legacy_result, "page", None), "value", getattr(legacy_result, "page", ""))
+            or ""
+        ).strip()
+        if getattr(legacy_result, "success", False):
+            return True
+        if legacy_page and legacy_page != "j2534_disconnect":
+            recovery_actions.append(
+                {
+                    "kind": "legacy_recovery",
+                    "label": "recover_data_display_connection",
+                    "reason": "j2534_disconnect legacy recovery advanced route state",
+                    "success": False,
+                    "page": legacy_page,
+                }
+            )
+            return True
+
     for _ in range(max(1, soft_retry_attempts)):
         buttons = controller.get_available_buttons() if hasattr(controller, "get_available_buttons") else {}
         if buttons.get("OK", False):
@@ -711,6 +824,9 @@ def recover_to_registry_common_ancestor(
     device_name: str = DEFAULT_VCI_DEVICE_NAME,
     page_states: list[dict[str, Any]] | None = None,
     recovery_policies: list[dict[str, Any]] | None = None,
+    recovery_data_category: str | None = None,
+    recovery_sub_category: str | None = None,
+    use_legacy_data_display_recovery: bool = False,
 ) -> list[dict[str, Any]]:
     recovery_actions: list[dict[str, Any]] = []
     if not target_path:
@@ -721,7 +837,14 @@ def recover_to_registry_common_ancestor(
             return recovery_actions
         if str(snapshot.get("effective_page_id") or "") == "j2534_disconnect":
             policy = policy_for_state(recovery_policies or [], "j2534_disconnect.visible")
-            if handle_j2534_disconnect(controller=controller, recovery_actions=recovery_actions, policy=policy):
+            if handle_j2534_disconnect(
+                controller=controller,
+                recovery_actions=recovery_actions,
+                policy=policy,
+                recovery_data_category=recovery_data_category,
+                recovery_sub_category=recovery_sub_category,
+                use_legacy_data_display_recovery=use_legacy_data_display_recovery,
+            ):
                 continue
             return recovery_actions
         if str(snapshot.get("effective_page_id") or "") == "device_explorer":
@@ -1362,6 +1485,7 @@ class RegistryNavigationRuntime:
                 entry=target_entry,
                 max_iterations=self._route_max_iterations,
                 max_backtracks=self._route_max_backtracks,
+                recovery_data_category=data_category,
             )
         except Exception as exc:
             result = {
@@ -1947,6 +2071,8 @@ class RegistryNavigationRuntime:
         max_iterations: int,
         max_backtracks: int,
         cancel_checker: Callable[[], None] | None = None,
+        recovery_data_category: str | None = None,
+        recovery_sub_category: str | None = None,
     ) -> dict[str, Any]:
         state_trace: list[dict[str, Any]] = []
         target_action = entry.get("target_action") or {}
@@ -1957,6 +2083,16 @@ class RegistryNavigationRuntime:
         success_criteria = dict(entry.get("success_criteria") or {})
         target_path = [str(item).strip() for item in entry.get("canonical_path") or [] if str(item).strip()]
         graph = self._route_navigator.graph
+        entry_data_category, entry_sub_category = data_display_recovery_targets(
+            entry,
+            controller=self._controller,
+        )
+        route_recovery_data_category = entry_data_category or recovery_data_category
+        route_recovery_sub_category = entry_sub_category or recovery_sub_category
+        use_legacy_data_display_recovery = (
+            str(entry.get("page_kind") or "").strip() == "data_display"
+            and bool(route_recovery_data_category)
+        )
         loading_watchdog = LoadingWatchdog(
             timeout_sec=self._loading_timeout_sec,
             max_restarts=self._max_loading_restarts,
@@ -1970,6 +2106,9 @@ class RegistryNavigationRuntime:
             device_name=self._default_device_name,
             page_states=self._page_states,
             recovery_policies=self._recovery_policies,
+            recovery_data_category=route_recovery_data_category,
+            recovery_sub_category=route_recovery_sub_category,
+            use_legacy_data_display_recovery=use_legacy_data_display_recovery,
         )
         executed_actions: list[dict[str, str]] = []
         start_snapshot = self._route_navigator.capture_settled_snapshot()
@@ -2051,7 +2190,14 @@ class RegistryNavigationRuntime:
                         "decision": "recover",
                     }
                 )
-                if handle_j2534_disconnect(controller=self._controller, recovery_actions=recovery_actions, policy=policy):
+                if handle_j2534_disconnect(
+                    controller=self._controller,
+                    recovery_actions=recovery_actions,
+                    policy=policy,
+                    recovery_data_category=route_recovery_data_category,
+                    recovery_sub_category=route_recovery_sub_category,
+                    use_legacy_data_display_recovery=use_legacy_data_display_recovery,
+                ):
                     continue
 
             success_requires_executed = [dict(action) for action in success_criteria.get("requires_executed") or []]
@@ -2140,6 +2286,9 @@ class RegistryNavigationRuntime:
                 device_name=self._default_device_name,
                 page_states=self._page_states,
                 recovery_policies=self._recovery_policies,
+                recovery_data_category=route_recovery_data_category,
+                recovery_sub_category=route_recovery_sub_category,
+                use_legacy_data_display_recovery=use_legacy_data_display_recovery,
             )
             if recovered:
                 recovery_actions.extend(recovered)
