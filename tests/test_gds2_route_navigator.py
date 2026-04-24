@@ -429,6 +429,19 @@ def test_route_navigator_waits_for_list_page_to_populate() -> None:
     assert GDS2RouteNavigator._snapshot_needs_settle(snapshot) is True
 
 
+def test_route_navigator_waits_for_vehicle_selection_to_finish_connecting() -> None:
+    snapshot = {
+        "effective_page_id": "vehicle_selection",
+        "observed_actions": [
+            {"kind": "button", "label": "Back"},
+            {"kind": "button", "label": "Disconnect"},
+        ],
+        "list_items": [],
+    }
+
+    assert GDS2RouteNavigator._snapshot_needs_settle(snapshot) is True
+
+
 def test_route_navigator_matches_list_item_by_substring_for_actionability() -> None:
     snapshot = {
         "observed_actions": [

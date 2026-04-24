@@ -243,6 +243,7 @@ def test_data_display_recovery_targets_use_canonical_path_before_context() -> No
 def test_vehicle_selection_status_falls_back_to_buttons_when_status_missing() -> None:
     assert decide_vehicle_selection_action({}, {"Enter", "Back"}) == "enter"
     assert decide_vehicle_selection_action({}, {"Select Device", "Back"}) == "select_device"
+    assert decide_vehicle_selection_action({}, {"Disconnect", "Back"}) == "wait"
 
 
 def test_normalize_default_vci_name_prefers_proxy_remote() -> None:

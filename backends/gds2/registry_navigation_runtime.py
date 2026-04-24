@@ -531,6 +531,8 @@ def decide_vehicle_selection_action(page_info: dict[str, Any], labels: set[str])
         return "enter"
     if "Select Device" in labels:
         return "select_device"
+    if "Disconnect" in labels:
+        return "wait"
     return "unknown"
 
 

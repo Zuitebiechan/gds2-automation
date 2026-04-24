@@ -52,6 +52,7 @@ class AgentNavigator:
         self._command_file = self._data_dir / 'command.json'
         self._result_file = self._data_dir / 'result.json'
         self._timeout_sec = timeout_sec
+        self._unsupported_actions: set[str] = set()
 
         logger.info(f"AgentNavigator initialized: {self._data_dir}")
 
@@ -201,10 +202,18 @@ class AgentNavigator:
             ["Module Diagnostics", "Engine Control Module", "Control Functions"].
             Returns an empty list if the agent command fails or the table is not present.
         """
+        if "get_navigation_path" in self._unsupported_actions:
+            return []
+
         result = self._send_command("get_navigation_path", {})
         if result.get('success'):
             return result.get('data', {}).get('items', [])
-        logger.warning(f"get_navigation_path failed: {result.get('message')}")
+        message = str(result.get('message') or '')
+        if "Unknown action: get_navigation_path" in message:
+            self._unsupported_actions.add("get_navigation_path")
+            logger.info("Java Agent does not support get_navigation_path; falling back to latest.json breadcrumbs")
+            return []
+        logger.warning(f"get_navigation_path failed: {message}")
         return []
 
     def click_navigation_path_item(self, text: str) -> Dict[str, Any]:

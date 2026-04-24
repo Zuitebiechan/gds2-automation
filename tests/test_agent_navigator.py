@@ -197,3 +197,41 @@ def test_agent_navigator_clear_dtcs_selection_state_command(tmp_path: Path) -> N
 
     assert result["success"] is True
     assert result["data"]["selectedModules"]["rows"] == ["Engine Control Module"]
+
+
+def test_agent_navigator_disables_unsupported_navigation_path_command_after_first_failure(
+    tmp_path: Path,
+) -> None:
+    nav = AgentNavigator(data_dir=tmp_path, timeout_sec=0.5)
+
+    command_file = tmp_path / "command.json"
+    result_file = tmp_path / "result.json"
+    responses: list[dict[str, object]] = []
+
+    def responder() -> None:
+        while len(responses) < 1:
+            if not command_file.exists():
+                time.sleep(0.01)
+                continue
+            command = json.loads(command_file.read_text(encoding="utf-8"))
+            responses.append(command)
+            result_file.write_text(
+                json.dumps(
+                    {
+                        "id": command["id"],
+                        "success": False,
+                        "message": "Unknown action: get_navigation_path",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            command_file.unlink(missing_ok=True)
+
+    thread = threading.Thread(target=responder, daemon=True)
+    thread.start()
+
+    assert nav.get_navigation_path() == []
+    thread.join(timeout=1.0)
+
+    assert nav.get_navigation_path() == []
+    assert len(responses) == 1

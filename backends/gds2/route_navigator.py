@@ -412,6 +412,13 @@ class GDS2RouteNavigator:
             if str(action.get("kind") or "") == "button"
         }
         list_items = [str(item) for item in snapshot.get("list_items") or [] if str(item).strip()]
+        if page_id == "vehicle_selection" and not list_items:
+            # After Device Explorer Continue, GDS2 can sit briefly in a
+            # connection-transition state with only Disconnect/Back visible.
+            # Treat that as unsettled so the route does not fail before Enter
+            # or Select Device becomes actionable.
+            if "Enter" not in buttons and "Select Device" not in buttons:
+                return True
         if page_id in {"diagnostics_menu", "module_list", "module_submenu", "data_list"}:
             if {"Enter", "Home", "Vehicle Menu", "Back"} & buttons and not list_items:
                 return True
