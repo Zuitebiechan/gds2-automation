@@ -58,32 +58,34 @@ def set_orchestrator(orch: BusinessSessionOrchestrator) -> None:
     _runtime().set_orchestrator(orch)
 
 
-def _get_bound_session():
+def _get_bound_session(*, bind: bool = True):
     runtime = _runtime()
     binding = runtime.get_business_session_binding()
     if binding.session_id:
         return runtime.orchestrator.get_session(binding.session_id)
 
     session = runtime.orchestrator.get_active_session()
-    if session is not None:
+    if bind and session is not None:
         runtime.bind_business_session(session.session_id)
     return session
 
 
-def _get_session(session_id: str | None = None):
+def _get_session(session_id: str | None = None, *, bind: bool = True):
     if session_id:
         session = _runtime().orchestrator.get_session(session_id)
-        _runtime().bind_business_session(session.session_id)
+        if bind:
+            _runtime().bind_business_session(session.session_id)
         return session
-    return _get_bound_session()
+    return _get_bound_session(bind=bind)
 
 
 def _resolve_active_backend_descriptor(
     session_id: str | None = None,
     *,
     required: bool = True,
+    bind: bool = True,
 ):
-    session = _get_session(session_id)
+    session = _get_session(session_id, bind=bind)
     if session is None:
         raise RuntimeError("No active session bound to the worker")
 
@@ -117,6 +119,26 @@ def get_backend(
         descriptor=descriptor,
         backend_factory=lambda: get_backend_registry().get_by_name(descriptor.backend_name),
     )
+    return bundle.backend
+
+
+def get_bound_backend(
+    session_id: str | None = None,
+    *,
+    required: bool = True,
+) -> Any | None:
+    """Return the already-bound backend without rebinding or creating a bundle."""
+    session, descriptor = _resolve_active_backend_descriptor(
+        session_id,
+        required=required,
+        bind=False,
+    )
+    if descriptor is None:
+        return None
+
+    bundle = _runtime().get_active_backend_bundle(session.session_id)
+    if bundle is None or bundle.backend_name != descriptor.backend_name:
+        return None
     return bundle.backend
 
 

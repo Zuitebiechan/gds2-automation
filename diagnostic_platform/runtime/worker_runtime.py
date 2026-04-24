@@ -405,7 +405,8 @@ class WorkerRuntime:
 
     def set_connection_epoch(self, session_id: str, connection_epoch: str | None) -> None:
         with self.state_lock:
-            self.bind_business_session(session_id)
+            if self.business_session_binding.session_id != session_id:
+                return
             self.business_session_binding.connection_epoch = connection_epoch
 
     def get_connection_epoch(self, session_id: str) -> str | None:

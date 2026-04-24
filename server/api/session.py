@@ -60,6 +60,7 @@ from server.api.session_dependencies import (
     _runtime,
     get_adapter,
     get_backend as _get_backend,
+    get_bound_backend as _get_bound_backend,
     get_navigation_runtime as _get_navigation_runtime,
     get_executor,
     get_launch_spec_resolver,
@@ -1259,7 +1260,7 @@ def session_status():
             build_session_status_payload(
                 _runtime(),
                 orchestrator=get_orchestrator(),
-                backend=_get_backend(session_id, required=False),
+                backend=_get_bound_backend(session_id, required=False),
                 session_id=session_id,
             )
         )

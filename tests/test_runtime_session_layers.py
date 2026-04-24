@@ -95,6 +95,46 @@ def test_start_business_session_binds_worker_and_keeps_execution_state_out_of_se
     assert "live_data_active" not in session.to_dict()
 
 
+def test_build_session_status_payload_is_read_only(monkeypatch):
+    runtime, orchestrator, session, _ = _start_gds2_session(monkeypatch)
+    backend = types.SimpleNamespace(
+        get_state=lambda: types.SimpleNamespace(
+            current_page="module_list",
+            is_connected=False,
+            current_module=None,
+            current_data_category=None,
+            extra={},
+        ),
+        preflight=lambda: {
+            "network_quality": {
+                "grade": "good",
+                "status": "healthy",
+                "reason": "ok",
+                "connection_epoch": "epoch-1",
+                "sample_count": 5,
+                "fresh": True,
+                "connected": True,
+            },
+            "connection_epoch": "epoch-1",
+        },
+    )
+
+    assert getattr(session, "current_page", None) is None
+    assert runtime.get_connection_epoch(session.session_id) is None
+
+    status = build_session_status_payload(
+        runtime,
+        orchestrator=orchestrator,
+        backend=backend,
+        session_id=session.session_id,
+    )
+
+    assert status["backend_state_summary"]["current_page"] == "module_list"
+    assert status["connection_epoch"] == "epoch-1"
+    assert getattr(session, "current_page", None) is None
+    assert runtime.get_connection_epoch(session.session_id) is None
+
+
 def test_submit_session_decision_cancels_network_gate_and_clears_override(monkeypatch):
     runtime, orchestrator, session, _ = _start_gds2_session(monkeypatch)
     network_quality = {
@@ -778,6 +818,60 @@ def test_abort_business_session_cancels_active_worker_operation(monkeypatch):
 
     with pytest.raises(worker_runtime_module.OperationCancelledError):
         operation.check_cancelled()
+
+
+def test_build_session_status_payload_does_not_rebind_aborted_session(monkeypatch):
+    runtime, orchestrator, session, _ = _start_gds2_session(monkeypatch)
+    backend = types.SimpleNamespace(
+        get_state=lambda: types.SimpleNamespace(
+            current_page="module_list",
+            is_connected=False,
+            current_module=None,
+            current_data_category=None,
+            extra={},
+        ),
+        preflight=lambda: {
+            "network_quality": {
+                "grade": "good",
+                "status": "healthy",
+                "reason": "ok",
+                "connection_epoch": "epoch-1",
+                "sample_count": 5,
+                "fresh": True,
+                "connected": True,
+            },
+            "connection_epoch": "epoch-1",
+        },
+    )
+
+    abort_business_session(
+        runtime,
+        orchestrator=orchestrator,
+        session_id=session.session_id,
+        reason="user_cancelled",
+        get_ai_engine=lambda: MagicMock(),
+    )
+
+    assert runtime.get_business_session_binding(session.session_id).session_id is None
+
+    status = build_session_status_payload(
+        runtime,
+        orchestrator=orchestrator,
+        backend=backend,
+        session_id=session.session_id,
+    )
+
+    assert status["status"] == "aborted"
+    assert runtime.get_business_session_binding(session.session_id).session_id is None
+
+    restarted = start_business_session(
+        runtime,
+        orchestrator=orchestrator,
+        context=SessionContext(brand="Chevrolet", model="Malibu", vin="VIN456"),
+    )
+
+    assert restarted["success"] is True
+    assert restarted["session_id"] != session.session_id
 
 
 def test_start_business_session_serializes_concurrent_starts(monkeypatch):

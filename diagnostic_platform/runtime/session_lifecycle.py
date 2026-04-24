@@ -14,8 +14,6 @@ from .session_preflight import get_session_network_snapshot
 from .session_state import (
     bind_business_session,
     clear_business_session,
-    set_connection_epoch,
-    set_session_current_page,
     session_binding_payload,
 )
 from .worker_runtime import WorkerRuntime
@@ -98,11 +96,6 @@ def build_session_status_payload(
         backend=backend,
         session_id=session_id,
     )
-    if isinstance(backend_state_summary, dict):
-        current_page = backend_state_summary.get("current_page")
-        if current_page:
-            set_session_current_page(session, str(current_page), runtime=runtime)
-    set_connection_epoch(runtime, session, network_snapshot.get("connection_epoch"))
     return {
         "success": True,
         **session.to_dict(),
