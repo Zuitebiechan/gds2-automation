@@ -24,6 +24,7 @@ from diagnostic_platform.observability import (
     LogContext,
     emit_event,
     get_product_log_writer,
+    install_observability_log_handler,
     read_active_session_snapshot,
 )
 
@@ -133,6 +134,9 @@ class ReverseProxyServer:
         self._last_snapshot_write_error: str | None = None
         self._seen_auth_signatures: dict[tuple[int, bytes], int] = {}
         self._observability_writer = get_product_log_writer("reverse_server")
+        self._process_started_emitted = False
+        self._process_shutdown_started_emitted = False
+        self._process_shutdown_finished_emitted = False
 
         # P1-1: ReadMsgs BUFFER_EMPTY cache
         self._read_cache = ReadMsgsCache(self.config.read_msgs_cache)
@@ -251,6 +255,29 @@ class ReverseProxyServer:
                 return
             logger.warning("Failed to emit proxy observability event: %s", event_type, exc_info=True)
 
+    def _emit_process_lifecycle_event(
+        self,
+        event_type: str,
+        *,
+        status: str = "ok",
+        failure_code: str | None = None,
+        reason: str | None = None,
+        **extra: object,
+    ) -> None:
+        self._emit_tunnel_event(
+            event_type,
+            operation_kind="reverse_server_process",
+            impact_scope="reverse_server_process",
+            status=status,
+            failure_code=failure_code,
+            failure_domain="cloud_proxy_tunnel" if status == "error" else "unknown",
+            reason=reason,
+            pid=os.getpid(),
+            listen_port=self.listen_port,
+            proxy_port=self.proxy_port,
+            **extra,
+        )
+
     def _build_tls_server_context(self) -> ssl.SSLContext | None:
         """Build optional TLS listener context for inbound reverse clients."""
         if not self.config.tls.enabled:
@@ -309,9 +336,16 @@ class ReverseProxyServer:
             )
         if self.benchmark_writer is not None:
             logger.info("Proxy benchmark logging enabled: %s", self.benchmark_writer.path)
-
-        print(f"\n等待本地 VCI Proxy 连接到端口 {self.listen_port}...")
-        print(f"连接后，可以通过 localhost:{self.proxy_port} 访问 J2534 设备\n")
+        logger.info("Waiting for local VCI Proxy connection on port %s", self.listen_port)
+        logger.info("After connection, J2534 is reachable through localhost:%s", self.proxy_port)
+        if not self._process_started_emitted:
+            self._process_started_emitted = True
+            self._emit_process_lifecycle_event(
+                "process.lifecycle.started",
+                reason="server_started",
+                auth_enabled=self.config.auth.enabled,
+                tls_enabled=self.config.tls.enabled,
+            )
 
         try:
             await asyncio.gather(
@@ -328,6 +362,12 @@ class ReverseProxyServer:
         if self._shutting_down:
             if self._vci_server is None and self._proxy_server is None:
                 return
+        if not self._process_shutdown_started_emitted:
+            self._process_shutdown_started_emitted = True
+            self._emit_process_lifecycle_event(
+                "process.lifecycle.shutdown_started",
+                reason="shutdown_requested",
+            )
         self._shutting_down = True
         self._cancel_pending_futures()
         await self._cancel_probe_task_async()
@@ -358,6 +398,12 @@ class ReverseProxyServer:
                 pass
         self._vci_server = None
         self._proxy_server = None
+        if not self._process_shutdown_finished_emitted:
+            self._process_shutdown_finished_emitted = True
+            self._emit_process_lifecycle_event(
+                "process.lifecycle.shutdown_finished",
+                reason="shutdown_finished",
+            )
 
     def _cancel_pending_futures(self):
         """取消所有挂起的 Future（VCI 断开时调用）"""
@@ -677,10 +723,9 @@ class ReverseProxyServer:
             except Exception:
                 pass
 
-        print(f"\n*** VCI Proxy 已连接: {addr} ***\n")
-
         self.vci_reader = reader
         self.vci_writer = writer
+        logger.info("VCI Proxy connected: %s", addr)
         self._connection_counter += 1
         local_epoch = f"epoch-{int(time.time() * 1000)}-{self._connection_counter:03d}"
         self._connection_epoch = local_epoch
@@ -793,8 +838,6 @@ class ReverseProxyServer:
                     remote_addr=str(addr),
                 )
             writer.close()
-            if owns_current_tunnel:
-                print(f"\n*** VCI Proxy 已断开 ***\n")
 
     def _try_serve_cached(self, msg_type: int, body: bytes,
                           sequence: int) -> tuple[Optional[bytes], Optional[int]]:
@@ -1288,6 +1331,15 @@ class ReverseProxyServer:
             logger.error(f"代理连接错误: {e}")
         finally:
             writer.close()
+def _install_runtime_log_observability(server: ReverseProxyServer) -> None:
+    install_observability_log_handler(
+        logging.getLogger(),
+        component="reverse_server.runtime",
+        writer=get_product_log_writer("reverse_server.runtime"),
+        context_provider=lambda _record: server._current_observability_context(
+            operation_kind="reverse_server_runtime"
+        ),
+    )
 
 
 def _run_server_until_stopped(server: ReverseProxyServer) -> None:
@@ -1300,11 +1352,11 @@ def _run_server_until_stopped(server: ReverseProxyServer) -> None:
     def _handle_sigint(signum, frame):
         nonlocal stop_requested
         if stop_requested:
-            print("\n强制停止服务器...")
+            logger.warning("强制停止服务器...")
             os._exit(130)
         stop_requested = True
         server._shutting_down = True
-        print("\n停止服务器...")
+        logger.info("停止服务器...")
         if not main_task.done():
             loop.call_soon_threadsafe(main_task.cancel)
 
@@ -1385,20 +1437,6 @@ def main():
         ioctl_ttl=args.ioctl_ttl,
     )
 
-    print("=" * 50)
-    print("VCI Proxy 反向连接服务器")
-    print("=" * 50)
-    print(f"VCI Proxy 连接端口: {args.listen_port}")
-    print(f"本地代理端口: {args.proxy_port}")
-    print(f"Auth: {'enabled' if config.auth.enabled else 'disabled'}")
-    print(f"TLS: {'enabled' if config.tls.enabled else 'disabled'}")
-    print(f"ReadMsgs cache: {'enabled' if config.read_msgs_cache.enabled else 'disabled'}"
-          f" (TTL={config.read_msgs_cache.ttl_ms}ms)")
-    print(f"Filter dedup: {'enabled' if config.filter_dedup.enabled else 'disabled'}")
-    print(f"VBATT cache: {'enabled' if config.vbatt_cache.enabled else 'disabled'}"
-          f" (TTL={config.vbatt_cache.ttl_s}s)")
-    print("=" * 50)
-
     benchmark_writer = JsonlBenchmarkWriter(args.benchmark_log) if args.benchmark_log else None
     server = ReverseProxyServer(
         args.listen_port,
@@ -1407,11 +1445,42 @@ def main():
         benchmark_writer=benchmark_writer,
         benchmark_label=args.benchmark_label,
     )
+    _install_runtime_log_observability(server)
+    logger.info("=" * 50)
+    logger.info("VCI Proxy reverse connection server")
+    logger.info("=" * 50)
+    logger.info("VCI Proxy listen port: %s", args.listen_port)
+    logger.info("Local proxy port: %s", args.proxy_port)
+    logger.info("Auth: %s", "enabled" if config.auth.enabled else "disabled")
+    logger.info("TLS: %s", "enabled" if config.tls.enabled else "disabled")
+    logger.info(
+        "ReadMsgs cache: %s (TTL=%sms)",
+        "enabled" if config.read_msgs_cache.enabled else "disabled",
+        config.read_msgs_cache.ttl_ms,
+    )
+    logger.info(
+        "Filter dedup: %s",
+        "enabled" if config.filter_dedup.enabled else "disabled",
+    )
+    logger.info(
+        "VBATT cache: %s (TTL=%ss)",
+        "enabled" if config.vbatt_cache.enabled else "disabled",
+        config.vbatt_cache.ttl_s,
+    )
+    logger.info("=" * 50)
 
     try:
         _run_server_until_stopped(server)
     except KeyboardInterrupt:
-        print("\n强制停止服务器...")
+        logger.warning("强制停止服务器...")
+    except Exception as exc:
+        server._emit_process_lifecycle_event(
+            "process.lifecycle.failed",
+            status="error",
+            failure_code=type(exc).__name__,
+            reason=str(exc),
+        )
+        raise
 
 
 if __name__ == '__main__':

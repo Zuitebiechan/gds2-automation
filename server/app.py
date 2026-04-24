@@ -20,9 +20,11 @@ from flask_cors import CORS
 
 from diagnostic_platform.observability import (
     LogContext,
+    build_snapshot_log_context,
     emit_event,
     generate_request_id,
     get_product_log_writer,
+    install_observability_log_handler,
 )
 from diagnostic_platform.observability_artifacts import (
     cleanup_product_observability,
@@ -67,6 +69,39 @@ logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
 for level, message in _bootstrap_logs:
     getattr(logger, level)(message)
+
+
+def _install_runtime_log_observability() -> None:
+    install_observability_log_handler(
+        logging.getLogger(),
+        component="server.runtime",
+        writer=get_product_log_writer("server.runtime"),
+        context_provider=lambda _record: build_snapshot_log_context(
+            operation_kind="server_runtime"
+        ),
+    )
+
+
+def _emit_server_runtime_event(
+    event_type: str,
+    *,
+    status: str = "ok",
+    failure_code: str | None = None,
+    reason: str | None = None,
+    **extra: object,
+) -> dict[str, object]:
+    return emit_event(
+        get_product_log_writer("server.runtime"),
+        component="server.runtime",
+        event_type=event_type,
+        context=build_snapshot_log_context(operation_kind="server_runtime"),
+        status=status,
+        failure_code=failure_code,
+        failure_domain="unknown",
+        reason=reason,
+        impact_scope="server_runtime",
+        **extra,
+    )
 
 
 @dataclass(frozen=True)
@@ -304,38 +339,62 @@ def _disable_windows_quick_edit() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     _disable_windows_quick_edit()
-    settings = resolve_server_settings(argv)
-    runtime_app = create_app(settings)
-    readiness_started = start_node_readiness_monitor()
-
-    local_ip = "127.0.0.1"
+    _install_runtime_log_observability()
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.connect(("8.8.8.8", 80))
-        local_ip = sock.getsockname()[0]
-        sock.close()
-    except Exception:
-        pass
-
-    logger.info("API starting host=%s port=%s debug=%s", settings.host, settings.port, settings.debug)
-    if settings.enable_cors:
-        logger.info("API CORS enabled origins=%s", list(settings.cors_origins) or ["*"])
-    if settings.api_token:
-        logger.info("API token authentication enabled")
-    if settings.host == "0.0.0.0":
-        logger.info(
-            "API endpoints local=http://localhost:%s remote=http://%s:%s",
-            settings.port,
-            local_ip,
-            settings.port,
+        settings = resolve_server_settings(argv)
+    except Exception as exc:
+        _emit_server_runtime_event(
+            "process.lifecycle.failed",
+            status="error",
+            failure_code=type(exc).__name__,
+            reason=str(exc),
+            stage="resolve_server_settings",
+            argv=list(sys.argv[1:] if argv is None else argv),
         )
-    else:
-        logger.info("API endpoint http://localhost:%s", settings.port)
-    logger.info("API routes /api/diagnose/* /api/navigate/* /api/session/*")
-    if readiness_started:
-        logger.info("Booting-node readiness monitor started")
+        raise
+    readiness_started = False
+    run_completed = False
 
     try:
+        runtime_app = create_app(settings)
+        readiness_started = start_node_readiness_monitor()
+
+        local_ip = "127.0.0.1"
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.connect(("8.8.8.8", 80))
+            local_ip = sock.getsockname()[0]
+            sock.close()
+        except Exception:
+            pass
+
+        logger.info("API starting host=%s port=%s debug=%s", settings.host, settings.port, settings.debug)
+        if settings.enable_cors:
+            logger.info("API CORS enabled origins=%s", list(settings.cors_origins) or ["*"])
+        if settings.api_token:
+            logger.info("API token authentication enabled")
+        if settings.host == "0.0.0.0":
+            logger.info(
+                "API endpoints local=http://localhost:%s remote=http://%s:%s",
+                settings.port,
+                local_ip,
+                settings.port,
+            )
+        else:
+            logger.info("API endpoint http://localhost:%s", settings.port)
+        logger.info("API routes /api/diagnose/* /api/navigate/* /api/session/*")
+        if readiness_started:
+            logger.info("Booting-node readiness monitor started")
+
+        _emit_server_runtime_event(
+            "process.lifecycle.starting",
+            reason="server_starting",
+            host=settings.host,
+            port=settings.port,
+            debug=settings.debug,
+            cors_enabled=settings.enable_cors,
+            api_token_enabled=bool(settings.api_token),
+        )
         runtime_app.run(
             debug=settings.debug,
             host=settings.host,
@@ -343,7 +402,31 @@ def main(argv: list[str] | None = None) -> int:
             use_reloader=False,
             threaded=True,
         )
+        run_completed = True
+    except Exception as exc:
+        _emit_server_runtime_event(
+            "process.lifecycle.failed",
+            status="error",
+            failure_code=type(exc).__name__,
+            reason=str(exc),
+            host=settings.host,
+            port=settings.port,
+        )
+        raise
     finally:
+        if run_completed:
+            _emit_server_runtime_event(
+                "process.lifecycle.shutdown_started",
+                reason="server_stopping",
+                host=settings.host,
+                port=settings.port,
+            )
+            _emit_server_runtime_event(
+                "process.lifecycle.shutdown_finished",
+                reason="server_stopped",
+                host=settings.host,
+                port=settings.port,
+            )
         stop_node_readiness_monitor()
     return 0
 

@@ -2,16 +2,21 @@ from __future__ import annotations
 
 import gzip
 import json
+import logging
 from pathlib import Path
 
 from diagnostic_platform.observability import (
     ActiveSessionSnapshotStore,
     JsonlWriter,
     LogContext,
+    ObservabilityLogHandler,
     RotatingGzipWriter,
+    build_snapshot_log_context,
     emit_event,
     flush_product_log_writers,
     get_active_session_snapshot_path,
+    get_product_log_writer,
+    install_observability_log_handler,
     read_active_session_snapshot,
     redact_payload,
 )
@@ -137,3 +142,39 @@ def test_active_session_snapshot_store_round_trips_and_recovers_from_corruption(
     store.clear()
     assert not snapshot_path.exists()
     flush_product_log_writers()
+
+
+def test_install_observability_log_handler_writes_runtime_log_event(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+    logger = logging.getLogger("tests.runtime-log")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    logger.handlers = []
+
+    handler = install_observability_log_handler(
+        logger,
+        component="server.runtime",
+        writer=get_product_log_writer("server.runtime"),
+        context_provider=lambda _record: build_snapshot_log_context(
+            operation_kind="server_runtime"
+        ),
+    )
+    assert isinstance(handler, ObservabilityLogHandler)
+
+    logger.info("runtime mirror works")
+    flush_product_log_writers()
+
+    raw_dir = tmp_path / "RPA_Diagnostic" / "observability" / "cloud" / "raw"
+    event_files = sorted(raw_dir.glob("*.jsonl"))
+    assert event_files
+    records = []
+    for path in event_files:
+        records.extend(_read_jsonl(path))
+    mirrored = [record for record in records if record["event_type"] == "runtime.log"]
+    assert mirrored
+    assert mirrored[-1]["component"] == "server.runtime"
+    assert mirrored[-1]["log_level"] == "INFO"
+    assert mirrored[-1]["log_message"] == "runtime mirror works"

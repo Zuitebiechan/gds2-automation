@@ -14,6 +14,7 @@ import atexit
 import gzip
 import hashlib
 import json
+import logging
 import os
 import queue
 import re
@@ -23,7 +24,7 @@ import uuid
 from dataclasses import dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 OBSERVABILITY_SCHEMA_VERSION = "observability.v1"
 _PROCESS_STARTUP_TS = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -374,6 +375,118 @@ class NullJsonlWriter:
         return None
 
 
+def build_snapshot_log_context(*, operation_kind: str = "runtime_log") -> LogContext:
+    """Build one best-effort log context from the active session snapshot."""
+    snapshot = read_active_session_snapshot() or {}
+    return LogContext(
+        session_id=str(snapshot.get("session_id") or "") or None,
+        connection_epoch=str(snapshot.get("connection_epoch") or "") or None,
+        operation_kind=operation_kind or None,
+        page=str(snapshot.get("current_page") or "") or None,
+        module=str(snapshot.get("selected_module") or "") or None,
+        data_category=str(snapshot.get("selected_data_category") or "") or None,
+    )
+
+
+class ObservabilityLogHandler(logging.Handler):
+    """Mirror Python log records into structured observability events."""
+
+    def __init__(
+        self,
+        *,
+        component: str,
+        writer: JsonlWriter | NullJsonlWriter | None,
+        context_provider: Callable[[logging.LogRecord], LogContext | None] | None = None,
+        event_type: str = "runtime.log",
+        level: int = logging.INFO,
+    ) -> None:
+        super().__init__(level=level)
+        self.component = component
+        self.writer = writer
+        self.context_provider = context_provider
+        self.event_type = event_type
+        self._emit_guard = threading.local()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if getattr(self._emit_guard, "active", False):
+            return
+        if getattr(record, "_skip_observability_log_handler", False):
+            return
+
+        rendered = self.format(record)
+        message = str(getattr(record, "getMessage", lambda: "")() or "").strip()
+        if not rendered.strip() and not message:
+            return
+
+        context = None
+        if callable(self.context_provider):
+            try:
+                context = self.context_provider(record)
+            except Exception:
+                context = None
+
+        status = "error" if int(record.levelno) >= logging.ERROR else "ok"
+        failure_code = f"log_{str(record.levelname or '').lower()}" if status == "error" else None
+        extra: dict[str, Any] = {
+            "logger_name": str(record.name or ""),
+            "log_level": str(record.levelname or ""),
+            "log_message": rendered.strip() or message,
+            "source_file": str(getattr(record, "pathname", "") or ""),
+            "source_line": int(getattr(record, "lineno", 0) or 0),
+        }
+        if record.exc_info:
+            extra["exception_type"] = str(getattr(record.exc_info[0], "__name__", "") or "")
+
+        try:
+            self._emit_guard.active = True
+            emit_event(
+                self.writer,
+                component=self.component,
+                event_type=self.event_type,
+                context=context,
+                status=status,
+                failure_code=failure_code,
+                failure_domain="unknown",
+                reason=message or rendered.strip() or None,
+                impact_scope="runtime_log",
+                **extra,
+            )
+        finally:
+            self._emit_guard.active = False
+
+
+def install_observability_log_handler(
+    logger: logging.Logger,
+    *,
+    component: str,
+    writer: JsonlWriter | NullJsonlWriter | None,
+    context_provider: Callable[[logging.LogRecord], LogContext | None] | None = None,
+    event_type: str = "runtime.log",
+    level: int = logging.INFO,
+) -> ObservabilityLogHandler:
+    """Install one deduplicated observability log handler on a logger."""
+    for existing in logger.handlers:
+        if (
+            isinstance(existing, ObservabilityLogHandler)
+            and existing.component == component
+            and existing.event_type == event_type
+        ):
+            existing.writer = writer
+            existing.context_provider = context_provider
+            existing.setLevel(level)
+            return existing
+
+    handler = ObservabilityLogHandler(
+        component=component,
+        writer=writer,
+        context_provider=context_provider,
+        event_type=event_type,
+        level=level,
+    )
+    logger.addHandler(handler)
+    return handler
+
+
 def _resolve_writer_root(root: str | Path | None = None) -> Path:
     return Path(root) if root is not None else _get_cloud_raw_dir()
 
@@ -579,6 +692,7 @@ class ActiveSessionSnapshotStore:
 
 __all__ = [
     "ActiveSessionSnapshotStore",
+    "ObservabilityLogHandler",
     "JsonlWriter",
     "LogContext",
     "NullJsonlWriter",
@@ -596,6 +710,8 @@ __all__ = [
     "get_cloud_observability_root",
     "get_local_observability_root",
     "get_product_log_writer",
+    "install_observability_log_handler",
+    "build_snapshot_log_context",
     "normalize_active_session_snapshot",
     "read_active_session_snapshot",
     "redact_payload",

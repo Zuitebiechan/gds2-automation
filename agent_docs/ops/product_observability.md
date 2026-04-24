@@ -228,6 +228,8 @@ Current runtime behavior:
   - emits AI provider failure events with provider status, type, model, base URL, and ai session id
 - `diagnostic_platform/observability_analysis.py`
   - assembles `session_trace`, classifies incidents deterministically, and generates `incident_bundle`
+- `diagnostic_platform/observability.py`
+  - provides the Python logging bridge that mirrors terminal/runtime logger output into structured `runtime.log` events
 - `src/navigation/controller.py`
   - emits page detection and vehicle-selection UI action events
 - `backends/gds2/backend.py`
@@ -237,7 +239,7 @@ Current runtime behavior:
 - `src/streaming/agent_data_collector.py`
   - emits availability, snapshot, guard-failed, started, and stopped collector events
 - `vci_proxy/reverse_server.py`
-  - emits tunnel lifecycle, probe, tunnel-quality, and proxy-request staged events
+  - emits tunnel lifecycle, probe, tunnel-quality, proxy-request staged events, and reverse-server process lifecycle events
 - `vci_proxy/reverse_client.py`
   - emits reverse tunnel connection lifecycle, request receipt, and J2534 call events
 - `vci_proxy/j2534_worker.py`
@@ -249,6 +251,8 @@ Current runtime behavior:
   - mirrors changed cloud-side log artifacts onto the local machine
 - `vci_proxy/virtual_dll/virtual_j2534.c`
   - emits DLL-side JSONL call lifecycle and transport retry/socket events
+- `server.runtime` / `reverse_server.runtime`
+  - mirror Python runtime logger output into structured `runtime.log` events so terminal-visible messages are searchable in raw observability artifacts
 
 ## Examples
 

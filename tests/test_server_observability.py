@@ -6,6 +6,8 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
+
 from diagnostic_platform.observability import flush_product_log_writers
 
 
@@ -189,3 +191,92 @@ def test_api_request_observability_reads_session_id_from_multidict_like_args(
         if line.strip()
     ]
     assert records[-1]["session_id"] == "session-get-1"
+
+
+def test_install_runtime_log_observability_adds_deduplicated_handler(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _install_fake_flask_stack(monkeypatch)
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+    server_app = importlib.import_module("server.app")
+
+    root_logger = server_app.logging.getLogger()
+    before = [
+        handler
+        for handler in root_logger.handlers
+        if getattr(handler, "component", None) == "server.runtime"
+    ]
+    server_app._install_runtime_log_observability()
+    server_app._install_runtime_log_observability()
+    after = [
+        handler
+        for handler in root_logger.handlers
+        if getattr(handler, "component", None) == "server.runtime"
+    ]
+
+    assert len(after) == max(1, len(before) or 1)
+
+
+def test_main_emits_failed_lifecycle_event_when_create_app_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _install_fake_flask_stack(monkeypatch)
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+    server_app = importlib.import_module("server.app")
+    monkeypatch.setattr(server_app, "_disable_windows_quick_edit", lambda: None)
+    monkeypatch.setattr(server_app, "create_app", lambda _settings: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(server_app, "start_node_readiness_monitor", lambda: False)
+    monkeypatch.setattr(server_app, "stop_node_readiness_monitor", lambda: None)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        server_app.main([])
+    flush_product_log_writers()
+
+    records = []
+    for path in _raw_event_files(tmp_path):
+        records.extend(
+            json.loads(line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        )
+    failed = [
+        record
+        for record in records
+        if record["component"] == "server.runtime"
+        and record["event_type"] == "process.lifecycle.failed"
+    ]
+    assert failed
+    assert failed[-1]["failure_code"] == "RuntimeError"
+
+
+def test_main_emits_failed_lifecycle_event_when_settings_parse_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _install_fake_flask_stack(monkeypatch)
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+    server_app = importlib.import_module("server.app")
+    monkeypatch.setattr(server_app, "_disable_windows_quick_edit", lambda: None)
+
+    with pytest.raises(ValueError):
+        server_app.main(["--port", "bad"])
+    flush_product_log_writers()
+
+    records = []
+    for path in _raw_event_files(tmp_path):
+        records.extend(
+            json.loads(line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        )
+    failed = [
+        record
+        for record in records
+        if record["component"] == "server.runtime"
+        and record["event_type"] == "process.lifecycle.failed"
+    ]
+    assert failed
+    assert failed[-1]["failure_code"] == "ValueError"
+    assert failed[-1]["stage"] == "resolve_server_settings"

@@ -366,7 +366,7 @@ def test_start_handles_cancelled_gather_as_graceful_shutdown(monkeypatch) -> Non
     ]
 
 
-def test_run_server_until_stopped_ignores_repeated_sigint(monkeypatch, capsys) -> None:
+def test_run_server_until_stopped_ignores_repeated_sigint(monkeypatch, caplog) -> None:
     class _FakeTask:
         def __init__(self) -> None:
             self.cancel_calls = 0
@@ -430,7 +430,7 @@ def test_run_server_until_stopped_ignores_repeated_sigint(monkeypatch, capsys) -
     with pytest.raises(SystemExit) as exc:
         handler(sigint, None)
 
-    captured = capsys.readouterr()
+    captured = types.SimpleNamespace(out=caplog.text)
     assert "停止服务器..." in captured.out
     assert "强制停止服务器..." in captured.out
     assert fake_loop.main_task.cancel_calls == 1
@@ -946,3 +946,57 @@ def test_handle_proxy_connection_emits_timeout_event(monkeypatch, tmp_path) -> N
     assert timeouts[-1]["proxy_seq"] == 88
     assert timeouts[-1]["status"] == "error"
     assert timeouts[-1]["failure_code"] == "timeout"
+
+
+def test_shutdown_servers_emits_process_lifecycle_events(monkeypatch) -> None:
+    async def _run() -> None:
+        server = ReverseProxyServer(config=ProxyConfig())
+        emitted: list[str] = []
+
+        class _ClosableServer:
+            def close(self) -> None:
+                return None
+
+            async def wait_closed(self) -> None:
+                return None
+
+        server._vci_server = _ClosableServer()
+        server._proxy_server = _ClosableServer()
+        monkeypatch.setattr(
+            server,
+            "_emit_process_lifecycle_event",
+            lambda event_type, **_kwargs: emitted.append(event_type),
+        )
+
+        await server._shutdown_servers()
+
+        assert emitted == [
+            "process.lifecycle.shutdown_started",
+            "process.lifecycle.shutdown_finished",
+        ]
+
+    asyncio.run(_run())
+
+
+def test_main_emits_process_failed_event_on_run_server_error(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+    monkeypatch.setattr(reverse_server_module, "_disable_windows_quick_edit", lambda: None)
+    monkeypatch.setattr(
+        reverse_server_module,
+        "_run_server_until_stopped",
+        lambda _server: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    monkeypatch.setattr("builtins.print", lambda *args, **kwargs: None)
+    monkeypatch.setattr("sys.argv", ["reverse_server.py"])
+
+    with pytest.raises(RuntimeError, match="boom"):
+        reverse_server_module.main()
+
+    records = _read_product_log_events(tmp_path)
+    failed = [
+        record
+        for record in records
+        if record["event_type"] == "process.lifecycle.failed"
+    ]
+    assert failed
+    assert failed[-1]["failure_code"] == "RuntimeError"
