@@ -1,0 +1,4 @@
+interface:
+  display_name: "Analyze Observability Logs"
+  short_description: "Correlate cloud and local observability artifacts"
+  default_prompt: "Use $analyze-observability-logs to inspect this repository's cloud and local observability logs, correlate the evidence across both sides, identify the first failure, and summarize the likely failure ordering."
