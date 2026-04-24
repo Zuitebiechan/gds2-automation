@@ -124,6 +124,8 @@ class BusinessSessionOrchestrator(Protocol):
 
     def get_active_session(self) -> Session | None: ...
 
+    def _rollback_start_session(self, session_id: str) -> None: ...
+
     def abort_session(self, session_id: str, reason: str) -> Session: ...
 
     def complete_session(self, session_id: str, result: dict[str, Any] | None = None) -> Session: ...
@@ -226,6 +228,15 @@ class SessionOrchestrator:
             self._sessions.pop(session_id, None)
             self._queues.pop(session_id, None)
             self._cleanup_timers.pop(session_id, None)
+
+    def _rollback_start_session(self, session_id: str) -> None:
+        """Discard a session that failed before worker binding completed."""
+        with self._lock:
+            timer = self._cleanup_timers.pop(session_id, None)
+            self._sessions.pop(session_id, None)
+            self._queues.pop(session_id, None)
+        if timer is not None:
+            timer.cancel()
 
     def _schedule_terminal_cleanup(self, session_id: str) -> None:
         with self._lock:

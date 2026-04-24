@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import diagnostic_platform.session_orchestrator as platform_session_orchestrator_module
+import diagnostic_platform.runtime.session_state as session_state_module
 import src.gds2_orchestration.session_orchestrator as session_orchestrator_module
 import diagnostic_platform.runtime.worker_runtime as worker_runtime_module
 from diagnostic_platform.runtime.navigation_runtime import NavSession, NavSessionStatus
@@ -93,6 +94,81 @@ def test_start_business_session_binds_worker_and_keeps_execution_state_out_of_se
     assert "active_navigation_session_id" not in session.to_dict()
     assert "active_ai_session_id" not in session.to_dict()
     assert "live_data_active" not in session.to_dict()
+
+
+def test_start_business_session_rolls_back_session_when_worker_binding_fails(monkeypatch):
+    runtime = WorkerRuntime()
+    orchestrator = SessionOrchestrator()
+    created_ids = iter(["failed-bind-0001", "recovered-bind-2"])
+
+    monkeypatch.setattr(platform_session_orchestrator_module, "route_backend", lambda brand: "gds2")
+    monkeypatch.setattr(
+        platform_session_orchestrator_module.uuid,
+        "uuid4",
+        lambda: types.SimpleNamespace(hex=next(created_ids)),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "bind_business_session",
+        lambda _session_id: (_ for _ in ()).throw(RuntimeError("worker bind failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="worker bind failed"):
+        start_business_session(
+            runtime,
+            orchestrator=orchestrator,
+            context=SessionContext(brand="Chevrolet", model="Malibu", vin="VIN123"),
+        )
+
+    assert orchestrator.get_active_session() is None
+    assert runtime.get_business_session_binding().session_id is None
+    with pytest.raises(KeyError):
+        orchestrator.get_session("failed-bind-0001")
+    assert orchestrator.get_event_queue("failed-bind-0001") is None
+
+    monkeypatch.setattr(runtime, "bind_business_session", WorkerRuntime.bind_business_session.__get__(runtime))
+
+    restarted = start_business_session(
+        runtime,
+        orchestrator=orchestrator,
+        context=SessionContext(brand="Chevrolet", model="Malibu", vin="VIN456"),
+    )
+
+    assert restarted["success"] is True
+    assert restarted["session_id"] == "recovered-bind-2"
+
+
+def test_start_business_session_clears_partial_binding_when_snapshot_sync_fails(monkeypatch):
+    runtime = WorkerRuntime()
+    orchestrator = SessionOrchestrator()
+    monkeypatch.setattr(platform_session_orchestrator_module, "route_backend", lambda brand: "gds2")
+    monkeypatch.setattr(
+        platform_session_orchestrator_module.uuid,
+        "uuid4",
+        lambda: types.SimpleNamespace(hex="snapshot-bind-01"),
+    )
+
+    class FailingSnapshotStore:
+        def write(self, _payload):
+            raise RuntimeError("snapshot write failed")
+
+        def clear(self):
+            return None
+
+    monkeypatch.setattr(session_state_module, "ActiveSessionSnapshotStore", FailingSnapshotStore)
+
+    with pytest.raises(RuntimeError, match="snapshot write failed"):
+        start_business_session(
+            runtime,
+            orchestrator=orchestrator,
+            context=SessionContext(brand="Chevrolet", model="Malibu", vin="VIN123"),
+        )
+
+    assert orchestrator.get_active_session() is None
+    assert runtime.get_business_session_binding().session_id is None
+    with pytest.raises(KeyError):
+        orchestrator.get_session("snapshot-bind-01")
+    assert orchestrator.get_event_queue("snapshot-bind-01") is None
 
 
 def test_build_session_status_payload_is_read_only(monkeypatch):

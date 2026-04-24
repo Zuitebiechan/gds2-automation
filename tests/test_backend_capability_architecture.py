@@ -8,6 +8,8 @@ import types
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -466,6 +468,44 @@ def test_start_business_session_and_status_include_backend_metadata():
     summary = status.get("backend_state_summary") or {}
     assert summary.get("current_page") == "module_list"
     assert summary.get("is_connected") is False
+
+
+def test_start_business_session_rolls_back_failed_worker_bind_without_retaining_session():
+    BackendCapability = _require_attr(contracts_module, "BackendCapability")
+
+    registry = contracts_module.BackendRegistry()
+    registry.register(
+        FakeCoreBackend(
+            capabilities=[BackendCapability.CORE_SESSION]
+        )
+    )
+
+    runtime = WorkerRuntime()
+    orchestrator = SessionOrchestrator(registry_provider=lambda: registry)
+
+    def _raise_bind_error(_session_id: str) -> None:
+        raise RuntimeError("worker bind failed")
+
+    runtime.bind_business_session = _raise_bind_error
+
+    with pytest.raises(RuntimeError, match="worker bind failed"):
+        start_business_session(
+            runtime,
+            orchestrator=orchestrator,
+            context=SessionContext(brand="fakebrand", model="Demo", vin="VIN-FAKE-001"),
+        )
+
+    assert orchestrator.get_active_session() is None
+    assert runtime.get_business_session_binding().session_id is None
+
+    runtime.bind_business_session = WorkerRuntime.bind_business_session.__get__(runtime)
+    restarted = start_business_session(
+        runtime,
+        orchestrator=orchestrator,
+        context=SessionContext(brand="fakebrand", model="Demo", vin="VIN-FAKE-002"),
+    )
+
+    assert restarted["success"] is True
 
 
 def test_session_api_runs_fake_backend_core_chain_and_gates_extensions(monkeypatch):

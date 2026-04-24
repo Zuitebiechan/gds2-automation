@@ -94,6 +94,8 @@ class DiagnosticsWindow:
         self._current_page = ""
         self._vehicle_dtc_ready = False
         self._vehicle_dtc_status_message = ""
+        self._session_abort_finalizing = False
+        self._session_terminal_session_id: Optional[str] = None
         self._session_status_refresh_inflight = False
         self._session_live_data_active = False
         self._session_ai_active = False
@@ -1064,6 +1066,101 @@ class DiagnosticsWindow:
         value = payload.get("error") if isinstance(payload, dict) else None
         return str(value).strip() if value else fallback
 
+    def _is_aborted_status(self, status: Any) -> bool:
+        return str(status or "").strip().lower() == "aborted"
+
+    def _begin_abort_finalization(
+        self,
+        *,
+        session_id: str,
+        status_message: str,
+        hint: str,
+        agent_message: str,
+    ) -> None:
+        target_session_id = str(session_id or self._session_id or "").strip()
+        if target_session_id:
+            self._session_id = target_session_id
+        self._session_abort_finalizing = True
+        self._session_terminal_session_id = target_session_id or None
+        self._session_live_data_active = False
+        self._session_ai_active = False
+        self._session_navigation_active = False
+        self._session_category_confirmed = False
+        self._navigate_session_id = None
+        self._close_decision_modal()
+        self._set_agent_prompt(None, "", [])
+
+        for widget_name in (
+            "_session_start_button",
+            "_session_abort_button",
+            "_start_button",
+            "_vehicle_diagnostics_button",
+            "_select_module_button",
+            "_select_data_category_button",
+            "_read_dtc_button",
+            "_clear_dtc_button",
+            "_start_stream_button",
+            "_ai_diagnose_button",
+        ):
+            widget = getattr(self, widget_name, None)
+            if widget is None:
+                continue
+            try:
+                widget.configure(state=tk.DISABLED)
+            except Exception:
+                pass
+
+        self._session_status_var.set(status_message)
+        self._set_session_hint(hint)
+        self._append_agent_message("agent", agent_message)
+
+    def _finalize_terminal_session(self, *, aborted: bool, reason: str = "") -> None:
+        for stop_name in (
+            "_stop_sse_thread",
+            "_stop_ai_sse_thread",
+            "_stop_session_sse_thread",
+            "_stop_navigate_sse_thread",
+        ):
+            stop_fn = getattr(self, stop_name, None)
+            if callable(stop_fn):
+                stop_fn()
+
+        self._close_decision_modal()
+        self._set_agent_prompt(None, "", [])
+        if getattr(self, "_active_assignment", None):
+            self._release_active_assignment()
+
+        self._session_start_button.configure(state=tk.NORMAL)
+        self._session_abort_button.configure(state=tk.DISABLED)
+        self._start_button.configure(state=tk.DISABLED)
+        self._select_data_category_button.configure(state=tk.DISABLED)
+        self._session_category_confirmed = False
+        self._set_active_branch("")
+        self._set_current_page("")
+        self._session_status_refresh_inflight = False
+        self._session_live_data_active = False
+        self._session_ai_active = False
+        self._session_navigation_active = False
+        self._stream_active = False
+        self._navigate_session_id = None
+        self._vehicle_dtc_ready = False
+        self._vehicle_dtc_status_message = ""
+        self._session_id = None
+        self._session_abort_finalizing = False
+        self._session_terminal_session_id = None
+        self._refresh_action_buttons()
+
+        if aborted:
+            message = f"Session aborted. {reason}".strip()
+            hint = "Abort completed. You can start a new session."
+        else:
+            message = "Session completed."
+            hint = "Session ended. You can start a new session."
+
+        self._session_status_var.set(message)
+        self._set_session_hint(hint)
+        self._append_agent_message("agent", message)
+
     def _is_missing_session_payload(self, payload: dict[str, Any]) -> bool:
         error_text = self._error_message(payload, "")
         lowered = error_text.lower()
@@ -1072,6 +1169,10 @@ class DiagnosticsWindow:
     def _handle_missing_session(self, payload: dict[str, Any], *, action: str) -> bool:
         if not self._is_missing_session_payload(payload):
             return False
+
+        if getattr(self, "_session_abort_finalizing", False):
+            self._finalize_terminal_session(aborted=True)
+            return True
 
         self._stop_session_sse_thread()
         self._close_decision_modal()
@@ -1121,6 +1222,8 @@ class DiagnosticsWindow:
     ) -> None:
         self._session_id = session_id
         sid_preview = (self._session_id or "")[:8]
+        self._session_abort_finalizing = False
+        self._session_terminal_session_id = None
 
         self._session_start_button.configure(state=tk.DISABLED)
         self._session_abort_button.configure(state=tk.NORMAL)
@@ -1181,8 +1284,37 @@ class DiagnosticsWindow:
             self._start_session_sse_thread(self._session_id)
             self._request_session_status_refresh()
 
+    def _handle_aborted_session_conflict(self, payload: dict[str, Any]) -> bool:
+        if str(payload.get("error_code") or "").strip() != "active_session_exists":
+            return False
+        if not self._is_aborted_status(payload.get("active_session_status")):
+            return False
+
+        session_id = self._active_session_id_from_payload(payload)
+        if not session_id:
+            return False
+
+        self._begin_abort_finalization(
+            session_id=session_id,
+            status_message="Previous abort is still finalizing...",
+            hint=(
+                "Abort finalization is in progress. "
+                "Start Session stays disabled until local cleanup finishes."
+            ),
+            agent_message=(
+                "The previous session is already aborted. "
+                "Finalizing local cleanup before a new session can start."
+            ),
+        )
+        self._request_session_status_refresh()
+        return True
+
     def _recover_existing_session(self, payload: dict[str, Any]) -> bool:
         if str(payload.get("error_code") or "").strip() != "active_session_exists":
+            return False
+        if getattr(self, "_session_abort_finalizing", False):
+            return False
+        if self._is_aborted_status(payload.get("active_session_status")):
             return False
 
         session_id = self._active_session_id_from_payload(payload)
@@ -1598,6 +1730,7 @@ class DiagnosticsWindow:
 
     def _on_clear_dtcs_clicked(self) -> None:
         category = self._selected_data_category.get().strip()
+        module = self._selected_module.get().strip()
         is_vehicle_branch = str(self._active_branch or "").strip().lower() == "vehicle"
 
         if not category and not is_vehicle_branch:
@@ -1637,12 +1770,17 @@ class DiagnosticsWindow:
         self._set_status_text("Clearing fault codes...")
         self._set_action_output_mode("dtc")
         self._append_agent_message("user", "Execute Clear DTCs")
+        payload: dict[str, Any] = {
+            "session_id": self._session_id,
+        }
+        if module:
+            payload["module"] = module
+        if category:
+            payload["data_category"] = category
         self._api_call(
             "POST",
             "/api/session/clear_dtcs",
-            json_data={
-                "session_id": self._session_id,
-            },
+            json_data=payload,
             callback_event="clear_dtcs_result",
         )
 
@@ -2080,6 +2218,25 @@ class DiagnosticsWindow:
         if self._handle_missing_session(payload, action="Session refresh"):
             return
         if not payload.get("success"):
+            return
+        if self._is_aborted_status(payload.get("status")):
+            reason = str(
+                payload.get("reason")
+                or payload.get("failure_reason")
+                or payload.get("error")
+                or ""
+            ).strip()
+            self._finalize_terminal_session(aborted=True, reason=reason)
+            return
+        if getattr(self, "_session_abort_finalizing", False):
+            self._session_start_button.configure(state=tk.DISABLED)
+            self._session_abort_button.configure(state=tk.DISABLED)
+            self._start_button.configure(state=tk.DISABLED)
+            self._session_status_var.set("Abort accepted. Finalizing session cleanup...")
+            self._set_session_hint(
+                "Abort finalization is in progress. "
+                "Start Session stays disabled until local cleanup finishes."
+            )
             return
         self._session_live_data_active = bool(payload.get("live_data_active"))
         self._session_ai_active = bool(payload.get("active_ai_session_id"))
@@ -2682,6 +2839,15 @@ class DiagnosticsWindow:
     # ------------------------------------------------------------------
 
     def _on_session_start_clicked(self) -> None:
+        if getattr(self, "_session_abort_finalizing", False):
+            self._session_start_button.configure(state=tk.DISABLED)
+            self._session_status_var.set("Abort accepted. Finalizing session cleanup...")
+            self._set_session_hint(
+                "Abort finalization is in progress. "
+                "Start Session stays disabled until local cleanup finishes."
+            )
+            return
+
         brand = self._session_brand.get().strip()
         if not brand:
             messagebox.showwarning(
@@ -2712,9 +2878,14 @@ class DiagnosticsWindow:
     def _on_session_abort_clicked(self) -> None:
         if not self._session_id:
             return
+        self._session_start_button.configure(state=tk.DISABLED)
         self._session_abort_button.configure(state=tk.DISABLED)
         self._start_button.configure(state=tk.DISABLED)
+        self._vehicle_diagnostics_button.configure(state=tk.DISABLED)
         self._session_status_var.set("Aborting...")
+        self._set_session_hint(
+            "Abort requested. Start Session will re-enable after session cleanup completes."
+        )
         self._append_agent_message("user", "Abort Session")
         self._api_call(
             "POST",
@@ -2937,6 +3108,8 @@ class DiagnosticsWindow:
 
     def _handle_session_start_result(self, payload: dict[str, Any]) -> None:
         if not payload.get("success"):
+            if self._handle_aborted_session_conflict(payload):
+                return
             if self._recover_existing_session(payload):
                 return
             if self._retry_bootstrap_after_assignment_failure(payload):
@@ -3005,31 +3178,15 @@ class DiagnosticsWindow:
         self._append_agent_message("agent", f"Session 错误：{error}")
 
     def _handle_session_done(self, payload: dict[str, Any]) -> None:
-        self._stop_session_sse_thread()
-        self._close_decision_modal()
-        self._set_agent_prompt(None, "", [])
-        if getattr(self, "_active_assignment", None):
-            self._release_active_assignment()
-        aborted = payload.get("aborted", False)
-        if aborted:
-            reason = payload.get("reason", "")
-            self._session_status_var.set(f"Session aborted. {reason}".strip())
-            self._append_agent_message("agent", f"Session 已中止。{reason}".strip())
-        else:
-            self._session_status_var.set("Session completed.")
-            self._append_agent_message("agent", "Session 已完成。")
-        self._session_start_button.configure(state=tk.NORMAL)
-        self._session_abort_button.configure(state=tk.DISABLED)
-        self._start_button.configure(state=tk.DISABLED)
-        self._select_data_category_button.configure(state=tk.DISABLED)
-        self._session_category_confirmed = False
-        self._set_active_branch("")
-        self._set_current_page("")
-        self._session_status_refresh_inflight = False
-        self._session_id = None
-        self._set_agent_prompt(None, "", [])
-        self._refresh_action_buttons()
-        self._set_session_hint("Session 已结束。可重新 Start Session。")
+        payload_session_id = str(payload.get("session_id") or "").strip()
+        current_session_id = str(getattr(self, "_session_id", "") or "").strip()
+        terminal_session_id = str(getattr(self, "_session_terminal_session_id", "") or "").strip()
+        if payload_session_id and payload_session_id not in {current_session_id, terminal_session_id}:
+            return
+
+        aborted = bool(payload.get("aborted")) or self._is_aborted_status(payload.get("status"))
+        reason = str(payload.get("reason") or payload.get("failure_reason") or "").strip()
+        self._finalize_terminal_session(aborted=aborted, reason=reason)
 
     def _handle_session_decision_submit_result(self, payload: dict[str, Any]) -> None:
         if payload.get("success"):
@@ -3131,18 +3288,28 @@ class DiagnosticsWindow:
 
     def _handle_session_abort_result(self, payload: dict[str, Any]) -> None:
         if payload.get("success"):
-            self._navigate_session_id = None
-            self._session_status_var.set("Abort request sent.")
-            self._set_session_hint("正在结束 Session...")
-            self._append_agent_message("agent", "Abort 请求已发送，正在结束 Session。")
-        else:
-            self._session_abort_button.configure(state=tk.NORMAL)
-            self._start_button.configure(state=tk.NORMAL)
-            self._session_status_var.set(
-                f"Abort failed: {self._error_message(payload, 'Request failed.')}"
+            self._begin_abort_finalization(
+                session_id=str(payload.get("session_id") or self._session_id or "").strip(),
+                status_message="Abort accepted. Finalizing session cleanup...",
+                hint=(
+                    "Abort finalization is in progress. "
+                    "Start Session stays disabled until local cleanup finishes."
+                ),
+                agent_message=(
+                    "Abort accepted. Finalizing session cleanup before a new session can start."
+                ),
             )
-            self._set_session_hint("Abort 失败，请重试。")
-            self._append_agent_message("agent", "Abort 失败，请重试。")
+            self._request_session_status_refresh()
+            return
+
+        self._session_abort_button.configure(state=tk.NORMAL)
+        self._start_button.configure(state=tk.NORMAL)
+        self._refresh_action_buttons()
+        self._session_status_var.set(
+            f"Abort failed: {self._error_message(payload, 'Request failed.')}"
+        )
+        self._set_session_hint("Abort failed. The current session is still active; please retry.")
+        self._append_agent_message("agent", "Abort failed. Please retry.")
 
     def _handle_navigate_start_result(self, payload: dict[str, Any]) -> None:
         self._start_button.configure(state=tk.NORMAL)

@@ -93,6 +93,8 @@ def _build_window(*, current_page: str = "") -> DiagnosticsWindow:
     window._current_page = current_page
     window._vehicle_dtc_ready = False
     window._vehicle_dtc_status_message = ""
+    window._session_abort_finalizing = False
+    window._session_terminal_session_id = None
     window._session_status_refresh_inflight = False
     window._server_connected = None
     window._status_message = _Var("")
@@ -124,7 +126,10 @@ def _build_window(*, current_page: str = "") -> DiagnosticsWindow:
     window._append_agent_message = lambda role, message: window._agent_messages.append((role, message))
     window._set_status_text = lambda message: window._status_message.set(message)
     window._set_server_connected = lambda connected: setattr(window, "_server_connected", connected)
+    window._stop_sse_thread = lambda: None
+    window._stop_ai_sse_thread = lambda: None
     window._stop_session_sse_thread = lambda: None
+    window._stop_navigate_sse_thread = lambda: None
     window._close_decision_modal = lambda: None
     window._set_agent_prompt = lambda kind, label, options, **kwargs: None
     return window
@@ -218,6 +223,81 @@ def test_handle_session_status_result_updates_current_page_and_button_state() ->
     assert window._clear_dtc_button.state == tk.NORMAL
 
 
+def test_handle_session_abort_result_enters_finalization_and_requests_status_refresh() -> None:
+    window = _build_window(current_page="data_display")
+    refresh_calls: list[str] = []
+    window._request_session_status_refresh = lambda: refresh_calls.append("refresh")
+
+    window._handle_session_abort_result(
+        {
+            "success": True,
+            "session_id": "session-123",
+            "status": "aborted",
+        }
+    )
+
+    assert window._session_abort_finalizing is True
+    assert window._session_terminal_session_id == "session-123"
+    assert window._session_start_button.state == tk.DISABLED
+    assert window._session_abort_button.state == tk.DISABLED
+    assert window._start_button.state == tk.DISABLED
+    assert window._session_status_var.get() == "Abort accepted. Finalizing session cleanup..."
+    assert "Start Session stays disabled" in window._session_hint_var.get()
+    assert refresh_calls == ["refresh"]
+
+
+def test_on_session_abort_clicked_disables_restart_and_sets_waiting_hint() -> None:
+    window = _build_window(current_page="data_display")
+    calls: list[tuple[str, str, dict[str, object]]] = []
+    window._api_call = lambda method, endpoint, **kwargs: calls.append((method, endpoint, kwargs))
+
+    window._on_session_abort_clicked()
+
+    assert window._session_start_button.state == tk.DISABLED
+    assert window._session_abort_button.state == tk.DISABLED
+    assert window._start_button.state == tk.DISABLED
+    assert window._vehicle_diagnostics_button.state == tk.DISABLED
+    assert window._session_status_var.get() == "Aborting..."
+    assert window._session_hint_var.get() == (
+        "Abort requested. Start Session will re-enable after session cleanup completes."
+    )
+    assert calls == [
+        (
+            "POST",
+            "/api/session/abort",
+            {
+                "json_data": {"session_id": "session-123"},
+                "callback_event": "session_abort_result",
+            },
+        )
+    ]
+
+
+def test_handle_session_status_result_finalizes_aborted_session_without_session_done_event() -> None:
+    window = _build_window(current_page="data_display")
+    window._active_branch = "module"
+    window._session_abort_finalizing = True
+    window._session_terminal_session_id = "session-123"
+
+    window._handle_session_status_result(
+        {
+            "success": True,
+            "session_id": "session-123",
+            "status": "aborted",
+            "reason": "user_cancelled",
+        }
+    )
+
+    assert window._session_abort_finalizing is False
+    assert window._session_terminal_session_id is None
+    assert window._session_id is None
+    assert window._session_start_button.state == tk.NORMAL
+    assert window._session_abort_button.state == tk.DISABLED
+    assert window._start_button.state == tk.DISABLED
+    assert window._session_status_var.get() == "Session aborted. user_cancelled"
+    assert window._session_hint_var.get() == "Abort completed. You can start a new session."
+
+
 def test_handle_session_status_result_resets_stale_missing_session() -> None:
     window = _build_window(current_page="data_display")
 
@@ -298,6 +378,34 @@ def test_on_clear_dtcs_clicked_posts_session_clear_request() -> None:
             {
                 "json_data": {
                     "session_id": "session-123",
+                    "module": "ECM",
+                    "data_category": "Diagnostic Data Display",
+                },
+                "callback_event": "clear_dtcs_result",
+            },
+        )
+    ]
+
+
+def test_on_clear_dtcs_clicked_posts_vehicle_context_for_vehicle_branch() -> None:
+    window = _build_window(current_page="data_display")
+    window._active_branch = "vehicle"
+    window._selected_module.set("")
+    window._selected_data_category.set("Vehicle DTC Information")
+    window._vehicle_dtc_ready = True
+    calls: list[tuple[str, str, dict[str, object]]] = []
+    window._api_call = lambda method, endpoint, **kwargs: calls.append((method, endpoint, kwargs))
+
+    window._on_clear_dtcs_clicked()
+
+    assert calls == [
+        (
+            "POST",
+            "/api/session/clear_dtcs",
+            {
+                "json_data": {
+                    "session_id": "session-123",
+                    "data_category": "Vehicle DTC Information",
                 },
                 "callback_event": "clear_dtcs_result",
             },
@@ -785,6 +893,61 @@ def test_handle_session_start_result_recovers_existing_active_session() -> None:
     assert any("Recovered existing session" in message for _, message in messages)
 
 
+def test_handle_session_start_result_does_not_recover_aborted_active_session() -> None:
+    window = DiagnosticsWindow.__new__(DiagnosticsWindow)
+    messages: list[tuple[str, str]] = []
+    refresh_calls: list[str] = []
+    window._session_id = None
+    window._session_abort_finalizing = False
+    window._session_terminal_session_id = None
+    window._session_start_button = _Widget()
+    window._session_abort_button = _Widget()
+    window._start_button = _Widget()
+    window._vehicle_diagnostics_button = _Widget()
+    window._select_module_button = _Widget()
+    window._select_data_category_button = _Widget()
+    window._read_dtc_button = _Widget()
+    window._clear_dtc_button = _Widget()
+    window._start_stream_button = _Widget()
+    window._ai_diagnose_button = _Widget()
+    window._session_status_var = _Var("")
+    window._session_hint_var = _Var("")
+    window._append_agent_message = lambda role, message: messages.append((role, message))
+    window._request_session_status_refresh = lambda: refresh_calls.append("refresh")
+    window._close_decision_modal = lambda: None
+    window._set_agent_prompt = lambda *args, **kwargs: None
+    window._active_assignment = None
+    window._recover_existing_session = DiagnosticsWindow._recover_existing_session.__get__(window, DiagnosticsWindow)
+    window._handle_aborted_session_conflict = DiagnosticsWindow._handle_aborted_session_conflict.__get__(window, DiagnosticsWindow)
+    window._active_session_id_from_payload = DiagnosticsWindow._active_session_id_from_payload.__get__(window, DiagnosticsWindow)
+    window._is_aborted_status = DiagnosticsWindow._is_aborted_status.__get__(window, DiagnosticsWindow)
+    window._begin_abort_finalization = DiagnosticsWindow._begin_abort_finalization.__get__(window, DiagnosticsWindow)
+    window._retry_bootstrap_after_assignment_failure = lambda payload: False
+    window._error_message = DiagnosticsWindow._error_message.__get__(window, DiagnosticsWindow)
+
+    window._handle_session_start_result(
+        {
+            "success": False,
+            "error": "Another session is already active (session_id=session-123, status=aborted)",
+            "error_code": "active_session_exists",
+            "active_session_id": "session-123",
+            "active_session_status": "aborted",
+            "active_backend_name": "gds2",
+        }
+    )
+
+    assert window._session_abort_finalizing is True
+    assert window._session_id == "session-123"
+    assert window._session_terminal_session_id == "session-123"
+    assert window._session_start_button.state == tk.DISABLED
+    assert window._session_abort_button.state == tk.DISABLED
+    assert window._start_button.state == tk.DISABLED
+    assert window._session_status_var.get() == "Previous abort is still finalizing..."
+    assert "Start Session stays disabled" in window._session_hint_var.get()
+    assert refresh_calls == ["refresh"]
+    assert not any("Recovered existing session" in message for _, message in messages)
+
+
 def test_handle_session_done_releases_assignment_and_restores_bootstrap_base() -> None:
     window = DiagnosticsWindow.__new__(DiagnosticsWindow)
     release_calls: list[tuple[str, str, dict[str, object]]] = []
@@ -797,7 +960,10 @@ def test_handle_session_done_releases_assignment_and_restores_bootstrap_base() -
     window._session_hint_var = _Var("")
     window._server_state_text = _Var("Server: lax-1.diag.example.com")
     window._append_agent_message = lambda role, message: None
+    window._stop_sse_thread = lambda: None
+    window._stop_ai_sse_thread = lambda: None
     window._stop_session_sse_thread = lambda: None
+    window._stop_navigate_sse_thread = lambda: None
     window._close_decision_modal = lambda: None
     window._set_agent_prompt = lambda *args, **kwargs: None
     window._set_current_page = lambda page: setattr(window, "_current_page", page)

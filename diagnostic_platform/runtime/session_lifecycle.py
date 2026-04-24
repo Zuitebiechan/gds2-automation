@@ -21,6 +21,46 @@ from .worker_runtime import WorkerRuntime
 logger = logging.getLogger(__name__)
 
 
+def _rollback_failed_session_start(
+    runtime: WorkerRuntime,
+    *,
+    orchestrator: Any,
+    session: Any,
+) -> None:
+    session_id = getattr(session, "session_id", None)
+    if not session_id:
+        return
+
+    try:
+        clear_business_session(runtime, session_id)
+    except Exception:
+        logger.exception(
+            "Failed to clear worker binding during start rollback for session %s",
+            session_id,
+        )
+
+    rollback = getattr(orchestrator, "_rollback_start_session", None)
+    if callable(rollback):
+        try:
+            rollback(session_id)
+            return
+        except Exception:
+            logger.exception(
+                "Failed to discard session %s during start rollback",
+                session_id,
+            )
+
+    abort = getattr(orchestrator, "abort_session", None)
+    if callable(abort):
+        try:
+            abort(session_id, "Session start failed before worker binding completed")
+        except Exception:
+            logger.exception(
+                "Failed to abort session %s during start rollback fallback",
+                session_id,
+            )
+
+
 def start_business_session(
     runtime: WorkerRuntime,
     *,
@@ -29,7 +69,20 @@ def start_business_session(
 ) -> dict[str, Any]:
     """Start and bind one business session."""
     session = orchestrator.start_session(context)
-    bind_business_session(runtime, session)
+    try:
+        bind_business_session(runtime, session)
+    except Exception:
+        logger.warning(
+            "SESSION %s start rollback after worker binding failure",
+            getattr(session, "session_id", "unknown"),
+            exc_info=True,
+        )
+        _rollback_failed_session_start(
+            runtime,
+            orchestrator=orchestrator,
+            session=session,
+        )
+        raise
     logger.info(
         "SESSION %s started brand=%s backend=%s status=%s",
         session.session_id,
