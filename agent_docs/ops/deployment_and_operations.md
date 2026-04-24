@@ -97,12 +97,14 @@ Security defaults:
 Product observability defaults:
 
 - cloud artifacts live under `%PROGRAMDATA%\RPA_Diagnostic\observability\cloud\`
+- set `PRODUCT_LOG_CLOUD_ROOT` to move cloud observability artifacts to an explicit directory such as `D:\RPA_Diagnostic\observability\cloud`
 - local artifacts live under `%APPDATA%\VCI_Proxy\observability\`
 - the cloud server now accepts internal artifact uploads at `POST /api/session/logs/upload`
 - the cloud server also exposes changed cloud log artifacts at `POST /api/session/logs/sync`
 - the tray client runs a best-effort background observability uploader using the assigned node `api_base_url` when available, otherwise its configured `api_scheme`, `host`, `api_port`, and `api_token`
 - the tray client mirrors changed cloud-side log artifacts under `%APPDATA%\VCI_Proxy\observability\cloud_mirror\`
 - retention defaults can be overridden with:
+  - `PRODUCT_LOG_CLOUD_ROOT`
   - `PRODUCT_LOGS_ENABLED`
   - `PRODUCT_LOG_RETENTION_DAYS_RAW`
   - `PRODUCT_LOG_RETENTION_DAYS_SESSION_TRACE`

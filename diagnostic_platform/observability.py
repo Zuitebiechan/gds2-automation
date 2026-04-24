@@ -55,7 +55,18 @@ def generate_request_id() -> str:
     return uuid.uuid4().hex[:16]
 
 
+def _configured_cloud_observability_root() -> Path | None:
+    configured = str(os.environ.get("PRODUCT_LOG_CLOUD_ROOT", "") or "").strip()
+    if not configured:
+        return None
+    return Path(configured)
+
+
 def get_cloud_observability_root(programdata: str | Path | None = None) -> Path:
+    if programdata is None:
+        configured_root = _configured_cloud_observability_root()
+        if configured_root is not None:
+            return configured_root
     base = Path(programdata) if programdata is not None else Path(
         os.environ.get("PROGRAMDATA", "C:/ProgramData")
     )

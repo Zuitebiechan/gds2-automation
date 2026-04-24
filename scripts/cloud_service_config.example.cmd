@@ -19,6 +19,10 @@ set "DIAGNOSTIC_API_PUBLIC=0"
 set "DIAGNOSTIC_API_ENABLE_CORS=0"
 set "DIAGNOSTIC_API_CORS_ORIGINS="
 
+REM Optional cloud observability root override.
+REM Example: D:\RPA_Diagnostic\observability\cloud
+set "PRODUCT_LOG_CLOUD_ROOT="
+
 REM Optional reverse-server port overrides.
 set "VCI_PROXY_PORT=9000"
 set "VCI_PROXY_LOCAL_PROXY_PORT=9001"

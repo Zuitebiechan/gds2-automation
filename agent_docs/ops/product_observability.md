@@ -37,6 +37,7 @@ Key business actions:
 Cloud root:
 
 - `%PROGRAMDATA%\RPA_Diagnostic\observability\cloud\`
+- override with `PRODUCT_LOG_CLOUD_ROOT`, for example `D:\RPA_Diagnostic\observability\cloud`
 
 Local root:
 
@@ -198,6 +199,7 @@ Current cloud-sync skip reasons include:
 Default env-backed settings:
 
 - `PRODUCT_LOGS_ENABLED=true`
+- `PRODUCT_LOG_CLOUD_ROOT=` optional explicit cloud artifact root
 - `PRODUCT_LOG_RETENTION_DAYS_RAW=30`
 - `PRODUCT_LOG_RETENTION_DAYS_SESSION_TRACE=30`
 - `PRODUCT_LOG_RETENTION_DAYS_INCIDENT=90`

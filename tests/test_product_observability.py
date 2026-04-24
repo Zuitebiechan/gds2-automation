@@ -15,6 +15,7 @@ from diagnostic_platform.observability import (
     emit_event,
     flush_product_log_writers,
     get_active_session_snapshot_path,
+    get_cloud_observability_root,
     get_product_log_writer,
     install_observability_log_handler,
     read_active_session_snapshot,
@@ -142,6 +143,17 @@ def test_active_session_snapshot_store_round_trips_and_recovers_from_corruption(
     store.clear()
     assert not snapshot_path.exists()
     flush_product_log_writers()
+
+
+def test_get_cloud_observability_root_prefers_product_log_cloud_root_env(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    configured = tmp_path / "D-drive-like" / "RPA_Diagnostic" / "observability" / "cloud"
+    monkeypatch.setenv("PRODUCT_LOG_CLOUD_ROOT", str(configured))
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
+
+    assert get_cloud_observability_root() == configured
 
 
 def test_install_observability_log_handler_writes_runtime_log_event(
