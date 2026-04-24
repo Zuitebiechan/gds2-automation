@@ -224,6 +224,8 @@ Current runtime behavior:
 - `diagnostic_platform/runtime/*`
   - writes and maintains `active_session_snapshot.json`
   - emits session, start-diagnostics, network-gate, navigation, live-data, and AI business events
+- `src/diagnosis/ai_engine.py`
+  - emits AI provider failure events with provider status, type, model, base URL, and ai session id
 - `diagnostic_platform/observability_analysis.py`
   - assembles `session_trace`, classifies incidents deterministically, and generates `incident_bundle`
 - `src/navigation/controller.py`

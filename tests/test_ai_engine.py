@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import queue
+from pathlib import Path
 
+from diagnostic_platform.observability import flush_product_log_writers
 from diagnostic_platform.contracts import (
     DTC,
     DiagnosticPayload,
@@ -40,6 +42,21 @@ def _drain_queue(events: queue.Queue[str]) -> list[dict[str, object]]:
             }
         )
     return drained
+
+
+def _read_ai_engine_events(tmp_path: Path) -> list[dict[str, object]]:
+    flush_product_log_writers()
+    raw_dir = tmp_path / "RPA_Diagnostic" / "observability" / "cloud" / "raw"
+    records: list[dict[str, object]] = []
+    for path in sorted(raw_dir.glob("*.jsonl")):
+        if not path.name.startswith("ai_engine-"):
+            continue
+        records.extend(
+            json.loads(line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        )
+    return records
 
 
 def test_sse_event_preserves_unicode_json_payload() -> None:
@@ -309,4 +326,117 @@ def test_emit_keeps_essential_ai_events_when_queue_is_full(monkeypatch) -> None:
 
     assert engine.get_event_queue("session-1").get_nowait() == (
         'event: done\ndata: {"session_id": "session-1"}\n\n'
+    )
+
+
+def test_start_session_from_payload_emits_error_and_observability_on_provider_failure(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    class _ProviderPermissionError(RuntimeError):
+        def __init__(self) -> None:
+            super().__init__(
+                "Error code: 403 - {'error': {'message': 'This API key is not allowed to use any enabled OpenAI provider.', 'type': 'authentication_error'}, 'type': 'error'}"
+            )
+            self.status_code = 403
+            self.body = {
+                "error": {
+                    "message": "This API key is not allowed to use any enabled OpenAI provider.",
+                    "type": "authentication_error",
+                },
+                "type": "error",
+            }
+
+    class _FakeLLMClient:
+        def __init__(self, api_key: str, model: str = "gpt-5.4", *, base_url: str | None = None):
+            self.api_key = api_key
+            self.model = model
+            self.base_url = base_url
+
+        def diagnose_stream(self, vehicle_context, delta_payload, brand: str, software: str):
+            raise _ProviderPermissionError()
+
+        def provider_metadata(self) -> dict[str, object]:
+            return {
+                "model": self.model,
+                "base_url": self.base_url,
+                "reasoning_effort": "none",
+            }
+
+        @staticmethod
+        def parse_verdict(response_text: str) -> dict[str, object]:
+            raise AssertionError("parse_verdict must not run on provider failure")
+
+    class _NoopTimer:
+        def __init__(self, _seconds: float, _callback):
+            self.daemon = False
+
+        def start(self) -> None:
+            return None
+
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+    monkeypatch.setattr(ai_engine, "LLMClient", _FakeLLMClient)
+    monkeypatch.setattr(ai_engine.threading, "Timer", _NoopTimer)
+    monkeypatch.setattr(ai_engine.uuid, "uuid4", lambda: "session-403")
+    _payload_cache.clear()
+
+    engine = AIEngine(api_key="test", base_url="https://moacode.org/team/v1")
+    session_id = "session-403"
+    engine._active_session = session_id
+    engine._event_queues[session_id] = queue.Queue(maxsize=500)
+    engine._payload_worker(
+        session_id,
+        {
+            "session_id": "business-session-1",
+            "brand": "GM",
+            "software": "GDS2",
+            "module": "ECM",
+            "data_category": "Engine Data",
+        },
+        {
+            "snapshot_count": 2,
+            "actual_duration": 1.5,
+            "dtcs": [{"code": "P0101"}],
+            "timeline": [{"param": "RPM"}],
+            "significant_changes": [],
+            "sampling_quality": {"grade": "A"},
+            "quality_summary": "summary",
+            "gaps": [],
+        },
+    )
+
+    events = _drain_queue(engine.get_event_queue(session_id))
+
+    assert [event["event"] for event in events] == [
+        "progress",
+        "progress",
+        "error",
+        "done",
+    ]
+    assert events[2]["data"] == {
+        "error": "AI analysis failed: This API key is not allowed to use any enabled OpenAI provider. (HTTP 403)",
+        "cached_payload_id": "session-403",
+        "retryable": True,
+    }
+    assert events[3]["data"] == {"session_id": "session-403"}
+
+    records = _read_ai_engine_events(tmp_path)
+    provider_errors = [record for record in records if record.get("event_type") == "ai.provider.error"]
+
+    assert len(provider_errors) == 1
+    assert provider_errors[0]["component"] == "ai_engine"
+    assert provider_errors[0]["session_id"] == "business-session-1"
+    assert provider_errors[0]["failure_code"] == "ai_provider_http_403"
+    assert provider_errors[0]["failure_domain"] == "session_runtime"
+    assert provider_errors[0]["operation_kind"] == "ai.provider_request"
+    assert provider_errors[0]["module"] == "ECM"
+    assert provider_errors[0]["data_category"] == "Engine Data"
+    assert provider_errors[0]["ai_session_id"] == "session-403"
+    assert provider_errors[0]["ai_provider_model"] == "gpt-5.4"
+    assert provider_errors[0]["ai_provider_base_url"] == "https://moacode.org/team/v1"
+    assert provider_errors[0]["provider_status_code"] == 403
+    assert provider_errors[0]["provider_error_type"] == "authentication_error"
+    assert (
+        provider_errors[0]["provider_message"]
+        == "This API key is not allowed to use any enabled OpenAI provider."
     )

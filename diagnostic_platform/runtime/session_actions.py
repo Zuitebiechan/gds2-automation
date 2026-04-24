@@ -289,7 +289,9 @@ def start_ai_diagnosis(
 
     if not hasattr(engine, "start_session_from_payload"):
         raise RuntimeError("AI engine does not support payload-based sessions")
-    ai_sid = engine.start_session_from_payload(vehicle_context, diagnostic_payload)
+    engine_vehicle_context = dict(vehicle_context)
+    engine_vehicle_context.setdefault("session_id", session.session_id)
+    ai_sid = engine.start_session_from_payload(engine_vehicle_context, diagnostic_payload)
     bind_ai_session(runtime, session, ai_sid)
     set_session_selection(
         session,
@@ -326,7 +328,9 @@ def retry_ai_diagnosis(
     if engine.is_active:
         raise RuntimeError("AI diagnosis already in progress")
 
-    ai_sid = engine.retry_with_cached(cached_payload_id, vehicle_context)
+    engine_vehicle_context = dict(vehicle_context)
+    engine_vehicle_context.setdefault("session_id", session.session_id)
+    ai_sid = engine.retry_with_cached(cached_payload_id, engine_vehicle_context)
     bind_ai_session(runtime, session, ai_sid)
     set_session_selection(
         session,

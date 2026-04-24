@@ -56,6 +56,25 @@ class _Tree:
         self.headings[key] = text
 
 
+class _Text:
+    def __init__(self) -> None:
+        self.state = None
+        self.content = ""
+
+    def configure(self, **kwargs) -> None:
+        if "state" in kwargs:
+            self.state = kwargs["state"]
+
+    def delete(self, _start: str, _end: str) -> None:
+        self.content = ""
+
+    def insert(self, _index: str, text: str) -> None:
+        self.content += text
+
+    def see(self, _index: str) -> None:
+        return None
+
+
 def _build_window(*, current_page: str = "") -> DiagnosticsWindow:
     window = DiagnosticsWindow.__new__(DiagnosticsWindow)
     window._selected_module = _Var("ECM")
@@ -1104,6 +1123,58 @@ def test_start_session_sse_thread_sends_api_token_header(monkeypatch) -> None:
 
     assert captured["url"] == "https://cust001.diag.example.com/api/session/events?session_id=session-123"
     assert captured["headers"] == {"X-API-Token": "api-secret"}
+
+
+def test_handle_ai_done_surfaces_missing_terminal_payload_as_error() -> None:
+    window = DiagnosticsWindow.__new__(DiagnosticsWindow)
+    messages: list[tuple[str, str]] = []
+    window._ai_status_text = _Var("Sending to AI for analysis...")
+    window._ai_result_text = _Text()
+    window._ai_terminal_event_seen = False
+    window._ai_start_pending = True
+    window._session_ai_active = True
+    window._ai_diagnose_button = _Widget()
+    window._start_stream_button = _Widget()
+    window._read_dtc_button = _Widget()
+    window._append_agent_message = lambda role, message: messages.append((role, message))
+    window._stop_ai_sse_thread = lambda: None
+    window._refresh_action_buttons = lambda: None
+
+    window._handle_ai_done({})
+
+    assert window._ai_status_text.get() == (
+        "Error: AI analysis ended before any result or error was received. Check cloud logs for provider or SSE failures."
+    )
+    assert "AI analysis ended before any result or error was received." in window._ai_result_text.content
+    assert window._ai_diagnose_button.state == tk.NORMAL
+    assert window._start_stream_button.state == tk.NORMAL
+    assert window._read_dtc_button.state == tk.NORMAL
+    assert messages[-1] == (
+        "agent",
+        "AI Diagnostics ended without a terminal payload. AI analysis ended before any result or error was received. Check cloud logs for provider or SSE failures.",
+    )
+
+
+def test_handle_ai_done_preserves_existing_terminal_error_state() -> None:
+    window = DiagnosticsWindow.__new__(DiagnosticsWindow)
+    messages: list[tuple[str, str]] = []
+    window._ai_status_text = _Var("Error: AI analysis failed: provider denied access")
+    window._ai_result_text = _Text()
+    window._ai_terminal_event_seen = True
+    window._ai_start_pending = True
+    window._session_ai_active = True
+    window._ai_diagnose_button = _Widget()
+    window._start_stream_button = _Widget()
+    window._read_dtc_button = _Widget()
+    window._append_agent_message = lambda role, message: messages.append((role, message))
+    window._stop_ai_sse_thread = lambda: None
+    window._refresh_action_buttons = lambda: None
+
+    window._handle_ai_done({})
+
+    assert window._ai_status_text.get() == "Error: AI analysis failed: provider denied access"
+    assert window._ai_result_text.content == ""
+    assert messages == []
 
 
 class _QueueForSse:

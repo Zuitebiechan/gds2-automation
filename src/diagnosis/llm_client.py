@@ -235,6 +235,14 @@ class LLMClient:
                 )
         return self._client
 
+    def provider_metadata(self) -> dict[str, str | None]:
+        """Return one minimal provider descriptor for logs and observability."""
+        return {
+            "model": self._model,
+            "base_url": self._base_url,
+            "reasoning_effort": self._reasoning_effort,
+        }
+
     @staticmethod
     def _coerce_message_text(content: Any) -> str:
         """Best-effort conversion for provider message content variants."""

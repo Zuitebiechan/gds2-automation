@@ -16,9 +16,15 @@ import queue
 import threading
 import time
 import uuid
+from collections.abc import Mapping
 from typing import Any, Optional
 
 from diagnostic_platform.contracts import DiagnosticPayload, SamplingQuality
+from diagnostic_platform.observability import (
+    LogContext,
+    emit_event,
+    get_product_log_writer,
+)
 from diagnostic_platform.safe_utils import (
     display_text as _display_text,
     json_dumps_safe as _json_sse_data,
@@ -89,6 +95,71 @@ def _sampling_quality_to_status(sampling_quality: SamplingQuality) -> str:
     if sampling_quality == SamplingQuality.FAIR:
         return "degraded"
     return "insufficient"
+
+
+def _optional_text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _coerce_provider_body(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        return dict(value)
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def _extract_provider_error_details(exc: Exception) -> dict[str, Any]:
+    response = getattr(exc, "response", None)
+    status_code = getattr(exc, "status_code", None)
+    if status_code is None and response is not None:
+        status_code = getattr(response, "status_code", None)
+
+    body = getattr(exc, "body", None)
+    if body is None and response is not None:
+        try:
+            body = response.json()
+        except Exception:
+            body = getattr(response, "text", None)
+
+    provider_message = ""
+    provider_error_type = ""
+    if isinstance(body, Mapping):
+        error_payload = body.get("error")
+        if isinstance(error_payload, Mapping):
+            provider_message = str(error_payload.get("message") or "").strip()
+            provider_error_type = str(error_payload.get("type") or "").strip()
+
+    if not provider_message:
+        provider_message = str(exc).strip()
+
+    try:
+        provider_status_code = int(status_code) if status_code is not None else None
+    except (TypeError, ValueError):
+        provider_status_code = None
+
+    return {
+        "provider_status_code": provider_status_code,
+        "provider_error_type": provider_error_type or None,
+        "provider_message": provider_message,
+        "provider_body": _coerce_provider_body(body),
+    }
+
+
+def _format_ai_analysis_error(exc: Exception) -> str:
+    details = _extract_provider_error_details(exc)
+    provider_message = str(details.get("provider_message") or "").strip()
+    provider_status_code = details.get("provider_status_code")
+    if provider_message and provider_status_code is not None:
+        return f"AI analysis failed: {provider_message} (HTTP {provider_status_code})"
+    if provider_message:
+        return f"AI analysis failed: {provider_message}"
+    return f"AI analysis failed: {exc}"
 
 
 def _diagnostic_payload_to_delta_payload(payload: DiagnosticPayload) -> dict[str, Any]:
@@ -460,8 +531,13 @@ class AIEngine:
 
         except Exception as e:
             logger.exception(f"LLM call failed: {e}")
+            self._emit_provider_error_observability(
+                session_id=session_id,
+                vehicle_context=vehicle_context,
+                exc=e,
+            )
             self._emit(session_id, 'error', {
-                'error': f'AI analysis failed: {e}',
+                'error': _format_ai_analysis_error(e),
                 'cached_payload_id': payload_id,
                 'retryable': True,
             })
@@ -499,6 +575,59 @@ class AIEngine:
             session_id,
             verdict.get('verdict', 'parse_failed') if verdict else 'parse_failed',
             verdict.get('confidence', '?') if verdict else '?',
+        )
+
+    def _emit_provider_error_observability(
+        self,
+        *,
+        session_id: str,
+        vehicle_context: dict[str, Any],
+        exc: Exception,
+    ) -> None:
+        details = _extract_provider_error_details(exc)
+        provider_metadata = {}
+        metadata_getter = getattr(self._llm_client, "provider_metadata", None)
+        if callable(metadata_getter):
+            try:
+                provider_metadata = dict(metadata_getter() or {})
+            except Exception:
+                provider_metadata = {}
+
+        provider_status_code = details.get("provider_status_code")
+        failure_code = (
+            f"ai_provider_http_{provider_status_code}"
+            if provider_status_code is not None
+            else "ai_provider_request_failed"
+        )
+        emit_event(
+            get_product_log_writer("ai_engine"),
+            component="ai_engine",
+            event_type="ai.provider.error",
+            context=LogContext(
+                session_id=_optional_text(vehicle_context.get("session_id")),
+                operation_kind="ai.provider_request",
+                module=_optional_text(vehicle_context.get("module")),
+                data_category=_optional_text(vehicle_context.get("data_category")),
+            ),
+            status="error",
+            failure_code=failure_code,
+            failure_domain="session_runtime",
+            reason=details.get("provider_message") or "provider_request_failed",
+            impact_scope="ai_diagnosis",
+            symptom="ai_provider_request_failed",
+            next_checks=[
+                "verify AI provider key permissions on the configured gateway",
+                "verify OPENAI_BASE_URL or config.json openai_base_url matches the intended provider",
+                "verify the configured model is enabled for the selected provider",
+            ],
+            ai_session_id=session_id,
+            ai_provider_model=_optional_text(provider_metadata.get("model")),
+            ai_provider_base_url=_optional_text(provider_metadata.get("base_url")) or "default",
+            ai_reasoning_effort=_optional_text(provider_metadata.get("reasoning_effort")),
+            provider_status_code=provider_status_code,
+            provider_error_type=details.get("provider_error_type"),
+            provider_message=details.get("provider_message"),
+            provider_body=details.get("provider_body"),
         )
 
     def _apply_sampling_quality_confidence(

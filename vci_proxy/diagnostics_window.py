@@ -75,6 +75,7 @@ class DiagnosticsWindow:
         self._ai_sse_thread: Optional[threading.Thread] = None
         self._ai_sse_response: Optional[requests.Response] = None
         self._ai_start_pending = False
+        self._ai_terminal_event_seen = False
         self._vin = ""
         self._cached_payload_id = ""
         self._auto_ai_start_scheduled = False
@@ -1489,6 +1490,7 @@ class DiagnosticsWindow:
         self._ai_retry_button.grid_remove()
         self._auto_ai_start_scheduled = False
         self._ai_start_pending = True
+        self._ai_terminal_event_seen = False
         self._refresh_action_buttons()
         
         self._ai_status_text.set("Starting AI Diagnosis...")
@@ -1521,6 +1523,7 @@ class DiagnosticsWindow:
         self._read_dtc_button.configure(state=tk.DISABLED)
         self._ai_retry_button.grid_remove()
         self._ai_start_pending = True
+        self._ai_terminal_event_seen = False
         self._refresh_action_buttons()
         
         self._ai_status_text.set("Retrying AI Diagnosis...")
@@ -2341,6 +2344,7 @@ class DiagnosticsWindow:
 
     def _handle_ai_result(self, payload: dict[str, Any]) -> None:
         self._set_action_output_mode("ai")
+        self._ai_terminal_event_seen = True
         self._cached_payload_id = payload.get("cached_payload_id", "")
 
         verdict_data = payload.get("verdict")
@@ -2467,6 +2471,7 @@ class DiagnosticsWindow:
     def _handle_ai_error(self, payload: dict[str, Any]) -> None:
         self._set_action_output_mode("ai")
         self._ai_start_pending = False
+        self._ai_terminal_event_seen = True
         error_msg = payload.get("error", "Unknown error")
         self._ai_status_text.set(f"Error: {error_msg}")
         self._append_ai_result_text(f"\n\n[Error: {error_msg}]")
@@ -2483,6 +2488,18 @@ class DiagnosticsWindow:
         self._stop_ai_sse_thread()
         self._ai_start_pending = False
         self._session_ai_active = False
+        if not getattr(self, "_ai_terminal_event_seen", False):
+            error_msg = (
+                str(payload.get("error") or "").strip()
+                or "AI analysis ended before any result or error was received. Check cloud logs for provider or SSE failures."
+            )
+            self._ai_status_text.set(f"Error: {error_msg}")
+            if hasattr(self, "_ai_result_text"):
+                self._append_ai_result_text(f"\n\n[Error: {error_msg}]")
+            self._append_agent_message(
+                "agent",
+                f"AI Diagnostics ended without a terminal payload. {error_msg}",
+            )
         self._ai_diagnose_button.configure(state=tk.NORMAL)
         self._start_stream_button.configure(state=tk.NORMAL)
         self._read_dtc_button.configure(state=tk.NORMAL)
