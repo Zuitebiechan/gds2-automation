@@ -1,0 +1,4 @@
+interface:
+  display_name: "Build EXE"
+  short_description: "Build the Windows VCI Proxy client bundle"
+  default_prompt: "Use $build-vci-proxy-exe to build the latest Windows VCI Proxy client and worker executables from this repository."
