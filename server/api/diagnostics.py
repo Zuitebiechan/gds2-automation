@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+from typing import Any
 
 from flask import Blueprint, Response, jsonify, request
 
@@ -171,6 +172,15 @@ def _build_ai_engine() -> AIEngine:
 def _get_ai_engine() -> AIEngine:
     """Return the shared worker-scoped AI engine."""
     return _runtime().get_ai_engine(_build_ai_engine)
+
+
+def _ensure_ai_engine_ready(engine: Any) -> None:
+    """Fail before backend collection when AI provider/config is not usable."""
+    if bool(getattr(engine, "is_active", False)):
+        raise RuntimeError("AI diagnosis already in progress")
+    readiness_checker = getattr(engine, "verify_ready", None)
+    if callable(readiness_checker):
+        readiness_checker()
 
 
 def _load_zhipu_api_key() -> str | None:
@@ -508,6 +518,7 @@ def diagnose_ai_start():
         engine = _get_ai_engine()
         backend = _get_backend(_resolve_backend_name(data))
         _ensure_backend_capability(backend, BackendCapability.AI_DATA_COLLECTION)
+        _ensure_ai_engine_ready(engine)
         session_id = start_public_ai_diagnosis(
             backend=backend,
             engine=engine,
@@ -600,8 +611,10 @@ def diagnose_ai_retry():
                 "error": "cached_payload_id required",
             }), 400
 
+        engine = _get_ai_engine()
+        _ensure_ai_engine_ready(engine)
         session_id = retry_public_ai_diagnosis(
-            engine=_get_ai_engine(),
+            engine=engine,
             cached_payload_id=cached_payload_id,
             vehicle_context=vehicle_context,
         )

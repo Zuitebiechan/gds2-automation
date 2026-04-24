@@ -243,6 +243,27 @@ class LLMClient:
             "reasoning_effort": self._reasoning_effort,
         }
 
+    def verify_ready(self) -> dict[str, str | None]:
+        """Run one minimal completion request so config/provider issues fail early."""
+        client = self._get_client()
+        logger.info(
+            "Running AI provider readiness preflight model=%s base_url=%s",
+            self._model,
+            self._base_url or "default",
+        )
+        client.chat.completions.create(
+            **{
+                **self._request_kwargs(
+                    system_prompt="You are an AI readiness probe. Reply only with OK.",
+                    user_message="ready",
+                    stream=False,
+                ),
+                "temperature": 0.0,
+                "max_tokens": 1,
+            }
+        )
+        return self.provider_metadata()
+
     @staticmethod
     def _coerce_message_text(content: Any) -> str:
         """Best-effort conversion for provider message content variants."""

@@ -101,6 +101,93 @@ def test_start_ai_diagnose_rejects_non_string_data_category(monkeypatch) -> None
     assert payload == {"success": False, "error": "data_category must be a string"}
 
 
+def test_start_ai_diagnose_verifies_ai_ready_before_collecting(monkeypatch) -> None:
+    session = _session("session-ai", capabilities=[BackendCapability.AI_DATA_COLLECTION])
+    orch = _FakeOrchestrator(session)
+    order: list[str] = []
+
+    class _FakeEngine:
+        is_active = False
+        collection_seconds = 30
+
+        def verify_ready(self) -> None:
+            order.append("verify")
+
+        def start_session_from_payload(self, vehicle_context, diagnostic_payload):
+            order.append("start")
+            assert vehicle_context["session_id"] == "session-ai"
+            assert diagnostic_payload == {"payload": "ok"}
+            return "ai-1"
+
+    monkeypatch.setattr(session_ai_handlers, "get_orchestrator", lambda: orch)
+    monkeypatch.setattr(
+        session_ai_handlers,
+        "get_backend",
+        lambda session_id=None: types.SimpleNamespace(
+            collect_ai_payload=lambda **kwargs: order.append("collect") or {"payload": "ok"}
+        ),
+    )
+    monkeypatch.setattr(session_ai_handlers, "get_ai_engine", lambda: _FakeEngine())
+    monkeypatch.setattr(session_ai_handlers, "_runtime", lambda: WorkerRuntime())
+    monkeypatch.setattr(
+        session_ai_handlers,
+        "resolve_session_vehicle_context",
+        lambda session, data, backend: {
+            "vin": "VIN-1",
+            "module": "ECM",
+            "data_category": "Engine Data",
+        },
+    )
+
+    payload, status = session_ai_handlers.start_ai_diagnose({"session_id": "session-ai"})
+
+    assert status == 200
+    assert payload["ai_session_id"] == "ai-1"
+    assert order == ["verify", "collect", "start"]
+
+
+def test_start_ai_diagnose_stops_before_collection_when_ai_not_ready(monkeypatch) -> None:
+    session = _session("session-ai", capabilities=[BackendCapability.AI_DATA_COLLECTION])
+    orch = _FakeOrchestrator(session)
+
+    class _FakeEngine:
+        is_active = False
+        collection_seconds = 30
+
+        def verify_ready(self) -> None:
+            raise RuntimeError("AI readiness check failed: provider denied access")
+
+    monkeypatch.setattr(session_ai_handlers, "get_orchestrator", lambda: orch)
+    monkeypatch.setattr(
+        session_ai_handlers,
+        "get_backend",
+        lambda session_id=None: types.SimpleNamespace(
+            collect_ai_payload=lambda **kwargs: (_ for _ in ()).throw(
+                AssertionError("collect_ai_payload should not be called")
+            )
+        ),
+    )
+    monkeypatch.setattr(session_ai_handlers, "get_ai_engine", lambda: _FakeEngine())
+    monkeypatch.setattr(session_ai_handlers, "_runtime", lambda: WorkerRuntime())
+    monkeypatch.setattr(
+        session_ai_handlers,
+        "resolve_session_vehicle_context",
+        lambda session, data, backend: {
+            "vin": "VIN-1",
+            "module": "ECM",
+            "data_category": "Engine Data",
+        },
+    )
+
+    payload, status = session_ai_handlers.start_ai_diagnose({"session_id": "session-ai"})
+
+    assert status == 409
+    assert payload == {
+        "success": False,
+        "error": "AI readiness check failed: provider denied access",
+    }
+
+
 def test_stream_ai_diagnose_events_binds_ai_iterator(monkeypatch) -> None:
     session = _session("session-ai", capabilities=[BackendCapability.AI_DATA_COLLECTION])
     orch = _FakeOrchestrator(session)

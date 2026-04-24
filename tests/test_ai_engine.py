@@ -4,6 +4,8 @@ import json
 import queue
 from pathlib import Path
 
+import pytest
+
 from diagnostic_platform.observability import flush_product_log_writers
 from diagnostic_platform.contracts import (
     DTC,
@@ -440,3 +442,61 @@ def test_start_session_from_payload_emits_error_and_observability_on_provider_fa
         provider_errors[0]["provider_message"]
         == "This API key is not allowed to use any enabled OpenAI provider."
     )
+
+
+def test_ai_engine_verify_ready_runs_provider_preflight(monkeypatch) -> None:
+    observed: dict[str, object] = {}
+
+    class _FakeLLMClient:
+        def __init__(self, api_key: str, model: str = "gpt-5.4", *, base_url: str | None = None):
+            observed["api_key"] = api_key
+            observed["model"] = model
+            observed["base_url"] = base_url
+
+        def verify_ready(self) -> dict[str, object]:
+            observed["verified"] = True
+            return {"model": observed["model"], "base_url": observed["base_url"]}
+
+    monkeypatch.setattr(ai_engine, "LLMClient", _FakeLLMClient)
+
+    engine = AIEngine(api_key="test", base_url="https://moacode.org/team/v1")
+    engine.verify_ready()
+
+    assert observed == {
+        "api_key": "test",
+        "model": "gpt-5.4",
+        "base_url": "https://moacode.org/team/v1",
+        "verified": True,
+    }
+
+
+def test_ai_engine_verify_ready_formats_provider_failure(monkeypatch) -> None:
+    class _ProviderPermissionError(RuntimeError):
+        def __init__(self) -> None:
+            super().__init__("provider denied access")
+            self.status_code = 403
+            self.body = {
+                "error": {
+                    "message": "This API key is not allowed to use any enabled OpenAI provider.",
+                    "type": "authentication_error",
+                }
+            }
+
+    class _FakeLLMClient:
+        def __init__(self, api_key: str, model: str = "gpt-5.4", *, base_url: str | None = None):
+            self.api_key = api_key
+            self.model = model
+            self.base_url = base_url
+
+        def verify_ready(self) -> None:
+            raise _ProviderPermissionError()
+
+    monkeypatch.setattr(ai_engine, "LLMClient", _FakeLLMClient)
+
+    engine = AIEngine(api_key="test", base_url="https://moacode.org/team/v1")
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"AI readiness check failed: This API key is not allowed to use any enabled OpenAI provider\. \(HTTP 403\)",
+    ):
+        engine.verify_ready()

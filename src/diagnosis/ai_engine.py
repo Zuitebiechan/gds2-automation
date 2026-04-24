@@ -162,6 +162,17 @@ def _format_ai_analysis_error(exc: Exception) -> str:
     return f"AI analysis failed: {exc}"
 
 
+def _format_ai_readiness_error(exc: Exception) -> str:
+    details = _extract_provider_error_details(exc)
+    provider_message = str(details.get("provider_message") or "").strip()
+    provider_status_code = details.get("provider_status_code")
+    if provider_message and provider_status_code is not None:
+        return f"AI readiness check failed: {provider_message} (HTTP {provider_status_code})"
+    if provider_message:
+        return f"AI readiness check failed: {provider_message}"
+    return f"AI readiness check failed: {exc}"
+
+
 def _diagnostic_payload_to_delta_payload(payload: DiagnosticPayload) -> dict[str, Any]:
     live_data = sorted(payload.live_data, key=lambda point: point.timestamp)
     timeline: list[dict[str, Any]] = []
@@ -296,6 +307,20 @@ class AIEngine:
     @property
     def collection_seconds(self) -> int:
         return self._collection_seconds
+
+    def verify_ready(self) -> None:
+        """Verify provider/auth/model readiness before starting data collection."""
+        try:
+            self._llm_client.verify_ready()
+        except RuntimeError as exc:
+            if any(
+                getattr(exc, attr_name, None) is not None
+                for attr_name in ("response", "status_code", "body")
+            ):
+                raise RuntimeError(_format_ai_readiness_error(exc)) from exc
+            raise
+        except Exception as exc:
+            raise RuntimeError(_format_ai_readiness_error(exc)) from exc
 
     def get_event_queue(self, session_id: str) -> Optional[queue.Queue]:
         """Get the SSE event queue for a session."""

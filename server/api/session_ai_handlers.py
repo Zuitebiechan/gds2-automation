@@ -50,6 +50,15 @@ def _normalize_vehicle_context_data(data: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _ensure_ai_engine_ready(engine: Any) -> None:
+    """Fail before backend collection when AI provider/config is not usable."""
+    if bool(getattr(engine, "is_active", False)):
+        raise RuntimeError("AI diagnosis already in progress")
+    readiness_checker = getattr(engine, "verify_ready", None)
+    if callable(readiness_checker):
+        readiness_checker()
+
+
 def start_ai_diagnose(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
     try:
         session_id = _read_text_field(data, "session_id")
@@ -75,6 +84,7 @@ def start_ai_diagnose(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
 
         backend = get_backend(session_id)
         engine = get_ai_engine()
+        _ensure_ai_engine_ready(engine)
         diagnostic_payload = backend.collect_ai_payload(
             vehicle_context=vehicle_context,
             data_category=data_category,
@@ -176,6 +186,7 @@ def retry_ai_diagnose(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
             backend=get_backend(session_id),
         )
         engine = get_ai_engine()
+        _ensure_ai_engine_ready(engine)
         ai_session_id = retry_ai_diagnosis(
             _runtime(),
             session,

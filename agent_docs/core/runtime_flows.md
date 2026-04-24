@@ -341,10 +341,11 @@ Sequence:
 
 1. Ensure `AI_DATA_COLLECTION` capability.
 2. Resolve VIN, module, and data category from request/session/backend state.
-3. Ask the backend to collect a standardized `DiagnosticPayload`.
-4. Start an AI-engine session from that payload.
-5. Bind the AI session id to the business session.
-6. Stream AI events over the AI event endpoint.
+3. Verify the shared AI engine is ready before data collection begins, including provider/config readiness when supported.
+4. Ask the backend to collect a standardized `DiagnosticPayload`.
+5. Start an AI-engine session from that payload.
+6. Bind the AI session id to the business session.
+7. Stream AI events over the AI event endpoint.
 
 ### Session-bound events
 

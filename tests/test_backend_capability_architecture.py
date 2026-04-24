@@ -1032,11 +1032,24 @@ def test_diagnostics_api_live_and_ai_use_backend_owned_extensions(monkeypatch):
         ]
     )
     fake_registry.register(backend)
+    order: list[str] = []
+
+    original_collect_ai_payload = backend.collect_ai_payload
+
+    def _collect_ai_payload_with_order(**kwargs):
+        order.append("collect")
+        return original_collect_ai_payload(**kwargs)
+
+    backend.collect_ai_payload = _collect_ai_payload_with_order
 
     class FakeEngine:
         is_active = False
 
+        def verify_ready(self):
+            order.append("verify")
+
         def start_session_from_payload(self, vehicle_context, diagnostic_payload):
+            order.append("start")
             return "diag-ai-1"
 
         def start_session(self, *args, **kwargs):
@@ -1076,6 +1089,7 @@ def test_diagnostics_api_live_and_ai_use_backend_owned_extensions(monkeypatch):
 
         assert ai_status == 200
         assert ai_payload["session_id"] == "diag-ai-1"
+        assert order == ["verify", "collect", "start"]
         assert backend.ai_payload_calls[-1]["data_category"] == "Live Data"
         assert backend.ai_payload_calls[-1]["vehicle_context"]["module"] == "Engine"
     finally:

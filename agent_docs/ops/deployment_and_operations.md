@@ -54,6 +54,12 @@ python -m vci_proxy.reverse_server --auth-token <shared-token>
 python app.py --port 8080
 ```
 
+When starting directly from source instead of `scripts\cloud_start_services.bat`:
+
+- set `PRODUCT_LOG_CLOUD_ROOT` to move structured observability artifacts such as `raw\*.jsonl` to an explicit root like `D:\RPA_Diagnostic\observability\cloud`
+- set `LOG_DIR` to move Flask and reverse-server text logs to an explicit directory like `D:\RPA_Diagnostic\logs`
+- both `python app.py` and `python -m vci_proxy.reverse_server` now also read the repo-root `.env` file when present, so these paths can be persisted there for direct launches
+
 For Windows cloud nodes, the repository also includes a one-click startup flow:
 
 ```bash
@@ -392,7 +398,7 @@ These facts matter operationally:
 - one GDS2 instance is assumed per machine
 - GBK encoding may appear in GDS2-facing behavior
 - live diagnostics features assume GDS2 reaches the Data Display page
-- AI diagnosis requires a 30-second data-collection window before the LLM call
+- AI diagnosis now runs an AI/provider readiness preflight before the 30-second data-collection window starts
 
 ## Startup Responsibilities
 
