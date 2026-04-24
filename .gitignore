@@ -111,6 +111,7 @@ data/gds2_navigation_registry.sqlite
 .sisyphus/
 bench_*.jsonl
 reports/network_benchmarks/
+reports/gds2_ab_runs/
 reports/navigation_registry_probe/
 reports/navigation_path_debug/
 reports/navigation_path_proof/

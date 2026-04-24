@@ -16,6 +16,7 @@ Use it as the primary source of truth after the code itself. Each document has a
 - If you need tests, validation policy, or documentation-quality guards, read `agent_docs/core/testing_and_quality.md`.
 - If you need environment setup, runtime commands, ports, secrets, or deployment notes, read `agent_docs/ops/deployment_and_operations.md`.
 - If you need reverse tunnel, local tray client, virtual DLL, auth, cache, or tunnel-quality details, read `agent_docs/ops/vci_proxy_and_tunnel.md`.
+- If you need real-vehicle local-vs-cloud GDS2 log collection and comparison workflow, read `agent_docs/ops/gds2_ab_log_comparison.md`.
 - If you need the product-level observability schema, artifact layout, redaction policy, or incident artifact contract, read `agent_docs/ops/product_observability.md`.
 - If you need AWS Local Zone node allocation, pool sizing, routing, or cost guidance, read `agent_docs/ops/aws_local_zone_node_allocation.md`.
 - If you need GDS2 registry-runtime rollout, rollback, telemetry, or troubleshooting guidance, read `agent_docs/ops/gds2_registry_runtime_rollout.md`.
@@ -39,6 +40,7 @@ Use it as the primary source of truth after the code itself. Each document has a
 | --- | --- |
 | `agent_docs/ops/deployment_and_operations.md` | Environment setup, ports, startup, secrets, logs, build/run conventions |
 | `agent_docs/ops/vci_proxy_and_tunnel.md` | Tunnel protocol path, reverse server/client, GUI/tray client, auth, cache, quality tracking |
+| `agent_docs/ops/gds2_ab_log_comparison.md` | Real-vehicle A/B log capture workflow and local-vs-cloud comparison method |
 | `agent_docs/ops/product_observability.md` | Structured logging schema, artifact layout, redaction rules, and incident artifact contract |
 | `agent_docs/ops/aws_local_zone_customer_node.md` | Plain-language deployment guide for one-customer-per-node AWS Local Zone Windows workers |
 | `agent_docs/ops/aws_local_zone_node_allocation.md` | Automated Local Zone node allocation, pool strategy, routing, cost model, and rollout difficulty |
