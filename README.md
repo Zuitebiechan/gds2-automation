@@ -76,6 +76,13 @@ python app.py --port 8080
 # For GDS2, keep the Java Agent writing to ~/gds2-data/latest.json
 ```
 
+For direct source launches, set:
+
+- `PRODUCT_LOG_CLOUD_ROOT=D:\RPA_Diagnostic\observability\cloud` for structured observability artifacts
+- `LOG_DIR=D:\RPA_Diagnostic\logs` for Flask and reverse-server text logs
+
+Both `python app.py` and `python -m vci_proxy.reverse_server` also read the repo-root `.env` file when present, so these paths can be persisted there without using the startup script.
+
 For Windows cloud nodes, there is now a simpler one-click path:
 
 ```bash

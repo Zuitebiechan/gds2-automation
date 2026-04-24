@@ -19,6 +19,7 @@ import ssl
 import signal
 import os
 from typing import Optional
+from pathlib import Path
 
 from diagnostic_platform.observability import (
     LogContext,
@@ -46,12 +47,59 @@ from .tunnel_quality import (
     write_tunnel_quality_snapshot,
 )
 
+_bootstrap_logs: list[tuple[str, str]] = []
+
+try:
+    from dotenv import load_dotenv
+
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    if env_path.exists():
+        load_dotenv(env_path)
+        _bootstrap_logs.append(("debug", f"Loaded environment variables from {env_path}"))
+    else:
+        _bootstrap_logs.append(("debug", f".env file not found at {env_path}"))
+except ImportError:
+    _bootstrap_logs.append(("debug", "python-dotenv not installed"))
+
+
+def _resolve_reverse_server_log_path(
+    file_name: str = "vci_proxy.log",
+    *,
+    environ: dict[str, str] | None = None,
+) -> Path | None:
+    env = os.environ if environ is None else environ
+    configured_dir = str(env.get("LOG_DIR", "") or "").strip()
+    if not configured_dir:
+        return None
+    log_dir = Path(configured_dir)
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        _bootstrap_logs.append(
+            ("warning", f"Failed to create LOG_DIR {log_dir}: {exc}; console logging only")
+        )
+        return None
+    return log_dir / file_name
+
+
+_logging_handlers: list[logging.Handler] = [logging.StreamHandler()]
+_reverse_server_log_path = _resolve_reverse_server_log_path()
+if _reverse_server_log_path is not None:
+    _logging_handlers.insert(
+        0,
+        logging.FileHandler(_reverse_server_log_path, encoding="utf-8"),
+    )
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s',
-    datefmt='%H:%M:%S'
+    datefmt='%H:%M:%S',
+    handlers=_logging_handlers,
 )
 logger = logging.getLogger(__name__)
+
+for level, message in _bootstrap_logs:
+    getattr(logger, level)(message)
 
 MAX_FRAME_BODY_BYTES = 1_000_000
 DEFAULT_FRAME_BODY_READ_TIMEOUT_S = 10.0

@@ -56,11 +56,34 @@ try:
 except ImportError:
     _bootstrap_logs.append(("debug", "python-dotenv not installed"))
 
+
+def _resolve_server_log_path(
+    file_name: str = "gds2_web.log",
+    *,
+    environ: dict[str, str] | None = None,
+) -> Path:
+    env = os.environ if environ is None else environ
+    configured_dir = str(env.get("LOG_DIR", "") or "").strip()
+    if configured_dir:
+        log_dir = Path(configured_dir)
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            return log_dir / file_name
+        except OSError as exc:
+            _bootstrap_logs.append(
+                (
+                    "warning",
+                    f"Failed to create LOG_DIR {log_dir}: {exc}; falling back to {file_name}",
+                )
+            )
+    return Path(file_name)
+
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
     handlers=[
-        logging.FileHandler("gds2_web.log"),
+        logging.FileHandler(_resolve_server_log_path(), encoding="utf-8"),
         logging.StreamHandler(),
     ],
 )

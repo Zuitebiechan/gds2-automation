@@ -92,6 +92,15 @@ def _read_product_log_events(tmp_path) -> list[dict[str, object]]:
     return records
 
 
+def test_resolve_reverse_server_log_path_prefers_log_dir(tmp_path) -> None:
+    path = reverse_server_module._resolve_reverse_server_log_path(
+        environ={"LOG_DIR": str(tmp_path / "logs")}
+    )
+
+    assert path == tmp_path / "logs" / "vci_proxy.log"
+    assert path.parent.is_dir()
+
+
 def test_authenticate_vci_accepts_valid_auth_request(monkeypatch) -> None:
     server = ReverseProxyServer(config=ProxyConfig.from_args(auth_token="secret"))
     reader = _FakeReader(ProtocolEncoder.encode_auth_req(123, b"x" * 32, sequence=7))

@@ -89,6 +89,18 @@ def _raw_event_files(root: Path) -> list[Path]:
     return sorted((root / "RPA_Diagnostic" / "observability" / "cloud" / "raw").glob("*.jsonl"))
 
 
+def test_resolve_server_log_path_prefers_log_dir(tmp_path: Path, monkeypatch) -> None:
+    _install_fake_flask_stack(monkeypatch)
+    server_app = importlib.import_module("server.app")
+
+    path = server_app._resolve_server_log_path(
+        environ={"LOG_DIR": str(tmp_path / "logs")}
+    )
+
+    assert path == tmp_path / "logs" / "gds2_web.log"
+    assert path.parent.is_dir()
+
+
 def test_api_request_observability_assigns_request_id_and_writes_success_event(
     tmp_path: Path,
     monkeypatch,
