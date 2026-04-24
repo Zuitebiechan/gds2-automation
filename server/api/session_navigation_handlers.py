@@ -16,7 +16,7 @@ from diagnostic_platform.runtime.session_actions import (
 )
 from diagnostic_platform.runtime.session_streams import iter_navigation_events
 
-from server.api.http_utils import internal_error_payload
+from server.api.http_utils import internal_error_payload, navigation_decision_error_payload
 from server.api.session_dependencies import (
     _runtime,
     get_backend,
@@ -153,9 +153,7 @@ def submit_navigation_decision_for_business(data: dict[str, object]) -> tuple[di
     except UnsupportedCapabilityError as exc:
         return {"success": False, "error": str(exc)}, 501
     except ValueError as exc:
-        message = str(exc)
-        status_code = 409 if "awaiting a decision" in message else 400
-        return {"success": False, "error": message}, status_code
+        return navigation_decision_error_payload(str(exc))
     except Exception as exc:
         logger.exception("session_navigate_decision failed")
         return internal_error_payload(), 500

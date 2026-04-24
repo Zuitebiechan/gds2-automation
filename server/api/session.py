@@ -53,6 +53,8 @@ from server.api import session_log_handlers
 from server.api.http_utils import (
     RequestPayloadError,
     internal_error_payload,
+    session_not_running_payload,
+    session_state_error_payload,
     read_text_mapping_field,
     require_json_object,
 )
@@ -783,8 +785,8 @@ def session_execute():
     except UnsupportedCapabilityError as exc:
         return jsonify({"success": False, "error": str(exc)}), 501
     except ValueError as exc:
-        status = 409 if "Session not running" in str(exc) else 400
-        return jsonify({"success": False, "error": str(exc)}), status
+        payload, status = session_state_error_payload(str(exc))
+        return jsonify(payload), status
     except RequestPayloadError as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
     except Exception as exc:
@@ -814,7 +816,7 @@ def session_events():
         return _sse_response(
             iter_session_events(
                 orchestrator=get_orchestrator(),
-                backend=_get_backend(session_id, required=False),
+                backend=_get_bound_backend(session_id, required=False),
                 session_id=session_id,
             )
         )
@@ -897,10 +899,7 @@ def session_select_module():
         orch = get_orchestrator()
         session = orch.get_session(session_id)
         if session.status != SessionStatus.RUNNING:
-            return jsonify({
-                "success": False,
-                "error": f"Session not running (status={session.status.value})",
-            }), 409
+            return jsonify(session_not_running_payload(session.status.value)), 409
 
         try:
             outcome = select_module_action(
@@ -972,10 +971,7 @@ def session_select_data_category():
         orch = get_orchestrator()
         session = orch.get_session(session_id)
         if session.status != SessionStatus.RUNNING:
-            return jsonify({
-                "success": False,
-                "error": f"Session not running (status={session.status.value})",
-            }), 409
+            return jsonify(session_not_running_payload(session.status.value)), 409
 
         try:
             outcome = select_data_category_action(

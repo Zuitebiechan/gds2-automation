@@ -21,7 +21,7 @@ from diagnostic_platform.session_models import SessionStatus
 from diagnostic_platform.runtime.session_streams import iter_scoped_agent_events
 from diagnostic_platform.sse import session_agent_stream_scope
 
-from server.api.http_utils import internal_error_payload
+from server.api.http_utils import internal_error_payload, session_not_running_payload
 from server.api.session_dependencies import (
     _runtime,
     get_backend,
@@ -65,7 +65,7 @@ def read_session_dtcs(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
         result = read_dtcs(
             session,
             normalized_data,
-            backend=get_backend(),
+            backend=get_backend(session_id),
             emit_progress=lambda message: orch.emit_progress(session_id, message),
         )
         logger.debug(
@@ -105,7 +105,7 @@ def clear_session_dtcs(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
             _runtime(),
             session,
             normalized_data,
-            backend=get_backend(),
+            backend=get_backend(session_id),
             emit_progress=lambda message: orch.emit_progress(session_id, message),
         )
         logger.debug(
@@ -153,7 +153,7 @@ def start_live_data_session(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
             session,
             normalized_data,
             interval_ms=interval_ms,
-            backend=get_backend(),
+            backend=get_backend(session_id),
             stream_scope=session_agent_stream_scope(session_id),
             emit_progress=lambda message: orch.emit_progress(session_id, message),
         )
@@ -219,15 +219,12 @@ def stop_live_data_session(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
         orch = get_orchestrator()
         session = orch.get_session(session_id)
         if session.status != SessionStatus.RUNNING:
-            return {
-                "success": False,
-                "error": f"Session not running (status={session.status.value})",
-            }, 409
+            return session_not_running_payload(session.status.value), 409
         ensure_session_capability(session, BackendCapability.LIVE_DATA)
         payload = stop_live_data(
             _runtime(),
             session,
-            backend=get_backend(),
+            backend=get_backend(session_id),
             emit_progress=lambda message: orch.emit_progress(session_id, message),
         )
         logger.debug("SESSION %s live_data stopped", session_id)

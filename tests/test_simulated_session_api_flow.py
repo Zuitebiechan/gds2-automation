@@ -76,12 +76,12 @@ def _bind_simulated_dependencies(
 
     monkeypatch.setattr(session_ai_handlers, "_runtime", lambda: runtime)
     monkeypatch.setattr(session_ai_handlers, "get_orchestrator", lambda: orchestrator)
-    monkeypatch.setattr(session_ai_handlers, "get_backend", lambda: backend)
+    monkeypatch.setattr(session_ai_handlers, "get_backend", lambda session_id=None: backend)
     monkeypatch.setattr(session_ai_handlers, "get_ai_engine", lambda: ai_engine)
 
     monkeypatch.setattr(session_live_data_handlers, "_runtime", lambda: runtime)
     monkeypatch.setattr(session_live_data_handlers, "get_orchestrator", lambda: orchestrator)
-    monkeypatch.setattr(session_live_data_handlers, "get_backend", lambda: backend)
+    monkeypatch.setattr(session_live_data_handlers, "get_backend", lambda session_id=None: backend)
 
 
 def _drive_navigation_to_data_display(

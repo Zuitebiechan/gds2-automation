@@ -46,7 +46,7 @@ def test_start_ai_diagnose_requires_data_category(monkeypatch) -> None:
     monkeypatch.setattr(
         session_ai_handlers,
         "get_backend",
-        lambda: types.SimpleNamespace(
+        lambda session_id=None: types.SimpleNamespace(
             collect_ai_payload=lambda **kwargs: (_ for _ in ()).throw(
                 AssertionError("collect_ai_payload should not be called")
             )
@@ -82,7 +82,7 @@ def test_start_ai_diagnose_rejects_non_string_data_category(monkeypatch) -> None
     orch = _FakeOrchestrator(session)
 
     monkeypatch.setattr(session_ai_handlers, "get_orchestrator", lambda: orch)
-    monkeypatch.setattr(session_ai_handlers, "get_backend", lambda: object())
+    monkeypatch.setattr(session_ai_handlers, "get_backend", lambda session_id=None: object())
     monkeypatch.setattr(session_ai_handlers, "get_ai_engine", lambda: object())
     monkeypatch.setattr(session_ai_handlers, "_runtime", lambda: WorkerRuntime())
     monkeypatch.setattr(
@@ -145,7 +145,7 @@ def test_start_live_data_session_returns_backend_payload_and_scope(monkeypatch) 
     runtime = WorkerRuntime()
 
     monkeypatch.setattr(session_live_data_handlers, "get_orchestrator", lambda: orch)
-    monkeypatch.setattr(session_live_data_handlers, "get_backend", lambda: object())
+    monkeypatch.setattr(session_live_data_handlers, "get_backend", lambda session_id=None: object())
     monkeypatch.setattr(session_live_data_handlers, "_runtime", lambda: runtime)
     monkeypatch.setattr(
         session_live_data_handlers,
@@ -179,7 +179,7 @@ def test_start_live_data_session_rejects_invalid_interval_ms(monkeypatch) -> Non
     orch = _FakeOrchestrator(session)
 
     monkeypatch.setattr(session_live_data_handlers, "get_orchestrator", lambda: orch)
-    monkeypatch.setattr(session_live_data_handlers, "get_backend", lambda: object())
+    monkeypatch.setattr(session_live_data_handlers, "get_backend", lambda session_id=None: object())
     monkeypatch.setattr(session_live_data_handlers, "_runtime", lambda: WorkerRuntime())
     monkeypatch.setattr(
         session_live_data_handlers,
@@ -202,7 +202,7 @@ def test_start_live_data_session_rejects_non_string_data_category(monkeypatch) -
     orch = _FakeOrchestrator(session)
 
     monkeypatch.setattr(session_live_data_handlers, "get_orchestrator", lambda: orch)
-    monkeypatch.setattr(session_live_data_handlers, "get_backend", lambda: object())
+    monkeypatch.setattr(session_live_data_handlers, "get_backend", lambda session_id=None: object())
     monkeypatch.setattr(session_live_data_handlers, "_runtime", lambda: WorkerRuntime())
     monkeypatch.setattr(
         session_live_data_handlers,
@@ -252,7 +252,7 @@ def test_read_session_dtcs_rejects_non_string_module(monkeypatch) -> None:
     orch = _FakeOrchestrator(session)
 
     monkeypatch.setattr(session_live_data_handlers, "get_orchestrator", lambda: orch)
-    monkeypatch.setattr(session_live_data_handlers, "get_backend", lambda: object())
+    monkeypatch.setattr(session_live_data_handlers, "get_backend", lambda session_id=None: object())
     monkeypatch.setattr(
         session_live_data_handlers,
         "read_dtcs",
@@ -274,7 +274,7 @@ def test_clear_session_dtcs_rejects_non_string_data_category(monkeypatch) -> Non
     orch = _FakeOrchestrator(session)
 
     monkeypatch.setattr(session_live_data_handlers, "get_orchestrator", lambda: orch)
-    monkeypatch.setattr(session_live_data_handlers, "get_backend", lambda: object())
+    monkeypatch.setattr(session_live_data_handlers, "get_backend", lambda session_id=None: object())
     monkeypatch.setattr(session_live_data_handlers, "_runtime", lambda: WorkerRuntime())
     monkeypatch.setattr(
         session_live_data_handlers,
@@ -302,7 +302,7 @@ def test_stop_live_data_session_returns_conflict_when_session_not_running(monkey
 
     monkeypatch.setattr(session_live_data_handlers, "get_orchestrator", lambda: orch)
     monkeypatch.setattr(session_live_data_handlers, "_runtime", lambda: WorkerRuntime())
-    monkeypatch.setattr(session_live_data_handlers, "get_backend", lambda: object())
+    monkeypatch.setattr(session_live_data_handlers, "get_backend", lambda session_id=None: object())
 
     payload, status = session_live_data_handlers.stop_live_data_session(
         {"session_id": "session-live"}
@@ -312,6 +312,8 @@ def test_stop_live_data_session_returns_conflict_when_session_not_running(monkey
     assert payload == {
         "success": False,
         "error": "Session not running (status=awaiting_decision)",
+        "error_code": "session_not_running",
+        "session_status": "awaiting_decision",
     }
 
 
@@ -341,6 +343,7 @@ def test_submit_navigation_decision_conflict_maps_to_409(monkeypatch) -> None:
     assert payload == {
         "success": False,
         "error": "Session is not awaiting a decision (status=running)",
+        "error_code": "navigation_not_awaiting_decision",
     }
 
 

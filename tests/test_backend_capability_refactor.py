@@ -389,6 +389,54 @@ def test_session_execute_returns_501_when_backend_lacks_generic_actions(monkeypa
     assert "generic actions" in payload["error"].lower()
 
 
+def test_session_execute_returns_machine_readable_session_state_conflict(monkeypatch):
+    _install_fake_flask_stack(monkeypatch)
+    session_module = importlib.import_module("server.api.session")
+    orchestrator = SessionOrchestrator()
+    session = Session(
+        session_id="session-1",
+        context=SessionContext(brand="alpha"),
+        status=SessionStatus.AWAITING_DECISION,
+    )
+    session.backend_name = "fake-alpha"
+    session.capabilities = [
+        BackendCapability.CORE_SESSION.value,
+        BackendCapability.GENERIC_ACTIONS.value,
+    ]
+    orchestrator._sessions[session.session_id] = session
+
+    monkeypatch.setattr(session_module, "jsonify", lambda payload: payload)
+    monkeypatch.setattr(
+        session_module,
+        "request",
+        types.SimpleNamespace(
+            json={
+                "session_id": session.session_id,
+                "action": "select_module",
+                "args": {"module_name": "ECM"},
+            }
+        ),
+    )
+    monkeypatch.setattr(session_module, "get_orchestrator", lambda: orchestrator)
+    monkeypatch.setattr(
+        session_module,
+        "_get_backend",
+        lambda session_id=None: (_ for _ in ()).throw(
+            AssertionError("_get_backend should not be called")
+        ),
+    )
+
+    payload, status_code = session_module.session_execute()
+
+    assert status_code == 409
+    assert payload == {
+        "success": False,
+        "error": "Session not running (status=awaiting_decision)",
+        "error_code": "session_not_running",
+        "session_status": "awaiting_decision",
+    }
+
+
 def test_session_execute_delegates_to_backend_execute_action(monkeypatch):
     _install_fake_flask_stack(monkeypatch)
     session_module = importlib.import_module("server.api.session")

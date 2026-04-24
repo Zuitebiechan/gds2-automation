@@ -64,7 +64,7 @@ def start_ai_diagnose(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
         vehicle_context = resolve_session_vehicle_context(
             session,
             normalized_data,
-            backend=get_backend(),
+            backend=get_backend(session_id),
         )
         vehicle_context["brand"] = session.context.brand
         if session.context.model:
@@ -73,7 +73,7 @@ def start_ai_diagnose(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
         if not data_category:
             return {"success": False, "error": "data_category required"}, 400
 
-        backend = get_backend()
+        backend = get_backend(session_id)
         engine = get_ai_engine()
         diagnostic_payload = backend.collect_ai_payload(
             vehicle_context=vehicle_context,
@@ -173,7 +173,7 @@ def retry_ai_diagnose(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
         vehicle_context = resolve_session_vehicle_context(
             session,
             normalized_data,
-            backend=get_backend(),
+            backend=get_backend(session_id),
         )
         engine = get_ai_engine()
         ai_session_id = retry_ai_diagnosis(

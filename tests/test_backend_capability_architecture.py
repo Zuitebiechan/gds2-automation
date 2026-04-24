@@ -727,6 +727,57 @@ def test_session_status_does_not_rebind_aborted_session(monkeypatch):
         set_backend_registry(original_registry)
 
 
+def test_session_events_does_not_rebind_aborted_session(monkeypatch):
+    BackendCapability = _require_attr(contracts_module, "BackendCapability")
+    registry_module = _require_module("diagnostic_platform.backend_registry")
+    get_backend_registry = _require_attr(registry_module, "get_backend_registry")
+    set_backend_registry = _require_attr(registry_module, "set_backend_registry")
+
+    original_registry = get_backend_registry()
+    fake_registry = contracts_module.BackendRegistry()
+    fake_registry.register(
+        FakeCoreBackend(
+            capabilities=[BackendCapability.CORE_SESSION]
+        )
+    )
+
+    try:
+        set_backend_registry(fake_registry)
+        runtime = worker_runtime_module.WorkerRuntime()
+        monkeypatch.setattr(worker_runtime_module, "_WORKER_RUNTIME", runtime)
+
+        session_api, fake_request = _import_session_api(monkeypatch)
+        monkeypatch.setattr(session_api, "_sse_response", lambda stream: stream)
+
+        started = start_business_session(
+            runtime,
+            orchestrator=runtime.orchestrator,
+            context=SessionContext(brand="fakebrand", model="Demo", vin="VIN123"),
+        )
+        session_id = started["session_id"]
+
+        abort_business_session(
+            runtime,
+            orchestrator=runtime.orchestrator,
+            session_id=session_id,
+            reason="user_cancelled",
+            get_ai_engine=lambda: types.SimpleNamespace(abort_session=lambda _sid: None),
+        )
+
+        assert runtime.get_business_session_binding(session_id).session_id is None
+        assert runtime.get_active_backend_bundle(session_id) is None
+
+        fake_request.args = {"session_id": session_id}
+        event_stream = session_api.session_events()
+
+        assert runtime.get_business_session_binding(session_id).session_id is None
+        assert runtime.get_active_backend_bundle(session_id) is None
+        assert next(event_stream).startswith("event: connected\n")
+        event_stream.close()
+    finally:
+        set_backend_registry(original_registry)
+
+
 def test_session_live_data_uses_backend_owned_streaming_extensions(monkeypatch):
     BackendCapability = _require_attr(contracts_module, "BackendCapability")
     backend = FakeTelemetryBackend(
@@ -852,7 +903,7 @@ def test_session_ai_handler_uses_backend_owned_payload_collection(monkeypatch):
             raise AssertionError("Legacy AI collection path should not be used")
 
     monkeypatch.setattr(session_ai_handlers, "get_orchestrator", lambda: FakeOrchestrator())
-    monkeypatch.setattr(session_ai_handlers, "get_backend", lambda: backend)
+    monkeypatch.setattr(session_ai_handlers, "get_backend", lambda session_id=None: backend)
     monkeypatch.setattr(session_ai_handlers, "get_ai_engine", lambda: FakeEngine())
     monkeypatch.setattr(session_ai_handlers, "_runtime", lambda: WorkerRuntime())
 

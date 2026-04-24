@@ -61,6 +61,15 @@ The handlers currently follow these broad conventions:
 - `501 Not Implemented`: capability not supported by the bound backend
 - `500 Internal Server Error`: unexpected failure
 
+Some conflict/state responses also include machine-readable `error_code` values.
+Current examples include:
+
+- `active_session_exists`
+- `session_not_running`
+- `navigation_not_awaiting_decision`
+- `navigation_session_terminated`
+- `navigation_decision_mismatch`
+
 ## SSE Conventions
 
 Current SSE streams begin with:
@@ -125,6 +134,7 @@ Current routes:
 - `/start` creates the business session and may return `awaiting_decision`
 - `/start_diagnostics` performs backend startup and tunnel-quality preflight
 - `/decision` is shared by backend-selection, network-override, and branch-resolution gates
+- read-oriented session routes such as `/events` and `/status` should not claim worker ownership, bind sessions, or create backend bundles as side effects
 - `/execute` is capability-gated by `GENERIC_ACTIONS`
 - session AI/live/navigation subroutes are all capability-gated
 - session clear-DTC is capability-gated by `CLEAR_DTCS`

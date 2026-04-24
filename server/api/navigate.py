@@ -25,6 +25,7 @@ from diagnostic_platform.runtime.navigation_runtime import (
 from diagnostic_platform.runtime.worker_runtime import get_worker_runtime
 from server.api.http_utils import (
     RequestPayloadError,
+    navigation_decision_error_payload,
     read_text_mapping_field,
     require_json_object,
 )
@@ -194,9 +195,8 @@ def navigate_decision():
     except KeyError as exc:
         return jsonify({"success": False, "error": str(exc)}), 404
     except ValueError as exc:
-        message = str(exc)
-        status_code = 409 if "awaiting a decision" in message or "terminated" in message else 400
-        return jsonify({"success": False, "error": message}), status_code
+        payload, status_code = navigation_decision_error_payload(str(exc))
+        return jsonify(payload), status_code
 
 
 # ---------------------------------------------------------------------------
