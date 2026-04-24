@@ -4,7 +4,7 @@ REM Fill in the real values there. Do not commit the copied file.
 
 set "PROJECT_DIR=C:\path\to\RPA_demo"
 set "PYTHON=%PROJECT_DIR%\venv\Scripts\python.exe"
-set "LOG_DIR=%PROJECT_DIR%\logs"
+set "LOG_DIR=D:\RPA_Diagnostic\logs"
 set "GDS2_AGENT_DIR=C:\tools\gds2-agent"
 
 REM Required for reverse tunnel authentication.
@@ -21,7 +21,7 @@ set "DIAGNOSTIC_API_CORS_ORIGINS="
 
 REM Optional cloud observability root override.
 REM Example: D:\RPA_Diagnostic\observability\cloud
-set "PRODUCT_LOG_CLOUD_ROOT="
+set "PRODUCT_LOG_CLOUD_ROOT=D:\RPA_Diagnostic\observability\cloud"
 
 REM Optional reverse-server port overrides.
 set "VCI_PROXY_PORT=9000"

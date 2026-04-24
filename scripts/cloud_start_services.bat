@@ -32,7 +32,8 @@ if exist "%CONFIG_FILE%" (
 
 if not defined PROJECT_DIR set "PROJECT_DIR=%DEFAULT_PROJECT_DIR%"
 if not defined GDS2_AGENT_DIR set "GDS2_AGENT_DIR=C:\tools\gds2-agent"
-if not defined LOG_DIR set "LOG_DIR=%PROJECT_DIR%\logs"
+if not defined PRODUCT_LOG_CLOUD_ROOT set "PRODUCT_LOG_CLOUD_ROOT=D:\RPA_Diagnostic\observability\cloud"
+if not defined LOG_DIR set "LOG_DIR=D:\RPA_Diagnostic\logs"
 if not defined DIAGNOSTIC_API_PORT set "DIAGNOSTIC_API_PORT=8080"
 if not defined VCI_PROXY_PORT set "VCI_PROXY_PORT=9000"
 if not defined VCI_PROXY_LOCAL_PROXY_PORT set "VCI_PROXY_LOCAL_PROXY_PORT=9001"
@@ -58,6 +59,7 @@ echo  Diagnostic Platform - Cloud Services
 echo ============================================================
 echo.
 echo  Project dir: %PROJECT_DIR%
+echo  Observability: %PRODUCT_LOG_CLOUD_ROOT%
 if exist "%CONFIG_FILE%" (
     echo  Config:      %CONFIG_FILE%
 ) else (

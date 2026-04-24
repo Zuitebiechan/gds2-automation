@@ -85,7 +85,7 @@ def test_server_app_registers_session_logs_upload_route(monkeypatch) -> None:
     routes = {rule.rule for rule in app.url_map.iter_rules()}
 
     assert "/api/session/logs/upload" in routes
-    assert "/api/session/logs/sync" in routes
+    assert "/api/session/logs/sync" not in routes
 
 
 def test_session_logs_upload_handler_ingests_artifact(monkeypatch, tmp_path: Path) -> None:
@@ -222,81 +222,3 @@ def test_session_logs_upload_handler_streams_uploaded_jsonl_without_read_text(mo
     assert status == 201
     assert response_payload["success"] is True
     assert response_payload["deduped"] is False
-
-
-def test_session_logs_sync_handler_returns_sync_payload(monkeypatch, tmp_path: Path) -> None:
-    payload = {
-        "cursor_mtime_ns": 0,
-        "cursor_path": "",
-        "max_files": 10,
-    }
-    _install_fake_flask_stack(monkeypatch, payload)
-    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
-    monkeypatch.setenv("DIAGNOSTIC_API_TOKEN", "api-secret")
-
-    session_api = importlib.import_module("server.api.session")
-    fake_flask = sys.modules["flask"]
-    fake_flask.request.headers = {"X-API-Token": "api-secret"}
-    monkeypatch.setattr(
-        session_api.session_log_handlers,
-        "sync_cloud_logs",
-        lambda data: (
-            {
-                "success": True,
-                "files": [{"relative_path": "observability/cloud/raw/server.jsonl"}],
-                "skipped_files": [],
-                "has_more": False,
-                "next_cursor_mtime_ns": 123,
-                "next_cursor_path": "observability/cloud/raw/server.jsonl",
-            },
-            200,
-        ),
-    )
-
-    response_payload, status = session_api.session_logs_sync()
-
-    assert status == 200
-    assert response_payload["success"] is True
-    assert response_payload["files"] == [{"relative_path": "observability/cloud/raw/server.jsonl"}]
-
-
-def test_session_logs_sync_handler_requires_configured_api_token(monkeypatch, tmp_path: Path) -> None:
-    payload = {
-        "cursor_mtime_ns": 0,
-        "cursor_path": "",
-        "max_files": 10,
-    }
-    _install_fake_flask_stack(monkeypatch, payload)
-    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
-    monkeypatch.delenv("DIAGNOSTIC_API_TOKEN", raising=False)
-
-    session_api = importlib.import_module("server.api.session")
-
-    response_payload, status = session_api.session_logs_sync()
-
-    assert status == 503
-    assert response_payload == {
-        "success": False,
-        "error": "Cloud log sync export requires DIAGNOSTIC_API_TOKEN",
-    }
-
-
-def test_session_logs_sync_handler_rejects_missing_request_token(monkeypatch, tmp_path: Path) -> None:
-    payload = {
-        "cursor_mtime_ns": 0,
-        "cursor_path": "",
-        "max_files": 10,
-    }
-    _install_fake_flask_stack(monkeypatch, payload)
-    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
-    monkeypatch.setenv("DIAGNOSTIC_API_TOKEN", "api-secret")
-
-    session_api = importlib.import_module("server.api.session")
-
-    response_payload, status = session_api.session_logs_sync()
-
-    assert status == 401
-    assert response_payload == {
-        "success": False,
-        "error": "Unauthorized",
-    }

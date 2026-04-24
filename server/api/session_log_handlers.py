@@ -8,7 +8,6 @@ from typing import Any
 
 from diagnostic_platform.observability import get_cloud_observability_root
 from diagnostic_platform.observability_artifacts import (
-    export_cloud_log_artifacts,
     ingest_uploaded_artifact,
     resolve_product_log_settings,
 )
@@ -39,20 +38,4 @@ def upload_session_logs(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
         return internal_error_payload(), 500
 
 
-def sync_cloud_logs(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
-    try:
-        settings = resolve_product_log_settings()
-        result = export_cloud_log_artifacts(
-            data,
-            cloud_root=get_cloud_observability_root(),
-            max_artifact_mb=settings.max_artifact_mb,
-        )
-        return result, 200
-    except ValueError as exc:
-        return {"success": False, "error": str(exc)}, 400
-    except Exception:
-        logger.exception("session_logs_sync failed")
-        return internal_error_payload(), 500
-
-
-__all__ = ["sync_cloud_logs", "upload_session_logs"]
+__all__ = ["upload_session_logs"]

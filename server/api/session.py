@@ -7,7 +7,6 @@ SessionOrchestrator and does not touch existing diagnostics routes.
 
 # pyright: reportMissingImports=false
 
-import hmac
 import inspect
 import logging
 import os
@@ -94,31 +93,6 @@ def _read_text_field(
 
 def _read_query_text_arg(field: str, *, default: str = "") -> str:
     return read_text_mapping_field(request.args, field, default=default)
-
-
-def _extract_request_token() -> str:
-    headers = getattr(request, "headers", {}) or {}
-    auth_header = str(headers.get("Authorization") or "").strip()
-    if auth_header.lower().startswith("bearer "):
-        return auth_header[7:].strip()
-    return str(headers.get("X-API-Token") or "").strip()
-
-
-def _require_logs_sync_token() -> tuple[dict[str, Any], int] | None:
-    required_token = (os.environ.get("DIAGNOSTIC_API_TOKEN") or "").strip()
-    if not required_token:
-        return {
-            "success": False,
-            "error": "Cloud log sync export requires DIAGNOSTIC_API_TOKEN",
-        }, 503
-
-    provided_token = _extract_request_token()
-    if not provided_token or not hmac.compare_digest(provided_token, required_token):
-        return {
-            "success": False,
-            "error": "Unauthorized",
-        }, 401
-    return None
 
 
 def _read_object_field(
@@ -1276,18 +1250,4 @@ def session_logs_upload():
     except RequestPayloadError as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
     payload, status = session_log_handlers.upload_session_logs(data)
-    return jsonify(payload), status
-
-
-@session_bp.route("/logs/sync", methods=["POST"])
-def session_logs_sync():
-    auth_error = _require_logs_sync_token()
-    if auth_error is not None:
-        payload, status = auth_error
-        return jsonify(payload), status
-    try:
-        data = require_json_object(request)
-    except RequestPayloadError as exc:
-        return jsonify({"success": False, "error": str(exc)}), 400
-    payload, status = session_log_handlers.sync_cloud_logs(data)
     return jsonify(payload), status

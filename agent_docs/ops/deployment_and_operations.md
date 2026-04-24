@@ -75,7 +75,8 @@ The startup script:
 - refuses to start unless `VCI_PROXY_AUTH_TOKEN` is defined after config/env load
 - starts `python -m vci_proxy.reverse_server --auth-token ...`
 - starts `python app.py --port 8080`
-- writes logs to `logs\vci_proxy.log` and `logs\flask_api.log`
+- defaults structured cloud observability to `D:\RPA_Diagnostic\observability\cloud`
+- writes reverse-server and Flask terminal logs to `D:\RPA_Diagnostic\logs\`
 - skips GDS2 automatically in Session 0 such as Windows Scheduled Task startup
 
 For boot auto-start on a Windows cloud server, run once as Administrator:
@@ -97,12 +98,11 @@ Security defaults:
 Product observability defaults:
 
 - cloud artifacts live under `%PROGRAMDATA%\RPA_Diagnostic\observability\cloud\`
+- `scripts\cloud_start_services.bat` now defaults `PRODUCT_LOG_CLOUD_ROOT` to `D:\RPA_Diagnostic\observability\cloud` on Windows cloud nodes
 - set `PRODUCT_LOG_CLOUD_ROOT` to move cloud observability artifacts to an explicit directory such as `D:\RPA_Diagnostic\observability\cloud`
 - local artifacts live under `%APPDATA%\VCI_Proxy\observability\`
 - the cloud server now accepts internal artifact uploads at `POST /api/session/logs/upload`
-- the cloud server also exposes changed cloud log artifacts at `POST /api/session/logs/sync`
 - the tray client runs a best-effort background observability uploader using the assigned node `api_base_url` when available, otherwise its configured `api_scheme`, `host`, `api_port`, and `api_token`
-- the tray client mirrors changed cloud-side log artifacts under `%APPDATA%\VCI_Proxy\observability\cloud_mirror\`
 - retention defaults can be overridden with:
   - `PRODUCT_LOG_CLOUD_ROOT`
   - `PRODUCT_LOGS_ENABLED`

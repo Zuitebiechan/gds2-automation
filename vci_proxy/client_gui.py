@@ -32,7 +32,6 @@ except ImportError:
 
 from vci_proxy.reverse_client import ReverseProxyClient
 from vci_proxy.config import ProxyConfig
-from vci_proxy.cloud_log_mirror import sync_cloud_logs as sync_cloud_logs_to_local
 from vci_proxy.observability_outbox import ObservabilityOutbox
 from diagnostic_platform.observability_artifacts import (
     cleanup_product_observability,
@@ -593,41 +592,18 @@ class VCIProxyTrayApp:
             "uploaded_count": int(uploaded.get("uploaded_count") or 0),
         }
 
-    def _sync_cloud_logs_once(self) -> dict[str, int]:
-        if not self._product_log_settings.enabled:
-            return {"mirrored_count": 0, "skipped_count": 0}
-        cfg = self._effective_runtime_config()
-        host = str(cfg.get("host") or "").strip()
-        api_token = str(cfg.get("api_token") or "").strip()
-        if not host or not api_token:
-            return {"mirrored_count": 0, "skipped_count": 0}
-        return sync_cloud_logs_to_local(
-            api_base_url=self._effective_api_base_url(),
-            api_token=api_token,
-            appdata=os.environ.get("APPDATA", Path.home()),
-            max_batch_bytes=5 * 1024 * 1024,
-        )
-
     def _uploader_loop(self) -> None:
         while not self._uploader_stop_event.is_set():
             try:
                 upload_result = self._upload_observability_once()
-                sync_result = self._sync_cloud_logs_once()
-                if (
-                    upload_result["queued_count"]
-                    or upload_result["uploaded_count"]
-                    or sync_result["mirrored_count"]
-                    or sync_result["skipped_count"]
-                ):
+                if upload_result["queued_count"] or upload_result["uploaded_count"]:
                     logger.info(
-                        "[GUI_OBS] queued=%s uploaded=%s mirrored=%s skipped=%s",
+                        "[GUI_OBS] queued=%s uploaded=%s",
                         upload_result["queued_count"],
                         upload_result["uploaded_count"],
-                        sync_result["mirrored_count"],
-                        sync_result["skipped_count"],
                     )
             except Exception:
-                logger.exception("[GUI_OBS] observability sync cycle failed")
+                logger.exception("[GUI_OBS] observability upload cycle failed")
             self._uploader_stop_event.wait(15.0)
 
     def _start_observability_uploader(self) -> None:

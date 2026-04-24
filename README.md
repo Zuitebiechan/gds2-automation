@@ -87,7 +87,8 @@ That startup script:
 
 - loads `scripts\cloud_service_config.cmd` when present
 - requires `VCI_PROXY_AUTH_TOKEN`
-- starts the reverse server and Flask API with logs under `logs\`
+- defaults structured cloud observability to `D:\RPA_Diagnostic\observability\cloud`
+- defaults reverse-server and Flask terminal logs to `D:\RPA_Diagnostic\logs`
 - skips GDS2 automatically when run in Session 0
 
 To register boot auto-start on the cloud server, run once as Administrator:

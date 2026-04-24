@@ -30,6 +30,25 @@ COPY_SUFFIXES = {".json", ".gz", ".zip", ".bin", ".vsf", ".xml", ".properties", 
 DEFAULT_OUTPUT_ROOT = Path("reports") / "gds2_ab_runs"
 
 
+def _cloud_text_log_roots(project_root: Path) -> list[Path]:
+    roots: list[Path] = []
+    configured_cloud_root = str(os.environ.get("PRODUCT_LOG_CLOUD_ROOT") or "").strip()
+    if configured_cloud_root:
+        cloud_root = Path(configured_cloud_root)
+        roots.append(cloud_root.parent.parent / "logs")
+    roots.append(Path("D:/RPA_Diagnostic/logs"))
+    roots.append(project_root / "logs")
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        key = str(root).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(root)
+    return deduped
+
+
 @dataclass(frozen=True)
 class ArtifactCandidate:
     source_path: Path
@@ -159,12 +178,6 @@ def discover_artifact_candidates(
 
     local_obs_root = appdata_root / "VCI_Proxy" / "observability"
     _add_tree(candidates, local_obs_root / "raw", prefix="observability/local/raw", kind="local_observability")
-    _add_tree(
-        candidates,
-        local_obs_root / "cloud_mirror",
-        prefix="observability/local/cloud_mirror",
-        kind="local_cloud_mirror",
-    )
     _add_tree(candidates, local_obs_root / "outbox", prefix="observability/local/outbox", kind="local_outbox")
 
     gds2_root = programdata_root / "GDS 2"
@@ -250,12 +263,26 @@ def discover_artifact_candidates(
         always=True,
     )
 
-    for relative in ("gds2_web.log", "logs/vci_proxy.log", "logs/flask_api.log"):
+    _add_file(
+        candidates,
+        project_root / "gds2_web.log",
+        root=project_root,
+        prefix="project",
+        kind="project_logs",
+    )
+    for logs_root in _cloud_text_log_roots(project_root):
         _add_file(
             candidates,
-            project_root / relative,
-            root=project_root,
-            prefix="project",
+            logs_root / "vci_proxy.log",
+            root=logs_root.parent,
+            prefix=logs_root.parent.name,
+            kind="project_logs",
+        )
+        _add_file(
+            candidates,
+            logs_root / "flask_api.log",
+            root=logs_root.parent,
+            prefix=logs_root.parent.name,
             kind="project_logs",
         )
 

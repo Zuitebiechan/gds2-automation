@@ -1,9 +1,8 @@
-"""Materialized observability artifacts for traces, incidents, uploads, cleanup, and export."""
+"""Materialized observability artifacts for traces, incidents, uploads, and cleanup."""
 
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 import os
 import time
@@ -81,64 +80,6 @@ def get_cloud_incidents_dir(programdata: str | Path | None = None) -> Path:
 
 def get_cloud_uploads_dir(programdata: str | Path | None = None) -> Path:
     return _resolve_cloud_root(programdata) / "uploads"
-
-
-def _repo_root() -> Path:
-    return Path(__file__).resolve().parent.parent
-
-
-def _read_bytes_sha256(path: Path) -> tuple[bytes, str]:
-    payload = path.read_bytes()
-    return payload, hashlib.sha256(payload).hexdigest()
-
-
-def _discover_cloud_export_candidates(
-    *,
-    cloud_root: Path,
-    project_root: Path,
-) -> list[dict[str, Any]]:
-    candidates: list[dict[str, Any]] = []
-
-    def _add_path(path: Path, relative_path: str) -> None:
-        if not path.exists() or not path.is_file():
-            return
-        stat = path.stat()
-        candidates.append(
-            {
-                "path": path,
-                "relative_path": relative_path,
-                "mtime_ns": int(stat.st_mtime_ns),
-                "size_bytes": int(stat.st_size),
-            }
-        )
-
-    for directory_name in ("raw", "session_traces", "incidents"):
-        directory = cloud_root / directory_name
-        if not directory.exists():
-            continue
-        for path in sorted(item for item in directory.rglob("*") if item.is_file()):
-            relative = "observability/cloud/" + path.relative_to(cloud_root).as_posix()
-            _add_path(path, relative)
-
-    _add_path(
-        cloud_root / "active_session_snapshot.json",
-        "observability/cloud/active_session_snapshot.json",
-    )
-
-    compatibility_files = (
-        (project_root / "gds2_web.log", "compat/gds2_web.log"),
-        (project_root / "logs" / "vci_proxy.log", "compat/logs/vci_proxy.log"),
-        (project_root / "logs" / "flask_api.log", "compat/logs/flask_api.log"),
-        (Path.home() / "gds2-data" / "vci_proxy_dll.log", "compat/gds2-data/vci_proxy_dll.log"),
-        (
-            Path(os.environ.get("PROGRAMDATA", "C:/ProgramData")) / "VCI_Proxy" / "tunnel_quality.json",
-            "compat/programdata/VCI_Proxy/tunnel_quality.json",
-        ),
-    )
-    for path, relative_path in compatibility_files:
-        _add_path(path, relative_path)
-
-    return sorted(candidates, key=lambda item: (item["mtime_ns"], item["relative_path"]))
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> Path:
@@ -275,128 +216,6 @@ def ingest_uploaded_artifact(
         "trace_path": refresh.get("trace_path"),
         "incident_paths": refresh.get("incident_paths", []),
     }
-
-
-def export_cloud_log_artifacts(
-    payload: dict[str, Any] | None = None,
-    *,
-    cloud_root: str | Path | None = None,
-    project_root: str | Path | None = None,
-    max_artifact_mb: int = 50,
-) -> dict[str, Any]:
-    request = dict(payload or {})
-    cursor_mtime_ns = int(request.get("cursor_mtime_ns") or 0)
-    cursor_path = str(request.get("cursor_path") or "")
-    max_files = int(request.get("max_files") or 20)
-    max_batch_bytes = int(request.get("max_batch_bytes") or (5 * 1024 * 1024))
-    if max_files < 1:
-        raise ValueError("max_files must be >= 1")
-    if max_files > 100:
-        max_files = 100
-    if max_batch_bytes < 1:
-        raise ValueError("max_batch_bytes must be >= 1")
-
-    resolved_cloud_root = _resolve_cloud_root(cloud_root)
-    resolved_project_root = Path(project_root) if project_root is not None else _repo_root()
-    max_bytes = max(1, int(max_artifact_mb)) * 1024 * 1024
-
-    candidates = _discover_cloud_export_candidates(
-        cloud_root=resolved_cloud_root,
-        project_root=resolved_project_root,
-    )
-    changed = [
-        item
-        for item in candidates
-        if (item["mtime_ns"], item["relative_path"]) > (cursor_mtime_ns, cursor_path)
-    ]
-
-    files: list[dict[str, Any]] = []
-    skipped_files: list[dict[str, Any]] = []
-    last_cursor_mtime_ns = cursor_mtime_ns
-    last_cursor_path = cursor_path
-    processed_count = 0
-    batch_bytes = 0
-
-    for item in changed:
-        if processed_count >= max_files:
-            break
-        relative_path = str(item["relative_path"])
-        size_bytes = int(item["size_bytes"])
-        mtime_ns = int(item["mtime_ns"])
-
-        if size_bytes > max_bytes:
-            last_cursor_mtime_ns = mtime_ns
-            last_cursor_path = relative_path
-            skipped_files.append(
-                {
-                    "relative_path": relative_path,
-                    "mtime_ns": mtime_ns,
-                    "size_bytes": size_bytes,
-                    "reason": "file_exceeds_max_artifact_mb",
-                }
-            )
-            processed_count += 1
-            continue
-        if size_bytes > max_batch_bytes:
-            last_cursor_mtime_ns = mtime_ns
-            last_cursor_path = relative_path
-            skipped_files.append(
-                {
-                    "relative_path": relative_path,
-                    "mtime_ns": mtime_ns,
-                    "size_bytes": size_bytes,
-                    "reason": "file_exceeds_max_batch_bytes",
-                }
-            )
-            processed_count += 1
-            continue
-        if batch_bytes + size_bytes > max_batch_bytes:
-            break
-
-        last_cursor_mtime_ns = mtime_ns
-        last_cursor_path = relative_path
-        try:
-            content, sha256 = _read_bytes_sha256(Path(item["path"]))
-        except OSError:
-            skipped_files.append(
-                {
-                    "relative_path": relative_path,
-                    "mtime_ns": mtime_ns,
-                    "size_bytes": size_bytes,
-                    "reason": "file_unreadable",
-                }
-            )
-            processed_count += 1
-            continue
-        files.append(
-            {
-                "relative_path": relative_path,
-                "mtime_ns": mtime_ns,
-                "size_bytes": size_bytes,
-                "sha256": sha256,
-                "content_base64": base64.b64encode(content).decode("ascii"),
-            }
-        )
-        batch_bytes += size_bytes
-        processed_count += 1
-
-    has_more = processed_count < len(changed)
-    if processed_count == 0:
-        last_cursor_mtime_ns = cursor_mtime_ns
-        last_cursor_path = cursor_path
-
-    return {
-        "success": True,
-        "files": files,
-        "skipped_files": skipped_files,
-        "has_more": has_more,
-        "next_cursor_mtime_ns": last_cursor_mtime_ns,
-        "next_cursor_path": last_cursor_path,
-        "synced_at": time.time(),
-        "max_batch_bytes": max_batch_bytes,
-    }
-
-
 def _delete_older_than(directory: Path, *, max_age_days: int, now: float) -> None:
     if not directory.exists():
         return
@@ -492,7 +311,6 @@ def maybe_materialize_cloud_artifacts(
 
 __all__ = [
     "cleanup_product_observability",
-    "export_cloud_log_artifacts",
     "get_cloud_incidents_dir",
     "get_cloud_session_traces_dir",
     "get_cloud_uploads_dir",

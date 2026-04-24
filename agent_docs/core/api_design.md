@@ -123,7 +123,6 @@ Current routes:
 - `POST /api/session/abort`
 - `GET /api/session/status`
 - `POST /api/session/logs/upload`
-- `POST /api/session/logs/sync`
 
 ### Key semantics
 
@@ -141,10 +140,6 @@ Current routes:
 - session clear-DTC is intended to run from the current `Data Display` page; explicit module/category input is optional and only needed when the caller wants forced context reconciliation
 - `/status` returns session state plus backend summary and network snapshot details when available
 - `/logs/upload` ingests local observability artifacts staged by the tray client
-- `/logs/sync` returns changed cloud-side log artifacts so the tray client can mirror them locally
-  - request fields include `cursor_mtime_ns`, `cursor_path`, `max_files`, and `max_batch_bytes`
-  - response includes changed files, skipped files, `has_more`, and the next cursor
-  - files larger than the per-response batch cap are skipped rather than emitted over the requested `max_batch_bytes`
 
 ## `/api/diagnose/*`
 

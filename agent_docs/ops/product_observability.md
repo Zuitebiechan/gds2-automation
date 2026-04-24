@@ -57,8 +57,6 @@ Materialized cloud artifacts:
 Local artifacts:
 
 - `raw\*.jsonl`
-- `cloud_mirror\sources\<source_id>\state.json`
-- `cloud_mirror\sources\<source_id>\files\**\*`
 - `outbox\pending\*.json`
 - `outbox\uploaded\*.json`
 
@@ -162,8 +160,6 @@ When no active session exists, the snapshot may be absent.
 Upload API:
 
 - `POST /api/session/logs/upload`
-- `POST /api/session/logs/sync`
-  - `POST /api/session/logs/sync` requires `DIAGNOSTIC_API_TOKEN` to be configured on the cloud API and supplied by the caller
 
 Expected upload payload fields:
 
@@ -174,27 +170,6 @@ Expected upload payload fields:
 - `artifact_type`
 - `session_id` optional
 - `content_base64`
-
-Expected cloud-sync request payload fields:
-
-- `cursor_mtime_ns`
-- `cursor_path`
-- `max_files` optional
-- `max_batch_bytes` optional
-
-Expected cloud-sync response fields:
-
-- `files`
-- `skipped_files`
-- `has_more`
-- `next_cursor_mtime_ns`
-- `next_cursor_path`
-
-Current cloud-sync skip reasons include:
-
-- `file_exceeds_max_artifact_mb`
-- `file_exceeds_max_batch_bytes`
-- `file_unreadable`
 
 Default env-backed settings:
 
@@ -211,7 +186,6 @@ Current runtime behavior:
 - cloud-side startup runs best-effort retention cleanup for raw/session-trace/incident/uploaded artifacts
 - tray client startup runs best-effort cleanup for uploaded outbox entries
 - tray client runs a background uploader loop that stages local artifacts into the outbox and uploads them to the cloud ingest API
-- tray client also polls the cloud sync API and mirrors changed cloud-side log files into `%APPDATA%\VCI_Proxy\observability\cloud_mirror\`
 
 ## Current Component Usage
 
@@ -220,7 +194,6 @@ Current runtime behavior:
   - writes structured API request completion events
 - `server/api/session_log_handlers.py`
   - ingests local observability artifacts uploaded from the tray client
-  - exports changed cloud-side log artifacts for local mirroring
 - `diagnostic_platform/session_orchestrator.py`
   - emits session lifecycle completion/failure terminal events
 - `diagnostic_platform/runtime/*`
@@ -250,7 +223,6 @@ Current runtime behavior:
   - reuses shared UTC timestamp formatting from the observability module
 - `vci_proxy/client_gui.py`
   - uploads local observability artifacts to the cloud
-  - mirrors changed cloud-side log artifacts onto the local machine
 - `vci_proxy/virtual_dll/virtual_j2534.c`
   - emits DLL-side JSONL call lifecycle and transport retry/socket events
 - `server.runtime` / `reverse_server.runtime`
