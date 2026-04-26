@@ -14,6 +14,7 @@ import json
 import queue
 import re
 import threading
+import time
 import tkinter as tk
 from datetime import datetime
 from tkinter import ttk, messagebox
@@ -26,6 +27,390 @@ from vci_proxy.diagnostics_step_flow import (
     DiagnosticsStepFlowState,
     build_step_flow_view,
 )
+
+GUARDED_ACTION_CONFLICT_MESSAGE = (
+    "Another shutdown action is already in progress. Please wait for it to finish."
+)
+
+
+class DiagnosticsGuardController:
+    """Shared diagnostics-owned guard executor for destructive user intents."""
+
+    GUARD_TIMEOUT_SEC = 20.0
+    POLL_INTERVAL_SEC = 0.5
+
+    def __init__(
+        self,
+        api_base_url: str,
+        *,
+        api_token: str = "",
+        node_assignment_callback: Callable[[dict[str, Any] | None], None] | None = None,
+        ui_dispatch: Callable[[Callable[[], Any]], Any] | None = None,
+        suppress_assignment_reconnect: Callable[[], None] | None = None,
+    ) -> None:
+        self._api_base = str(api_base_url or "").rstrip("/")
+        self._api_token = str(api_token or "").strip()
+        self._node_assignment_callback = node_assignment_callback
+        self._ui_dispatch = ui_dispatch or (lambda callback: callback())
+        self._suppress_assignment_reconnect = suppress_assignment_reconnect or (lambda: None)
+        self._window: DiagnosticsWindow | None = None
+        self._session_id: str | None = None
+        self._session_abort_finalizing = False
+        self._session_terminal_session_id: str | None = None
+        self._active_assignment: dict[str, Any] | None = None
+        self._bootstrap_api_base = self._api_base
+        self._pending_action: dict[str, Any] | None = None
+        self._guard_timer: threading.Timer | None = None
+        self._lock = threading.RLock()
+
+    def _dispatch_ui(self, callback: Callable[[], Any]) -> Any:
+        window = self.get_attached_window()
+        if window is not None and hasattr(window, "_run_sync_ui_callback"):
+            return window._run_sync_ui_callback(callback)
+        return self._ui_dispatch(callback)
+
+    def _cancel_guard_timer_locked(self) -> None:
+        timer = self._guard_timer
+        self._guard_timer = None
+        if timer is not None:
+            timer.cancel()
+
+    def _request_headers(self) -> dict[str, str]:
+        if not self._api_token:
+            return {}
+        return {"X-API-Token": self._api_token}
+
+    def update_api_context(self, api_base_url: str, *, api_token: str = "") -> None:
+        with self._lock:
+            self._api_base = str(api_base_url or "").rstrip("/")
+            self._api_token = str(api_token or "").strip()
+
+    def set_bootstrap_api_base(self, api_base_url: str) -> None:
+        with self._lock:
+            self._bootstrap_api_base = str(api_base_url or "").rstrip("/")
+
+    def set_active_assignment(
+        self,
+        assignment: dict[str, Any] | None,
+        *,
+        bootstrap_api_base: str = "",
+        api_base_url: str = "",
+    ) -> None:
+        with self._lock:
+            self._active_assignment = dict(assignment) if assignment else None
+            if bootstrap_api_base:
+                self._bootstrap_api_base = str(bootstrap_api_base).rstrip("/")
+            if api_base_url:
+                self._api_base = str(api_base_url).rstrip("/")
+
+    def clear_active_assignment(self, *, restore_api_base: str = "") -> None:
+        with self._lock:
+            self._active_assignment = None
+            if restore_api_base:
+                self._api_base = str(restore_api_base).rstrip("/")
+
+    def attach_window(self, window: "DiagnosticsWindow") -> None:
+        with self._lock:
+            self._window = window
+
+    def detach_window(self, window: "DiagnosticsWindow") -> None:
+        with self._lock:
+            if self._window is window:
+                self._window = None
+
+    def get_attached_window(self) -> "DiagnosticsWindow | None":
+        with self._lock:
+            return self._window
+
+    def set_session_active(self, session_id: str | None) -> None:
+        with self._lock:
+            self._session_id = str(session_id or "").strip() or None
+            self._session_abort_finalizing = False
+            self._session_terminal_session_id = None
+
+    def begin_abort_finalization(self, session_id: str | None) -> None:
+        with self._lock:
+            target = str(session_id or self._session_id or "").strip() or None
+            self._session_id = target
+            self._session_abort_finalizing = True
+            self._session_terminal_session_id = target
+
+    def clear_session_state(self) -> None:
+        with self._lock:
+            self._session_id = None
+            self._session_abort_finalizing = False
+            self._session_terminal_session_id = None
+
+    def has_active_session(self) -> bool:
+        with self._lock:
+            return bool(
+                self._session_id
+                or self._session_abort_finalizing
+                or self._session_terminal_session_id
+            )
+
+    def request_guarded_action(
+        self,
+        action_name: str,
+        *,
+        on_safe: Callable[[], None],
+        on_force: Callable[[], None] | None = None,
+        on_failure: Callable[[str], None] | None = None,
+        timeout_sec: float | None = None,
+    ) -> bool:
+        with self._lock:
+            if self._pending_action is not None:
+                pending_name = str(self._pending_action.get("name") or "")
+                if pending_name == str(action_name or "").strip():
+                    return True
+                failure_cb = on_failure
+                if callable(failure_cb):
+                    self._dispatch_ui(
+                        lambda: failure_cb(GUARDED_ACTION_CONFLICT_MESSAGE)
+                    )
+                return False
+
+            self._pending_action = {
+                "name": str(action_name or "").strip() or "guarded_action",
+                "on_safe": on_safe,
+                "on_force": on_force,
+                "on_failure": on_failure,
+            }
+            self._cancel_guard_timer_locked()
+            timer = threading.Timer(
+                float(timeout_sec or self.GUARD_TIMEOUT_SEC),
+                self._handle_guard_timeout,
+            )
+            timer.daemon = True
+            self._guard_timer = timer
+            window = self._window
+            has_session = bool(
+                self._session_id or self._session_abort_finalizing or self._session_terminal_session_id
+            )
+
+        timer.start()
+
+        if not has_session:
+            self._complete_pending_action(force=False)
+            return True
+
+        if window is not None:
+            self._dispatch_ui(
+                lambda: window._start_guarded_shutdown_from_controller(
+                    str(action_name or "").strip() or "guarded_action"
+                )
+            )
+            return True
+
+        threading.Thread(
+            target=self._run_headless_guarded_shutdown,
+            daemon=True,
+            name=f"diag-guard-{action_name}",
+        ).start()
+        return True
+
+    def cancel_pending_action(self) -> None:
+        with self._lock:
+            self._cancel_guard_timer_locked()
+            self._pending_action = None
+
+    def force_pending_action(self) -> None:
+        self._complete_pending_action(force=True)
+
+    def _handle_guard_timeout(self) -> None:
+        with self._lock:
+            pending = dict(self._pending_action or {})
+        if not pending:
+            return
+        failure_cb = pending.get("on_failure")
+        if callable(failure_cb):
+            self._dispatch_ui(
+                lambda: failure_cb(
+                    "Safe session shutdown did not complete before the timeout."
+                )
+            )
+
+    def _consume_pending_action_locked(self, *, force: bool = False) -> Callable[[], None] | None:
+        pending = self._pending_action
+        self._pending_action = None
+        self._cancel_guard_timer_locked()
+        if pending is None:
+            return None
+        callback_name = "on_force" if force else "on_safe"
+        callback = pending.get(callback_name)
+        if callback is None and force:
+            callback = pending.get("on_safe")
+        if callable(callback):
+            return callback
+        return None
+
+    def _complete_pending_action(self, *, force: bool) -> None:
+        callback: Callable[[], None] | None = None
+        with self._lock:
+            callback = self._consume_pending_action_locked(force=force)
+        if callback is not None:
+            self._dispatch_ui(callback)
+
+    def notify_guarded_shutdown_failure(self, reason: str) -> None:
+        with self._lock:
+            pending = dict(self._pending_action or {})
+        if not pending:
+            return
+        failure_cb = pending.get("on_failure")
+        if callable(failure_cb):
+            self._dispatch_ui(lambda: failure_cb(str(reason or "Guarded shutdown failed.")))
+
+    def notify_guarded_shutdown_safe_completion(self) -> None:
+        self.clear_session_state()
+        self._complete_pending_action(force=False)
+
+    def prepare_guard_owned_assignment_release(self) -> None:
+        with self._lock:
+            pending_name = str((self._pending_action or {}).get("name") or "")
+        if pending_name in {"quit_app", "apply_settings_and_restart"}:
+            try:
+                self._suppress_assignment_reconnect()
+            except Exception:
+                pass
+
+    def _api_json(
+        self,
+        *,
+        base_url: str,
+        method: str,
+        endpoint: str,
+        json_data: dict[str, Any] | None = None,
+        query_params: dict[str, Any] | None = None,
+    ) -> tuple[int, dict[str, Any]]:
+        url = f"{str(base_url or '').rstrip('/')}/{endpoint.lstrip('/')}"
+        headers = self._request_headers() or None
+        if method.upper() == "POST":
+            response = requests.post(
+                url,
+                json=json_data,
+                params=query_params,
+                timeout=60,
+                headers=headers,
+            )
+        else:
+            response = requests.get(
+                url,
+                params=query_params,
+                timeout=60,
+                headers=headers,
+            )
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = {
+                "success": False,
+                "error": (
+                    f"Server returned non-JSON response "
+                    f"(HTTP {response.status_code} {response.reason})."
+                ),
+                "http_status": response.status_code,
+                "http_reason": response.reason,
+            }
+        return response.status_code, payload if isinstance(payload, dict) else {"success": False}
+
+    def _run_headless_guarded_shutdown(self) -> None:
+        with self._lock:
+            session_id = str(
+                self._session_terminal_session_id or self._session_id or ""
+            ).strip()
+            inflight = bool(self._session_abort_finalizing)
+
+        if not session_id:
+            self._complete_pending_action(force=False)
+            return
+
+        if not inflight:
+            try:
+                _status_code, payload = self._api_json(
+                    base_url=self._api_base,
+                    method="POST",
+                    endpoint="/api/session/abort",
+                    json_data={"session_id": session_id},
+                )
+            except Exception as exc:
+                self.notify_guarded_shutdown_failure(str(exc))
+                return
+
+            error_text = str(payload.get("error") or "").lower()
+            if not payload.get("success") and "already in terminal state" not in error_text:
+                self.notify_guarded_shutdown_failure(
+                    str(payload.get("error") or "Abort failed.")
+                )
+                return
+
+            self.begin_abort_finalization(session_id)
+
+        deadline = time.monotonic() + self.GUARD_TIMEOUT_SEC
+        while time.monotonic() < deadline:
+            try:
+                status_code, payload = self._api_json(
+                    base_url=self._api_base,
+                    method="GET",
+                    endpoint="/api/session/status",
+                    query_params={"session_id": session_id},
+                )
+            except Exception:
+                time.sleep(self.POLL_INTERVAL_SEC)
+                continue
+
+            if status_code == 404:
+                self._complete_headless_release()
+                self.notify_guarded_shutdown_safe_completion()
+                return
+
+            if payload.get("success") and str(payload.get("status") or "").strip().lower() in {
+                "aborted",
+                "completed",
+                "failed",
+            }:
+                self._complete_headless_release()
+                self.notify_guarded_shutdown_safe_completion()
+                return
+
+            time.sleep(self.POLL_INTERVAL_SEC)
+
+        self.notify_guarded_shutdown_failure(
+            "Safe session shutdown did not complete before the timeout."
+        )
+
+    def _complete_headless_release(self) -> None:
+        with self._lock:
+            assignment = dict(self._active_assignment or {})
+            bootstrap_api_base = str(self._bootstrap_api_base or "").strip()
+            pending_name = str((self._pending_action or {}).get("name") or "")
+
+        assignment_id = str(assignment.get("assignment_id") or "").strip()
+        if assignment_id and bootstrap_api_base:
+            try:
+                self._api_json(
+                    base_url=bootstrap_api_base,
+                    method="POST",
+                    endpoint="/api/session/bootstrap/release",
+                    json_data={
+                        "assignment_id": assignment_id,
+                        "recovery_action": "idle",
+                    },
+                )
+            except Exception:
+                pass
+
+        if pending_name in {"quit_app", "apply_settings_and_restart"}:
+            try:
+                self._suppress_assignment_reconnect()
+            except Exception:
+                pass
+        callback = self._node_assignment_callback
+        if callable(callback):
+            try:
+                callback(None)
+            except Exception:
+                pass
+        self.clear_active_assignment(restore_api_base=bootstrap_api_base)
 
 
 class DiagnosticsWindow:
@@ -63,7 +448,10 @@ class DiagnosticsWindow:
         self._root = tk.Tk()
         self._root.title("Vehicle Diagnostics")
         self._root.configure(bg="white")
-        self._root.protocol("WM_DELETE_WINDOW", self.destroy)
+        self._root.protocol("WM_DELETE_WINDOW", self.request_close)
+        self._guard_controller: DiagnosticsGuardController | None = None
+        self._window_thread = threading.current_thread()
+        self._ui_callback_queue: queue.Queue[tuple[Callable[[], Any], threading.Event, dict[str, Any]]] = queue.Queue()
 
         self._is_destroying = False
         self._sse_running = False
@@ -183,6 +571,117 @@ class DiagnosticsWindow:
         self._root.lift()
         self._root.mainloop()
 
+    def set_guard_controller(self, controller: DiagnosticsGuardController | None) -> None:
+        self._guard_controller = controller
+        if controller is None:
+            return
+        controller.attach_window(self)
+        controller.update_api_context(self._api_base, api_token=self._api_token)
+        controller.set_bootstrap_api_base(self._bootstrap_api_base)
+        controller.set_active_assignment(
+            self._active_assignment,
+            bootstrap_api_base=self._bootstrap_api_base,
+            api_base_url=self._api_base,
+        )
+        if self._session_abort_finalizing:
+            controller.begin_abort_finalization(self._session_terminal_session_id or self._session_id)
+        else:
+            controller.set_session_active(self._session_id)
+
+    def request_close(self) -> None:
+        if self._is_destroying:
+            return
+        controller = getattr(self, "_guard_controller", None)
+        if controller is None or not controller.has_active_session():
+            self.destroy()
+            return
+
+        confirmed = messagebox.askyesno(
+            "Close Diagnostics",
+            (
+                "A diagnostics session is still active.\n\n"
+                "Closing this window will first end the session safely.\n\n"
+                "Do you want to continue?"
+            ),
+            parent=self._root,
+        )
+        if not confirmed:
+            return
+
+        self._request_guarded_action_via_controller(
+            action_name="close_diagnostics",
+            on_safe=self.destroy,
+            on_force=self.destroy,
+        )
+
+    def _run_sync_ui_callback(self, callback: Callable[[], Any], timeout: float | None = None) -> Any:
+        if threading.current_thread() is self._window_thread:
+            return callback()
+
+        done = threading.Event()
+        state: dict[str, Any] = {}
+        self._ui_callback_queue.put((callback, done, state))
+        if not done.wait(timeout or 5.0):
+            raise TimeoutError("Timed out waiting for diagnostics UI callback")
+        if "error" in state:
+            raise state["error"]
+        return state.get("result")
+
+    def _offer_force_guarded_action(self, action_name: str, reason: str) -> None:
+        if str(reason or "") == GUARDED_ACTION_CONFLICT_MESSAGE:
+            messagebox.showwarning("Action In Progress", str(reason), parent=self._root)
+            return
+        action_label = {
+            "close_diagnostics": "Force Close",
+            "quit_app": "Force Quit",
+            "apply_settings_and_restart": "Force Apply and Restart",
+        }.get(action_name, "Force Continue")
+        force = messagebox.askyesno(
+            action_label,
+            (
+                f"{reason}\n\n"
+                f"{action_label} may leave the cloud session or assignment cleanup incomplete.\n\n"
+                f"Do you want to {action_label.lower()}?"
+            ),
+            parent=self._root,
+        )
+        controller = getattr(self, "_guard_controller", None)
+        if controller is None:
+            return
+        if force:
+            controller.force_pending_action()
+        else:
+            controller.cancel_pending_action()
+
+    def _request_guarded_action_via_controller(
+        self,
+        *,
+        action_name: str,
+        on_safe: Callable[[], None],
+        on_force: Callable[[], None] | None = None,
+    ) -> bool:
+        controller = getattr(self, "_guard_controller", None)
+        if controller is None:
+            on_safe()
+            return True
+        return controller.request_guarded_action(
+            action_name,
+            on_safe=on_safe,
+            on_force=on_force,
+            on_failure=lambda reason: self._offer_force_guarded_action(action_name, reason),
+        )
+
+    def _start_guarded_shutdown_from_controller(self, action_name: str) -> None:
+        if getattr(self, "_session_abort_finalizing", False):
+            self._request_session_status_refresh()
+            return
+        if self._session_id:
+            self._on_session_abort_clicked()
+            return
+        controller = getattr(self, "_guard_controller", None)
+        if controller is not None:
+            controller.notify_guarded_shutdown_safe_completion()
+
     def destroy(self) -> None:
         """Stop background workers and close window."""
         if self._is_destroying:
@@ -205,6 +704,9 @@ class DiagnosticsWindow:
             self._root.destroy()
         except tk.TclError:
             pass
+        controller = getattr(self, "_guard_controller", None)
+        if controller is not None:
+            controller.detach_window(self)
 
     # ------------------------------------------------------------------
     # UI setup
@@ -777,6 +1279,18 @@ class DiagnosticsWindow:
 
         try:
             while True:
+                callback, done, state = self._ui_callback_queue.get_nowait()
+                try:
+                    state["result"] = callback()
+                except BaseException as exc:  # pragma: no cover - surfaced to caller
+                    state["error"] = exc
+                finally:
+                    done.set()
+        except queue.Empty:
+            pass
+
+        try:
+            while True:
                 event, data = self._queue.get_nowait()
                 self._handle_event(event, data)
         except queue.Empty:
@@ -1113,6 +1627,9 @@ class DiagnosticsWindow:
         self._session_status_var.set(status_message)
         self._set_session_hint(hint)
         self._append_agent_message("agent", agent_message)
+        controller = getattr(self, "_guard_controller", None)
+        if controller is not None:
+            controller.begin_abort_finalization(self._session_terminal_session_id or self._session_id)
 
     def _finalize_terminal_session(self, *, aborted: bool, reason: str = "") -> None:
         for stop_name in (
@@ -1160,6 +1677,9 @@ class DiagnosticsWindow:
         self._session_status_var.set(message)
         self._set_session_hint(hint)
         self._append_agent_message("agent", message)
+        controller = getattr(self, "_guard_controller", None)
+        if controller is not None:
+            controller.notify_guarded_shutdown_safe_completion()
 
     def _is_missing_session_payload(self, payload: dict[str, Any]) -> bool:
         error_text = self._error_message(payload, "")
@@ -1198,6 +1718,9 @@ class DiagnosticsWindow:
         self._session_status_var.set("Session expired.")
         self._set_session_hint("当前会话已失效，请重新点击 Start Session。")
         self._append_agent_message("agent", "当前 session 已在服务端失效，请重新 Start Session。")
+        controller = getattr(self, "_guard_controller", None)
+        if controller is not None:
+            controller.clear_session_state()
         return True
 
     def _active_session_id_from_payload(self, payload: dict[str, Any]) -> str:
@@ -1283,6 +1806,9 @@ class DiagnosticsWindow:
                 self._bind_active_assignment(self._session_id)
             self._start_session_sse_thread(self._session_id)
             self._request_session_status_refresh()
+        controller = getattr(self, "_guard_controller", None)
+        if controller is not None:
+            controller.set_session_active(self._session_id)
 
     def _handle_aborted_session_conflict(self, payload: dict[str, Any]) -> bool:
         if str(payload.get("error_code") or "").strip() != "active_session_exists":
@@ -2904,12 +3430,18 @@ class DiagnosticsWindow:
         self._server_display = parsed.netloc or self._api_base
         if hasattr(self, "_server_state_text"):
             self._server_state_text.set(f"Server: {self._server_display}")
+        controller = getattr(self, "_guard_controller", None)
+        if controller is not None:
+            controller.update_api_context(self._api_base, api_token=self._api_token)
 
     def _restore_bootstrap_base(self) -> None:
         bootstrap_api_base = str(getattr(self, "_bootstrap_api_base", "") or "").strip()
         if not bootstrap_api_base:
             return
         self._switch_api_base(bootstrap_api_base)
+        controller = getattr(self, "_guard_controller", None)
+        if controller is not None:
+            controller.set_bootstrap_api_base(bootstrap_api_base)
 
     def _should_fallback_to_direct_start(self, payload: dict[str, Any]) -> bool:
         if getattr(self, "_active_assignment", None):
@@ -3035,11 +3567,16 @@ class DiagnosticsWindow:
                 },
                 callback_event="session_bootstrap_release_result",
             )
+        controller = getattr(self, "_guard_controller", None)
+        if controller is not None:
+            controller.prepare_guard_owned_assignment_release()
         self._active_assignment = None
         callback = getattr(self, "_node_assignment_callback", None)
         if callable(callback):
             callback(None)
         self._restore_bootstrap_base()
+        if controller is not None:
+            controller.clear_active_assignment(restore_api_base=bootstrap_api_base)
 
     def _handle_session_bootstrap_result(self, payload: dict[str, Any]) -> None:
         if not payload.get("success"):
@@ -3083,6 +3620,13 @@ class DiagnosticsWindow:
         self._bootstrap_api_base = self._api_base
         self._active_assignment = dict(assignment)
         self._switch_api_base(api_base_url)
+        controller = getattr(self, "_guard_controller", None)
+        if controller is not None:
+            controller.set_active_assignment(
+                self._active_assignment,
+                bootstrap_api_base=self._bootstrap_api_base,
+                api_base_url=self._api_base,
+            )
         callback = getattr(self, "_node_assignment_callback", None)
         if callable(callback):
             callback(dict(assignment))
@@ -3310,6 +3854,11 @@ class DiagnosticsWindow:
         )
         self._set_session_hint("Abort failed. The current session is still active; please retry.")
         self._append_agent_message("agent", "Abort failed. Please retry.")
+        controller = getattr(self, "_guard_controller", None)
+        if controller is not None:
+            controller.notify_guarded_shutdown_failure(
+                self._error_message(payload, "Request failed.")
+            )
 
     def _handle_navigate_start_result(self, payload: dict[str, Any]) -> None:
         self._start_button.configure(state=tk.NORMAL)

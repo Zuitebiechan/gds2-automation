@@ -168,6 +168,59 @@ _REAL_THREAD = threading.Thread
 _UI_THREAD_STOP = object()
 
 
+class _NullDiagnosticsGuardController:
+    """Fallback no-op guard controller used only when the diagnostics module is stubbed."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        self._window = None
+
+    def attach_window(self, window: Any) -> None:
+        self._window = window
+
+    def detach_window(self, window: Any) -> None:
+        if self._window is window:
+            self._window = None
+
+    def get_attached_window(self) -> Any | None:
+        return self._window
+
+    def has_active_session(self) -> bool:
+        return False
+
+    def request_guarded_action(
+        self,
+        _action_name: str,
+        *,
+        on_safe: Callable[[], Any],
+        on_force: Callable[[], Any] | None = None,
+        on_failure: Callable[[str], Any] | None = None,
+        timeout_sec: float | None = None,
+    ) -> bool:
+        on_safe()
+        return True
+
+    def update_api_context(self, api_base_url: str, *, api_token: str = "") -> None:
+        return None
+
+    def set_active_assignment(
+        self,
+        assignment: dict[str, Any] | None,
+        *,
+        bootstrap_api_base: str = "",
+        api_base_url: str = "",
+    ) -> None:
+        return None
+
+    def clear_active_assignment(self, *, restore_api_base: str = "") -> None:
+        return None
+
+    def force_pending_action(self) -> None:
+        return None
+
+    def cancel_pending_action(self) -> None:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Configuration Dialog (tkinter)
 # ---------------------------------------------------------------------------
@@ -428,6 +481,9 @@ class VCIProxyTrayApp:
         self._settings_dialog_thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._active_node_assignment: Optional[dict[str, Any]] = None
+        self._diagnostics_guard_controller: Optional[Any] = None
+        self._pending_restart_config: dict[str, Any] | None = None
+        self._suppress_assignment_reconnect_count = 0
         self._ui_thread: Optional[threading.Thread] = None
         self._ui_queue: queue.Queue[object] | None = None
         self._ui_thread_lock = threading.Lock()
@@ -498,6 +554,120 @@ class VCIProxyTrayApp:
             self._ui_thread = None
             self._ui_queue = None
 
+    def _ask_threadsafe_confirmation(self, title: str, message: str) -> bool:
+        """Show one confirmation dialog safely on the shared UI thread."""
+        controller = self._diagnostics_guard_controller
+        window = controller.get_attached_window() if controller is not None else None
+        if window is not None and hasattr(window, "_run_sync_ui_callback"):
+            try:
+                return bool(
+                    window._run_sync_ui_callback(
+                        lambda: messagebox.askyesno(title, message, parent=window._root)
+                    )
+                )
+            except Exception:
+                logger.exception("[GUI_CTRL] window-scoped confirmation dialog failed title=%s", title)
+
+        def _show() -> bool:
+            root = tk.Tk()
+            root.withdraw()
+            try:
+                return bool(messagebox.askyesno(title, message, parent=root))
+            finally:
+                root.destroy()
+
+        try:
+            return bool(self._run_on_ui_thread(_show))
+        except Exception:
+            logger.exception("[GUI_CTRL] confirmation dialog failed title=%s", title)
+            return False
+
+    def _suppress_next_assignment_reconnect(self) -> None:
+        self._suppress_assignment_reconnect_count += 1
+
+    def _ensure_diagnostics_guard_controller(self) -> Any:
+        controller = self._diagnostics_guard_controller
+        if controller is None:
+            try:
+                from vci_proxy.diagnostics_window import DiagnosticsGuardController
+            except Exception:
+                logger.exception("[GUI_CTRL] failed to import DiagnosticsGuardController")
+                DiagnosticsGuardController = _NullDiagnosticsGuardController
+            controller = DiagnosticsGuardController(
+                self._effective_api_base_url(),
+                api_token=str(self._config.get("api_token") or "").strip(),
+                node_assignment_callback=self._on_node_assignment,
+                ui_dispatch=lambda callback: self._run_on_ui_thread(callback),
+                suppress_assignment_reconnect=self._suppress_next_assignment_reconnect,
+            )
+            self._diagnostics_guard_controller = controller
+        update_api = getattr(controller, "update_api_context", None)
+        if callable(update_api):
+            update_api(
+                self._effective_api_base_url(),
+                api_token=str(self._config.get("api_token") or "").strip(),
+            )
+        return controller
+
+    def _complete_guarded_restart(self) -> None:
+        staged = self._pending_restart_config
+        self._pending_restart_config = None
+        if staged is None:
+            return
+        self._config = normalize_config(staged)
+        save_config(self._config)
+        self._restart_client()
+
+    def _complete_guarded_quit(self) -> None:
+        controller = self._diagnostics_guard_controller
+        window = controller.get_attached_window() if controller is not None else None
+        if window is not None and not getattr(window, "_is_destroying", False):
+            try:
+                window.destroy()
+            except Exception:
+                logger.exception("[GUI_CTRL] failed to destroy diagnostics window during quit")
+        self._stop_client()
+        self._stop_ui_thread()
+        if self._tray:
+            self._tray.stop()
+
+    def _handle_guarded_action_failure(self, action_name: str, reason: str) -> None:
+        try:
+            from vci_proxy.diagnostics_window import GUARDED_ACTION_CONFLICT_MESSAGE
+        except Exception:
+            GUARDED_ACTION_CONFLICT_MESSAGE = (
+                "Another shutdown action is already in progress. Please wait for it to finish."
+            )
+        if str(reason or "") == GUARDED_ACTION_CONFLICT_MESSAGE:
+            self._show_threadsafe_error("Action In Progress", str(reason))
+            return
+        action_label = {
+            "quit_app": "Force Quit",
+            "apply_settings_and_restart": "Force Apply And Restart",
+            "close_diagnostics": "Force Close",
+        }.get(action_name, "Force Continue")
+        confirmed = self._ask_threadsafe_confirmation(
+            action_label,
+            (
+                f"{reason}\n\n"
+                f"{action_label} may leave cloud session cleanup incomplete.\n\n"
+                f"Do you want to continue?"
+            ),
+        )
+        controller = self._diagnostics_guard_controller
+        if controller is None:
+            return
+        if confirmed:
+            force = getattr(controller, "force_pending_action", None)
+            if callable(force):
+                force()
+            return
+        if action_name == "apply_settings_and_restart":
+            self._pending_restart_config = None
+        cancel = getattr(controller, "cancel_pending_action", None)
+        if callable(cancel):
+            cancel()
+
     # --- Status management ---
 
     def _on_status_change(self, status: str, detail: str = ""):
@@ -567,6 +737,10 @@ class VCIProxyTrayApp:
     def _on_node_assignment(self, assignment: dict[str, Any] | None) -> None:
         """Apply one assigned-node override and reconnect the reverse tunnel."""
         self._active_node_assignment = dict(assignment) if assignment else None
+        if assignment is None and self._suppress_assignment_reconnect_count > 0:
+            self._suppress_assignment_reconnect_count -= 1
+            logger.info("[GUI_CTRL] assignment release reconnect suppressed")
+            return
         self._restart_client()
 
     def _client_instance_id(self) -> str:
@@ -731,10 +905,36 @@ class VCIProxyTrayApp:
                 previous_config = normalize_config(self._config)
                 updated_config = normalize_config({**self._config, **result})
                 needs_restart = tunnel_restart_required(previous_config, updated_config)
+                guard_controller = self._ensure_diagnostics_guard_controller()
                 logger.info(
                     "[GUI_CTRL] settings updated restart_required=%s",
                     needs_restart,
                 )
+                if needs_restart:
+                    if bool(getattr(guard_controller, "has_active_session", lambda: False)()):
+                        confirmed = self._ask_threadsafe_confirmation(
+                            "Apply Settings",
+                            (
+                                "A diagnostics session is still active.\n\n"
+                                "Applying these settings will first end the session safely, "
+                                "then save the settings and restart the client.\n\n"
+                                "Do you want to continue?"
+                            ),
+                        )
+                        if not confirmed:
+                            logger.info("[GUI_CTRL] settings apply cancelled during active session")
+                            return
+                        self._pending_restart_config = updated_config
+                        guard_controller.request_guarded_action(
+                            "apply_settings_and_restart",
+                            on_safe=self._complete_guarded_restart,
+                            on_force=self._complete_guarded_restart,
+                            on_failure=lambda reason: self._handle_guarded_action_failure(
+                                "apply_settings_and_restart",
+                                reason,
+                            ),
+                        )
+                        return
                 self._config = updated_config
                 save_config(self._config)
                 if needs_restart:
@@ -766,6 +966,24 @@ class VCIProxyTrayApp:
             self._show_threadsafe_error("Diagnostics", "Server address is not configured. Open Settings first.")
             return
 
+        guard_controller = self._ensure_diagnostics_guard_controller()
+        existing_window = getattr(guard_controller, "get_attached_window", lambda: None)()
+        if existing_window is not None and not getattr(existing_window, "_is_destroying", False):
+            def _focus_existing() -> None:
+                try:
+                    existing_window._root.deiconify()
+                    existing_window._root.lift()
+                    existing_window._root.focus_force()
+                except Exception:
+                    logger.exception("[GUI_CTRL] failed to focus existing diagnostics window")
+
+            threading.Thread(
+                target=lambda: existing_window._run_sync_ui_callback(_focus_existing),
+                daemon=True,
+                name="diagnostics-focus",
+            ).start()
+            return
+
         api_base = self._effective_api_base_url()
         api_token = str(self._config.get("api_token") or "").strip()
 
@@ -780,6 +998,8 @@ class VCIProxyTrayApp:
                         use_session_bootstrap=True,
                         node_assignment_callback=self._on_node_assignment,
                     )
+                    if hasattr(win, "set_guard_controller"):
+                        win.set_guard_controller(guard_controller)
                     win.show()
 
                 self._run_on_ui_thread(_show_window)
@@ -812,10 +1032,29 @@ class VCIProxyTrayApp:
     def _on_quit(self, icon=None, item=None):
         """Quit the application."""
         logger.info("[GUI_CTRL] quit requested")
-        self._stop_client()
-        self._stop_ui_thread()
-        if self._tray:
-            self._tray.stop()
+        guard_controller = self._ensure_diagnostics_guard_controller()
+        if bool(getattr(guard_controller, "has_active_session", lambda: False)()):
+            confirmed = self._ask_threadsafe_confirmation(
+                "Quit VCI Proxy",
+                (
+                    "A diagnostics session is still active.\n\n"
+                    "Quitting will first end the session safely before the local client exits.\n\n"
+                    "Do you want to continue?"
+                ),
+            )
+            if not confirmed:
+                return
+            guard_controller.request_guarded_action(
+                "quit_app",
+                on_safe=self._complete_guarded_quit,
+                on_force=self._complete_guarded_quit,
+                on_failure=lambda reason: self._handle_guarded_action_failure(
+                    "quit_app",
+                    reason,
+                ),
+            )
+            return
+        self._complete_guarded_quit()
 
     def _build_menu(self) -> Any:
         """Build the right-click context menu."""

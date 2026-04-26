@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import types
 import tkinter as tk
 from tkinter import messagebox
 
@@ -97,6 +98,7 @@ def _build_window(*, current_page: str = "") -> DiagnosticsWindow:
     window._session_terminal_session_id = None
     window._session_status_refresh_inflight = False
     window._server_connected = None
+    window._is_destroying = False
     window._status_message = _Var("")
     window._session_status_var = _Var("")
     window._session_hint_var = _Var("")
@@ -133,6 +135,214 @@ def _build_window(*, current_page: str = "") -> DiagnosticsWindow:
     window._close_decision_modal = lambda: None
     window._set_agent_prompt = lambda kind, label, options, **kwargs: None
     return window
+
+
+def test_request_close_destroys_immediately_when_no_active_session(monkeypatch) -> None:
+    window = _build_window(current_page="data_display")
+    destroyed: list[bool] = []
+    window._root = object()
+    window.destroy = lambda: destroyed.append(True)
+    window._guard_controller = types.SimpleNamespace(has_active_session=lambda: False)
+
+    window.request_close()
+
+    assert destroyed == [True]
+
+
+def test_request_close_active_session_routes_through_guard_controller(monkeypatch) -> None:
+    window = _build_window(current_page="data_display")
+    observed: dict[str, object] = {}
+    window._root = object()
+
+    class _FakeController:
+        def has_active_session(self) -> bool:
+            return True
+
+        def request_guarded_action(self, action_name, **kwargs):
+            observed["action_name"] = action_name
+            observed["kwargs"] = kwargs
+            return True
+
+    window._guard_controller = _FakeController()
+    monkeypatch.setattr(messagebox, "askyesno", lambda *args, **kwargs: True)
+
+    window.request_close()
+
+    assert observed["action_name"] == "close_diagnostics"
+
+
+def test_guard_controller_headless_quit_suppresses_assignment_reconnect(monkeypatch) -> None:
+    observed = {
+        "assignment_events": [],
+        "suppressed": [],
+        "calls": [],
+        "safe": [],
+    }
+
+    class _ImmediateThread:
+        def __init__(self, target=None, daemon=None, name=None):
+            self.target = target
+            self.daemon = daemon
+            self.name = name
+
+        def start(self):
+            if self.target is not None:
+                self.target()
+
+    class _NoopTimer:
+        def __init__(self, interval, callback, args=None, kwargs=None):
+            self.interval = interval
+            self.callback = callback
+            self.args = args or ()
+            self.kwargs = kwargs or {}
+            self.daemon = False
+
+        def start(self):
+            return None
+
+        def cancel(self):
+            return None
+
+    class _Response:
+        def __init__(self, status_code: int, payload: dict[str, object], reason: str = "OK"):
+            self.status_code = status_code
+            self._payload = payload
+            self.reason = reason
+
+        def json(self):
+            return self._payload
+
+    def _fake_post(url, json=None, params=None, timeout=None, headers=None):
+        observed["calls"].append(("POST", url, json))
+        if url.endswith("/api/session/bootstrap/release"):
+            return _Response(200, {"success": True, "released": True})
+        return _Response(200, {"success": True, "session_id": "session-123", "status": "aborted"})
+
+    def _fake_get(url, params=None, timeout=None, headers=None):
+        observed["calls"].append(("GET", url, params))
+        return _Response(404, {"success": False, "error": "Session session-123 not found"}, reason="Not Found")
+
+    monkeypatch.setattr(threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(threading, "Timer", _NoopTimer)
+    monkeypatch.setattr("vci_proxy.diagnostics_window.requests.post", _fake_post)
+    monkeypatch.setattr("vci_proxy.diagnostics_window.requests.get", _fake_get)
+
+    from vci_proxy.diagnostics_window import DiagnosticsGuardController
+
+    controller = DiagnosticsGuardController(
+        "https://node-1.diag.example.com",
+        api_token="api-secret",
+        node_assignment_callback=lambda assignment: observed["assignment_events"].append(assignment),
+        ui_dispatch=lambda callback: callback(),
+        suppress_assignment_reconnect=lambda: observed["suppressed"].append(True),
+    )
+    controller.set_bootstrap_api_base("https://entry.diag.example.com")
+    controller.set_active_assignment(
+        {
+            "assignment_id": "assign-123",
+            "api_base_url": "https://node-1.diag.example.com",
+            "tunnel_host": "node-1.diag.example.com",
+        },
+        bootstrap_api_base="https://entry.diag.example.com",
+        api_base_url="https://node-1.diag.example.com",
+    )
+    controller.set_session_active("session-123")
+
+    controller.request_guarded_action(
+        "quit_app",
+        on_safe=lambda: observed["safe"].append("safe"),
+        on_force=lambda: observed["safe"].append("force"),
+        on_failure=lambda reason: observed["safe"].append(f"failure:{reason}"),
+    )
+
+    assert observed["safe"] == ["safe"]
+    assert observed["suppressed"] == [True]
+    assert observed["assignment_events"] == [None]
+    assert any(call[1].endswith("/api/session/abort") for call in observed["calls"])
+    assert any(call[1].endswith("/api/session/bootstrap/release") for call in observed["calls"])
+
+
+def test_guard_controller_coalesces_duplicate_guarded_actions() -> None:
+    observed: list[str] = []
+    from vci_proxy.diagnostics_window import DiagnosticsGuardController
+
+    controller = DiagnosticsGuardController(
+        "https://node-1.diag.example.com",
+        ui_dispatch=lambda callback: callback(),
+    )
+    controller.attach_window(
+        types.SimpleNamespace(
+            _run_sync_ui_callback=lambda callback: callback(),
+            _start_guarded_shutdown_from_controller=lambda action_name: observed.append(action_name),
+        )
+    )
+    controller.set_session_active("session-123")
+    controller._pending_action = {"name": "quit_app", "on_safe": lambda: None}
+
+    result = controller.request_guarded_action(
+        "quit_app",
+        on_safe=lambda: observed.append("safe"),
+    )
+
+    assert result is True
+    assert observed == []
+
+
+def test_guard_controller_rejects_different_inflight_guarded_action() -> None:
+    observed: list[str] = []
+    from vci_proxy.diagnostics_window import DiagnosticsGuardController
+
+    controller = DiagnosticsGuardController(
+        "https://node-1.diag.example.com",
+        ui_dispatch=lambda callback: callback(),
+    )
+    controller._pending_action = {"name": "close_diagnostics", "on_safe": lambda: None}
+
+    result = controller.request_guarded_action(
+        "quit_app",
+        on_safe=lambda: observed.append("safe"),
+        on_failure=lambda reason: observed.append(reason),
+    )
+
+    assert result is False
+    assert observed == [
+        "Another shutdown action is already in progress. Please wait for it to finish."
+    ]
+
+
+def test_offer_force_guarded_action_shows_warning_for_cross_action_conflict(monkeypatch) -> None:
+    window = _build_window(current_page="data_display")
+    observed: dict[str, object] = {}
+    window._root = object()
+    window._guard_controller = types.SimpleNamespace(
+        force_pending_action=lambda: observed.setdefault("forced", True),
+        cancel_pending_action=lambda: observed.setdefault("cancelled", True),
+    )
+    monkeypatch.setattr(
+        messagebox,
+        "showwarning",
+        lambda title, message, parent=None: observed.setdefault("warning", (title, message, parent)),
+    )
+    monkeypatch.setattr(
+        messagebox,
+        "askyesno",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("force confirmation should not be shown for a cross-action conflict")
+        ),
+    )
+
+    window._offer_force_guarded_action(
+        "close_diagnostics",
+        "Another shutdown action is already in progress. Please wait for it to finish.",
+    )
+
+    assert observed["warning"] == (
+        "Action In Progress",
+        "Another shutdown action is already in progress. Please wait for it to finish.",
+        window._root,
+    )
+    assert "forced" not in observed
+    assert "cancelled" not in observed
 
 
 def test_refresh_action_buttons_shows_step_one_before_branch_selection() -> None:

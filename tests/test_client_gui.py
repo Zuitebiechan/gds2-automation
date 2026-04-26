@@ -833,6 +833,112 @@ def test_on_node_assignment_none_clears_active_assignment_and_restarts(monkeypat
     assert restarted == [True]
 
 
+def test_on_node_assignment_none_can_skip_restart_for_guarded_release(monkeypatch, tmp_path) -> None:
+    client_gui = _import_client_gui(monkeypatch, tmp_path)
+    restarted: list[bool] = []
+
+    app = client_gui.VCIProxyTrayApp()
+    app._active_node_assignment = {
+        "tunnel_host": "lax-1.diag.example.com",
+        "api_base_url": "https://lax-1.diag.example.com:443",
+    }
+    app._restart_client = lambda: restarted.append(True)
+    app._suppress_next_assignment_reconnect()
+
+    app._on_node_assignment(None)
+
+    assert app._active_node_assignment is None
+    assert restarted == []
+
+
+def test_on_quit_defers_shutdown_when_active_session_exists(monkeypatch, tmp_path) -> None:
+    client_gui = _import_client_gui(monkeypatch, tmp_path)
+    observed: dict[str, object] = {}
+
+    class _FakeController:
+        def has_active_session(self) -> bool:
+            return True
+
+        def request_guarded_action(self, action_name, **kwargs):
+            observed["action_name"] = action_name
+            observed["kwargs"] = kwargs
+            return True
+
+    app = client_gui.VCIProxyTrayApp()
+    app._tray = types.SimpleNamespace(stop=lambda: observed.setdefault("tray_stopped", True))
+    app._stop_client = lambda: observed.setdefault("stopped", True)
+    app._stop_ui_thread = lambda: observed.setdefault("ui_stopped", True)
+    app._ensure_diagnostics_guard_controller = lambda: _FakeController()
+    app._ask_threadsafe_confirmation = lambda title, message: observed.setdefault("confirmed", (title, message)) or True
+
+    app._on_quit()
+
+    assert observed["action_name"] == "quit_app"
+    assert "stopped" not in observed
+    assert "ui_stopped" not in observed
+    assert "tray_stopped" not in observed
+
+
+def test_run_settings_dialog_defers_restart_when_active_session_exists(monkeypatch, tmp_path) -> None:
+    client_gui = _import_client_gui(monkeypatch, tmp_path)
+    observed: dict[str, object] = {}
+
+    class _FakeDialog:
+        def __init__(self, config):
+            observed["dialog_config"] = dict(config)
+
+        def show(self):
+            return {
+                "api_scheme": "http",
+                "host": "diag.example",
+                "port": 9000,
+                "api_port": 8080,
+                "api_token": "",
+                "auth_token": "updated-secret",
+                "dll_path": "",
+            }
+
+    class _FakeController:
+        def has_active_session(self) -> bool:
+            return True
+
+        def request_guarded_action(self, action_name, **kwargs):
+            observed["action_name"] = action_name
+            observed["kwargs"] = kwargs
+            return True
+
+    app = client_gui.VCIProxyTrayApp()
+    app._config = {
+        "api_scheme": "http",
+        "host": "diag.example",
+        "port": 9000,
+        "api_port": 8080,
+        "api_token": "",
+        "auth_token": "secret",
+        "dll_path": "",
+        "tls_enabled": False,
+        "tls_ca_file": "",
+        "tls_server_name": "",
+    }
+    app._client_thread = types.SimpleNamespace(is_alive=lambda: True)
+    monkeypatch.setattr(client_gui, "ConfigDialog", _FakeDialog)
+    monkeypatch.setattr(client_gui, "save_config", lambda cfg: observed.setdefault("saved", dict(cfg)))
+    monkeypatch.setattr(app, "_restart_client", lambda: observed.setdefault("restarted", True))
+    monkeypatch.setattr(app, "_start_client", lambda: observed.setdefault("started", True))
+    monkeypatch.setattr(app, "_run_on_ui_thread", lambda callback, timeout=None: callback())
+    app._ensure_diagnostics_guard_controller = lambda: _FakeController()
+    app._ask_threadsafe_confirmation = lambda title, message: observed.setdefault("confirmed", (title, message)) or True
+
+    app._run_settings_dialog()
+
+    assert observed["action_name"] == "apply_settings_and_restart"
+    assert app._pending_restart_config is not None
+    assert app._pending_restart_config["auth_token"] == "updated-secret"
+    assert "saved" not in observed
+    assert "restarted" not in observed
+    assert "started" not in observed
+
+
 def test_show_threadsafe_error_uses_single_ui_executor(monkeypatch, tmp_path) -> None:
     client_gui = _import_client_gui(monkeypatch, tmp_path)
     app = client_gui.VCIProxyTrayApp()
@@ -854,6 +960,67 @@ def test_show_threadsafe_error_uses_single_ui_executor(monkeypatch, tmp_path) ->
 
     assert observed["ui_calls"] == 1
     assert observed["dialog"] == ("Diagnostics Error", "boom")
+
+
+def test_ask_threadsafe_confirmation_prefers_attached_window_executor(monkeypatch, tmp_path) -> None:
+    client_gui = _import_client_gui(monkeypatch, tmp_path)
+    app = client_gui.VCIProxyTrayApp()
+    observed: dict[str, object] = {}
+
+    def _run_window_callback(callback):
+        observed["window_executor"] = True
+        return callback()
+
+    fake_window = types.SimpleNamespace(
+        _root=object(),
+        _run_sync_ui_callback=_run_window_callback,
+    )
+    app._diagnostics_guard_controller = types.SimpleNamespace(
+        get_attached_window=lambda: fake_window
+    )
+    monkeypatch.setattr(
+        app,
+        "_run_on_ui_thread",
+        lambda callback, timeout=None: (_ for _ in ()).throw(
+            AssertionError("tray UI executor should not be used while diagnostics window is attached")
+        ),
+    )
+    monkeypatch.setattr(
+        client_gui.messagebox,
+        "askyesno",
+        lambda title, message, parent=None: observed.setdefault("parent", parent) or True,
+    )
+
+    assert app._ask_threadsafe_confirmation("Quit", "Continue?") is True
+    assert observed["window_executor"] is True
+    assert observed["parent"] is fake_window._root
+
+
+def test_handle_guarded_action_failure_shows_warning_for_cross_action_conflict(monkeypatch, tmp_path) -> None:
+    client_gui = _import_client_gui(monkeypatch, tmp_path)
+    app = client_gui.VCIProxyTrayApp()
+    observed: dict[str, object] = {}
+
+    app._show_threadsafe_error = lambda title, message: observed.setdefault("error", (title, message))
+    app._ask_threadsafe_confirmation = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("force confirmation should not be shown for a cross-action conflict")
+    )
+    app._diagnostics_guard_controller = types.SimpleNamespace(
+        force_pending_action=lambda: observed.setdefault("forced", True),
+        cancel_pending_action=lambda: observed.setdefault("cancelled", True),
+    )
+
+    app._handle_guarded_action_failure(
+        "quit_app",
+        "Another shutdown action is already in progress. Please wait for it to finish.",
+    )
+
+    assert observed["error"] == (
+        "Action In Progress",
+        "Another shutdown action is already in progress. Please wait for it to finish.",
+    )
+    assert "forced" not in observed
+    assert "cancelled" not in observed
 
 
 def test_main_forces_logging_configuration(monkeypatch, tmp_path) -> None:
