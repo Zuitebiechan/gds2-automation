@@ -171,6 +171,37 @@ def test_start_business_session_clears_partial_binding_when_snapshot_sync_fails(
     assert orchestrator.get_event_queue("snapshot-bind-01") is None
 
 
+def test_start_business_session_recovers_orphaned_worker_binding(monkeypatch):
+    runtime = WorkerRuntime()
+    orchestrator = SessionOrchestrator()
+    monkeypatch.setattr(platform_session_orchestrator_module, "route_backend", lambda brand: "gds2")
+    runtime.bind_business_session("missing-session")
+
+    payload = start_business_session(
+        runtime,
+        orchestrator=orchestrator,
+        context=SessionContext(brand="Chevrolet", model="Malibu", vin="VIN123"),
+    )
+
+    assert payload["success"] is True
+    assert runtime.get_business_session_binding().session_id == payload["session_id"]
+
+
+def test_start_business_session_recovers_terminal_worker_binding(monkeypatch):
+    runtime, orchestrator, session, _ = _start_gds2_session(monkeypatch)
+    orchestrator.complete_session(session.session_id)
+
+    payload = start_business_session(
+        runtime,
+        orchestrator=orchestrator,
+        context=SessionContext(brand="Chevrolet", model="Malibu", vin="VIN456"),
+    )
+
+    assert payload["success"] is True
+    assert payload["session_id"] != session.session_id
+    assert runtime.get_business_session_binding().session_id == payload["session_id"]
+
+
 def test_build_session_status_payload_is_read_only(monkeypatch):
     runtime, orchestrator, session, _ = _start_gds2_session(monkeypatch)
     backend = types.SimpleNamespace(

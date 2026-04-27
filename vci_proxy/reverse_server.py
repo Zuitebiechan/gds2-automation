@@ -688,8 +688,15 @@ class ReverseProxyServer:
             return True, "existing_tunnel_inactive", existing_addr
 
         snapshot = self._tunnel_quality.snapshot()
-        if snapshot.get("connected") and snapshot.get("fresh"):
+        try:
+            probe_failures = int(snapshot.get("probe_failures") or 0)
+        except (TypeError, ValueError):
+            probe_failures = 0
+        has_probe_failures = probe_failures > 0 or snapshot.get("reason") == "probe_failures"
+        if snapshot.get("connected") and snapshot.get("fresh") and not has_probe_failures:
             return False, "existing_tunnel_healthy", existing_addr
+        if has_probe_failures:
+            return True, "existing_tunnel_probe_failed", existing_addr
         return True, "existing_tunnel_stale", existing_addr
 
     async def _handle_vci_connection(self, reader: asyncio.StreamReader,

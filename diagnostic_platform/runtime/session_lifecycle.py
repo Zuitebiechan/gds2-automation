@@ -19,6 +19,47 @@ from .session_state import (
 from .worker_runtime import WorkerRuntime
 
 logger = logging.getLogger(__name__)
+_TERMINAL_SESSION_STATUSES = {"completed", "failed", "aborted"}
+
+
+def _session_status_value(session: Any) -> str:
+    status = getattr(session, "status", "")
+    return str(getattr(status, "value", status) or "")
+
+
+def _clear_stale_worker_binding(
+    runtime: WorkerRuntime,
+    *,
+    orchestrator: Any,
+    new_session_id: str,
+) -> None:
+    binding = runtime.get_business_session_binding()
+    bound_session_id = binding.session_id
+    if not bound_session_id or bound_session_id == new_session_id:
+        return
+
+    try:
+        bound_session = orchestrator.get_session(bound_session_id)
+    except KeyError:
+        clear_business_session(runtime, bound_session_id)
+        logger.warning(
+            "Cleared stale worker session binding before binding new session "
+            "old_session_id=%s new_session_id=%s reason=session_not_found",
+            bound_session_id,
+            new_session_id,
+        )
+        return
+
+    status_value = _session_status_value(bound_session)
+    if status_value in _TERMINAL_SESSION_STATUSES:
+        clear_business_session(runtime, bound_session_id)
+        logger.warning(
+            "Cleared stale worker session binding before binding new session "
+            "old_session_id=%s new_session_id=%s reason=terminal_session status=%s",
+            bound_session_id,
+            new_session_id,
+            status_value,
+        )
 
 
 def _rollback_failed_session_start(
@@ -70,6 +111,11 @@ def start_business_session(
     """Start and bind one business session."""
     session = orchestrator.start_session(context)
     try:
+        _clear_stale_worker_binding(
+            runtime,
+            orchestrator=orchestrator,
+            new_session_id=session.session_id,
+        )
         bind_business_session(runtime, session)
     except Exception:
         logger.warning(

@@ -885,6 +885,29 @@ def test_new_vci_connection_can_replace_stale_existing_tunnel() -> None:
     assert existing_addr == ("1.1.1.1", 1111)
 
 
+def test_new_vci_connection_can_replace_probe_failed_existing_tunnel() -> None:
+    server = ReverseProxyServer()
+    server.vci_writer = _FakeWriter(peername=("1.1.1.1", 1111))
+    server._connection_epoch = "epoch-1"
+    server.vci_connected.set()
+    server._tunnel_quality = types.SimpleNamespace(
+        snapshot=lambda: {
+            "connection_epoch": "epoch-1",
+            "connected": True,
+            "fresh": True,
+            "status": "blocked",
+            "reason": "probe_failures",
+            "probe_failures": 1,
+        }
+    )
+
+    accepted, reason, existing_addr = server._should_accept_new_vci_connection(("2.2.2.2", 2222))
+
+    assert accepted is True
+    assert reason == "existing_tunnel_probe_failed"
+    assert existing_addr == ("1.1.1.1", 1111)
+
+
 def test_handle_proxy_connection_emits_staged_success_events(monkeypatch, tmp_path) -> None:
     async def _run() -> None:
         monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
