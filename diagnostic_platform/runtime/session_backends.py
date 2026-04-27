@@ -13,6 +13,7 @@ from diagnostic_platform.contracts import (
 )
 from diagnostic_platform.session_models import SessionStatus
 
+from .session_errors import SessionNotRunningError
 from .worker_runtime import WorkerRuntime
 
 
@@ -36,7 +37,7 @@ def ensure_session_capability(
     descriptor: BackendDescriptor | None = None,
 ) -> None:
     if session.status != SessionStatus.RUNNING:
-        raise ValueError(f"Session not running (status={session.status.value})")
+        raise SessionNotRunningError(session.status)
 
     capability_name = capability_value(capability)
     capabilities = session_capabilities(session, descriptor)

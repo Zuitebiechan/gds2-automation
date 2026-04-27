@@ -3,7 +3,17 @@ from __future__ import annotations
 import types
 
 from diagnostic_platform.contracts import BackendCapability
+from diagnostic_platform.runtime.navigation_errors import (
+    NavigationDecisionMismatchError,
+    NavigationNotAwaitingDecisionError,
+    NavigationSessionTerminatedError,
+)
+from diagnostic_platform.runtime.session_errors import SessionNotRunningError
 from diagnostic_platform.runtime.worker_runtime import WorkerRuntime
+from server.api.http_utils import (
+    navigation_decision_error_payload,
+    session_state_error_payload,
+)
 from server.api import session_ai_handlers, session_live_data_handlers, session_navigation_handlers
 from src.gds2_orchestration.session_orchestrator import Session, SessionContext, SessionStatus
 
@@ -68,6 +78,53 @@ def test_start_ai_diagnose_requires_data_category(monkeypatch) -> None:
 
     assert status == 400
     assert payload == {"success": False, "error": "data_category required"}
+
+
+def test_http_error_mapping_prefers_typed_session_errors() -> None:
+    payload, status = session_state_error_payload(
+        SessionNotRunningError(SessionStatus.AWAITING_DECISION)
+    )
+
+    assert status == 409
+    assert payload == {
+        "success": False,
+        "error": "Session not running (status=awaiting_decision)",
+        "error_code": "session_not_running",
+        "session_status": "awaiting_decision",
+    }
+
+
+def test_http_error_mapping_prefers_typed_navigation_errors() -> None:
+    cases = [
+        (
+            NavigationNotAwaitingDecisionError("running"),
+            409,
+            "navigation_not_awaiting_decision",
+            "Session is not awaiting a decision (status=running)",
+        ),
+        (
+            NavigationSessionTerminatedError("completed"),
+            409,
+            "navigation_session_terminated",
+            "Session already terminated (status=completed)",
+        ),
+        (
+            NavigationDecisionMismatchError("decision-1", "decision-2"),
+            400,
+            "navigation_decision_mismatch",
+            "Decision ID mismatch: expected 'decision-1', got 'decision-2'",
+        ),
+    ]
+
+    for error, expected_status, expected_code, expected_message in cases:
+        payload, status = navigation_decision_error_payload(error)
+
+        assert status == expected_status
+        assert payload == {
+            "success": False,
+            "error": expected_message,
+            "error_code": expected_code,
+        }
 
 
 def test_start_ai_diagnose_rejects_non_string_session_id() -> None:

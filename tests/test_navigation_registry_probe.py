@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import shutil
 import uuid
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from backends.gds2.registry_navigation_runtime import (
+    action_available,
     clear_dtcs_state_matches,
     data_display_recovery_targets,
     decide_vehicle_selection_action,
@@ -22,6 +24,11 @@ from backends.gds2.registry_navigation_runtime import (
     select_next_route_step,
 )
 from backends.gds2.registry_navigation_runtime import RegistryNavigationRuntime
+from backends.gds2.registry_navigation_runtime import (
+    GDS2ClearDTCFlow,
+    GDS2RecoveryCoordinator,
+    GDS2RegistryRouteExecutor,
+)
 from backends.gds2.registry_navigation_runtime import evaluate_success_criteria
 from diagnostic_platform.runtime.navigation_runtime import NavSession
 
@@ -33,6 +40,18 @@ def test_vehicle_selection_status_connected_prefers_enter() -> None:
     )
 
     assert action == "enter"
+
+
+def test_registry_runtime_collaborators_use_ports_boundary() -> None:
+    for collaborator in (
+        GDS2RecoveryCoordinator,
+        GDS2ClearDTCFlow,
+        GDS2RegistryRouteExecutor,
+    ):
+        source = inspect.getsource(collaborator)
+        assert "self._runtime" not in source
+        assert "runtime._" not in source
+        assert "self._ports" in source
 
 
 def test_vehicle_selection_status_connecting_waits() -> None:
@@ -324,6 +343,29 @@ def test_success_criteria_supports_variants() -> None:
 
     assert success is True
     assert any(item["name"] == "selection" and item["missing_all_of"] == [] for item in details["variant_results"])
+
+
+def test_action_available_uses_unique_contains_without_ambiguous_clickability() -> None:
+    unique_snapshot = {
+        "observed_actions": [
+            {"kind": "list_item", "label": "[K20] Engine Control Module", "list_index": 0},
+        ]
+    }
+    ambiguous_snapshot = {
+        "observed_actions": [
+            {"kind": "list_item", "label": "Fuel Trim Enable", "list_index": 0},
+            {"kind": "list_item", "label": "Fuel Trim Disable", "list_index": 0},
+        ]
+    }
+
+    assert action_available(
+        unique_snapshot,
+        {"kind": "list_item", "label": "Engine Control Module"},
+    ) is True
+    assert action_available(
+        ambiguous_snapshot,
+        {"kind": "list_item", "label": "Fuel Trim"},
+    ) is False
 
 
 def test_first_pending_route_step_advances_through_executed_prefix() -> None:
@@ -1065,6 +1107,102 @@ def test_registry_navigation_runtime_recover_data_display_records_failed_restore
     assert status["last_operation"] == "recover_data_display"
     assert "did not restore Data Display" in status["last_error"]
     assert status["last_route"]["terminal_reason"] == "failed_restore_data_display"
+
+
+def test_registry_route_status_preserves_match_diagnostics() -> None:
+    runtime = RegistryNavigationRuntime(
+        controller=object(),
+        route_navigator=type("_Navigator", (), {"graph": {}})(),
+        entries=[],
+    )
+    diagnostic = {
+        "target_label": "Engine Control Module",
+        "action_kind": "list_item",
+        "owner": "registry_runtime.route_step",
+        "selected_policy": "unique_contains",
+        "candidate_labels": ["[K20] Engine Control Module"],
+        "resolution": "unique_contains",
+    }
+
+    status = runtime._build_route_status(
+        entry={"page_key": "module.engine", "category": "module", "canonical_path": ["Module Diagnostics"]},
+        route_result={
+            "matched_start_node_id": "module_list",
+            "final_page": "module_submenu",
+            "planned_path": [],
+            "executed_actions": [],
+            "recovery_actions": [],
+            "state_trace": [],
+            "match_diagnostics": [diagnostic],
+        },
+        terminal_reason="selected_module",
+    )
+
+    assert status["match_diagnostics"] == [diagnostic]
+
+
+def test_registry_failure_status_preserves_ambiguous_match_diagnostics() -> None:
+    snapshot = {
+        "effective_page_id": "data_list",
+        "observed_actions": [
+            {"kind": "list_item", "label": "Fuel Trim Enable", "list_index": 0},
+            {"kind": "list_item", "label": "Fuel Trim Disable", "list_index": 0},
+        ],
+        "navigation_path": [],
+        "list_items": ["Fuel Trim Enable", "Fuel Trim Disable"],
+    }
+
+    class _Navigator:
+        graph = {}
+
+        def capture_settled_snapshot(self):
+            return dict(snapshot)
+
+        def match_snapshot(self, _snapshot):
+            return None
+
+        def snapshot_action_match(self, current_snapshot, label, *, kind):
+            from src.navigation import find_action_match
+
+            return find_action_match(
+                current_snapshot.get("observed_actions") or [],
+                label,
+                kind=kind,
+            )
+
+        def resolve_bridge_action(self, _snapshot):
+            return None
+
+    runtime = RegistryNavigationRuntime(
+        controller=object(),
+        route_navigator=_Navigator(),
+        entries=[
+            {
+                "page_key": "data.fuel_trim",
+                "aliases": ["Fuel Trim"],
+                "category": "data",
+                "canonical_path": [],
+                "target_action": {"kind": "list_item", "label": "Fuel Trim"},
+                "route_steps": [],
+            }
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="Ambiguous action match"):
+        runtime.select_data_category("Fuel Trim")
+
+    status = runtime.get_runtime_status()
+    assert status["last_route"]["terminal_reason"] == "failed_select_data_category"
+    assert status["last_route"]["match_diagnostics"] == [
+        {
+            "target_label": "Fuel Trim",
+            "action_kind": "list_item",
+            "owner": "registry_runtime.target_action",
+            "selected_policy": "ambiguous",
+            "candidate_labels": ["Fuel Trim Enable", "Fuel Trim Disable"],
+            "resolution": "ambiguous",
+        }
+    ]
 
 
 def test_loading_watchdog_waits_restarts_and_fails_after_limit() -> None:

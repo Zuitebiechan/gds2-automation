@@ -153,7 +153,7 @@ def submit_navigation_decision_for_business(data: dict[str, object]) -> tuple[di
     except UnsupportedCapabilityError as exc:
         return {"success": False, "error": str(exc)}, 501
     except ValueError as exc:
-        return navigation_decision_error_payload(str(exc))
+        return navigation_decision_error_payload(exc)
     except Exception as exc:
         logger.exception("session_navigate_decision failed")
         return internal_error_payload(), 500

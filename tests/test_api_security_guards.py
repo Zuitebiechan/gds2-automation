@@ -181,10 +181,18 @@ def test_navigate_start_rejects_non_string_goal(monkeypatch):
 def test_navigate_start_requires_active_backend_navigation_runtime(monkeypatch):
     _install_fake_flask_stack(monkeypatch, {"goal": "Go to Data Display"})
     navigate_api = _fresh_import(monkeypatch, "server.api.navigate")
+
+    def _missing_navigation_session(session_id):
+        raise KeyError(f"Navigation session {session_id} not found")
+
+    runtime = types.SimpleNamespace(
+        get_active_backend_bundle=lambda: None,
+        get_navigation_session=_missing_navigation_session,
+    )
     monkeypatch.setattr(
         navigate_api,
         "_runtime",
-        lambda: types.SimpleNamespace(get_active_backend_bundle=lambda: None),
+        lambda: runtime,
     )
 
     payload, status = navigate_api.navigate_start()
@@ -195,6 +203,15 @@ def test_navigate_start_requires_active_backend_navigation_runtime(monkeypatch):
         "error": "No active backend navigation runtime is available",
     }
 
+    navigate_api.request.args = {"session_id": "missing-nav"}
+    status_payload, status_code = navigate_api.navigate_status()
+
+    assert status_code == 404
+    assert status_payload == {
+        "success": False,
+        "error": "'Navigation session missing-nav not found'",
+    }
+
 
 def test_navigate_start_uses_active_backend_navigation_handle(monkeypatch):
     _install_fake_flask_stack(monkeypatch, {"goal": "Go to Data Display"})
@@ -203,7 +220,16 @@ def test_navigate_start_uses_active_backend_navigation_handle(monkeypatch):
     fake_session = types.SimpleNamespace(
         session_id="nav-1",
         status=types.SimpleNamespace(value="running"),
+        goal="Go to Data Display",
+        current_page="module_list",
+        pending_decision_id=None,
+        pending_items=[],
+        error=None,
     )
+    runtime_state = {
+        "bundle": None,
+        "sessions": {},
+    }
 
     class _FakeNavigationHandle:
         def __init__(self):
@@ -211,14 +237,22 @@ def test_navigate_start_uses_active_backend_navigation_handle(monkeypatch):
 
         def start_navigation_session(self, runtime, goal):
             self.calls.append((runtime, goal))
+            runtime_state["sessions"][fake_session.session_id] = fake_session
             return fake_session
 
+    class _FakeRuntime:
+        def get_active_backend_bundle(self):
+            return runtime_state["bundle"]
+
+        def get_navigation_session(self, session_id):
+            try:
+                return runtime_state["sessions"][session_id]
+            except KeyError:
+                raise KeyError(f"Navigation session {session_id} not found") from None
+
     navigation_handle = _FakeNavigationHandle()
-    runtime = types.SimpleNamespace(
-        get_active_backend_bundle=lambda: types.SimpleNamespace(
-            navigation_handle=navigation_handle
-        )
-    )
+    runtime = _FakeRuntime()
+    runtime_state["bundle"] = types.SimpleNamespace(navigation_handle=navigation_handle)
     monkeypatch.setattr(navigate_api, "_runtime", lambda: runtime)
 
     payload = navigate_api.navigate_start()
@@ -229,6 +263,18 @@ def test_navigate_start_uses_active_backend_navigation_handle(monkeypatch):
         "status": "running",
     }
     assert navigation_handle.calls == [(runtime, "Go to Data Display")]
+
+    runtime_state["bundle"] = None
+    navigate_api.request.args = {"session_id": "nav-1"}
+    status_payload = navigate_api.navigate_status()
+
+    assert status_payload == {
+        "success": True,
+        "session_id": "nav-1",
+        "status": "running",
+        "goal": "Go to Data Display",
+        "current_page": "module_list",
+    }
 
 
 def test_navigate_decision_rejects_non_string_selected_item(monkeypatch):
@@ -373,6 +419,13 @@ def test_navigate_status_rejects_non_string_session_id(monkeypatch):
     _install_fake_flask_stack(monkeypatch, None, path="/api/navigate/status", method="GET")
     navigate_api = _fresh_import(monkeypatch, "server.api.navigate")
     navigate_api.request.args = {"session_id": ["bad"]}
+    monkeypatch.setattr(
+        navigate_api,
+        "_get_session",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("_get_session should not be called")
+        ),
+    )
 
     payload, status = navigate_api.navigate_status()
 

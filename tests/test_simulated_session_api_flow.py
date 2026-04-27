@@ -62,6 +62,13 @@ def _parse_sse_event(message: str) -> tuple[str, dict[str, object]]:
     return event_type, payload
 
 
+def _assert_navigation_stream_scope(event_types: list[str]) -> None:
+    assert set(event_types) <= {"connected", "progress", "decision_required", "done"}
+    assert "network_quality_changed" not in event_types
+    assert "decision_timeout" not in event_types
+    assert "decision_resolved" not in event_types
+
+
 def _bind_simulated_dependencies(
     monkeypatch,
     *,
@@ -107,11 +114,13 @@ def _drive_navigation_to_data_display(
     )
 
     seen_done = False
+    seen_event_types: list[str] = []
     for message in event_iterator:
         if message.startswith(":"):
             continue
 
         event_type, event_payload = _parse_sse_event(message)
+        seen_event_types.append(event_type)
         if event_type == "decision_required":
             selected_item = (
                 "ECM"
@@ -136,6 +145,7 @@ def _drive_navigation_to_data_display(
             assert event_payload["error"] is None
 
     assert seen_done is True
+    _assert_navigation_stream_scope(seen_event_types)
 
 
 def _drive_vehicle_diagnostics_to_information(
@@ -159,11 +169,13 @@ def _drive_vehicle_diagnostics_to_information(
 
     seen_decision = False
     seen_done = False
+    seen_event_types: list[str] = []
     for message in event_iterator:
         if message.startswith(":"):
             continue
 
         event_type, event_payload = _parse_sse_event(message)
+        seen_event_types.append(event_type)
         if event_type == "decision_required":
             seen_decision = True
             assert event_payload["page"] == "vehicle_diagnostics_menu"
@@ -191,6 +203,7 @@ def _drive_vehicle_diagnostics_to_information(
 
     assert seen_decision is True
     assert seen_done is True
+    _assert_navigation_stream_scope(seen_event_types)
 
 
 def test_simulated_navigation_session_handlers_reach_data_display(monkeypatch) -> None:
@@ -368,6 +381,7 @@ def test_simulated_session_handlers_run_ai_and_clear_dtcs_after_navigation(monke
         "data_category": "Engine Data",
         "brand": "Chevrolet",
         "model": "Simulated Malibu",
+        "session_id": "session-simulated",
     }
     assert [point.parameter for point in started["diagnostic_payload"].live_data] == [
         "RPM",

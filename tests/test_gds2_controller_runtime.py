@@ -8,12 +8,14 @@ import pytest
 
 import backends.gds2.controller_runtime as controller_runtime_module
 from diagnostic_platform.observability import flush_product_log_writers
+from diagnostic_platform.action_schema import ActionStep, GDS2Action
 from diagnostic_platform.contracts import BackendCapability, BackendRegistry, BackendState
 
+from backends.gds2.action_adapter import GDS2ActionAdapter
 from backends.gds2.backend import GDS2DiagnosticBackend
 from backends.gds2.controller_runtime import GDS2ControllerRuntime
 from backends.gds2.registry_navigation_runtime import RegistryNavigationRuntime
-from src.navigation import GDS2Page, NavigationController, NavigationResult
+from src.navigation import ControllerSnapshot, GDS2Page, NavigationController, NavigationResult
 from src.streaming.agent_data_collector import AgentSnapshot, DTCInfo
 
 
@@ -220,6 +222,172 @@ def test_backend_get_state_delegates_to_runtime_status():
     runtime.status.assert_called_once_with()
 
 
+def test_action_adapter_builds_ui_state_from_raw_controller_snapshot():
+    class _Controller:
+        def get_controller_snapshot(self, *, capture_mode: str):
+            assert capture_mode == "action_adapter_ui_state"
+            return ControllerSnapshot(
+                raw_page_id="data_list",
+                buttons=("Back", "Enter"),
+                list_items=("Engine Data",),
+                context={"module": "Engine Control Module"},
+                capture_source="test",
+                capture_mode=capture_mode,
+            )
+
+        def detect_current_page(self):  # pragma: no cover - should not be used
+            raise AssertionError("adapter should use get_controller_snapshot first")
+
+    adapter = GDS2ActionAdapter(backend=object(), controller=_Controller())
+
+    state = adapter.get_current_ui_state()
+
+    assert state.current_page == "data_list"
+    assert state.visible_buttons == ["Back", "Enter"]
+    assert state.list_items == ["Engine Data"]
+    assert state.context == {"module": "Engine Control Module"}
+
+
+def test_action_adapter_bridges_legacy_controller_snapshot_methods():
+    class _Controller:
+        def detect_current_page(self):
+            return SimpleNamespace(value="module_list")
+
+        def get_visible_buttons(self):
+            return [{"text": "Back"}, "Enter"]
+
+        def get_list_items(self):
+            return ["Engine Control Module"]
+
+        def get_context(self):
+            return {"module": None}
+
+    adapter = GDS2ActionAdapter(backend=object(), controller=_Controller())
+
+    state = adapter.get_current_ui_state()
+
+    assert state.current_page == "module_list"
+    assert state.visible_buttons == ["Back", "Enter"]
+    assert state.list_items == ["Engine Control Module"]
+    assert state.context == {"module": None}
+
+
+def test_action_adapter_navigation_handlers_use_internal_command_seam():
+    class _Controller:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def go_home(self):
+            self.calls.append("go_home")
+            return NavigationResult(success=True, page=GDS2Page.MAIN_MENU)
+
+        def go_back(self):
+            self.calls.append("go_back")
+            return NavigationResult(
+                success=True,
+                page=GDS2Page.MODULE_LIST,
+                error=None,
+            )
+
+    controller = _Controller()
+    adapter = GDS2ActionAdapter(backend=object(), controller=controller)
+
+    home_result = adapter._handle_go_home(ActionStep(GDS2Action.GO_HOME), object())
+    back_result = adapter._handle_go_back(ActionStep(GDS2Action.GO_BACK), object())
+
+    assert controller.calls == ["go_home", "go_back"]
+    assert home_result == {"success": True, "page": "main_menu", "error": None}
+    assert back_result == {"success": True, "page": "module_list", "error": None}
+
+
+def test_action_adapter_select_handlers_use_navigation_command_seam():
+    class _Controller:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        def select_device(self, device_name: str):
+            self.calls.append(("select_device", device_name))
+            return NavigationResult(
+                success=True,
+                page=GDS2Page.VEHICLE_SELECTION,
+                selected=device_name,
+            )
+
+        def select_sub_category(self, sub_category_name: str):
+            self.calls.append(("select_sub_category", sub_category_name))
+            return NavigationResult(
+                success=True,
+                page=GDS2Page.DATA_DISPLAY,
+                selected=sub_category_name,
+            )
+
+    controller = _Controller()
+    adapter = GDS2ActionAdapter(backend=object(), controller=controller)
+
+    device_result = adapter._handle_select_device(
+        ActionStep(GDS2Action.SELECT_DEVICE, args={"device_name": "VCI Proxy"}),
+        object(),
+    )
+    sub_category_result = adapter._handle_select_sub_category(
+        ActionStep(GDS2Action.SELECT_SUB_CATEGORY, args={"sub_category_name": "Fuel Trim"}),
+        object(),
+    )
+
+    assert controller.calls == [
+        ("select_device", "VCI Proxy"),
+        ("select_sub_category", "Fuel Trim"),
+    ]
+    assert device_result == {
+        "success": True,
+        "page": "vehicle_selection",
+        "selected": "VCI Proxy",
+        "error": None,
+    }
+    assert sub_category_result == {
+        "success": True,
+        "page": "data_display",
+        "selected": "Fuel Trim",
+        "error": None,
+    }
+
+
+def test_action_adapter_abort_reuses_navigation_command_seam():
+    class _Backend:
+        def __init__(self) -> None:
+            self.stopped = False
+
+        def stop_live_data_session(self) -> None:
+            self.stopped = True
+
+    class _Controller:
+        def __init__(self) -> None:
+            self.go_home_calls = 0
+
+        def go_home(self):
+            self.go_home_calls += 1
+            return NavigationResult(success=False, page=GDS2Page.MAIN_MENU, error="ignored")
+
+    backend = _Backend()
+    controller = _Controller()
+    adapter = GDS2ActionAdapter(backend=backend, controller=controller)
+
+    result = adapter._handle_abort_session(ActionStep(GDS2Action.ABORT_SESSION), object())
+
+    assert backend.stopped is True
+    assert controller.go_home_calls == 1
+    assert result == {"success": True, "page": "main_menu", "aborted": True}
+
+
+def test_navigation_controller_set_current_page_replaces_private_write() -> None:
+    controller = NavigationController(nav=MagicMock())
+
+    page = controller.set_current_page(GDS2Page.DATA_LIST)
+
+    assert page == GDS2Page.DATA_LIST
+    assert controller.current_page == GDS2Page.DATA_LIST
+    assert controller.history == []
+
+
 def test_controller_runtime_builds_registry_navigation_runtime(monkeypatch):
     workflow = _make_workflow()
     created = {}
@@ -274,6 +442,10 @@ def test_controller_runtime_builds_registry_navigation_runtime(monkeypatch):
     assert created["entries"] == [{"page_key": "dtc.clear.execute", "aliases": []}]
     assert callable(created["state_reader"])
     assert created["default_device_name"] == "VCI Proxy (Remote)"
+    assert "recovery_coordinator_factory" not in created
+    assert "route_executor_factory" not in created
+    assert "clear_dtc_flow_factory" not in created
+    assert "status_recorder" not in created
 
 
 def test_controller_runtime_rebuilds_stale_registry_before_loading(monkeypatch):

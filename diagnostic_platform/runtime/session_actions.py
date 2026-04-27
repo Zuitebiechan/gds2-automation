@@ -42,6 +42,7 @@ from .session_state import (
     set_session_selection,
 )
 from diagnostic_platform.session_observability import emit_session_runtime_event
+from .session_errors import SessionNotRunningError
 from .worker_runtime import WorkerRuntime
 
 logger = logging.getLogger(__name__)
@@ -51,7 +52,7 @@ _CLEAR_DTCS_READY_PAGES = {"data_list", "data_display", "sub_data_list"}
 def ensure_session_capability(session: Any, capability: BackendCapability) -> None:
     """Validate one running session supports the requested capability."""
     if _status_value(session.status) != SessionStatus.RUNNING.value:
-        raise ValueError(f"Session not running (status={_status_value(session.status)})")
+        raise SessionNotRunningError(_status_value(session.status))
     available = {
         str(item)
         for item in (getattr(session, "capabilities", None) or [])

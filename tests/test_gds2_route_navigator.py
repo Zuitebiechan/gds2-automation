@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from backends.gds2.route_navigator import GDS2RouteNavigator
+from src.navigation import ControllerSnapshot, NavigationController, find_list_item_match
 
 
 @dataclass
@@ -207,6 +208,33 @@ class _WeakMatchListController(_FakeController):
         return super().go_back()
 
 
+class _UniqueContainsController(_FakeController):
+    def __init__(self) -> None:
+        super().__init__("data_list")
+        self.page = "contains_match_list"
+        self._pages["contains_match_list"] = {
+            "buttons": ["Back", "Enter"],
+            "lists": ["[K20] Engine Control Module"],
+        }
+
+    def get_snapshot(self) -> dict:
+        page = self._pages[self.page]
+        page_id = "data_list" if self.page == "contains_match_list" else self.page
+        return {
+            "page": page_id,
+            "buttons": list(page["buttons"]),
+            "lists": list(page["lists"]),
+            "context": {},
+        }
+
+    def select_list_item(self, label: str):
+        self.executed.append(("list_item", label))
+        if self.page == "contains_match_list" and label == "Engine Control Module":
+            self.page = "data_display"
+            return _Result(True)
+        return super().select_list_item(label)
+
+
 def _graph() -> dict:
     return {
         "version": 1,
@@ -322,6 +350,38 @@ def test_route_navigator_classifies_loading_vehicle_selection_snapshot() -> None
 
     assert snapshot["raw_page_id"] == "loading"
     assert snapshot["effective_page_id"] == "vehicle_selection"
+    assert snapshot["classification_evidence"]["rule"] == "loading_vehicle_markers"
+
+
+def test_route_navigator_prefers_raw_controller_snapshot_contract() -> None:
+    class _RawSnapshotController(_FakeController):
+        def __init__(self) -> None:
+            super().__init__("data_list")
+            self.capture_modes: list[str] = []
+
+        def get_controller_snapshot(self, *, capture_mode: str):
+            self.capture_modes.append(capture_mode)
+            return ControllerSnapshot(
+                raw_page_id="loading",
+                buttons=("Back", "Disconnect", "Enter", "Read VIN"),
+                list_items=(),
+                context={"device": "VCI Proxy (Remote)"},
+                capture_source="test",
+                capture_mode=capture_mode,
+            )
+
+        def get_snapshot(self):  # pragma: no cover - should not be used
+            raise AssertionError("route navigator should use get_controller_snapshot first")
+
+    controller = _RawSnapshotController()
+    navigator = GDS2RouteNavigator(controller=controller, graph=_graph())
+
+    snapshot = navigator._capture_snapshot()
+
+    assert controller.capture_modes == ["route_navigator_snapshot"]
+    assert snapshot["raw_page_id"] == "loading"
+    assert snapshot["effective_page_id"] == "vehicle_selection"
+    assert snapshot["classification_evidence"]["rule"] == "loading_vehicle_markers"
 
 
 def test_route_navigator_overrides_stale_vehicle_selection_when_list_is_diagnostics_menu() -> None:
@@ -373,6 +433,46 @@ def test_route_navigator_snapshot_includes_navigation_path_from_reader() -> None
         "Engine Control Module",
         "Control Functions",
     ]
+
+
+def test_controller_snapshot_preserves_raw_contract_without_gds2_derived_fields() -> None:
+    snapshot = ControllerSnapshot.from_legacy_dict(
+        {
+            "page": "vehicle_selection",
+            "buttons": [" Enter ", "Back", ""],
+            "lists": [" Module Diagnostics ", ""],
+            "context": {"device": "VCI Proxy (Remote)"},
+            "navigation_path": ["Module Diagnostics"],
+            "effective_page_id": "diagnostics_menu",
+            "classification_evidence": {"rule": "derived"},
+            "ambiguity_metadata": {"matches": []},
+            "derived_action_data": {"actions": []},
+        },
+        capture_source="test",
+        capture_mode="unit",
+        captured_at=123.0,
+    )
+
+    assert snapshot.raw_page_id == "vehicle_selection"
+    assert snapshot.raw_visible_buttons == ("Enter", "Back")
+    assert snapshot.raw_list_items == ("Module Diagnostics",)
+    assert snapshot.navigation_path == ("Module Diagnostics",)
+    assert snapshot.capture_source == "test"
+    assert snapshot.capture_mode == "unit"
+    assert snapshot.captured_at == 123.0
+
+    legacy = snapshot.to_legacy_dict()
+    assert legacy == {
+        "page": "vehicle_selection",
+        "buttons": ["Enter", "Back"],
+        "lists": ["Module Diagnostics"],
+        "context": {"device": "VCI Proxy (Remote)"},
+        "navigation_path": ["Module Diagnostics"],
+    }
+    assert "effective_page_id" not in legacy
+    assert "classification_evidence" not in legacy
+    assert "ambiguity_metadata" not in legacy
+    assert "derived_action_data" not in legacy
 
 
 def test_route_navigator_bridges_from_main_menu_into_diagnostics_tree() -> None:
@@ -454,6 +554,58 @@ def test_route_navigator_matches_list_item_by_substring_for_actionability() -> N
         "Engine Control Module",
         kind="list_item",
     ) is True
+
+
+def test_shared_list_item_matcher_rejects_ambiguous_contains_match() -> None:
+    match = find_list_item_match(
+        "Fuel Trim",
+        ["Fuel Trim Enable", "Fuel Trim Disable"],
+    )
+
+    assert match.matched is False
+    assert match.ambiguous is True
+    assert match.candidate_labels == ("Fuel Trim Enable", "Fuel Trim Disable")
+    assert NavigationController._find_matching_list_item(
+        "Fuel Trim",
+        ["Fuel Trim Enable", "Fuel Trim Disable"],
+    ) == (None, None)
+
+
+def test_route_navigator_rejects_ambiguous_substring_list_item_match() -> None:
+    snapshot = {
+        "observed_actions": [
+            {"kind": "list_item", "label": "Fuel Trim Enable", "list_index": 0},
+            {"kind": "list_item", "label": "Fuel Trim Disable", "list_index": 0},
+        ]
+    }
+
+    match = GDS2RouteNavigator._action_match(snapshot, "Fuel Trim", kind="list_item")
+
+    assert match.ambiguous is True
+    assert GDS2RouteNavigator._snapshot_has_action(
+        snapshot,
+        "Fuel Trim",
+        kind="list_item",
+    ) is False
+
+
+def test_route_navigator_records_diagnostics_for_unique_contains_match() -> None:
+    controller = _UniqueContainsController()
+    navigator = GDS2RouteNavigator(controller=controller, graph=_graph())
+
+    result = navigator.navigate_to_action("Engine Control Module", kind="list_item")
+
+    assert result["final_page"] == "data_display"
+    assert result["match_diagnostics"] == [
+        {
+            "target_label": "Engine Control Module",
+            "action_kind": "list_item",
+            "owner": "route_navigator.direct_target",
+            "selected_policy": "unique_contains",
+            "candidate_labels": ["[K20] Engine Control Module"],
+            "resolution": "unique_contains",
+        }
+    ]
 
 
 class _BreadcrumbJumpController(_FakeController):
@@ -575,3 +727,9 @@ def test_route_navigator_public_seams_delegate_to_existing_logic() -> None:
     assert navigator.match_snapshot(snapshot) == "main"
     assert navigator.snapshot_has_action(snapshot, "Diagnostics", kind="button") is True
     assert navigator.resolve_bridge_action(snapshot) == {"kind": "button", "label": "Diagnostics"}
+    assert snapshot["classification_evidence"]["rule"] == "raw_page"
+    assert snapshot["ambiguity_metadata"] == {}
+    assert snapshot["derived_action_data"] == {
+        "button_labels": ["Diagnostics", "Home"],
+        "list_item_labels": [],
+    }

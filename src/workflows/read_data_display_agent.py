@@ -10,7 +10,7 @@ Benefits:
 - Java Agent: Direct JavaFX API calls (~1ms), supports invisible list items
 - Windows API: Direct Win32 message control for Device Explorer
 - Works in background, no screen dependency
-- State-aware page detection via NavigationController
+- State-aware page detection via InteractiveWorkflow
 """
 
 import logging
@@ -93,7 +93,7 @@ class ReadDataDisplayAgentWorkflow:
                 logger.info("Step 2: No Device Explorer (skipped)")
 
             # Step 4: If at Diagnostics Menu, select Module Diagnostics
-            page = wf.controller.detect_current_page()
+            page = wf.detect_current_page()
             if page == GDS2Page.DIAGNOSTICS_MENU:
                 logger.info("Step 3: Selecting Module Diagnostics...")
                 result = wf.step_module_diagnostics()

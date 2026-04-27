@@ -22,6 +22,7 @@ from backends.gds2.navigation_registry import (
     lookup_entry,
     rebuild_registry_database,
 )
+from backends.gds2.runtime_status import GDS2NavigationRuntimeStatusRecorder
 from backends.gds2.route_graph import load_graph, merge_graph_files
 from backends.gds2.route_navigator import GDS2RouteNavigator
 from backends.gds2.vehicle_dtc_status import is_vehicle_dtc_information_label
@@ -32,6 +33,7 @@ from diagnostic_platform.safe_utils import (
     status_value as _status_value,
     strip_optional_text as _strip_optional_text,
 )
+from src.navigation.action_matcher import ActionMatchError, find_action_match
 from src.native.device_explorer import DeviceExplorerController
 from src.navigation.controller import NavigationController
 from src.streaming.agent_navigator import AgentNavigator
@@ -127,17 +129,15 @@ Get-Process javaw,java -ErrorAction SilentlyContinue |
 def action_available(snapshot: dict[str, Any], expected_action: dict[str, Any]) -> bool:
     expected_kind = str(expected_action.get("kind") or "").strip()
     expected_label = str(expected_action.get("label") or "").strip()
-    for action in snapshot.get("observed_actions") or []:
-        if expected_kind and str(action.get("kind") or "") != expected_kind:
-            continue
-        label = str(action.get("label") or "").strip()
-        if label == expected_label:
-            return True
-        if expected_kind == "list_item" and expected_label and label and (
-            expected_label in label or label in expected_label
-        ):
-            return True
-    return False
+    return find_action_match(
+        snapshot.get("observed_actions") or [],
+        expected_label,
+        kind=expected_kind or None,
+    ).matched
+
+
+def match_diagnostics_from_error(exc: Exception) -> list[dict[str, Any]]:
+    return copy.deepcopy(getattr(exc, "match_diagnostics", []) or [])
 
 
 def navigation_path_matches(snapshot: dict[str, Any], expected_path: list[str], *, mode: str) -> bool:
@@ -922,6 +922,675 @@ def recover_to_registry_common_ancestor(
     return recovery_actions
 
 
+class GDS2RegistryRuntimePorts:
+    def __init__(self, runtime: Any) -> None:
+        self._runtime = runtime
+
+    @property
+    def controller(self) -> NavigationController:
+        return self._runtime.controller
+
+    @property
+    def route_navigator(self) -> GDS2RouteNavigator:
+        return self._runtime.route_navigator
+
+    @property
+    def route_graph(self) -> dict[str, Any]:
+        return self.route_navigator.graph
+
+    @property
+    def default_device_name(self) -> str:
+        return self._runtime._default_device_name
+
+    @property
+    def page_states(self) -> list[dict[str, Any]]:
+        return self._runtime._page_states
+
+    @property
+    def recovery_policies(self) -> list[dict[str, Any]]:
+        return self._runtime._recovery_policies
+
+    @property
+    def loading_timeout_sec(self) -> float:
+        return self._runtime._loading_timeout_sec
+
+    @property
+    def max_loading_restarts(self) -> int:
+        return self._runtime._max_loading_restarts
+
+    @property
+    def route_max_iterations(self) -> int:
+        return self._runtime._route_max_iterations
+
+    @property
+    def route_max_backtracks(self) -> int:
+        return self._runtime._route_max_backtracks
+
+    def restart_runtime(
+        self,
+        *,
+        graph: dict[str, Any],
+        recovery_actions: list[dict[str, Any]],
+    ) -> tuple[NavigationController, GDS2RouteNavigator]:
+        controller, route_navigator = self._runtime._restart_runtime(
+            graph=graph,
+            recovery_actions=recovery_actions,
+        )
+        self._runtime._controller = controller
+        self._runtime._route_navigator = route_navigator
+        return controller, route_navigator
+
+    def capture_runtime_snapshot(self) -> dict[str, Any]:
+        return self._runtime.capture_runtime_snapshot()
+
+    def require_entry(self, page_key: str) -> dict[str, Any]:
+        return self._runtime._require_entry(page_key)
+
+    def execute_registry_route(self, **kwargs: Any) -> dict[str, Any]:
+        return self._runtime.execute_registry_route(**kwargs)
+
+    def match_page_states(
+        self,
+        snapshot: dict[str, Any],
+        page_info: dict[str, Any],
+        *,
+        target_path: list[str] | None = None,
+    ) -> list[str]:
+        return self._runtime.match_page_states(
+            snapshot,
+            page_info,
+            target_path=target_path,
+        )
+
+    def select_recovery_policy(self, state_key: str) -> dict[str, Any] | None:
+        return self._runtime.select_recovery_policy(state_key)
+
+    def recovery_coordinator(self) -> "GDS2RecoveryCoordinator":
+        return self._runtime._recovery_coordinator()
+
+    def recover_data_display_impl(
+        self,
+        *,
+        data_category: str,
+        mode: str,
+        loading_watchdog: LoadingWatchdog | None = None,
+    ) -> dict[str, Any] | None:
+        return self._runtime._recover_data_display_impl(
+            data_category=data_category,
+            mode=mode,
+            loading_watchdog=loading_watchdog,
+        )
+
+    def is_vehicle_dtc_context(self, snapshot: dict[str, Any]) -> bool:
+        return self._runtime._is_vehicle_dtc_context(snapshot)
+
+    def is_data_display_direct_clear_context(self, snapshot: dict[str, Any]) -> bool:
+        return self._runtime._is_data_display_direct_clear_context(snapshot)
+
+    def build_vehicle_dtc_clear_entry(self, clear_entry: dict[str, Any]) -> dict[str, Any]:
+        return self._runtime._build_vehicle_dtc_clear_entry(clear_entry)
+
+    def build_data_display_clear_entry(
+        self,
+        clear_entry: dict[str, Any],
+        *,
+        navigation_path: list[str],
+    ) -> dict[str, Any]:
+        return self._runtime._build_data_display_clear_entry(
+            clear_entry,
+            navigation_path=navigation_path,
+        )
+
+    def read_dtc_count(self, *, default: int = 0) -> int:
+        return self._runtime._read_dtc_count(default=default)
+
+    def read_post_clear_dtc_count(self, *, final_page: str, default: int = 0) -> int:
+        return self._runtime._read_post_clear_dtc_count(
+            final_page=final_page,
+            default=default,
+        )
+
+    def set_runtime_status(self, **updates: Any) -> None:
+        self._runtime._set_runtime_status(**updates)
+
+    def build_route_status(
+        self,
+        *,
+        entry: dict[str, Any],
+        route_result: dict[str, Any],
+        terminal_reason: str,
+        merged_recovery_actions: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        return self._runtime._build_route_status(
+            entry=entry,
+            route_result=route_result,
+            terminal_reason=terminal_reason,
+            merged_recovery_actions=merged_recovery_actions,
+        )
+
+
+class GDS2RecoveryCoordinator:
+    def __init__(self, ports: GDS2RegistryRuntimePorts) -> None:
+        self._ports = ports
+
+    def recover_to_common_ancestor(
+        self,
+        *,
+        target_path: list[str],
+        max_backtracks: int,
+        recovery_data_category: str | None = None,
+        recovery_sub_category: str | None = None,
+        use_legacy_data_display_recovery: bool = False,
+    ) -> list[dict[str, Any]]:
+        ports = self._ports
+        return recover_to_registry_common_ancestor(
+            controller=ports.controller,
+            route_navigator=ports.route_navigator,
+            target_path=target_path,
+            max_backtracks=max_backtracks,
+            device_name=ports.default_device_name,
+            page_states=ports.page_states,
+            recovery_policies=ports.recovery_policies,
+            recovery_data_category=recovery_data_category,
+            recovery_sub_category=recovery_sub_category,
+            use_legacy_data_display_recovery=use_legacy_data_display_recovery,
+        )
+
+    def handle_loading(
+        self,
+        *,
+        snapshot: dict[str, Any],
+        loading_watchdog: LoadingWatchdog,
+        graph: dict[str, Any],
+        state_trace: list[dict[str, Any]],
+        recovery_actions: list[dict[str, Any]],
+    ) -> str:
+        loading_action = loading_watchdog.observe(str(snapshot.get("effective_page_id") or ""))
+        if loading_action == "ready":
+            return "ready"
+
+        trace = {
+            "page_id": "loading",
+            "matched_state_keys": ["loading.deep_page"],
+            "selected_policy_key": "loading.restart_after_timeout",
+            "decision": loading_action,
+        }
+        state_trace.append(trace)
+
+        if loading_action == "wait":
+            recovery_actions.append(
+                {
+                    "kind": "wait",
+                    "label": "loading",
+                    "reason": "waiting for transient loading page to settle",
+                    "success": True,
+                }
+            )
+            time.sleep(2.0)
+            return "handled"
+        if loading_action == "restart":
+            self._ports.restart_runtime(
+                graph=graph,
+                recovery_actions=recovery_actions,
+            )
+            return "handled"
+        if loading_action == "failed":
+            return "failed"
+        return "ready"
+
+    def handle_device_explorer(
+        self,
+        *,
+        snapshot: dict[str, Any],
+        state_trace: list[dict[str, Any]],
+        recovery_actions: list[dict[str, Any]],
+    ) -> bool:
+        if str(snapshot.get("effective_page_id") or "") != "device_explorer":
+            return False
+        policy = self._ports.select_recovery_policy("device_explorer.visible")
+        state_trace.append(
+            {
+                "page_id": "device_explorer",
+                "matched_state_keys": ["device_explorer.visible"],
+                "selected_policy_key": (policy or {}).get("policy_key"),
+                "decision": "recover",
+            }
+        )
+        return handle_device_explorer(
+            recovery_actions=recovery_actions,
+            device_name=self._ports.default_device_name,
+            policy=policy,
+        )
+
+    def handle_j2534_disconnect(
+        self,
+        *,
+        snapshot: dict[str, Any],
+        state_trace: list[dict[str, Any]],
+        recovery_actions: list[dict[str, Any]],
+        recovery_data_category: str | None,
+        recovery_sub_category: str | None,
+        use_legacy_data_display_recovery: bool,
+    ) -> bool:
+        if str(snapshot.get("effective_page_id") or "") != "j2534_disconnect":
+            return False
+        policy = self._ports.select_recovery_policy("j2534_disconnect.visible")
+        state_trace.append(
+            {
+                "page_id": "j2534_disconnect",
+                "matched_state_keys": ["j2534_disconnect.visible"],
+                "selected_policy_key": (policy or {}).get("policy_key"),
+                "decision": "recover",
+            }
+        )
+        return handle_j2534_disconnect(
+            controller=self._ports.controller,
+            recovery_actions=recovery_actions,
+            policy=policy,
+            recovery_data_category=recovery_data_category,
+            recovery_sub_category=recovery_sub_category,
+            use_legacy_data_display_recovery=use_legacy_data_display_recovery,
+        )
+
+    def handle_vehicle_selection(
+        self,
+        *,
+        snapshot: dict[str, Any],
+        target_path: list[str],
+        state_trace: list[dict[str, Any]],
+        recovery_actions: list[dict[str, Any]],
+    ) -> bool:
+        if str(snapshot.get("effective_page_id") or "") != "vehicle_selection":
+            return False
+        page_info = self._ports.controller.nav.get_page_id()
+        matched_states = self._ports.match_page_states(
+            snapshot,
+            page_info,
+            target_path=target_path,
+        )
+        selected_policy = None
+        for state_key in matched_states:
+            selected_policy = self._ports.select_recovery_policy(state_key)
+            if selected_policy:
+                break
+        state_trace.append(
+            {
+                "page_id": "vehicle_selection",
+                "matched_state_keys": matched_states,
+                "selected_policy_key": (selected_policy or {}).get("policy_key"),
+                "decision": "recover",
+            }
+        )
+        return handle_vehicle_selection(
+            controller=self._ports.controller,
+            route_navigator=self._ports.route_navigator,
+            recovery_actions=recovery_actions,
+            device_name=self._ports.default_device_name,
+            page_states=self._ports.page_states,
+            recovery_policies=self._ports.recovery_policies,
+        )
+
+    def recover_data_display(
+        self,
+        *,
+        data_category: str,
+        mode: str,
+        loading_watchdog: LoadingWatchdog | None = None,
+    ) -> dict[str, Any] | None:
+        return self._ports.recover_data_display_impl(
+            data_category=data_category,
+            mode=mode,
+            loading_watchdog=loading_watchdog,
+        )
+
+
+class GDS2ClearDTCFlow:
+    def __init__(self, ports: GDS2RegistryRuntimePorts) -> None:
+        self._ports = ports
+
+    def clear_dtcs(self) -> dict[str, Any]:
+        ports = self._ports
+        dtc_display_entry = ports.require_entry("dtc.display")
+        clear_entry = ports.require_entry("dtc.clear.execute")
+        active_clear_entry = clear_entry
+        try:
+            initial_snapshot = ports.capture_runtime_snapshot()
+            vehicle_context = ports.is_vehicle_dtc_context(initial_snapshot)
+            active_clear_entry = (
+                ports.build_vehicle_dtc_clear_entry(clear_entry)
+                if vehicle_context
+                else clear_entry
+            )
+            display_entry = (
+                ports.require_entry("vehicle_dtc.information")
+                if vehicle_context
+                else dtc_display_entry
+            )
+            if ports.is_data_display_direct_clear_context(initial_snapshot):
+                display_result = {
+                    "matched_start_node_id": None,
+                    "recovery_actions": [],
+                    "planned_path": [],
+                    "executed_actions": [],
+                    "final_page": str(initial_snapshot.get("effective_page_id") or "unknown"),
+                    "final_snapshot": dict(initial_snapshot),
+                    "state_trace": [],
+                }
+                if not vehicle_context:
+                    active_clear_entry = ports.build_data_display_clear_entry(
+                        clear_entry,
+                        navigation_path=[
+                            str(item).strip()
+                            for item in initial_snapshot.get("navigation_path") or []
+                            if str(item).strip()
+                        ],
+                    )
+            else:
+                display_result = ports.execute_registry_route(
+                    entry=display_entry,
+                    max_iterations=ports.route_max_iterations,
+                    max_backtracks=ports.route_max_backtracks,
+                )
+
+            pre_clear_count = ports.read_dtc_count(default=0)
+            current_snapshot = ports.capture_runtime_snapshot()
+            current_page = str(current_snapshot.get("effective_page_id") or "unknown")
+            if pre_clear_count <= 0:
+                result = {
+                    "success": True,
+                    "cleared_count": 0,
+                    "message": "No DTCs detected; nothing to clear",
+                    "page_context": current_page,
+                }
+                ports.set_runtime_status(
+                    status="ready",
+                    last_operation="clear_dtcs",
+                    last_result=copy.deepcopy(result),
+                    last_route=ports.build_route_status(
+                        entry=active_clear_entry,
+                        route_result=display_result,
+                        terminal_reason="no_dtcs",
+                    ),
+                )
+                return result
+
+            route_result = ports.execute_registry_route(
+                entry=active_clear_entry,
+                max_iterations=ports.route_max_iterations,
+                max_backtracks=ports.route_max_backtracks,
+            )
+            final_page = str(route_result.get("final_page") or "unknown")
+            recovery_actions = [
+                *list(display_result.get("recovery_actions") or []),
+                *list(route_result.get("recovery_actions") or []),
+            ]
+            post_clear_count = ports.read_post_clear_dtc_count(
+                final_page=final_page,
+                default=0,
+            )
+            cleared_count = max(0, pre_clear_count - post_clear_count)
+            result = {
+                "success": True,
+                "cleared_count": cleared_count,
+                "message": "Clear DTCs completed",
+                "page_context": final_page,
+                "recovery_actions": recovery_actions,
+            }
+            ports.set_runtime_status(
+                status="ready",
+                last_operation="clear_dtcs",
+                last_result={
+                    "success": True,
+                    "cleared_count": cleared_count,
+                    "message": "Clear DTCs completed",
+                    "page_context": final_page,
+                },
+                last_route=ports.build_route_status(
+                    entry=active_clear_entry,
+                    route_result=route_result,
+                    terminal_reason="clear_dtcs_completed",
+                    merged_recovery_actions=recovery_actions,
+                ),
+            )
+            return result
+        except Exception as exc:
+            ports.set_runtime_status(
+                status="failed",
+                last_operation="clear_dtcs",
+                last_error=str(exc),
+                last_route={
+                    "route_target_page_key": active_clear_entry.get("page_key"),
+                    "route_target_category": active_clear_entry.get("category"),
+                    "canonical_path": list(active_clear_entry.get("canonical_path") or []),
+                    "match_diagnostics": match_diagnostics_from_error(exc),
+                    "terminal_reason": "failed_clear_dtcs",
+                },
+            )
+            raise
+
+
+class GDS2RegistryRouteExecutor:
+    def __init__(self, ports: GDS2RegistryRuntimePorts) -> None:
+        self._ports = ports
+
+    def execute(
+        self,
+        *,
+        entry: dict[str, Any],
+        max_iterations: int,
+        max_backtracks: int,
+        cancel_checker: Callable[[], None] | None = None,
+        recovery_data_category: str | None = None,
+        recovery_sub_category: str | None = None,
+    ) -> dict[str, Any]:
+        ports = self._ports
+        state_trace: list[dict[str, Any]] = []
+        target_action = entry.get("target_action") or {}
+        target_label = str(target_action.get("label") or "").strip()
+        target_kind = str(target_action.get("kind") or "").strip()
+        route_steps = [dict(step) for step in entry.get("route_steps") or []]
+        success_criteria = dict(entry.get("success_criteria") or {})
+        target_path = [str(item).strip() for item in entry.get("canonical_path") or [] if str(item).strip()]
+        graph = ports.route_graph
+        entry_data_category, entry_sub_category = data_display_recovery_targets(
+            entry,
+            controller=ports.controller,
+        )
+        route_recovery_data_category = entry_data_category or recovery_data_category
+        route_recovery_sub_category = entry_sub_category or recovery_sub_category
+        use_legacy_data_display_recovery = (
+            str(entry.get("page_kind") or "").strip() == "data_display"
+            and bool(route_recovery_data_category)
+        )
+        loading_watchdog = LoadingWatchdog(
+            timeout_sec=ports.loading_timeout_sec,
+            max_restarts=ports.max_loading_restarts,
+        )
+        match_diagnostics: list[dict[str, Any]] = []
+        recovery = ports.recovery_coordinator()
+
+        recovery_actions = recovery.recover_to_common_ancestor(
+            target_path=target_path,
+            max_backtracks=max_backtracks,
+            recovery_data_category=route_recovery_data_category,
+            recovery_sub_category=route_recovery_sub_category,
+            use_legacy_data_display_recovery=use_legacy_data_display_recovery,
+        )
+        executed_actions: list[dict[str, str]] = []
+        start_snapshot = ports.route_navigator.capture_settled_snapshot()
+
+        for _ in range(max_iterations):
+            if cancel_checker is not None:
+                cancel_checker()
+            snapshot = ports.route_navigator.capture_settled_snapshot()
+            loading_result = recovery.handle_loading(
+                snapshot=snapshot,
+                loading_watchdog=loading_watchdog,
+                graph=graph,
+                state_trace=state_trace,
+                recovery_actions=recovery_actions,
+            )
+            if loading_result == "handled":
+                continue
+            if loading_result == "failed":
+                raise RuntimeError(
+                    f"Loading page exceeded {ports.loading_timeout_sec}s and max restart count {ports.max_loading_restarts}"
+                )
+
+            if recovery.handle_device_explorer(
+                snapshot=snapshot,
+                state_trace=state_trace,
+                recovery_actions=recovery_actions,
+            ):
+                continue
+            if recovery.handle_j2534_disconnect(
+                snapshot=snapshot,
+                state_trace=state_trace,
+                recovery_actions=recovery_actions,
+                recovery_data_category=route_recovery_data_category,
+                recovery_sub_category=route_recovery_sub_category,
+                use_legacy_data_display_recovery=use_legacy_data_display_recovery,
+            ):
+                continue
+
+            success_requires_executed = [dict(action) for action in success_criteria.get("requires_executed") or []]
+            if success_criteria and executed_actions_available(executed_actions, success_requires_executed):
+                success, _details = evaluate_success_criteria(snapshot, success_criteria)
+                if success:
+                    return {
+                        "matched_start_node_id": ports.route_navigator.match_snapshot(start_snapshot),
+                        "recovery_actions": recovery_actions,
+                        "planned_path": route_steps,
+                        "executed_actions": executed_actions,
+                        "final_page": snapshot["effective_page_id"],
+                        "final_snapshot": snapshot,
+                        "state_trace": state_trace,
+                        "match_diagnostics": match_diagnostics,
+                    }
+
+            button_labels = snapshot_action_labels(snapshot, kind="button")
+            pending_route_step = select_next_route_step(route_steps, executed_actions, snapshot)
+            if "OK" in button_labels and not (
+                pending_route_step
+                and pending_route_step.get("kind") == "button"
+                and pending_route_step.get("label") == "OK"
+            ):
+                result = ports.controller.click_button("OK")
+                recovery_actions.append(
+                    {
+                        "kind": "button",
+                        "label": "OK",
+                        "reason": "dismiss blocking modal",
+                        "success": bool(result.success),
+                    }
+                )
+                continue
+
+            if pending_route_step is None and target_label and target_kind:
+                target_match = ports.route_navigator.snapshot_action_match(snapshot, target_label, kind=target_kind)
+                if target_match.ambiguous:
+                    match_diagnostics.append(
+                        target_match.diagnostics(
+                            target_label=target_label,
+                            action_kind=target_kind,
+                            owner="registry_runtime.target_action",
+                        )
+                    )
+                    raise ActionMatchError(
+                        f"Ambiguous action match for registry target '{target_label}'",
+                        match_diagnostics,
+                    )
+                if target_match.matched:
+                    if target_match.resolution != "exact":
+                        match_diagnostics.append(
+                            target_match.diagnostics(
+                                target_label=target_label,
+                                action_kind=target_kind,
+                                owner="registry_runtime.target_action",
+                            )
+                        )
+                    ports.route_navigator.execute_action({"kind": target_kind, "label": target_label})
+                    executed_actions.append({"kind": target_kind, "label": target_label})
+                    continue
+
+            bridge_action = ports.route_navigator.resolve_bridge_action(snapshot)
+            if bridge_action is not None:
+                ports.route_navigator.execute_action(bridge_action)
+                executed_actions.append({"kind": str(bridge_action["kind"]), "label": str(bridge_action["label"])})
+                continue
+
+            if recovery.handle_vehicle_selection(
+                snapshot=snapshot,
+                target_path=target_path,
+                state_trace=state_trace,
+                recovery_actions=recovery_actions,
+            ):
+                continue
+
+            recovered = recovery.recover_to_common_ancestor(
+                target_path=target_path,
+                max_backtracks=max_backtracks,
+                recovery_data_category=route_recovery_data_category,
+                recovery_sub_category=route_recovery_sub_category,
+                use_legacy_data_display_recovery=use_legacy_data_display_recovery,
+            )
+            if recovered:
+                recovery_actions.extend(recovered)
+                continue
+
+            pending_match = None
+            if pending_route_step is not None:
+                pending_match = ports.route_navigator.snapshot_action_match(
+                    snapshot,
+                    str(pending_route_step["label"]),
+                    kind=str(pending_route_step["kind"]),
+                )
+                if pending_match.ambiguous:
+                    match_diagnostics.append(
+                        pending_match.diagnostics(
+                            target_label=str(pending_route_step["label"]),
+                            action_kind=str(pending_route_step["kind"]),
+                            owner="registry_runtime.route_step",
+                        )
+                    )
+                    raise ActionMatchError(
+                        f"Ambiguous action match for route step '{pending_route_step['label']}'",
+                        match_diagnostics,
+                    )
+
+            if pending_route_step is not None and pending_match is not None and pending_match.matched:
+                if pending_match.resolution != "exact":
+                    match_diagnostics.append(
+                        pending_match.diagnostics(
+                            target_label=str(pending_route_step["label"]),
+                            action_kind=str(pending_route_step["kind"]),
+                            owner="registry_runtime.route_step",
+                        )
+                    )
+                if pending_route_step.get("transition") == "clear_dtcs_selection_state":
+                    if not execute_same_page_state_step(
+                        controller=ports.controller,
+                        step=pending_route_step,
+                        recovery_actions=recovery_actions,
+                    ):
+                        raise RuntimeError("Clear DTCs same-page state transition failed")
+                    executed_actions.append({"kind": str(pending_route_step["kind"]), "label": str(pending_route_step["label"])})
+                    continue
+                ports.route_navigator.execute_action(pending_route_step)
+                executed_actions.append({"kind": str(pending_route_step["kind"]), "label": str(pending_route_step["label"])})
+                continue
+
+            if "Back" in button_labels and str(snapshot.get("effective_page_id") or "") != "vehicle_selection":
+                result = ports.controller.go_back()
+                recovery_actions.append({"kind": "button", "label": "Back", "success": bool(result.success)})
+                if result.success:
+                    continue
+
+            raise RuntimeError(f"Registry route to '{entry['page_key']}' is stuck on {snapshot['effective_page_id']}")
+
+        raise RuntimeError(f"Registry route to '{entry['page_key']}' did not converge within {max_iterations} steps")
+
+
 class RegistryNavigationRuntime:
     def __init__(
         self,
@@ -955,13 +1624,15 @@ class RegistryNavigationRuntime:
         self._default_device_name = normalize_default_vci_name(default_device_name)
         self._route_max_iterations = route_max_iterations
         self._route_max_backtracks = route_max_backtracks
-        self._last_runtime_status: dict[str, Any] = {
-            "runtime_source": "registry_runtime",
-            "status": "idle",
-            "default_device_name": self._default_device_name,
-            "loading_timeout_sec": self._loading_timeout_sec,
-            "max_loading_restarts": self._max_loading_restarts,
-        }
+        self._status_recorder = GDS2NavigationRuntimeStatusRecorder(
+            default_device_name=self._default_device_name,
+            loading_timeout_sec=self._loading_timeout_sec,
+            max_loading_restarts=self._max_loading_restarts,
+        )
+        self._ports = GDS2RegistryRuntimePorts(self)
+        self._recovery_coordinator_instance = GDS2RecoveryCoordinator(self._ports)
+        self._route_executor_instance = GDS2RegistryRouteExecutor(self._ports)
+        self._clear_dtc_flow_instance = GDS2ClearDTCFlow(self._ports)
         self._entries_by_alias: dict[str, dict[str, Any]] = {}
         for entry in self._entries:
             page_key = str(entry.get("page_key") or "").strip()
@@ -984,7 +1655,16 @@ class RegistryNavigationRuntime:
         return self._route_navigator.capture_settled_snapshot()
 
     def get_runtime_status(self) -> dict[str, Any]:
-        return copy.deepcopy(self._last_runtime_status)
+        return self._status_recorder.get_status()
+
+    def _recovery_coordinator(self) -> GDS2RecoveryCoordinator:
+        return self._recovery_coordinator_instance
+
+    def _route_executor(self) -> GDS2RegistryRouteExecutor:
+        return self._route_executor_instance
+
+    def _clear_dtc_flow(self) -> GDS2ClearDTCFlow:
+        return self._clear_dtc_flow_instance
 
     def match_page_states(self, snapshot: dict[str, Any], page_info: dict[str, Any], target_path: list[str] | None = None) -> list[str]:
         return match_page_states(
@@ -1042,6 +1722,7 @@ class RegistryNavigationRuntime:
                     "route_target_page_key": entry.get("page_key"),
                     "route_target_category": entry.get("category"),
                     "canonical_path": list(entry.get("canonical_path") or []),
+                    "match_diagnostics": match_diagnostics_from_error(exc),
                     "terminal_reason": "failed_before_ready",
                 },
             )
@@ -1114,6 +1795,7 @@ class RegistryNavigationRuntime:
                     "route_target_page_key": (entry or {}).get("page_key") or str(module),
                     "route_target_category": (entry or {}).get("category") or "",
                     "canonical_path": list((entry or {}).get("canonical_path") or []),
+                    "match_diagnostics": match_diagnostics_from_error(exc),
                     "terminal_reason": "failed_select_module",
                 },
             )
@@ -1181,127 +1863,14 @@ class RegistryNavigationRuntime:
                     "route_target_page_key": (entry or {}).get("page_key") or str(category),
                     "route_target_category": (entry or {}).get("category") or "",
                     "canonical_path": list((entry or {}).get("canonical_path") or []),
+                    "match_diagnostics": match_diagnostics_from_error(exc),
                     "terminal_reason": "failed_select_data_category",
                 },
             )
             raise
 
     def clear_dtcs(self) -> dict[str, Any]:
-        dtc_display_entry = self._require_entry("dtc.display")
-        clear_entry = self._require_entry("dtc.clear.execute")
-        try:
-            initial_snapshot = self.capture_runtime_snapshot()
-            vehicle_context = self._is_vehicle_dtc_context(initial_snapshot)
-            active_clear_entry = (
-                self._build_vehicle_dtc_clear_entry(clear_entry)
-                if vehicle_context
-                else clear_entry
-            )
-            display_entry = (
-                self._require_entry("vehicle_dtc.information")
-                if vehicle_context
-                else dtc_display_entry
-            )
-            if self._is_data_display_direct_clear_context(initial_snapshot):
-                display_result = {
-                    "matched_start_node_id": None,
-                    "recovery_actions": [],
-                    "planned_path": [],
-                    "executed_actions": [],
-                    "final_page": str(initial_snapshot.get("effective_page_id") or "unknown"),
-                    "final_snapshot": dict(initial_snapshot),
-                    "state_trace": [],
-                }
-                if not vehicle_context:
-                    active_clear_entry = self._build_data_display_clear_entry(
-                        clear_entry,
-                        navigation_path=[
-                            str(item).strip()
-                            for item in initial_snapshot.get("navigation_path") or []
-                            if str(item).strip()
-                        ],
-                    )
-            else:
-                display_result = self.execute_registry_route(
-                    entry=display_entry,
-                    max_iterations=self._route_max_iterations,
-                    max_backtracks=self._route_max_backtracks,
-                )
-
-            pre_clear_count = self._read_dtc_count(default=0)
-            current_snapshot = self.capture_runtime_snapshot()
-            current_page = str(current_snapshot.get("effective_page_id") or "unknown")
-            if pre_clear_count <= 0:
-                result = {
-                    "success": True,
-                    "cleared_count": 0,
-                    "message": "No DTCs detected; nothing to clear",
-                    "page_context": current_page,
-                }
-                self._set_runtime_status(
-                    status="ready",
-                    last_operation="clear_dtcs",
-                    last_result=copy.deepcopy(result),
-                    last_route=self._build_route_status(
-                        entry=active_clear_entry,
-                        route_result=display_result,
-                        terminal_reason="no_dtcs",
-                    ),
-                )
-                return result
-
-            route_result = self.execute_registry_route(
-                entry=active_clear_entry,
-                max_iterations=self._route_max_iterations,
-                max_backtracks=self._route_max_backtracks,
-            )
-            final_page = str(route_result.get("final_page") or "unknown")
-            recovery_actions = [
-                *list(display_result.get("recovery_actions") or []),
-                *list(route_result.get("recovery_actions") or []),
-            ]
-            post_clear_count = self._read_post_clear_dtc_count(
-                final_page=final_page,
-                default=0,
-            )
-            cleared_count = max(0, pre_clear_count - post_clear_count)
-            result = {
-                "success": True,
-                "cleared_count": cleared_count,
-                "message": "Clear DTCs completed",
-                "page_context": final_page,
-                "recovery_actions": recovery_actions,
-            }
-            self._set_runtime_status(
-                status="ready",
-                last_operation="clear_dtcs",
-                last_result={
-                    "success": True,
-                    "cleared_count": cleared_count,
-                    "message": "Clear DTCs completed",
-                    "page_context": final_page,
-                },
-                last_route=self._build_route_status(
-                    entry=active_clear_entry,
-                    route_result=route_result,
-                    terminal_reason="clear_dtcs_completed",
-                    merged_recovery_actions=recovery_actions,
-                ),
-            )
-            return result
-        except Exception as exc:
-            self._set_runtime_status(
-                status="failed",
-                last_operation="clear_dtcs",
-                last_error=str(exc),
-                last_route={
-                    "route_target_page_key": active_clear_entry.get("page_key"),
-                    "route_target_category": active_clear_entry.get("category"),
-                    "canonical_path": list(active_clear_entry.get("canonical_path") or []),
-                    "terminal_reason": "failed_clear_dtcs",
-                },
-            )
-            raise
+        return self._clear_dtc_flow().clear_dtcs()
 
     def detect_current_page(self) -> str:
         try:
@@ -1424,6 +1993,19 @@ class RegistryNavigationRuntime:
         mode: str,
         loading_watchdog: LoadingWatchdog | None = None,
     ) -> dict[str, Any] | None:
+        return self._recovery_coordinator().recover_data_display(
+            data_category=data_category,
+            mode=mode,
+            loading_watchdog=loading_watchdog,
+        )
+
+    def _recover_data_display_impl(
+        self,
+        *,
+        data_category: str,
+        mode: str,
+        loading_watchdog: LoadingWatchdog | None = None,
+    ) -> dict[str, Any] | None:
         def _emit_recovery_failed(*, page: str, failure_code: str, reason: str) -> None:
             emit_gds2_ui_event(
                 "recovery_failed",
@@ -1509,6 +2091,7 @@ class RegistryNavigationRuntime:
                 last_error=str(exc),
                 last_route={
                     "route_target_page_key": str(data_category),
+                    "match_diagnostics": match_diagnostics_from_error(exc),
                     "terminal_reason": "failed_route_execution",
                 },
             )
@@ -1999,19 +2582,16 @@ class RegistryNavigationRuntime:
         return self._read_dtc_count(default=default)
 
     def _set_runtime_status(self, **updates: Any) -> None:
-        self._last_runtime_status.update(copy.deepcopy(updates))
-        self._last_runtime_status["runtime_source"] = "registry_runtime"
-        self._last_runtime_status["default_device_name"] = self._default_device_name
-        self._last_runtime_status["loading_timeout_sec"] = self._loading_timeout_sec
-        self._last_runtime_status["max_loading_restarts"] = self._max_loading_restarts
+        self._status_recorder.update_defaults(
+            default_device_name=self._default_device_name,
+            loading_timeout_sec=self._loading_timeout_sec,
+            max_loading_restarts=self._max_loading_restarts,
+        )
+        self._status_recorder.update(**updates)
 
     @staticmethod
     def _recovery_action_counts(recovery_actions: list[dict[str, Any]]) -> dict[str, int]:
-        counts: dict[str, int] = {}
-        for action in recovery_actions:
-            key = f"{str(action.get('kind') or '').strip()}:{str(action.get('label') or '').strip()}"
-            counts[key] = counts.get(key, 0) + 1
-        return counts
+        return GDS2NavigationRuntimeStatusRecorder.recovery_action_counts(recovery_actions)
 
     def _build_route_status(
         self,
@@ -2021,20 +2601,12 @@ class RegistryNavigationRuntime:
         terminal_reason: str,
         merged_recovery_actions: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        recovery_actions = list(merged_recovery_actions or route_result.get("recovery_actions") or [])
-        return {
-            "route_target_page_key": str(entry.get("page_key") or ""),
-            "route_target_category": str(entry.get("category") or ""),
-            "canonical_path": list(entry.get("canonical_path") or []),
-            "matched_start_node_id": route_result.get("matched_start_node_id"),
-            "final_page_id": route_result.get("final_page"),
-            "planned_path": copy.deepcopy(route_result.get("planned_path") or []),
-            "executed_actions": copy.deepcopy(route_result.get("executed_actions") or []),
-            "recovery_actions": copy.deepcopy(recovery_actions),
-            "recovery_action_counts": self._recovery_action_counts(recovery_actions),
-            "matched_state_trace": copy.deepcopy(route_result.get("state_trace") or []),
-            "terminal_reason": terminal_reason,
-        }
+        return self._status_recorder.build_route_status(
+            entry=entry,
+            route_result=route_result,
+            terminal_reason=terminal_reason,
+            merged_recovery_actions=merged_recovery_actions,
+        )
 
     @staticmethod
     def _derive_recovery_method(recovery_actions: list[dict[str, Any]]) -> str:
@@ -2081,253 +2653,14 @@ class RegistryNavigationRuntime:
         recovery_data_category: str | None = None,
         recovery_sub_category: str | None = None,
     ) -> dict[str, Any]:
-        state_trace: list[dict[str, Any]] = []
-        target_action = entry.get("target_action") or {}
-        target_label = str(target_action.get("label") or "").strip()
-        target_kind = str(target_action.get("kind") or "").strip()
-        route_steps = [dict(step) for step in entry.get("route_steps") or []]
-        expected_actions = [dict(action) for action in entry.get("expected_actions") or []]
-        success_criteria = dict(entry.get("success_criteria") or {})
-        target_path = [str(item).strip() for item in entry.get("canonical_path") or [] if str(item).strip()]
-        graph = self._route_navigator.graph
-        entry_data_category, entry_sub_category = data_display_recovery_targets(
-            entry,
-            controller=self._controller,
-        )
-        route_recovery_data_category = entry_data_category or recovery_data_category
-        route_recovery_sub_category = entry_sub_category or recovery_sub_category
-        use_legacy_data_display_recovery = (
-            str(entry.get("page_kind") or "").strip() == "data_display"
-            and bool(route_recovery_data_category)
-        )
-        loading_watchdog = LoadingWatchdog(
-            timeout_sec=self._loading_timeout_sec,
-            max_restarts=self._max_loading_restarts,
-        )
-
-        recovery_actions = recover_to_registry_common_ancestor(
-            controller=self._controller,
-            route_navigator=self._route_navigator,
-            target_path=target_path,
+        return self._route_executor().execute(
+            entry=entry,
+            max_iterations=max_iterations,
             max_backtracks=max_backtracks,
-            device_name=self._default_device_name,
-            page_states=self._page_states,
-            recovery_policies=self._recovery_policies,
-            recovery_data_category=route_recovery_data_category,
-            recovery_sub_category=route_recovery_sub_category,
-            use_legacy_data_display_recovery=use_legacy_data_display_recovery,
+            cancel_checker=cancel_checker,
+            recovery_data_category=recovery_data_category,
+            recovery_sub_category=recovery_sub_category,
         )
-        executed_actions: list[dict[str, str]] = []
-        start_snapshot = self._route_navigator.capture_settled_snapshot()
-
-        for _ in range(max_iterations):
-            if cancel_checker is not None:
-                cancel_checker()
-            snapshot = self._route_navigator.capture_settled_snapshot()
-            loading_action = loading_watchdog.observe(str(snapshot.get("effective_page_id") or ""))
-            if loading_action == "wait":
-                state_trace.append(
-                    {
-                        "page_id": "loading",
-                        "matched_state_keys": ["loading.deep_page"],
-                        "selected_policy_key": "loading.restart_after_timeout",
-                        "decision": "wait",
-                    }
-                )
-                recovery_actions.append(
-                    {
-                        "kind": "wait",
-                        "label": "loading",
-                        "reason": "waiting for transient loading page to settle",
-                        "success": True,
-                    }
-                )
-                time.sleep(2.0)
-                continue
-            if loading_action == "restart":
-                state_trace.append(
-                    {
-                        "page_id": "loading",
-                        "matched_state_keys": ["loading.deep_page"],
-                        "selected_policy_key": "loading.restart_after_timeout",
-                        "decision": "restart",
-                    }
-                )
-                self._controller, self._route_navigator = self._restart_runtime(
-                    graph=graph,
-                    recovery_actions=recovery_actions,
-                )
-                continue
-            if loading_action == "failed":
-                state_trace.append(
-                    {
-                        "page_id": "loading",
-                        "matched_state_keys": ["loading.deep_page"],
-                        "selected_policy_key": "loading.restart_after_timeout",
-                        "decision": "failed",
-                    }
-                )
-                raise RuntimeError(
-                    f"Loading page exceeded {self._loading_timeout_sec}s and max restart count {self._max_loading_restarts}"
-                )
-
-            if str(snapshot.get("effective_page_id") or "") == "device_explorer":
-                policy = policy_for_state(self._recovery_policies, "device_explorer.visible")
-                state_trace.append(
-                    {
-                        "page_id": "device_explorer",
-                        "matched_state_keys": ["device_explorer.visible"],
-                        "selected_policy_key": (policy or {}).get("policy_key"),
-                        "decision": "recover",
-                    }
-                )
-                if handle_device_explorer(
-                    recovery_actions=recovery_actions,
-                    device_name=self._default_device_name,
-                    policy=policy,
-                ):
-                    continue
-            if str(snapshot.get("effective_page_id") or "") == "j2534_disconnect":
-                policy = policy_for_state(self._recovery_policies, "j2534_disconnect.visible")
-                state_trace.append(
-                    {
-                        "page_id": "j2534_disconnect",
-                        "matched_state_keys": ["j2534_disconnect.visible"],
-                        "selected_policy_key": (policy or {}).get("policy_key"),
-                        "decision": "recover",
-                    }
-                )
-                if handle_j2534_disconnect(
-                    controller=self._controller,
-                    recovery_actions=recovery_actions,
-                    policy=policy,
-                    recovery_data_category=route_recovery_data_category,
-                    recovery_sub_category=route_recovery_sub_category,
-                    use_legacy_data_display_recovery=use_legacy_data_display_recovery,
-                ):
-                    continue
-
-            success_requires_executed = [dict(action) for action in success_criteria.get("requires_executed") or []]
-            if success_criteria and executed_actions_available(executed_actions, success_requires_executed):
-                success, _details = evaluate_success_criteria(snapshot, success_criteria)
-                if success:
-                    return {
-                        "matched_start_node_id": self._route_navigator.match_snapshot(start_snapshot),
-                        "recovery_actions": recovery_actions,
-                        "planned_path": route_steps,
-                        "executed_actions": executed_actions,
-                        "final_page": snapshot["effective_page_id"],
-                        "final_snapshot": snapshot,
-                        "state_trace": state_trace,
-                    }
-
-            button_labels = snapshot_action_labels(snapshot, kind="button")
-            pending_route_step = select_next_route_step(route_steps, executed_actions, snapshot)
-            if "OK" in button_labels and not (
-                pending_route_step
-                and pending_route_step.get("kind") == "button"
-                and pending_route_step.get("label") == "OK"
-            ):
-                result = self._controller.click_button("OK")
-                recovery_actions.append(
-                    {
-                        "kind": "button",
-                        "label": "OK",
-                        "reason": "dismiss blocking modal",
-                        "success": bool(result.success),
-                    }
-                )
-                continue
-
-            if (
-                pending_route_step is None
-                and target_label
-                and target_kind
-                and self._route_navigator.snapshot_has_action(snapshot, target_label, kind=target_kind)
-            ):
-                self._route_navigator.execute_action({"kind": target_kind, "label": target_label})
-                executed_actions.append({"kind": target_kind, "label": target_label})
-                continue
-
-            bridge_action = self._route_navigator.resolve_bridge_action(snapshot)
-            if bridge_action is not None:
-                self._route_navigator.execute_action(bridge_action)
-                executed_actions.append({"kind": str(bridge_action["kind"]), "label": str(bridge_action["label"])})
-                continue
-
-            if str(snapshot.get("effective_page_id") or "") == "vehicle_selection":
-                page_info = self._controller.nav.get_page_id()
-                matched_states = self.match_page_states(
-                    snapshot,
-                    page_info,
-                    target_path=target_path,
-                )
-                selected_policy = None
-                for state_key in matched_states:
-                    selected_policy = self.select_recovery_policy(state_key)
-                    if selected_policy:
-                        break
-                state_trace.append(
-                    {
-                        "page_id": "vehicle_selection",
-                        "matched_state_keys": matched_states,
-                        "selected_policy_key": (selected_policy or {}).get("policy_key"),
-                        "decision": "recover",
-                    }
-                )
-                if handle_vehicle_selection(
-                    controller=self._controller,
-                    route_navigator=self._route_navigator,
-                    recovery_actions=recovery_actions,
-                    device_name=self._default_device_name,
-                    page_states=self._page_states,
-                    recovery_policies=self._recovery_policies,
-                ):
-                    continue
-
-            recovered = recover_to_registry_common_ancestor(
-                controller=self._controller,
-                route_navigator=self._route_navigator,
-                target_path=target_path,
-                max_backtracks=max_backtracks,
-                device_name=self._default_device_name,
-                page_states=self._page_states,
-                recovery_policies=self._recovery_policies,
-                recovery_data_category=route_recovery_data_category,
-                recovery_sub_category=route_recovery_sub_category,
-                use_legacy_data_display_recovery=use_legacy_data_display_recovery,
-            )
-            if recovered:
-                recovery_actions.extend(recovered)
-                continue
-
-            if pending_route_step is not None and self._route_navigator.snapshot_has_action(
-                snapshot,
-                str(pending_route_step["label"]),
-                kind=str(pending_route_step["kind"]),
-            ):
-                if pending_route_step.get("transition") == "clear_dtcs_selection_state":
-                    if not execute_same_page_state_step(
-                        controller=self._controller,
-                        step=pending_route_step,
-                        recovery_actions=recovery_actions,
-                    ):
-                        raise RuntimeError("Clear DTCs same-page state transition failed")
-                    executed_actions.append({"kind": str(pending_route_step["kind"]), "label": str(pending_route_step["label"])})
-                    continue
-                self._route_navigator.execute_action(pending_route_step)
-                executed_actions.append({"kind": str(pending_route_step["kind"]), "label": str(pending_route_step["label"])})
-                continue
-
-            if "Back" in button_labels and str(snapshot.get("effective_page_id") or "") != "vehicle_selection":
-                result = self._controller.go_back()
-                recovery_actions.append({"kind": "button", "label": "Back", "success": bool(result.success)})
-                if result.success:
-                    continue
-
-            raise RuntimeError(f"Registry route to '{entry['page_key']}' is stuck on {snapshot['effective_page_id']}")
-
-        raise RuntimeError(f"Registry route to '{entry['page_key']}' did not converge within {max_iterations} steps")
 
 
 def bootstrap_engine_data_baseline(

@@ -130,6 +130,19 @@ def test_active_session_snapshot_store_round_trips_and_recovers_from_corruption(
 
     snapshot = read_active_session_snapshot()
     assert snapshot is not None
+    assert set(snapshot) == {
+        "session_id",
+        "backend_name",
+        "operation_kind",
+        "selected_module",
+        "selected_data_category",
+        "current_page",
+        "navigation_session_id",
+        "ai_session_id",
+        "live_data_active",
+        "connection_epoch",
+        "updated_at",
+    }
     assert snapshot["session_id"] == "session-1"
     assert snapshot["backend_name"] == "gds2"
     assert snapshot["current_page"] == "data_display"

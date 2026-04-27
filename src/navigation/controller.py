@@ -17,6 +17,9 @@ from typing import Dict, List, Optional, Any
 from diagnostic_platform.session_observability import emit_gds2_ui_event
 from diagnostic_platform.runtime.errors import OperationCancelledError
 
+from .action_matcher import find_list_item_match
+from .snapshot import ControllerSnapshot
+
 logger = logging.getLogger(__name__)
 
 
@@ -170,6 +173,24 @@ class NavigationController:
     def current_page(self) -> GDS2Page:
         """Get current page (cached)."""
         return self._current_page
+
+    def set_current_page(
+        self,
+        page: GDS2Page | str,
+        *,
+        record_history: bool = False,
+    ) -> GDS2Page:
+        """Synchronize the cached page without external private-state writes."""
+        if isinstance(page, GDS2Page):
+            new_page = page
+        else:
+            new_page = GDS2Page(str(page))
+        with self._lock:
+            if record_history:
+                self._record_page_transition(new_page)
+            else:
+                self._current_page = new_page
+            return self._current_page
 
     @property
     def current_module(self) -> Optional[str]:
@@ -541,6 +562,20 @@ class NavigationController:
         call if available (< 2s old), avoiding redundant round-trips.
         Returns fresh data if cache is stale.
         """
+        snapshot = self.get_controller_snapshot(capture_mode="legacy_snapshot")
+        return {
+            "page": snapshot.raw_page_id,
+            "buttons": list(snapshot.buttons),
+            "lists": list(snapshot.list_items),
+            "context": dict(snapshot.context),
+        }
+
+    def get_controller_snapshot(
+        self,
+        *,
+        capture_mode: str = "controller_snapshot",
+    ) -> ControllerSnapshot:
+        """Return the neutral raw controller snapshot contract."""
         with self._lock:
             page = self.detect_current_page()
             cache_age = time.time() - self._cache_time
@@ -550,12 +585,15 @@ class NavigationController:
             else:
                 buttons = self.get_visible_buttons()
                 items = self.get_list_items(0)
-            return {
-                "page": page.value,
-                "buttons": buttons,
-                "lists": items,
-                "context": self.get_context(),
-            }
+            return ControllerSnapshot(
+                raw_page_id=page.value,
+                buttons=tuple(buttons),
+                list_items=tuple(items),
+                context=self.get_context(),
+                capture_source="navigation_controller",
+                capture_mode=capture_mode,
+                captured_at=time.time(),
+            )
 
     # =========================================================================
     # Navigation Actions
@@ -958,11 +996,11 @@ class NavigationController:
         target_text: str,
         items: List[str],
     ) -> tuple[Optional[int], Optional[str]]:
-        """Return the first list entry that loosely matches the requested text."""
-        for index, item in enumerate(items):
-            if target_text in item or item in target_text:
-                return index, item
-        return None, None
+        """Return the matching list entry when the label resolves unambiguously."""
+        match = find_list_item_match(target_text, items)
+        if not match.matched or match.index is None or match.label is None:
+            return None, None
+        return match.index, match.label
 
     def _wait_for_transition_or_detect(
         self,

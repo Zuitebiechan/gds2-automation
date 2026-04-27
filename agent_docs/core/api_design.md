@@ -70,6 +70,11 @@ Current examples include:
 - `navigation_session_terminated`
 - `navigation_decision_mismatch`
 
+JSON error responses served under `/api/*` include `request_id` when request
+observability is installed. This is additive: existing `success` and `error`
+fields remain present. Success JSON payloads and SSE messages do not use this
+error-correlation field.
+
 ## SSE Conventions
 
 Current SSE streams begin with:
@@ -80,15 +85,16 @@ Current keepalive format:
 
 - `: keepalive`
 
-Common session event types:
+Route-scoped event contracts:
 
-- `progress`
-- `decision_required`
-- `decision_resolved`
-- `decision_timeout`
-- `network_quality_changed`
-- `error`
-- `done`
+| Route | Events |
+| --- | --- |
+| `GET /api/session/events` | `connected`, keepalive comment, `progress`, `decision_required`, `decision_resolved`, `decision_timeout`, `network_quality_changed`, `error`, `done` |
+| `GET /api/session/navigate/events` | `connected`, keepalive comment, `progress`, `decision_required`, `error`, `done` |
+| `GET /api/navigate/events` | `connected`, keepalive comment, `progress`, `decision_required`, `error`, `done` |
+
+Navigation streams must not emit business-session-only events such as
+`network_quality_changed`, `decision_timeout`, or `decision_resolved`.
 
 ## `/api/session/*`
 
@@ -141,6 +147,26 @@ Current routes:
 - `/status` returns session state plus backend summary and network snapshot details when available
 - `/logs/upload` ingests local observability artifacts staged by the tray client
 
+### Active-session snapshot
+
+The active-session snapshot is a read-only observability mirror. It is not the
+runtime authority, does not bind or resume sessions, and does not provide
+crash-safe recovery.
+
+Stable snapshot fields:
+
+- `session_id`
+- `backend_name`
+- `operation_kind`
+- `selected_module`
+- `selected_data_category`
+- `current_page`
+- `navigation_session_id`
+- `ai_session_id`
+- `live_data_active`
+- `connection_epoch`
+- `updated_at`
+
 ## `/api/diagnose/*`
 
 This is the lower-level direct diagnostics surface.
@@ -159,6 +185,10 @@ Current routes:
 - `POST /api/diagnose/ai_diagnose/retry`
 
 Use this surface when you need direct backend capability access without business-session orchestration.
+
+Recovered direct diagnostics responses preserve compatibility fields such as
+`recovered`, `recovery_target`, and `reasoning`. `/api/diagnose/dtcs` error
+responses preserve `dtcs: []`.
 
 ## `/api/navigate/*`
 
@@ -179,6 +209,8 @@ Current runtime binding rule:
 - direct `/api/navigate/*` no longer bootstraps a backend/controller/viewer on demand
 - `POST /api/navigate/start` requires an already-active worker-scoped backend bundle with a navigation runtime
 - when no active backend navigation runtime is available, `POST /api/navigate/start` returns `409 Conflict`
+- `GET /api/navigate/status` performs a runtime-only navigation-session lookup: it returns `200` for an existing navigation session and `404` for a missing one, without requiring an active backend handle
+- `POST /api/navigate/decision` and `POST /api/navigate/abort` keep their existing handle-or-runtime fallback behavior
 
 ## Compatibility Notes
 

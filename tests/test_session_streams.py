@@ -58,6 +58,23 @@ def _event_payload(message: str) -> tuple[str, dict[str, object]]:
     return event_type, payload
 
 
+def _event_types(messages: list[str]) -> list[str]:
+    event_types: list[str] = []
+    for message in messages:
+        if message.startswith(":"):
+            event_types.append("keepalive")
+            continue
+        event_types.append(message.splitlines()[0].removeprefix("event: "))
+    return event_types
+
+
+def _assert_no_session_only_events(messages: list[str]) -> None:
+    joined_events = "".join(messages)
+    assert "event: network_quality_changed\n" not in joined_events
+    assert "event: decision_timeout\n" not in joined_events
+    assert "event: decision_resolved\n" not in joined_events
+
+
 def test_iter_engine_events_emits_keepalive_then_stops_on_done_event() -> None:
     events = list(
         iter_engine_events(
@@ -168,6 +185,7 @@ def test_iter_session_events_filters_stale_decisions_and_emits_network_change(mo
     )
 
     assert len(events) == 3
+    assert _event_types(events) == ["connected", "network_quality_changed", "done"]
     assert events[0] == 'event: connected\ndata: {"session_id": "session-1"}\n\n'
     event_type, payload = _event_payload(events[1])
     assert event_type == "network_quality_changed"
@@ -182,6 +200,10 @@ def test_iter_session_events_filters_stale_decisions_and_emits_network_change(mo
         "connection_epoch": "epoch-2",
     }
     assert events[2] == 'event: done\ndata: {"session_id": "session-1"}\n\n'
+    joined_events = "".join(events)
+    assert "event: decision_required\n" not in joined_events
+    assert "event: decision_resolved\n" not in joined_events
+    assert "event: decision_timeout\n" not in joined_events
 
 
 def test_iter_session_events_ignores_non_string_messages() -> None:
@@ -380,6 +402,8 @@ def test_iter_navigation_events_flushes_residual_events_after_thread_exit(monkey
         'event: progress\ndata: {"type": "progress", "page": "module_list"}\n\n',
         'event: done\ndata: {"type": "done", "status": "completed", "error": null}\n\n',
     ]
+    assert _event_types(events) == ["connected", "keepalive", "progress", "done"]
+    _assert_no_session_only_events(events)
 
 
 def test_iter_navigation_events_ignores_malformed_residual_events(monkeypatch) -> None:
@@ -445,6 +469,8 @@ def test_iter_navigation_events_stringifies_non_json_event_values() -> None:
         'event: progress\ndata: {"type": "progress", "page": "boom"}\n\n',
         'event: error\ndata: {"type": "error", "error": "bad"}\n\n',
     ]
+    assert _event_types(events) == ["connected", "progress", "error"]
+    _assert_no_session_only_events(events)
 
 
 def test_iter_navigation_events_serializes_non_json_values(monkeypatch) -> None:
@@ -476,3 +502,5 @@ def test_iter_navigation_events_serializes_non_json_values(monkeypatch) -> None:
         'event: progress\ndata: {"type": "progress", "page": "stable-value"}\n\n',
         'event: done\ndata: {"type": "done", "status": "completed", "error": null}\n\n',
     ]
+    assert _event_types(events) == ["connected", "keepalive", "progress", "done"]
+    _assert_no_session_only_events(events)

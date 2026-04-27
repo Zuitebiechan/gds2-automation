@@ -266,28 +266,102 @@ def stop_live_data_stream(*, backend_name: str | None = None) -> dict[str, objec
     return runtime_stop_live_data_stream(_runtime(), backend=backend)
 
 
+def build_diagnose_start_response(data: dict[str, object]) -> dict[str, object]:
+    """Build the direct diagnostics startup payload."""
+    payload = build_diagnostics_start_payload(
+        backend=_get_backend(_resolve_backend_name(data)),
+    )
+    if "modules" in payload:
+        logger.debug(
+            "DIAG start ready modules=%s device=%s",
+            len(payload["modules"]),
+            payload.get("device") or "-",
+        )
+    elif "devices" in payload:
+        logger.debug(
+            "DIAG start awaiting device selection devices=%s",
+            len(payload["devices"]),
+        )
+    else:
+        logger.debug("DIAG start ready payload_keys=%s", sorted(payload.keys()))
+    return payload
+
+
+def read_diagnose_dtcs_response(
+    *,
+    backend_name: str,
+    module_name: str,
+    data_category: str,
+) -> dict[str, object]:
+    """Read DTCs through the direct diagnostics surface."""
+    backend = _get_backend(backend_name or None)
+    _ensure_backend_capability(backend, BackendCapability.READ_DTCS)
+    payload = read_diagnostic_dtcs(
+        backend=backend,
+        module_name=module_name,
+        data_category=data_category,
+    )
+    logger.debug(
+        "DIAG DTC read count=%s page=%s",
+        payload["dtc_count"],
+        payload["page_context"],
+    )
+    return payload
+
+
+def clear_diagnose_dtcs_response(data: dict[str, object]) -> dict[str, object]:
+    """Clear DTCs through the direct diagnostics surface."""
+    backend = _get_backend(_resolve_backend_name(data))
+    _ensure_backend_capability(backend, BackendCapability.CLEAR_DTCS)
+    payload = clear_diagnostic_dtcs(
+        backend=backend,
+        module_name=_read_text_field(data, 'module'),
+        data_category=_read_text_field(data, 'data_category'),
+    )
+    logger.debug(
+        "DIAG clear_dtcs cleared=%s page=%s",
+        payload["cleared_count"],
+        payload["page_context"],
+    )
+    return payload
+
+
+def select_diagnose_module_response(data: dict[str, object]) -> tuple[dict[str, object], int]:
+    """Select one direct diagnostics module and return categories."""
+    module = _read_text_field(data, 'module')
+    if not module:
+        return {"success": False, "error": "Module name required"}, 400
+
+    backend = _get_backend(_resolve_backend_name(data))
+    payload = select_diagnostic_module(backend=backend, module=module)
+    logger.debug("DIAG module=%s categories=%s", module, len(payload["data_categories"]))
+    return payload, 200
+
+
+def start_diagnose_live_data_response(data: dict[str, object]) -> tuple[dict[str, object], int]:
+    """Start direct diagnostics live data from a request payload."""
+    data_category = _read_text_field(data, 'data_category')
+    interval_ms = _read_int_field(data, 'interval_ms', default=100)
+
+    if not data_category:
+        return {"success": False, "error": "Data category required"}, 400
+
+    return (
+        start_live_data_stream(
+            data_category,
+            interval_ms,
+            backend_name=_resolve_backend_name(data),
+        ),
+        200,
+    )
+
+
 @diagnostics_bp.route('/start', methods=['POST'])
 def diagnose_start():
     """One-button start: start + auto-connect + modules."""
     try:
         data = require_json_object(request)
-        payload = build_diagnostics_start_payload(
-            backend=_get_backend(_resolve_backend_name(data)),
-        )
-        if "modules" in payload:
-            logger.debug(
-                "DIAG start ready modules=%s device=%s",
-                len(payload["modules"]),
-                payload.get("device") or "-",
-            )
-        elif "devices" in payload:
-            logger.debug(
-                "DIAG start awaiting device selection devices=%s",
-                len(payload["devices"]),
-            )
-        else:
-            logger.debug("DIAG start ready payload_keys=%s", sorted(payload.keys()))
-        return jsonify(payload)
+        return jsonify(build_diagnose_start_response(data))
 
     except WorkflowRecoveryError as e:
         logger.warning("diagnose_start recovered target=%s error=%s", e.target_page, e)
@@ -315,19 +389,13 @@ def diagnose_dtcs():
         backend_name = _read_query_text_arg("backend_name")
         module_name = _read_query_text_arg("module")
         data_category = _read_query_text_arg("data_category")
-        backend = _get_backend(backend_name or None)
-        _ensure_backend_capability(backend, BackendCapability.READ_DTCS)
-        payload = read_diagnostic_dtcs(
-            backend=backend,
-            module_name=module_name,
-            data_category=data_category,
+        return jsonify(
+            read_diagnose_dtcs_response(
+                backend_name=backend_name,
+                module_name=module_name,
+                data_category=data_category,
+            )
         )
-        logger.debug(
-            "DIAG DTC read count=%s page=%s",
-            payload["dtc_count"],
-            payload["page_context"],
-        )
-        return jsonify(payload)
 
     except WorkflowRecoveryError as e:
         logger.warning("diagnose_dtcs recovered target=%s error=%s", e.target_page, e)
@@ -361,19 +429,7 @@ def diagnose_clear_dtcs():
     """Clear DTCs directly from the diagnostics backend."""
     try:
         data = require_json_object(request)
-        backend = _get_backend(_resolve_backend_name(data))
-        _ensure_backend_capability(backend, BackendCapability.CLEAR_DTCS)
-        payload = clear_diagnostic_dtcs(
-            backend=backend,
-            module_name=_read_text_field(data, 'module'),
-            data_category=_read_text_field(data, 'data_category'),
-        )
-        logger.debug(
-            "DIAG clear_dtcs cleared=%s page=%s",
-            payload["cleared_count"],
-            payload["page_context"],
-        )
-        return jsonify(payload)
+        return jsonify(clear_diagnose_dtcs_response(data))
 
     except UnsupportedCapabilityError as e:
         return jsonify({"success": False, "error": str(e)}), 501
@@ -394,15 +450,10 @@ def diagnose_select_module():
     """Select module and return data categories."""
     try:
         data = require_json_object(request)
-        module = _read_text_field(data, 'module')
-
-        if not module:
-            return jsonify({"success": False, "error": "Module name required"}), 400
-
-        backend = _get_backend(_resolve_backend_name(data))
-        payload = select_diagnostic_module(backend=backend, module=module)
-        logger.debug("DIAG module=%s categories=%s", module, len(payload["data_categories"]))
-        return jsonify(payload)
+        payload, status = select_diagnose_module_response(data)
+        if status == 200:
+            return jsonify(payload)
+        return jsonify(payload), status
 
     except WorkflowRecoveryError as e:
         logger.warning("diagnose_select_module recovered target=%s error=%s", e.target_page, e)
@@ -428,19 +479,10 @@ def diagnose_live_data_start():
     """Navigate to Data Display and start live Agent streaming."""
     try:
         data = require_json_object(request)
-        data_category = _read_text_field(data, 'data_category')
-        interval_ms = _read_int_field(data, 'interval_ms', default=100)
-
-        if not data_category:
-            return jsonify({"success": False, "error": "Data category required"}), 400
-
-        return jsonify(
-            start_live_data_stream(
-                data_category,
-                interval_ms,
-                backend_name=_resolve_backend_name(data),
-            )
-        )
+        payload, status = start_diagnose_live_data_response(data)
+        if status == 200:
+            return jsonify(payload)
+        return jsonify(payload), status
 
     except WorkflowRecoveryError as e:
         logger.warning("diagnose_live_data_start recovered target=%s error=%s", e.target_page, e)

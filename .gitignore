@@ -52,6 +52,7 @@ scripts/cloud_service_config.cmd
 .coverage
 htmlcov/
 .pytest_cache/
+pytest-cache-files-*/
 .pytest_tmp/
 .pytest_tmp_*/
 .pytest_*_verify_*/

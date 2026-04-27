@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+
 from src.navigation import GDS2Page, NavigationResult
 from src.workflows import read_data_display_agent
 from src.workflows.read_data_display_agent import ReadDataDisplayAgentWorkflow
@@ -23,17 +25,10 @@ def _result(
 
 
 def test_execute_runs_full_workflow_and_selects_first_sub_category(monkeypatch) -> None:
-    class _FakeController:
-        def __init__(self) -> None:
-            self.detected_pages = iter([GDS2Page.DIAGNOSTICS_MENU])
-
-        def detect_current_page(self) -> GDS2Page:
-            return next(self.detected_pages)
-
     class _FakeInteractiveWorkflow:
         def __init__(self) -> None:
             self._vehicle_id = None
-            self.controller = _FakeController()
+            self.detected_pages = iter([GDS2Page.DIAGNOSTICS_MENU])
             self.calls: list[tuple[str, object]] = []
 
         def start(self) -> NavigationResult:
@@ -47,6 +42,10 @@ def test_execute_runs_full_workflow_and_selects_first_sub_category(monkeypatch) 
         def step_select_device(self, device_name: str) -> NavigationResult:
             self.calls.append(("step_select_device", device_name))
             return _result(True, GDS2Page.VEHICLE_SELECTION)
+
+        def detect_current_page(self) -> GDS2Page:
+            self.calls.append(("detect_current_page", None))
+            return next(self.detected_pages)
 
         def step_module_diagnostics(self) -> NavigationResult:
             self.calls.append(("step_module_diagnostics", None))
@@ -93,6 +92,7 @@ def test_execute_runs_full_workflow_and_selects_first_sub_category(monkeypatch) 
         ("start", None),
         ("step_diagnostics", None),
         ("step_select_device", "SM2 USB"),
+        ("detect_current_page", None),
         ("step_module_diagnostics", None),
         ("step_select_module", "[K20] Engine Control Module"),
         ("step_data_display", None),
@@ -109,14 +109,9 @@ def test_execute_runs_full_workflow_and_selects_first_sub_category(monkeypatch) 
 
 
 def test_execute_skips_module_diagnostics_when_already_at_module_list(monkeypatch) -> None:
-    class _FakeController:
-        def detect_current_page(self) -> GDS2Page:
-            return GDS2Page.MODULE_LIST
-
     class _FakeInteractiveWorkflow:
         def __init__(self) -> None:
             self._vehicle_id = None
-            self.controller = _FakeController()
             self.step_module_diagnostics_called = False
 
         def start(self) -> NavigationResult:
@@ -124,6 +119,9 @@ def test_execute_skips_module_diagnostics_when_already_at_module_list(monkeypatc
 
         def step_diagnostics(self) -> NavigationResult:
             return _result(True, GDS2Page.VEHICLE_SELECTION)
+
+        def detect_current_page(self) -> GDS2Page:
+            return GDS2Page.MODULE_LIST
 
         def step_module_diagnostics(self) -> NavigationResult:
             self.step_module_diagnostics_called = True
@@ -153,7 +151,6 @@ def test_execute_returns_error_when_start_fails(monkeypatch) -> None:
     class _FakeInteractiveWorkflow:
         def __init__(self) -> None:
             self._vehicle_id = None
-            self.controller = object()
 
         def start(self) -> NavigationResult:
             return _result(False, GDS2Page.UNKNOWN, error="agent offline")
@@ -169,20 +166,18 @@ def test_execute_returns_error_when_start_fails(monkeypatch) -> None:
 
 
 def test_execute_returns_error_when_sub_category_list_is_empty(monkeypatch) -> None:
-    class _FakeController:
-        def detect_current_page(self) -> GDS2Page:
-            return GDS2Page.DIAGNOSTICS_MENU
-
     class _FakeInteractiveWorkflow:
         def __init__(self) -> None:
             self._vehicle_id = None
-            self.controller = _FakeController()
 
         def start(self) -> NavigationResult:
             return _result(True, GDS2Page.MAIN_MENU)
 
         def step_diagnostics(self) -> NavigationResult:
             return _result(True, GDS2Page.VEHICLE_SELECTION)
+
+        def detect_current_page(self) -> GDS2Page:
+            return GDS2Page.DIAGNOSTICS_MENU
 
         def step_module_diagnostics(self) -> NavigationResult:
             return _result(True, GDS2Page.MODULE_LIST)
@@ -204,3 +199,9 @@ def test_execute_returns_error_when_sub_category_list_is_empty(monkeypatch) -> N
         "success": False,
         "error": "Sub-categories detected but list is empty",
     }
+
+
+def test_read_data_display_agent_does_not_access_controller_directly() -> None:
+    source = inspect.getsource(ReadDataDisplayAgentWorkflow)
+
+    assert ".controller.detect_current_page" not in source

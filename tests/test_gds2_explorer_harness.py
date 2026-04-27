@@ -544,8 +544,34 @@ def test_gds2_explorer_harness_persists_effective_vehicle_selection_page_id(
     node = harness._graph["nodes"][snapshot["node_id"]]
     assert snapshot["raw_page_id"] == "loading"
     assert snapshot["effective_page_id"] == "vehicle_selection"
+    assert snapshot["classification_evidence"]["rule"] == "loading_vehicle_markers"
     assert node["page_id"] == "vehicle_selection"
     assert node["raw_page_id"] == "loading"
+
+
+def test_gds2_explorer_harness_uses_runtime_classifier_for_loading_list_pages(
+    tmp_path: Path,
+) -> None:
+    latest_path = tmp_path / "latest.json"
+    _write_latest_snapshot(
+        latest_path,
+        {"pageContext": {"windowTitle": "GDS 2"}, "tables": []},
+        "gb18030",
+    )
+    harness = GDS2ExplorerHarness(
+        navigator=_FakeNavigator(),
+        latest_json_path=latest_path,
+        artifact_root=tmp_path / "artifacts",
+        sleep_fn=lambda _seconds: None,
+    )
+    snapshot = {
+        "page": {"page_id": "loading", "confidence": "high"},
+        "buttons": [{"text": "Back", "enabled": True}],
+        "list_items": ["Module Diagnostics", "Vehicle Diagnostics", "Session Manager"],
+    }
+
+    assert harness._classify_effective_page(snapshot) == "diagnostics_menu"
+    assert snapshot["classification_evidence"]["rule"] == "diagnostics_menu_list_items"
 
 
 def test_gds2_explorer_harness_does_not_treat_deep_loading_as_vehicle_selection(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import types
 
 from src.navigation import GDS2Page, NavigationResult
@@ -72,6 +73,10 @@ def test_step_module_diagnostics_discovers_modules_and_updates_cache(monkeypatch
         def current_page(self) -> GDS2Page:
             return self._current_page
 
+        def set_current_page(self, page: GDS2Page) -> GDS2Page:
+            self._current_page = page
+            return self._current_page
+
         def wait_for_list(self):
             return next(self._lists)
 
@@ -89,6 +94,12 @@ def test_step_module_diagnostics_discovers_modules_and_updates_cache(monkeypatch
     assert result.choices == ["ECM", "TCM"]
     assert workflow.controller.nav.selected == [(0, 0, True)]
     assert mapping.module_updates == [("current_vehicle", {"ECM": 0, "TCM": 1})]
+
+
+def test_interactive_workflow_does_not_write_controller_private_page_state() -> None:
+    source = inspect.getsource(InteractiveWorkflow)
+
+    assert "controller._current_page" not in source
 
 
 def test_step_select_data_category_caches_sub_categories() -> None:

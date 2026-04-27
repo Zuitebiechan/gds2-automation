@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import hmac
+import json
 import logging
 import os
 import socket
@@ -267,6 +268,66 @@ def _install_api_token_guard(app: Flask, settings: ServerRuntimeSettings) -> Non
         return None
 
 
+def _response_is_json(response: object) -> bool:
+    if bool(getattr(response, "is_json", False)):
+        return True
+    mimetype = str(getattr(response, "mimetype", "") or "").lower()
+    content_type = str(getattr(response, "content_type", "") or "").lower()
+    return mimetype == "application/json" or "application/json" in content_type
+
+
+def _read_response_json(response: object) -> object | None:
+    get_json = getattr(response, "get_json", None)
+    if callable(get_json):
+        try:
+            return get_json(silent=True)
+        except TypeError:
+            try:
+                return get_json()
+            except Exception:
+                return None
+        except Exception:
+            return None
+
+    get_data = getattr(response, "get_data", None)
+    if callable(get_data):
+        try:
+            raw_data = get_data(as_text=True)
+        except TypeError:
+            try:
+                raw = get_data()
+                raw_data = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+            except Exception:
+                return None
+        except Exception:
+            return None
+        try:
+            return json.loads(raw_data)
+        except Exception:
+            return None
+
+    return None
+
+
+def _attach_request_id_to_error_json_response(response: object, *, request_id: str):
+    if bool(getattr(response, "is_streamed", False)):
+        return response
+    if not _response_is_json(response):
+        return response
+
+    payload = _read_response_json(response)
+    if not isinstance(payload, dict) or "request_id" in payload:
+        return response
+
+    set_data = getattr(response, "set_data", None)
+    if not callable(set_data):
+        return response
+
+    payload["request_id"] = request_id
+    set_data(json.dumps(payload, separators=(",", ":"), ensure_ascii=False))
+    return response
+
+
 def _install_api_failure_logger(app: Flask) -> None:
     writer = get_product_log_writer("server.api")
 
@@ -277,10 +338,20 @@ def _install_api_failure_logger(app: Flask) -> None:
         if not request_path.startswith("/api/"):
             return response
 
+        request_id = str(getattr(request, "request_id", "") or generate_request_id())
+        if not getattr(request, "request_id", None):
+            setattr(request, "request_id", request_id)
+
         request_started_at = getattr(request, "_request_started_at", None)
         duration_ms = None
         if isinstance(request_started_at, (float, int)):
             duration_ms = round((time.perf_counter() - float(request_started_at)) * 1000.0, 3)
+
+        if status_code >= 400:
+            response = _attach_request_id_to_error_json_response(
+                response,
+                request_id=request_id,
+            )
 
         emit_event(
             writer,
@@ -289,7 +360,7 @@ def _install_api_failure_logger(app: Flask) -> None:
             context=LogContext(
                 session_id=_extract_request_session_id(),
                 operation_kind=f"http:{str(getattr(request, 'method', 'GET') or 'GET')} {request_path}",
-                request_id=str(getattr(request, "request_id", "") or generate_request_id()),
+                request_id=request_id,
             ),
             status="error" if status_code >= 400 else "ok",
             failure_code=f"http_{status_code}" if status_code >= 400 else None,
@@ -300,7 +371,7 @@ def _install_api_failure_logger(app: Flask) -> None:
             http_method=str(getattr(request, "method", "GET") or "GET"),
             endpoint=str(getattr(request, "endpoint", "") or "-"),
             remote_addr=str(getattr(request, "remote_addr", "") or "-"),
-            request_id=str(getattr(request, "request_id", "") or ""),
+            request_id=request_id,
         )
 
         if status_code < 400:

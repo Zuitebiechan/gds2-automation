@@ -4,8 +4,11 @@ import time
 from pathlib import Path
 from typing import Any
 
+from backends.gds2.observed_state import GDS2ObservedState, classify_effective_page
 from backends.gds2.route_graph import match_snapshot_to_node_details, node_has_action, plan_to_action
 from backends.gds2.explorer_harness import extract_navigation_path, load_latest_snapshot
+from src.navigation.action_matcher import ActionMatch, ActionMatchError, find_action_match
+from src.navigation.snapshot import ControllerSnapshot
 
 
 class GDS2RouteNavigator:
@@ -42,6 +45,9 @@ class GDS2RouteNavigator:
     def snapshot_has_action(self, snapshot: dict[str, Any], label: str, *, kind: str | None) -> bool:
         return self._snapshot_has_action(snapshot, label, kind=kind)
 
+    def snapshot_action_match(self, snapshot: dict[str, Any], label: str, *, kind: str | None) -> ActionMatch:
+        return self._action_match(snapshot, label, kind=kind)
+
     def execute_action(self, action: dict[str, Any]) -> None:
         self._execute_action(action)
 
@@ -60,10 +66,29 @@ class GDS2RouteNavigator:
         executed_actions: list[dict[str, str]] = []
         matched_start_node_id: str | None = None
         last_path: list[dict[str, Any]] | None = None
+        match_diagnostics: list[dict[str, Any]] = []
 
         for _ in range(max(1, max_iterations)):
             direct_snapshot = self._capture_settled_snapshot()
-            if self._snapshot_has_action(direct_snapshot, label, kind=kind):
+            direct_match = self._action_match(direct_snapshot, label, kind=kind)
+            if direct_match.ambiguous:
+                match_diagnostics.append(
+                    direct_match.diagnostics(
+                        target_label=label,
+                        action_kind=kind,
+                        owner="route_navigator.direct_target",
+                    )
+                )
+                raise ActionMatchError(f"Ambiguous action match for '{label}'", match_diagnostics)
+            if direct_match.matched:
+                if direct_match.resolution != "exact":
+                    match_diagnostics.append(
+                        direct_match.diagnostics(
+                            target_label=label,
+                            action_kind=kind,
+                            owner="route_navigator.direct_target",
+                        )
+                    )
                 resolved_kind = self._resolve_action_kind(direct_snapshot, label, kind=kind)
                 self._execute_action({"kind": resolved_kind, "label": label})
                 executed_actions.append({"kind": resolved_kind, "label": label})
@@ -75,6 +100,7 @@ class GDS2RouteNavigator:
                     "executed_actions": executed_actions,
                     "final_page": final_snapshot["effective_page_id"],
                     "final_snapshot": final_snapshot,
+                    "match_diagnostics": match_diagnostics,
                 }
 
             bridge_action = self._resolve_bridge_action(direct_snapshot)
@@ -338,38 +364,43 @@ class GDS2RouteNavigator:
 
     @staticmethod
     def _snapshot_has_action(snapshot: dict[str, Any], label: str, *, kind: str | None) -> bool:
-        target = str(label or "").strip()
-        for action in snapshot.get("observed_actions") or []:
-            if kind is not None and str(action.get("kind") or "") != kind:
-                continue
-            current = str(action.get("label") or "").strip()
-            if current == target:
-                return True
-            if kind == "list_item" and target and current and (target in current or current in target):
-                return True
-        return False
+        return GDS2RouteNavigator._action_match(snapshot, label, kind=kind).matched
+
+    @staticmethod
+    def _action_match(snapshot: dict[str, Any], label: str, *, kind: str | None) -> ActionMatch:
+        return find_action_match(
+            snapshot.get("observed_actions") or [],
+            label,
+            kind=kind,
+        )
 
     def _capture_snapshot(self) -> dict[str, Any]:
-        raw_snapshot = self._controller.get_snapshot()
-        page = str(raw_snapshot.get("page") or "")
-        buttons = [str(item) for item in raw_snapshot.get("buttons") or [] if str(item).strip()]
-        list_items = [str(item) for item in raw_snapshot.get("lists") or [] if str(item).strip()]
-        observed_actions = [
-            {"kind": "button", "label": button}
-            for button in buttons
-        ] + [
-            {"kind": "list_item", "label": item, "list_index": 0}
-            for item in list_items
-        ]
-        effective_page = self._classify_effective_page(page, buttons, list_items)
-        return {
-            "page": {"page_id": page},
-            "raw_page_id": page,
-            "effective_page_id": effective_page,
-            "observed_actions": observed_actions,
-            "list_items": list_items,
-            "navigation_path": self._read_navigation_path(raw_page=page),
-        }
+        raw_snapshot = self._capture_controller_snapshot()
+        raw_snapshot = raw_snapshot.with_navigation_path(
+            self._read_navigation_path(raw_page=raw_snapshot.raw_page_id)
+        )
+        return GDS2ObservedState.from_controller_snapshot(raw_snapshot).to_snapshot_dict()
+
+    def _capture_controller_snapshot(self) -> ControllerSnapshot:
+        snapshot_reader = getattr(self._controller, "get_controller_snapshot", None)
+        if callable(snapshot_reader):
+            snapshot = snapshot_reader(capture_mode="route_navigator_snapshot")
+            if isinstance(snapshot, ControllerSnapshot):
+                return snapshot
+            if isinstance(snapshot, dict):
+                return ControllerSnapshot.from_legacy_dict(
+                    snapshot,
+                    capture_source="route_navigator",
+                    capture_mode="controller_snapshot_dict",
+                )
+            raise TypeError(
+                "get_controller_snapshot() must return ControllerSnapshot or snapshot dict"
+            )
+        return ControllerSnapshot.from_legacy_dict(
+            self._controller.get_snapshot(),
+            capture_source="route_navigator",
+            capture_mode="legacy_get_snapshot",
+        )
 
     def _read_navigation_path(self, *, raw_page: str = "") -> list[str]:
         controller_reader = getattr(self._controller, "get_navigation_path", None)
@@ -426,40 +457,8 @@ class GDS2RouteNavigator:
 
     @staticmethod
     def _classify_effective_page(page: str, buttons: list[str], list_items: list[str]) -> str:
-        page = str(page or "").strip()
-        button_texts = set(buttons)
-        if page in {"loading", "unknown", "vehicle_selection"} and any("Module Diagnostics" in item for item in list_items):
-            return "diagnostics_menu"
-        if page in {"loading", "unknown", "vehicle_selection", "diagnostics_menu"} and any("[" in item and "]" in item for item in list_items):
-            return "module_list"
-        if page in {"loading", "unknown", "vehicle_selection"} and "Back" in button_texts:
-            module_submenu_markers = {
-                "Data Display",
-                "Diagnostic Trouble Codes (DTC)",
-                "Control Functions",
-                "Configuration/Reset Functions",
-            }
-            if len(module_submenu_markers & set(list_items)) >= 2:
-                return "module_submenu"
-            if list_items:
-                return "data_list"
-
-        if page != "loading":
-            return page
-
-        vehicle_markers = {
-            "Select Device",
-            "Disconnect",
-            "Clear Vehicle Selection",
-            "Read VIN",
-            "Copy VIN",
-        }
-        deep_page_markers = {"Home", "Vehicle Menu"}
-        if button_texts & vehicle_markers:
-            return "vehicle_selection"
-        if button_texts & deep_page_markers and not list_items:
-            return "loading"
-        return page
+        effective_page, _evidence = classify_effective_page(page, buttons, list_items)
+        return effective_page
 
     @staticmethod
     def _resolve_action_kind(snapshot: dict[str, Any], label: str, *, kind: str | None) -> str:

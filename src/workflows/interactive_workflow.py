@@ -96,6 +96,10 @@ class InteractiveWorkflow:
         """Check if Java Agent is available."""
         return self.controller.check_agent()
 
+    def detect_current_page(self) -> GDS2Page:
+        """Detect the current GDS2 page through the workflow adapter."""
+        return self.controller.detect_current_page()
+
     # =========================================================================
     # Workflow Steps
     # =========================================================================
@@ -115,7 +119,7 @@ class InteractiveWorkflow:
                 context=self.controller.get_context(),
             )
 
-        page = self.controller.detect_current_page()
+        page = self.detect_current_page()
         choices = self._get_choices_for_page(page)
 
         return NavigationResult(
@@ -223,7 +227,7 @@ class InteractiveWorkflow:
                         module_indices = {name: idx for idx, name in enumerate(modules)}
                         self.mapping.update_module_list(self._vehicle_id, module_indices)
 
-                    self.controller._current_page = GDS2Page.MODULE_LIST
+                    self.controller.set_current_page(GDS2Page.MODULE_LIST)
 
                     return NavigationResult(
                         success=True,
@@ -303,7 +307,7 @@ class InteractiveWorkflow:
 
         # Get submenu items
         submenu_items = self.controller.wait_for_list()
-        self.controller._current_page = GDS2Page.MODULE_SUBMENU
+        self.controller.set_current_page(GDS2Page.MODULE_SUBMENU)
 
         return NavigationResult(
             success=True,
@@ -348,7 +352,7 @@ class InteractiveWorkflow:
                             cat_indices = {name: idx for idx, name in enumerate(data_categories)}
                             self.mapping.update_data_categories(self._vehicle_id, module, cat_indices)
 
-                    self.controller._current_page = GDS2Page.DATA_LIST
+                    self.controller.set_current_page(GDS2Page.DATA_LIST)
 
                     return NavigationResult(
                         success=True,
@@ -469,7 +473,7 @@ class InteractiveWorkflow:
         Returns:
             NavigationResult with current page info and choices
         """
-        page = self.controller.detect_current_page()
+        page = self.detect_current_page()
         choices = self._get_choices_for_page(page)
 
         return NavigationResult(

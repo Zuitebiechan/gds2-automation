@@ -215,12 +215,18 @@ Behavior:
 
 The standalone `/api/navigate/*` surface uses the same backend-owned navigation runtime as session-bound navigation, but is not bound to a business session.
 
-Current binding rule:
+Current start binding rule:
 
 1. The worker must already have one active backend bundle.
 2. The route resolves that bundle's `navigation_handle`.
 3. If no active backend navigation runtime is available, `POST /api/navigate/start` returns `409 Conflict`.
 4. The route must not create an ephemeral backend/controller/viewer as fallback.
+
+Other direct navigation routes have route-specific lookup rules:
+
+- `GET /api/navigate/status` reads the worker runtime navigation session by id only. It returns `200` when the runtime session exists and `404` when it does not; it does not require an active backend handle.
+- `POST /api/navigate/decision` and `POST /api/navigate/abort` keep handle-or-runtime fallback behavior so already-started sessions can still be completed or aborted when the active handle is unavailable.
+- `GET /api/navigate/events` is navigation-scoped and does not emit business-session-only events such as `network_quality_changed`, `decision_timeout`, or `decision_resolved`.
 
 ## DTC Read Flow
 
@@ -378,6 +384,12 @@ The business-session event stream:
 - periodically checks decision timeout
 - emits `network_quality_changed` when the tunnel snapshot changes while the client is subscribed
 - ends on terminal `done`
+
+Session navigation event streams are narrower than the business-session stream:
+`GET /api/session/navigate/events` forwards navigation `progress`,
+`decision_required`, terminal `done`/`error`, and keepalives, but not
+business-session-only events such as `network_quality_changed`,
+`decision_timeout`, or `decision_resolved`.
 
 ## Abort Flow
 

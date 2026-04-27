@@ -9,6 +9,7 @@ from typing import Any
 from backends.gds2.action_runtime import UIState
 from diagnostic_platform.action_runtime import DeterministicExecutor, StepHandler
 from diagnostic_platform.action_schema import ActionStep, GDS2Action
+from src.navigation import ControllerSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -56,13 +57,11 @@ class GDS2ActionAdapter:
     def _handle_select_device(self, step: ActionStep, state: UIState) -> dict[str, Any]:
         device_name = step.args["device_name"]
         logger.info("GDS2Adapter: SELECT_DEVICE -> %s", device_name)
-        nav_result = self._controller.select_device(device_name)
-        return {
-            "success": nav_result.success,
-            "page": nav_result.page.value,
-            "selected": nav_result.selected,
-            "error": nav_result.error,
-        }
+        return self._run_navigation_command(
+            "select_device",
+            device_name,
+            include_selected=True,
+        )
 
     def _handle_connect_device(self, step: ActionStep, state: UIState) -> dict[str, Any]:
         device_name = step.args["device_name"]
@@ -100,13 +99,11 @@ class GDS2ActionAdapter:
     ) -> dict[str, Any]:
         sub_category_name = step.args["sub_category_name"]
         logger.info("GDS2Adapter: SELECT_SUB_CATEGORY -> %s", sub_category_name)
-        nav_result = self._controller.select_sub_category(sub_category_name)
-        return {
-            "success": nav_result.success,
-            "page": nav_result.page.value,
-            "selected": nav_result.selected,
-            "error": nav_result.error,
-        }
+        return self._run_navigation_command(
+            "select_sub_category",
+            sub_category_name,
+            include_selected=True,
+        )
 
     def _handle_read_dtcs(self, step: ActionStep, state: UIState) -> dict[str, Any]:
         logger.info("GDS2Adapter: READ_DTCS")
@@ -151,21 +148,11 @@ class GDS2ActionAdapter:
 
     def _handle_go_home(self, step: ActionStep, state: UIState) -> dict[str, Any]:
         logger.info("GDS2Adapter: GO_HOME")
-        nav_result = self._controller.go_home()
-        return {
-            "success": nav_result.success,
-            "page": nav_result.page.value,
-            "error": nav_result.error,
-        }
+        return self._run_navigation_command("go_home")
 
     def _handle_go_back(self, step: ActionStep, state: UIState) -> dict[str, Any]:
         logger.info("GDS2Adapter: GO_BACK")
-        nav_result = self._controller.go_back()
-        return {
-            "success": nav_result.success,
-            "page": nav_result.page.value,
-            "error": nav_result.error,
-        }
+        return self._run_navigation_command("go_back")
 
     def _handle_abort_session(self, step: ActionStep, state: UIState) -> dict[str, Any]:
         logger.info("GDS2Adapter: ABORT_SESSION")
@@ -180,23 +167,73 @@ class GDS2ActionAdapter:
             logger.warning("Cleanup error during abort: %s", exc)
 
         try:
-            nav_result = self._controller.go_home()
+            nav_result = self._run_navigation_command("go_home")
             return {
                 "success": True,
-                "page": nav_result.page.value,
+                "page": nav_result.get("page"),
                 "aborted": True,
             }
         except Exception as exc:
             logger.warning("go_home failed during abort: %s", exc)
             return {"success": True, "aborted": True, "cleanup_error": str(exc)}
 
+    def _run_navigation_command(
+        self,
+        command_name: str,
+        *args: Any,
+        include_selected: bool = False,
+    ) -> dict[str, Any]:
+        command = getattr(self._controller, command_name)
+        nav_result = command(*args)
+        page = getattr(nav_result, "page", None)
+        payload = {
+            "success": bool(getattr(nav_result, "success", False)),
+            "page": getattr(page, "value", str(page) if page is not None else None),
+            "error": getattr(nav_result, "error", None),
+        }
+        if include_selected:
+            payload["selected"] = getattr(nav_result, "selected", None)
+        return payload
+
     def get_current_ui_state(self) -> UIState:
         """Build a UIState snapshot from the live navigation controller."""
+        snapshot = self._read_controller_snapshot()
+        return UIState(
+            current_page=snapshot.raw_page_id,
+            visible_buttons=list(snapshot.buttons),
+            list_items=list(snapshot.list_items),
+            context=dict(snapshot.context),
+        )
+
+    def _read_controller_snapshot(self) -> ControllerSnapshot:
+        """Read UI state through the raw snapshot contract with legacy fallback."""
+        snapshot_reader = getattr(self._controller, "get_controller_snapshot", None)
+        if callable(snapshot_reader):
+            try:
+                snapshot = snapshot_reader(capture_mode="action_adapter_ui_state")
+                if isinstance(snapshot, ControllerSnapshot):
+                    return snapshot
+                if isinstance(snapshot, dict):
+                    return ControllerSnapshot.from_legacy_dict(
+                        snapshot,
+                        capture_source="action_adapter",
+                        capture_mode="controller_snapshot_dict",
+                    )
+            except Exception as exc:
+                logger.debug("Raw controller snapshot unavailable for UIState: %s", exc)
+
+        return self._read_legacy_controller_snapshot()
+
+    def _read_legacy_controller_snapshot(self) -> ControllerSnapshot:
+        """Bridge older controller implementations into ControllerSnapshot."""
         page = self._controller.detect_current_page()
         buttons: list[str] = []
         list_items: list[str] = []
         try:
-            buttons = [b.get("text", "") for b in (self._controller.get_visible_buttons() or [])]
+            buttons = [
+                str(button.get("text", "") if isinstance(button, dict) else button)
+                for button in (self._controller.get_visible_buttons() or [])
+            ]
         except Exception:
             pass
         try:
@@ -205,11 +242,15 @@ class GDS2ActionAdapter:
             pass
 
         context = self._controller.get_context()
-        return UIState(
-            current_page=page.value,
-            visible_buttons=buttons,
-            list_items=list_items,
-            context=context,
+        return ControllerSnapshot.from_legacy_dict(
+            {
+                "page": getattr(page, "value", str(page)),
+                "buttons": buttons,
+                "lists": list_items,
+                "context": context,
+            },
+            capture_source="action_adapter",
+            capture_mode="legacy_controller_methods",
         )
 
 __all__ = ["GDS2ActionAdapter"]

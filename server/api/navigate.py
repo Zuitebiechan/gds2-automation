@@ -195,7 +195,7 @@ def navigate_decision():
     except KeyError as exc:
         return jsonify({"success": False, "error": str(exc)}), 404
     except ValueError as exc:
-        payload, status_code = navigation_decision_error_payload(str(exc))
+        payload, status_code = navigation_decision_error_payload(exc)
         return jsonify(payload), status_code
 
 

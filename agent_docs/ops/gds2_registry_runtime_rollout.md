@@ -52,6 +52,7 @@ Key fields inside `last_route`:
 - `recovery_actions`
 - `recovery_action_counts`
 - `matched_state_trace`
+- `match_diagnostics`
 - `terminal_reason`
 
 `matched_state_trace` records the runtime's observed page-state and recovery-policy choices at major recovery points such as:
@@ -60,6 +61,21 @@ Key fields inside `last_route`:
 - `device_explorer`
 - `j2534_disconnect`
 - `vehicle_selection`
+
+`match_diagnostics` records non-exact or ambiguous action matching decisions. Each item includes:
+
+- `target_label`
+- `action_kind`
+- `owner`
+- `selected_policy`
+- `candidate_labels`
+- `resolution`
+
+Expected `resolution` values are:
+
+- `normalized_exact`: casing or spacing differed, but one exact normalized label matched
+- `unique_contains`: the route used the bounded contains fallback and only one candidate matched
+- `ambiguous`: multiple candidates matched; the runtime treats the action as unsafe to click
 
 ## Release Checklist
 
@@ -111,6 +127,7 @@ Inspect:
 - `last_route.planned_path`
 - `last_route.executed_actions`
 - `last_route.final_page_id`
+- `last_route.match_diagnostics`
 - `last_route.terminal_reason`
 
 Typical causes:
@@ -119,6 +136,7 @@ Typical causes:
 - wrong entry alias
 - unexpected modal or warning dialog
 - controller snapshot drift
+- ambiguous or overly broad action label match
 
 ### Loading page loops or restarts
 

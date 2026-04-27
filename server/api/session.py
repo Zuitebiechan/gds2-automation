@@ -333,6 +333,229 @@ def _sse_response(stream) -> Response:
     )
 
 
+def _log_session_bootstrap_route_decision(
+    *,
+    payload: dict[str, Any],
+    route_decision: dict[str, Any],
+    preferred_zone: str,
+    preferred_metro: str,
+) -> None:
+    selected_zone = (
+        _read_text_field(payload.get("assignment", {}), "zone")
+        or _read_text_field(payload.get("provisioning", {}), "zone")
+        or preferred_zone
+    )
+    selected_metro = (
+        _read_text_field(payload.get("assignment", {}), "metro")
+        or _read_text_field(payload.get("provisioning", {}), "metro")
+        or preferred_metro
+    )
+    logger.info(
+        "session bootstrap route decision selected_zone=%s selected_metro=%s route_source=%s fallback_used=%s signal_conflict=%s",
+        selected_zone,
+        selected_metro,
+        _read_text_field(route_decision, "route_source") or "none",
+        str(bool(route_decision.get("fallback_used"))).lower(),
+        str(bool(route_decision.get("signal_conflict"))).lower(),
+    )
+
+
+def build_session_bootstrap_payload(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    """Build the bootstrap assignment response without Flask response objects."""
+    allocator = get_node_allocator()
+    if allocator is None:
+        return {
+            "success": False,
+            "error": "Node allocator is not configured",
+        }, 503
+
+    brand = _read_text_field(data, "brand")
+    if not brand:
+        return {"success": False, "error": "brand is required"}, 400
+
+    route_decision = _resolve_bootstrap_route_preferences(data)
+    preferred_zone = _read_text_field(route_decision, "preferred_zone")
+    preferred_metro = _read_text_field(route_decision, "preferred_metro")
+
+    ctx = SessionContext(
+        brand=brand,
+        model=_read_text_field(data, "model"),
+        vin=_read_text_field(data, "vin"),
+        backend_name=_read_text_field(data, "backend_name"),
+        extra={
+            k: v
+            for k, v in data.items()
+            if k
+            not in (
+                "brand",
+                "model",
+                "vin",
+                "backend_name",
+                "preferred_zone",
+                "preferred_metro",
+            )
+        },
+    )
+    payload = bootstrap_session_node_assignment(
+        allocator=allocator,
+        context=ctx,
+        preferred_zone=preferred_zone,
+        preferred_metro=preferred_metro,
+        provisioner=get_node_provisioner(),
+        launch_spec_resolver=get_launch_spec_resolver(),
+    )
+    _log_session_bootstrap_route_decision(
+        payload=payload,
+        route_decision=route_decision,
+        preferred_zone=preferred_zone,
+        preferred_metro=preferred_metro,
+    )
+    return payload, 202 if payload.get("pending_capacity") else 200
+
+
+def start_session_from_payload(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    """Start one business session from a validated request payload."""
+    brand = _read_text_field(data, "brand")
+    if not brand:
+        return {"success": False, "error": "brand is required"}, 400
+
+    ctx = SessionContext(
+        brand=brand,
+        model=_read_text_field(data, "model"),
+        vin=_read_text_field(data, "vin"),
+        backend_name=_read_text_field(data, "backend_name"),
+        extra={
+            k: v
+            for k, v in data.items()
+            if k not in ("brand", "model", "vin", "backend_name")
+        },
+    )
+    return (
+        start_business_session(
+            _runtime(),
+            orchestrator=get_orchestrator(),
+            context=ctx,
+        ),
+        200,
+    )
+
+
+def start_diagnostics_from_payload(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    """Run startup diagnostics for one business session payload."""
+    session_id = _read_text_field(data, "session_id")
+    if not session_id:
+        return {"success": False, "error": "session_id required"}, 400
+
+    payload = run_start_diagnostics(
+        _runtime(),
+        orchestrator=get_orchestrator(),
+        backend=_get_backend(session_id),
+        session_id=session_id,
+    )
+    if payload.get("result"):
+        result = payload["result"]
+        if "modules" in result:
+            logger.debug(
+                "SESSION %s diagnostics started modules=%s device=%s",
+                session_id,
+                len(result["modules"]),
+                result.get("device") or '-',
+            )
+        elif "devices" in result:
+            logger.debug(
+                "SESSION %s diagnostics awaiting device selection devices=%s",
+                session_id,
+                len(result["devices"]),
+            )
+        else:
+            logger.debug(
+                "SESSION %s diagnostics started result_keys=%s",
+                session_id,
+                sorted(result.keys()),
+            )
+    return payload, 200
+
+
+def execute_session_action_from_payload(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    """Execute one generic backend action from a business-session payload."""
+    session_id = _read_text_field(data, "session_id")
+    action_name = _read_text_field(data, "action")
+    action_args = _read_object_field(data, "args")
+
+    if not session_id:
+        return {"success": False, "error": "session_id required"}, 400
+    if not action_name:
+        return {"success": False, "error": "action required"}, 400
+
+    orch = get_orchestrator()
+    session = orch.get_session(session_id)
+    ensure_session_capability(session, BackendCapability.GENERIC_ACTIONS)
+
+    logger.debug("SESSION %s action=%s start", session_id, action_name)
+
+    try:
+        try:
+            backend = _get_backend(session_id)
+        except TypeError:
+            backend = _get_backend()
+        outcome = execute_backend_action(
+            session_id,
+            backend=backend,
+            action_name=action_name,
+            action_args=action_args,
+            timeout_sec=float(data.get("timeout_sec", 30.0)),
+            emit_progress=lambda message: orch.emit_progress(session_id, message),
+        )
+    except BranchDecisionRequiredError as exc:
+        payload = raise_branch_decision(
+            orchestrator=orch,
+            session_id=session_id,
+            exc=exc,
+            default_action=action_name,
+        )
+        logger.info(
+            "SESSION %s action=%s awaiting decision=%s domain=%s options=%s",
+            session_id,
+            action_name,
+            payload["decision"]["decision_id"],
+            exc.decision.domain.value,
+            len(exc.choices),
+        )
+        return payload, 200
+
+    if not outcome["success"]:
+        logger.warning(
+            "SESSION %s action=%s failed error=%s",
+            session_id,
+            action_name,
+            outcome["error"],
+        )
+        return {
+            "success": False,
+            "session_id": session_id,
+            "action": action_name,
+            "error": outcome["error"],
+            "attempts": outcome["attempts"],
+            "elapsed_time": outcome["elapsed_time"],
+        }, 500
+
+    logger.debug(
+        "SESSION %s action=%s completed attempts=%s elapsed=%.1fs",
+        session_id,
+        action_name,
+        outcome["attempts"],
+        outcome["elapsed_time"],
+    )
+    return {
+        "success": True,
+        "session_id": session_id,
+        "action": action_name,
+        "result": outcome["result"],
+        "attempts": outcome["attempts"],
+        "elapsed_time": outcome["elapsed_time"],
+    }, 200
+
+
 # ---------------------------------------------------------------------------
 # POST /api/session/bootstrap
 # ---------------------------------------------------------------------------
@@ -353,69 +576,8 @@ def session_bootstrap_ready():
 def session_bootstrap():
     """Assign a new diagnostics session to a remote worker node."""
     try:
-        allocator = get_node_allocator()
-        if allocator is None:
-            return jsonify(
-                {
-                    "success": False,
-                    "error": "Node allocator is not configured",
-                }
-            ), 503
-
         data = require_json_object(request)
-        brand = _read_text_field(data, "brand")
-
-        if not brand:
-            return jsonify({"success": False, "error": "brand is required"}), 400
-
-        route_decision = _resolve_bootstrap_route_preferences(data)
-        preferred_zone = _read_text_field(route_decision, "preferred_zone")
-        preferred_metro = _read_text_field(route_decision, "preferred_metro")
-
-        ctx = SessionContext(
-            brand=brand,
-            model=_read_text_field(data, "model"),
-            vin=_read_text_field(data, "vin"),
-            backend_name=_read_text_field(data, "backend_name"),
-            extra={
-                k: v
-                for k, v in data.items()
-                if k
-                not in (
-                    "brand",
-                    "model",
-                    "vin",
-                    "backend_name",
-                    "preferred_zone",
-                    "preferred_metro",
-                )
-            },
-        )
-        payload = bootstrap_session_node_assignment(
-            allocator=allocator,
-            context=ctx,
-            preferred_zone=preferred_zone,
-            preferred_metro=preferred_metro,
-            provisioner=get_node_provisioner(),
-            launch_spec_resolver=get_launch_spec_resolver(),
-        )
-        selected_zone = _read_text_field(payload.get("assignment", {}), "zone") or _read_text_field(
-            payload.get("provisioning", {}),
-            "zone",
-        ) or preferred_zone
-        selected_metro = _read_text_field(payload.get("assignment", {}), "metro") or _read_text_field(
-            payload.get("provisioning", {}),
-            "metro",
-        ) or preferred_metro
-        logger.info(
-            "session bootstrap route decision selected_zone=%s selected_metro=%s route_source=%s fallback_used=%s signal_conflict=%s",
-            selected_zone,
-            selected_metro,
-            _read_text_field(route_decision, "route_source") or "none",
-            str(bool(route_decision.get("fallback_used"))).lower(),
-            str(bool(route_decision.get("signal_conflict"))).lower(),
-        )
-        status = 202 if payload.get("pending_capacity") else 200
+        payload, status = build_session_bootstrap_payload(data)
         return jsonify(payload), status
 
     except ValueError as exc:
@@ -545,29 +707,10 @@ def session_start():
     """
     try:
         data = require_json_object(request)
-        brand = _read_text_field(data, "brand")
-
-        if not brand:
-            return jsonify({"success": False, "error": "brand is required"}), 400
-
-        ctx = SessionContext(
-            brand=brand,
-            model=_read_text_field(data, "model"),
-            vin=_read_text_field(data, "vin"),
-            backend_name=_read_text_field(data, "backend_name"),
-            extra={
-                k: v
-                for k, v in data.items()
-                if k not in ("brand", "model", "vin", "backend_name")
-            },
-        )
-        return jsonify(
-            start_business_session(
-                _runtime(),
-                orchestrator=get_orchestrator(),
-                context=ctx,
-            )
-        )
+        payload, status = start_session_from_payload(data)
+        if status == 200:
+            return jsonify(payload)
+        return jsonify(payload), status
 
     except ValueError as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
@@ -608,39 +751,10 @@ def session_start_diagnostics():
     """
     try:
         data = require_json_object(request)
-        session_id = _read_text_field(data, "session_id")
-
-        if not session_id:
-            return jsonify({"success": False, "error": "session_id required"}), 400
-
-        payload = run_start_diagnostics(
-            _runtime(),
-            orchestrator=get_orchestrator(),
-            backend=_get_backend(session_id),
-            session_id=session_id,
-        )
-        if payload.get("result"):
-            result = payload["result"]
-            if "modules" in result:
-                logger.debug(
-                    "SESSION %s diagnostics started modules=%s device=%s",
-                    session_id,
-                    len(result["modules"]),
-                    result.get("device") or '-',
-                )
-            elif "devices" in result:
-                logger.debug(
-                    "SESSION %s diagnostics awaiting device selection devices=%s",
-                    session_id,
-                    len(result["devices"]),
-                )
-            else:
-                logger.debug(
-                    "SESSION %s diagnostics started result_keys=%s",
-                    session_id,
-                    sorted(result.keys()),
-                )
-        return jsonify(payload)
+        payload, status = start_diagnostics_from_payload(data)
+        if status == 200:
+            return jsonify(payload)
+        return jsonify(payload), status
 
     except KeyError as exc:
         return jsonify({"success": False, "error": str(exc)}), 404
@@ -677,89 +791,17 @@ def session_execute():
     """
     try:
         data = require_json_object(request)
-        session_id = _read_text_field(data, "session_id")
-        action_name = _read_text_field(data, "action")
-        action_args = _read_object_field(data, "args")
-
-        if not session_id:
-            return jsonify({"success": False, "error": "session_id required"}), 400
-        if not action_name:
-            return jsonify({"success": False, "error": "action required"}), 400
-
-        orch = get_orchestrator()
-        session = orch.get_session(session_id)
-        ensure_session_capability(session, BackendCapability.GENERIC_ACTIONS)
-
-        logger.debug("SESSION %s action=%s start", session_id, action_name)
-
-        try:
-            try:
-                backend = _get_backend(session_id)
-            except TypeError:
-                backend = _get_backend()
-            outcome = execute_backend_action(
-                session_id,
-                backend=backend,
-                action_name=action_name,
-                action_args=action_args,
-                timeout_sec=float(data.get("timeout_sec", 30.0)),
-                emit_progress=lambda message: orch.emit_progress(session_id, message),
-            )
-        except BranchDecisionRequiredError as exc:
-            payload = raise_branch_decision(
-                orchestrator=orch,
-                session_id=session_id,
-                exc=exc,
-                default_action=action_name,
-            )
-            logger.info(
-                "SESSION %s action=%s awaiting decision=%s domain=%s options=%s",
-                session_id,
-                action_name,
-                payload["decision"]["decision_id"],
-                exc.decision.domain.value,
-                len(exc.choices),
-            )
+        payload, status = execute_session_action_from_payload(data)
+        if status == 200:
             return jsonify(payload)
-
-        if not outcome["success"]:
-            logger.warning(
-                "SESSION %s action=%s failed error=%s",
-                session_id,
-                action_name,
-                outcome["error"],
-            )
-            return jsonify({
-                "success": False,
-                "session_id": session_id,
-                "action": action_name,
-                "error": outcome["error"],
-                "attempts": outcome["attempts"],
-                "elapsed_time": outcome["elapsed_time"],
-            }), 500
-
-        logger.debug(
-            "SESSION %s action=%s completed attempts=%s elapsed=%.1fs",
-            session_id,
-            action_name,
-            outcome["attempts"],
-            outcome["elapsed_time"],
-        )
-        return jsonify({
-            "success": True,
-            "session_id": session_id,
-            "action": action_name,
-            "result": outcome["result"],
-            "attempts": outcome["attempts"],
-            "elapsed_time": outcome["elapsed_time"],
-        })
+        return jsonify(payload), status
 
     except KeyError as exc:
         return jsonify({"success": False, "error": str(exc)}), 404
     except UnsupportedCapabilityError as exc:
         return jsonify({"success": False, "error": str(exc)}), 501
     except ValueError as exc:
-        payload, status = session_state_error_payload(str(exc))
+        payload, status = session_state_error_payload(exc)
         return jsonify(payload), status
     except RequestPayloadError as exc:
         return jsonify({"success": False, "error": str(exc)}), 400

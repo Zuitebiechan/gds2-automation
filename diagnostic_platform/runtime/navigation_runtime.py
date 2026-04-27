@@ -22,6 +22,11 @@ from diagnostic_platform.safe_utils import (
 )
 
 from .errors import OperationCancelledError
+from .navigation_errors import (
+    NavigationDecisionMismatchError,
+    NavigationNotAwaitingDecisionError,
+    NavigationSessionTerminatedError,
+)
 from .worker_runtime import WorkerRuntime
 
 logger = logging.getLogger(__name__)
@@ -110,14 +115,10 @@ def submit_navigation_decision(
     session_status = _status_value(session.status)
 
     if session_status != NavSessionStatus.AWAITING_DECISION.value:
-        raise ValueError(
-            f"Session is not awaiting a decision (status={session_status})"
-        )
+        raise NavigationNotAwaitingDecisionError(session_status)
 
     if decision_id and session.pending_decision_id and decision_id != session.pending_decision_id:
-        raise ValueError(
-            f"Decision ID mismatch: expected '{session.pending_decision_id}', got '{decision_id}'"
-        )
+        raise NavigationDecisionMismatchError(session.pending_decision_id, decision_id)
 
     session.status = NavSessionStatus.RUNNING
     session.pending_decision_id = None
@@ -142,7 +143,7 @@ def abort_navigation_session(runtime: WorkerRuntime, session_id: str) -> dict[st
         NavSessionStatus.FAILED.value,
         NavSessionStatus.ABORTED.value,
     ):
-        raise ValueError(f"Session already terminated (status={session_status})")
+        raise NavigationSessionTerminatedError(session_status)
 
     session.status = NavSessionStatus.ABORTED
     session.error = "Aborted by user"

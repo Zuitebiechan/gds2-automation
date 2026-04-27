@@ -5,6 +5,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from diagnostic_platform.runtime.navigation_errors import NavigationDecisionError
+from diagnostic_platform.runtime.session_errors import SessionNotRunningError
+
 INTERNAL_SERVER_ERROR_MESSAGE = "Internal server error"
 JSON_OBJECT_REQUIRED_MESSAGE = "JSON request body must be an object"
 _SESSION_NOT_RUNNING_RE = re.compile(r"Session not running \(status=([^)]+)\)")
@@ -90,18 +93,27 @@ def session_not_running_payload(session_status: str) -> dict[str, Any]:
     )
 
 
-def session_state_error_payload(message: str) -> tuple[dict[str, Any], int]:
+def session_state_error_payload(error: Any) -> tuple[dict[str, Any], int]:
     """Classify common session state errors into stable payloads."""
-    text = str(message)
+    if isinstance(error, SessionNotRunningError):
+        return session_not_running_payload(error.session_status), 409
+
+    text = str(error)
     match = _SESSION_NOT_RUNNING_RE.search(text)
     if match:
         return session_not_running_payload(match.group(1)), 409
     return error_payload(text), 400
 
 
-def navigation_decision_error_payload(message: str) -> tuple[dict[str, Any], int]:
+def navigation_decision_error_payload(error: Any) -> tuple[dict[str, Any], int]:
     """Classify navigation decision errors into stable payloads."""
-    text = str(message)
+    if isinstance(error, NavigationDecisionError):
+        return (
+            error_payload(str(error), error_code=error.error_code),
+            error.http_status,
+        )
+
+    text = str(error)
     lowered = text.lower()
     if "not awaiting a decision" in lowered:
         return error_payload(text, error_code="navigation_not_awaiting_decision"), 409

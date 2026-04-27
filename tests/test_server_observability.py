@@ -89,6 +89,25 @@ def _raw_event_files(root: Path) -> list[Path]:
     return sorted((root / "RPA_Diagnostic" / "observability" / "cloud" / "raw").glob("*.jsonl"))
 
 
+class _JsonResponse:
+    is_json = True
+    mimetype = "application/json"
+    content_type = "application/json"
+
+    def __init__(self, payload: dict[str, object], status_code: int) -> None:
+        self.status_code = status_code
+        self._payload = dict(payload)
+        self.data = json.dumps(self._payload).encode("utf-8")
+
+    def get_json(self, silent=False):
+        return dict(self._payload)
+
+    def set_data(self, data):
+        text = data.decode("utf-8") if isinstance(data, bytes) else str(data)
+        self.data = text.encode("utf-8")
+        self._payload = json.loads(text)
+
+
 def test_resolve_server_log_path_prefers_log_dir(tmp_path: Path, monkeypatch) -> None:
     _install_fake_flask_stack(monkeypatch)
     server_app = importlib.import_module("server.app")
@@ -135,6 +154,65 @@ def test_api_request_observability_assigns_request_id_and_writes_success_event(
     assert records[-1]["status"] == "ok"
     assert records[-1]["session_id"] == "session-1"
     assert records[-1]["request_id"] == fake_flask.request.request_id
+
+
+def test_api_error_responses_receive_bound_request_id(monkeypatch) -> None:
+    fake_flask = _install_fake_flask_stack(monkeypatch)
+    server_app = importlib.import_module("server.app")
+
+    app = server_app.create_app()
+    for handler in app._before_request_handlers:
+        result = handler()
+        assert result is None
+
+    response = _JsonResponse(
+        {"success": False, "error": "Internal server error"},
+        500,
+    )
+    returned = app._after_request_handlers[0](response)
+
+    assert returned is response
+    assert response.get_json()["request_id"] == fake_flask.request.request_id
+
+
+def test_api_token_guard_error_receives_request_id(monkeypatch) -> None:
+    fake_flask = _install_fake_flask_stack(monkeypatch)
+    server_app = importlib.import_module("server.app")
+
+    app = server_app.create_app(
+        server_app.ServerRuntimeSettings(api_token="secret-token")
+    )
+    guard_result = None
+    for handler in app._before_request_handlers:
+        guard_result = handler()
+        if guard_result is not None:
+            break
+
+    assert guard_result == ({"success": False, "error": "Unauthorized"}, 401)
+
+    response = _JsonResponse(guard_result[0], guard_result[1])
+    app._after_request_handlers[0](response)
+
+    assert response.get_json() == {
+        "success": False,
+        "error": "Unauthorized",
+        "request_id": fake_flask.request.request_id,
+    }
+
+
+def test_api_success_responses_do_not_receive_request_id(monkeypatch) -> None:
+    _install_fake_flask_stack(monkeypatch)
+    server_app = importlib.import_module("server.app")
+
+    app = server_app.create_app()
+    for handler in app._before_request_handlers:
+        result = handler()
+        assert result is None
+
+    response = _JsonResponse({"success": True}, 200)
+    app._after_request_handlers[0](response)
+
+    assert response.get_json() == {"success": True}
 
 
 def test_api_request_observability_writes_error_event_for_failed_response(

@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from backends.gds2.observed_state import classify_effective_page
 from src.native.device_explorer import DeviceExplorerController
 from src.streaming.agent_navigator import AgentNavigator
 
@@ -260,21 +261,13 @@ class GDS2ExplorerHarness:
 
     def _classify_effective_page(self, snapshot: dict[str, Any]) -> str:
         page_id = self._raw_snapshot_page_id(snapshot)
-        if page_id != "loading":
-            return page_id
-
-        button_texts = set(self._snapshot_button_texts(snapshot))
-        vehicle_markers = {
-            "Select Device",
-            "Disconnect",
-            "Clear Vehicle Selection",
-            "Read VIN",
-            "Copy VIN",
-        }
-        if button_texts & vehicle_markers:
-            return "vehicle_selection"
-
-        return page_id
+        effective_page, evidence = classify_effective_page(
+            page_id,
+            self._snapshot_button_texts(snapshot),
+            [str(item).strip() for item in snapshot.get("list_items") or [] if str(item).strip()],
+        )
+        snapshot["classification_evidence"] = evidence
+        return effective_page
 
     def _snapshot_page_id(self, snapshot: dict[str, Any]) -> str:
         cached = snapshot.get("effective_page_id")

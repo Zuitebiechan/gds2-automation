@@ -21,6 +21,11 @@ from diagnostic_platform.runtime.navigation_runtime import (
     start_navigation_session,
     submit_navigation_decision,
 )
+from diagnostic_platform.runtime.navigation_errors import (
+    NavigationDecisionMismatchError,
+    NavigationNotAwaitingDecisionError,
+    NavigationSessionTerminatedError,
+)
 from diagnostic_platform.runtime.worker_runtime import WorkerRuntime
 from diagnostic_platform.sse import (
     agent_stream_client_count,
@@ -34,6 +39,23 @@ from src.navigation import GDS2Page
 class _StableValue:
     def __str__(self) -> str:
         return "stable-value"
+
+
+def _event_types(messages: list[str]) -> list[str]:
+    event_types: list[str] = []
+    for message in messages:
+        if message.startswith(":"):
+            event_types.append("keepalive")
+            continue
+        event_types.append(message.splitlines()[0].removeprefix("event: "))
+    return event_types
+
+
+def _assert_no_session_only_events(messages: list[str]) -> None:
+    joined_events = "".join(messages)
+    assert "event: network_quality_changed\n" not in joined_events
+    assert "event: decision_timeout\n" not in joined_events
+    assert "event: decision_resolved\n" not in joined_events
 
 
 def test_live_data_stream_reuses_scope_and_stops_cleanly(monkeypatch):
@@ -173,6 +195,49 @@ def test_navigation_runtime_start_registers_session_and_accepts_decision(monkeyp
     assert session.decision_queue.get_nowait() == {"selected_item": "ECM"}
 
 
+def test_navigation_runtime_raises_typed_decision_state_errors():
+    runtime = WorkerRuntime()
+    session = NavSession(session_id="nav-typed", goal="Navigate to Data Display")
+    runtime.set_navigation_session(session.session_id, session)
+
+    with pytest.raises(NavigationNotAwaitingDecisionError) as not_awaiting:
+        submit_navigation_decision(
+            runtime,
+            session.session_id,
+            decision_id="decision-1",
+            selected_item="ECM",
+        )
+
+    assert not_awaiting.value.error_code == "navigation_not_awaiting_decision"
+    assert not_awaiting.value.http_status == 409
+
+    session.status = NavSessionStatus.AWAITING_DECISION
+    session.pending_decision_id = "decision-1"
+    with pytest.raises(NavigationDecisionMismatchError) as mismatch:
+        submit_navigation_decision(
+            runtime,
+            session.session_id,
+            decision_id="decision-2",
+            selected_item="ECM",
+        )
+
+    assert mismatch.value.error_code == "navigation_decision_mismatch"
+    assert mismatch.value.http_status == 400
+
+
+def test_abort_navigation_session_raises_typed_terminal_error():
+    runtime = WorkerRuntime()
+    session = NavSession(session_id="nav-terminal", goal="Navigate to Data Display")
+    session.status = NavSessionStatus.COMPLETED
+    runtime.set_navigation_session(session.session_id, session)
+
+    with pytest.raises(NavigationSessionTerminatedError) as terminated:
+        abort_navigation_session(runtime, session.session_id)
+
+    assert terminated.value.error_code == "navigation_session_terminated"
+    assert terminated.value.http_status == 409
+
+
 def test_navigation_runtime_start_defaults_invalid_goal(monkeypatch):
     runtime = WorkerRuntime()
 
@@ -280,6 +345,9 @@ def test_navigation_status_and_abort_surface_pending_decision_and_terminal_state
     payload = abort_navigation_session(runtime, session.session_id)
     error_event = session.event_queue.get_nowait()
 
+    assert status["session_id"] == "nav-1"
+    assert status["status"] == "awaiting_decision"
+    assert status["goal"] == "Navigate to Data Display"
     assert status["pending_decision"]["decision_id"] == "decision-1"
     assert status["pending_decision"]["items"] == ["ECM", "TCM"]
     assert payload["success"] is True
@@ -316,6 +384,8 @@ def test_iter_navigation_session_events_serializes_non_json_values():
         ": keepalive\n\n",
         'event: done\ndata: {"type": "done", "status": "completed", "error": null}\n\n',
     ]
+    assert _event_types(events) == ["connected", "progress", "keepalive", "done"]
+    _assert_no_session_only_events(events)
 
 
 def test_abort_navigation_session_sets_cancel_event():

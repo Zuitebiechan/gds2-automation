@@ -234,22 +234,24 @@ class GDS2ControllerRuntime:
             controller=self.get_controller(),
             graph=graph,
         )
+        loading_timeout_sec = float(
+            loading_params.get("timeout_sec")
+            or (loading_policy or {}).get("timeout_sec")
+            or 20.0
+        )
+        max_loading_restarts = int(
+            loading_params.get("max_restarts")
+            or (loading_policy or {}).get("max_attempts")
+            or 1
+        )
         return RegistryNavigationRuntime(
             controller=self.get_controller(),
             route_navigator=route_navigator,
             entries=entries,
             page_states=page_states,
             recovery_policies=recovery_policies,
-            loading_timeout_sec=float(
-                loading_params.get("timeout_sec")
-                or (loading_policy or {}).get("timeout_sec")
-                or 20.0
-            ),
-            max_loading_restarts=int(
-                loading_params.get("max_restarts")
-                or (loading_policy or {}).get("max_attempts")
-                or 1
-            ),
+            loading_timeout_sec=loading_timeout_sec,
+            max_loading_restarts=max_loading_restarts,
             restart_runtime=self._restart_registry_runtime,
             read_dtcs_snapshot=self.read_all_dtcs,
             read_dtc_count=self.read_current_dtc_count,
