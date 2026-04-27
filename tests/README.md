@@ -30,8 +30,7 @@ The current top-level regression suites are:
 - `test_proxy_benchmark.py`: proxy benchmark event/report behavior
 - `test_server_layout.py`: Flask/server layout and blueprint wiring
 - `test_repo_layout_consistency.py`: repository structure and documentation consistency guards
-- `test_read_data_display_agent.py`: read-data workflow wrapper success and error propagation
-- `test_interactive_workflow.py`: step-by-step navigation workflow behavior and report parsing
+- `test_gds2_report_parser.py`: backend-owned GDS2 Data Display report parsing
 - `test_agent_data_collector.py`: Java Agent data collection behavior
 - `test_diagnostic_buffer.py`: sliding-window sampling, delta payload export, and raw-payload caching safety
 - `test_agent_navigator.py`: agent command serialization and result handoff behavior
@@ -67,10 +66,10 @@ Run the simulated no-hardware system-flow coverage:
 python -m pytest tests\test_simulated_system_flow.py tests\test_simulated_session_api_flow.py -q
 ```
 
-Run the focused GDS2 workflow and agent-side regressions:
+Run the focused GDS2 runtime and agent-side regressions:
 
 ```bash
-python -m pytest tests\test_gds2_controller_runtime.py tests\test_read_data_display_agent.py tests\test_interactive_workflow.py tests\test_agent_data_collector.py tests\test_diagnostic_buffer.py tests\test_agent_navigator.py tests\test_diagnostics_window.py tests\test_client_gui.py tests\test_device_explorer.py tests\test_llm_client.py tests\test_ai_engine.py tests\test_vehicle_mapping.py -q
+python -m pytest tests\test_gds2_controller_runtime.py tests\test_gds2_report_parser.py tests\test_agent_data_collector.py tests\test_diagnostic_buffer.py tests\test_agent_navigator.py tests\test_diagnostics_window.py tests\test_client_gui.py tests\test_device_explorer.py tests\test_llm_client.py tests\test_ai_engine.py tests\test_vehicle_mapping.py -q
 ```
 
 Run repository/documentation consistency checks:

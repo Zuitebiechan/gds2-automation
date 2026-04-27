@@ -14,6 +14,14 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+_RETIRED_WORKFLOW_MARKERS = (
+    "src.workflows",
+    "interactive_workflow",
+    "read_data_display_agent",
+    "InteractiveWorkflow",
+    "ReadDataDisplayAgentWorkflow",
+)
+
 import diagnostic_platform.contracts as contracts_module
 import diagnostic_platform.runtime.worker_runtime as worker_runtime_module
 from diagnostic_platform.runtime.session_lifecycle import (
@@ -37,6 +45,11 @@ from src.gds2_orchestration.session_orchestrator import (
 def _require_attr(obj: Any, name: str) -> Any:
     assert hasattr(obj, name), f"{obj!r} should expose {name}"
     return getattr(obj, name)
+
+
+def _assert_no_retired_workflow_markers(source: str, context: str = "source") -> None:
+    for marker in _RETIRED_WORKFLOW_MARKERS:
+        assert marker not in source, f"{marker!r} should not appear in {context}"
 
 
 def _require_module(module_name: str):
@@ -1159,6 +1172,7 @@ def test_platform_runtime_modules_do_not_import_legacy_navigation_brains():
         assert "src.workflows.data_viewer" not in source
         assert "from src.navigation" not in source
         assert "import src.navigation" not in source
+        _assert_no_retired_workflow_markers(source, module_name)
 
 
 def test_gds2_backend_modules_do_not_reference_data_viewer_workflow():
@@ -1173,6 +1187,37 @@ def test_gds2_backend_modules_do_not_reference_data_viewer_workflow():
         source = inspect.getsource(module)
         assert "DataViewerWorkflow" not in source
         assert "src.workflows.data_viewer" not in source
+        _assert_no_retired_workflow_markers(source, module_name)
+
+
+def test_retired_workflow_source_modules_are_removed():
+    workflow_dir = ROOT / "src" / "workflows"
+    if not workflow_dir.exists():
+        return
+
+    remaining_python_sources = [
+        path.relative_to(ROOT)
+        for path in workflow_dir.rglob("*.py")
+        if "__pycache__" not in path.parts
+    ]
+
+    assert remaining_python_sources == []
+
+
+def test_production_code_does_not_reference_retired_workflow_layer():
+    production_roots = [
+        ROOT / "backends",
+        ROOT / "diagnostic_platform",
+        ROOT / "server",
+        ROOT / "src",
+    ]
+
+    for root in production_roots:
+        for path in root.rglob("*.py"):
+            if "__pycache__" in path.parts:
+                continue
+            source = path.read_text(encoding="utf-8", errors="ignore")
+            _assert_no_retired_workflow_markers(source, str(path.relative_to(ROOT)))
 
 
 def test_registry_navigation_runtime_no_longer_delegates_production_navigation_to_legacy():

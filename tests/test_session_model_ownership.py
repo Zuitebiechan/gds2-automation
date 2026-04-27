@@ -202,13 +202,13 @@ def test_gds2_action_adapter_is_reexported_by_legacy_module() -> None:
     assert LegacyGDS2ActionAdapter is GDS2ActionAdapter
 
 
-def test_gds2_backend_and_remaining_workflows_use_backend_ownership_modules() -> None:
+def test_gds2_backend_uses_backend_ownership_modules_and_workflows_are_retired() -> None:
     backend_imports = _imported_modules(ROOT / "backends" / "gds2" / "backend.py")
     assert "backends.gds2.action_adapter" in backend_imports
     assert "src.gds2_orchestration" not in backend_imports
 
-    workflow_imports = _imported_modules(ROOT / "src" / "workflows" / "interactive_workflow.py")
-    assert "gds2_orchestration.planner" not in workflow_imports
+    assert not (ROOT / "src" / "workflows" / "interactive_workflow.py").exists()
+    assert not (ROOT / "src" / "workflows" / "read_data_display_agent.py").exists()
 
 
 def test_backend_owned_gds2_modules_do_not_import_legacy_orchestrator_paths() -> None:

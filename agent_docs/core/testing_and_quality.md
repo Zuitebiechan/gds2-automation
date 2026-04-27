@@ -27,8 +27,7 @@ This document does not restate the full architecture. For design context, read `
 | `tests/test_proxy_benchmark.py` | proxy benchmark behavior |
 | `tests/test_server_layout.py` | Flask/server layout and blueprint wiring |
 | `tests/test_repo_layout_consistency.py` | repository/documentation consistency and stale-technology guards |
-| `tests/test_read_data_display_agent.py` | read-data workflow wrapper success and error propagation |
-| `tests/test_interactive_workflow.py` | step-by-step navigation workflow behavior and report parsing |
+| `tests/test_gds2_report_parser.py` | backend-owned GDS2 Data Display report parsing |
 | `tests/test_agent_data_collector.py` | Java agent data collection behavior |
 | `tests/test_diagnostic_buffer.py` | sliding-window sampling quality, delta export, and raw-payload caching safety |
 | `tests/test_agent_navigator.py` | agent command serialization and result handoff behavior |
@@ -64,7 +63,7 @@ python -m pytest tests\test_backend_capability_architecture.py tests\test_backen
 Run the focused GDS2/runtime regressions:
 
 ```bash
-python -m pytest tests\test_gds2_controller_runtime.py tests\test_read_data_display_agent.py tests\test_interactive_workflow.py tests\test_agent_data_collector.py tests\test_diagnostic_buffer.py tests\test_agent_navigator.py tests\test_diagnostics_window.py tests\test_device_explorer.py tests\test_llm_client.py tests\test_ai_engine.py tests\test_vehicle_mapping.py -q
+python -m pytest tests\test_gds2_controller_runtime.py tests\test_gds2_report_parser.py tests\test_agent_data_collector.py tests\test_diagnostic_buffer.py tests\test_agent_navigator.py tests\test_diagnostics_window.py tests\test_device_explorer.py tests\test_llm_client.py tests\test_ai_engine.py tests\test_vehicle_mapping.py -q
 ```
 
 ### If you change `vci_proxy/`
