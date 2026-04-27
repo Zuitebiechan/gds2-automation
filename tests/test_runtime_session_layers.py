@@ -497,6 +497,111 @@ def test_clear_dtcs_explicit_context_selects_module_and_category(monkeypatch):
     assert session.selected_data_category == "Engine Data"
 
 
+def test_clear_dtcs_ignores_redundant_explicit_context_on_current_data_display(monkeypatch):
+    runtime, _, session, _ = _start_gds2_session(monkeypatch)
+    session.selected_module = "ECM"
+    session.selected_data_category = "Engine Data"
+
+    backend = MagicMock()
+    backend.get_state.return_value = types.SimpleNamespace(
+        current_page="data_display",
+        current_module="",
+        current_data_category="",
+    )
+    backend.detect_current_page.return_value = "data_display"
+    backend.clear_dtcs.return_value = types.SimpleNamespace(
+        success=True,
+        cleared_count=3,
+        message="Clear DTCs completed",
+    )
+
+    payload = clear_dtcs(
+        runtime,
+        session,
+        {
+            "session_id": session.session_id,
+            "module": "ECM",
+            "data_category": "Engine Data",
+        },
+        backend=backend,
+        emit_progress=lambda _message: None,
+    )
+
+    assert payload == {
+        "success": True,
+        "cleared_count": 3,
+        "message": "Clear DTCs completed",
+        "page_context": "data_display",
+    }
+    backend.select_module.assert_not_called()
+    backend.select_data_category.assert_not_called()
+    backend.clear_dtcs.assert_called_once_with()
+
+
+def test_clear_dtcs_keeps_explicit_reselection_when_target_differs_on_data_display(monkeypatch):
+    runtime, _, session, _ = _start_gds2_session(monkeypatch)
+    session.selected_module = "BCM"
+    session.selected_data_category = "Body Data"
+
+    class BackendWithDifferentExplicitTarget:
+        def __init__(self):
+            self.current_page = "data_display"
+            self.current_module = "BCM"
+            self.current_data_category = "Body Data"
+            self.select_module_calls: list[str] = []
+            self.select_data_category_calls: list[str] = []
+
+        def get_state(self):
+            return types.SimpleNamespace(
+                current_page=self.current_page,
+                current_module=self.current_module,
+                current_data_category=self.current_data_category,
+            )
+
+        def detect_current_page(self):
+            return self.current_page
+
+        def select_module(self, module_name):
+            self.select_module_calls.append(module_name)
+            self.current_module = module_name
+            self.current_page = "data_list"
+
+        def select_data_category(self, data_category):
+            self.select_data_category_calls.append(data_category)
+            self.current_data_category = data_category
+            self.current_page = "data_display"
+
+        def clear_dtcs(self):
+            return types.SimpleNamespace(
+                success=True,
+                cleared_count=1,
+                message="Clear DTCs completed",
+            )
+
+    backend = BackendWithDifferentExplicitTarget()
+
+    payload = clear_dtcs(
+        runtime,
+        session,
+        {
+            "session_id": session.session_id,
+            "module": "ECM",
+            "data_category": "Engine Data",
+        },
+        backend=backend,
+        emit_progress=lambda _message: None,
+    )
+
+    assert payload == {
+        "success": True,
+        "cleared_count": 1,
+        "message": "Clear DTCs completed",
+        "page_context": "data_display",
+    }
+    assert backend.select_module_calls == ["ECM"]
+    assert backend.select_data_category_calls == ["Engine Data"]
+
+
 def test_clear_dtcs_uses_remembered_context_when_not_on_data_display(monkeypatch):
     runtime, _, session, _ = _start_gds2_session(monkeypatch)
     session.selected_module = "ECM"

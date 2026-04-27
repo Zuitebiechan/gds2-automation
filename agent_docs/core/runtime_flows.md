@@ -265,7 +265,7 @@ Sequence:
 2. Reject the operation if live-data, navigation, or AI execution is still active for the session.
 3. Acquire a worker-exclusive `clear_dtcs` operation lock.
 4. Detect the backend's current page/state.
-5. If the request explicitly supplies `module` or `data_category`, reconcile that target context before clearing.
+5. If the request explicitly supplies `module` or `data_category`, reconcile that target context before clearing, unless those fields only restate the current `Data Display` context.
 6. Otherwise, treat the current `Data Display` context as authoritative and avoid hidden module/category reselection.
 7. Call backend clear-DTC behavior.
 8. Return normalized clear result payload with `cleared_count`, `message`, and final page context.

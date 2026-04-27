@@ -588,8 +588,6 @@ def test_on_clear_dtcs_clicked_posts_session_clear_request() -> None:
             {
                 "json_data": {
                     "session_id": "session-123",
-                    "module": "ECM",
-                    "data_category": "Diagnostic Data Display",
                 },
                 "callback_event": "clear_dtcs_result",
             },
@@ -597,7 +595,7 @@ def test_on_clear_dtcs_clicked_posts_session_clear_request() -> None:
     ]
 
 
-def test_on_clear_dtcs_clicked_posts_vehicle_context_for_vehicle_branch() -> None:
+def test_on_clear_dtcs_clicked_uses_session_only_payload_for_vehicle_branch() -> None:
     window = _build_window(current_page="data_display")
     window._active_branch = "vehicle"
     window._selected_module.set("")
@@ -615,7 +613,6 @@ def test_on_clear_dtcs_clicked_posts_vehicle_context_for_vehicle_branch() -> Non
             {
                 "json_data": {
                     "session_id": "session-123",
-                    "data_category": "Vehicle DTC Information",
                 },
                 "callback_event": "clear_dtcs_result",
             },

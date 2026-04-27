@@ -204,6 +204,41 @@ def _clear_dtcs_context_flags(session: Any, data: dict[str, Any]) -> tuple[bool,
     return explicit_context_requested, remembered_context_available
 
 
+def _clear_dtcs_explicit_context_is_redundant(
+    session: Any,
+    data: dict[str, Any],
+    *,
+    state: Any,
+    current_page: str,
+) -> bool:
+    """Return whether explicit clear-DTC context only restates the active Data Display target."""
+    if current_page != "data_display":
+        return False
+
+    explicit_module = _strip_optional_text(data.get("module"))
+    explicit_data_category = _strip_optional_text(data.get("data_category"))
+    if not (explicit_module or explicit_data_category):
+        return False
+
+    known_modules = {
+        _strip_optional_text(getattr(state, "current_module", "")),
+        _strip_optional_text(getattr(session, "selected_module", "")),
+    }
+    known_modules.discard("")
+
+    known_categories = {
+        _strip_optional_text(getattr(state, "current_data_category", "")),
+        _strip_optional_text(getattr(session, "selected_data_category", "")),
+    }
+    known_categories.discard("")
+
+    if explicit_module and explicit_module not in known_modules:
+        return False
+    if explicit_data_category and explicit_data_category not in known_categories:
+        return False
+    return True
+
+
 def _apply_explicit_clear_dtcs_context(
     session: Any,
     data: dict[str, Any],
@@ -742,7 +777,12 @@ def clear_dtcs(
             data,
         )
 
-        if explicit_context_requested:
+        if explicit_context_requested and not _clear_dtcs_explicit_context_is_redundant(
+            session,
+            data,
+            state=state,
+            current_page=current_page,
+        ):
             state, current_page = _apply_explicit_clear_dtcs_context(
                 session,
                 data,

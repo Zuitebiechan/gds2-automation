@@ -2296,17 +2296,12 @@ class DiagnosticsWindow:
         self._set_status_text("Clearing fault codes...")
         self._set_action_output_mode("dtc")
         self._append_agent_message("user", "Execute Clear DTCs")
-        payload: dict[str, Any] = {
-            "session_id": self._session_id,
-        }
-        if module:
-            payload["module"] = module
-        if category:
-            payload["data_category"] = category
         self._api_call(
             "POST",
             "/api/session/clear_dtcs",
-            json_data=payload,
+            # The session runtime treats the current Data Display page as
+            # authoritative when no explicit module/category is supplied.
+            json_data={"session_id": self._session_id},
             callback_event="clear_dtcs_result",
         )
 
