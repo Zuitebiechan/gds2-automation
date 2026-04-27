@@ -1191,7 +1191,17 @@ class RegistryNavigationRuntime:
         clear_entry = self._require_entry("dtc.clear.execute")
         try:
             initial_snapshot = self.capture_runtime_snapshot()
-            active_clear_entry = clear_entry
+            vehicle_context = self._is_vehicle_dtc_context(initial_snapshot)
+            active_clear_entry = (
+                self._build_vehicle_dtc_clear_entry(clear_entry)
+                if vehicle_context
+                else clear_entry
+            )
+            display_entry = (
+                self._require_entry("vehicle_dtc.information")
+                if vehicle_context
+                else dtc_display_entry
+            )
             if self._is_data_display_direct_clear_context(initial_snapshot):
                 display_result = {
                     "matched_start_node_id": None,
@@ -1202,9 +1212,7 @@ class RegistryNavigationRuntime:
                     "final_snapshot": dict(initial_snapshot),
                     "state_trace": [],
                 }
-                if self._is_vehicle_dtc_direct_clear_context(initial_snapshot):
-                    active_clear_entry = self._build_vehicle_dtc_clear_entry(clear_entry)
-                else:
+                if not vehicle_context:
                     active_clear_entry = self._build_data_display_clear_entry(
                         clear_entry,
                         navigation_path=[
@@ -1215,7 +1223,7 @@ class RegistryNavigationRuntime:
                     )
             else:
                 display_result = self.execute_registry_route(
-                    entry=dtc_display_entry,
+                    entry=display_entry,
                     max_iterations=self._route_max_iterations,
                     max_backtracks=self._route_max_backtracks,
                 )
@@ -1287,9 +1295,9 @@ class RegistryNavigationRuntime:
                 last_operation="clear_dtcs",
                 last_error=str(exc),
                 last_route={
-                    "route_target_page_key": clear_entry.get("page_key"),
-                    "route_target_category": clear_entry.get("category"),
-                    "canonical_path": list(clear_entry.get("canonical_path") or []),
+                    "route_target_page_key": active_clear_entry.get("page_key"),
+                    "route_target_category": active_clear_entry.get("category"),
+                    "canonical_path": list(active_clear_entry.get("canonical_path") or []),
                     "terminal_reason": "failed_clear_dtcs",
                 },
             )
@@ -1609,10 +1617,7 @@ class RegistryNavigationRuntime:
             and "Clear DTCs" in snapshot_action_labels(snapshot, kind="button")
         )
 
-    def _is_vehicle_dtc_direct_clear_context(self, snapshot: dict[str, Any]) -> bool:
-        if not self._is_data_display_direct_clear_context(snapshot):
-            return False
-
+    def _is_vehicle_dtc_context(self, snapshot: dict[str, Any]) -> bool:
         state = self._read_runtime_state()
         if is_vehicle_dtc_information_label(state.get("data_category")):
             return True

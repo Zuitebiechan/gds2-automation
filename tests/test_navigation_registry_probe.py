@@ -541,6 +541,7 @@ def test_registry_navigation_runtime_clear_dtcs_stays_on_vehicle_dtc_branch(monk
             },
         )(),
         entries=[
+            {"page_key": "vehicle_dtc.information", "aliases": ["Vehicle DTC Information"]},
             {"page_key": "dtc.display", "aliases": ["DTC Display"]},
             {"page_key": "dtc.clear.execute", "aliases": ["clear dtcs"]},
         ],
@@ -574,6 +575,68 @@ def test_registry_navigation_runtime_clear_dtcs_stays_on_vehicle_dtc_branch(monk
     assert result["cleared_count"] == 30
     status = runtime.get_runtime_status()
     assert status["last_route"]["route_target_page_key"] == "vehicle_dtc.clear.execute"
+
+
+def test_registry_navigation_runtime_clear_dtcs_relands_vehicle_branch_without_module_fallback(monkeypatch) -> None:
+    runtime = RegistryNavigationRuntime(
+        controller=object(),
+        route_navigator=type(
+            "_Navigator",
+            (),
+            {
+                "graph": {},
+                "capture_settled_snapshot": lambda self: {
+                    "effective_page_id": "vehicle_diagnostics_menu",
+                    "observed_actions": [
+                        {"kind": "list_item", "label": "Vehicle DTC Information"},
+                    ],
+                    "navigation_path": ["Vehicle Diagnostics"],
+                },
+            },
+        )(),
+        entries=[
+            {"page_key": "vehicle_dtc.information", "aliases": ["Vehicle DTC Information"]},
+            {"page_key": "dtc.display", "aliases": ["DTC Display"]},
+            {"page_key": "dtc.clear.execute", "aliases": ["clear dtcs"]},
+        ],
+        read_dtc_count=(lambda counts=iter([12, 0]): next(counts)),
+        state_reader=lambda: {"data_category": "Vehicle DTC Information"},
+    )
+    executed: list[str] = []
+
+    def fake_execute(*, entry, max_iterations, max_backtracks):
+        executed.append(str(entry["page_key"]))
+        return {
+            "final_page": "data_display",
+            "recovery_actions": [],
+            "final_snapshot": {
+                "effective_page_id": "data_display",
+                "observed_actions": [
+                    {"kind": "button", "label": "Clear DTCs"},
+                    {"kind": "button", "label": "Refresh"},
+                    {"kind": "button", "label": "Back"},
+                ],
+                "navigation_path": ["Vehicle Diagnostics"],
+            },
+        }
+
+    monkeypatch.setattr(runtime, "execute_registry_route", fake_execute)
+
+    result = runtime.clear_dtcs()
+
+    assert executed == ["vehicle_dtc.information", "vehicle_dtc.clear.execute"]
+    assert result["success"] is True
+    assert result["cleared_count"] == 12
+    status = runtime.get_runtime_status()
+    assert status["last_route"]["route_target_page_key"] == "vehicle_dtc.clear.execute"
+    assert status["last_route"]["canonical_path"] == [
+        "Vehicle Diagnostics",
+        "Vehicle DTC Information",
+        "Clear DTCs",
+        "Add All",
+        "OK",
+        "OK",
+    ]
 
 
 def test_registry_navigation_runtime_clear_dtcs_executes_in_place_from_current_data_display(monkeypatch) -> None:
@@ -907,6 +970,56 @@ def test_registry_navigation_runtime_clear_dtcs_records_failure_status(monkeypat
     assert status["last_operation"] == "clear_dtcs"
     assert status["last_error"] == "route failed"
     assert status["last_route"]["terminal_reason"] == "failed_clear_dtcs"
+
+
+def test_registry_navigation_runtime_clear_dtcs_vehicle_failure_records_vehicle_route(monkeypatch) -> None:
+    runtime = RegistryNavigationRuntime(
+        controller=object(),
+        route_navigator=type(
+            "_Navigator",
+            (),
+            {
+                "graph": {},
+                "capture_settled_snapshot": lambda self: {
+                    "effective_page_id": "data_display",
+                    "observed_actions": [
+                        {"kind": "button", "label": "Clear DTCs"},
+                        {"kind": "button", "label": "Refresh"},
+                        {"kind": "button", "label": "Back"},
+                    ],
+                    "navigation_path": ["Vehicle Diagnostics"],
+                },
+            },
+        )(),
+        entries=[
+            {"page_key": "vehicle_dtc.information", "aliases": ["Vehicle DTC Information"]},
+            {"page_key": "dtc.display", "aliases": ["DTC Display"]},
+            {"page_key": "dtc.clear.execute", "aliases": ["clear dtcs"]},
+        ],
+        read_dtc_count=(lambda counts=iter([3]): next(counts)),
+        state_reader=lambda: {"data_category": "Vehicle DTC Information"},
+    )
+
+    monkeypatch.setattr(
+        runtime,
+        "execute_registry_route",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("route failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="route failed"):
+        runtime.clear_dtcs()
+
+    status = runtime.get_runtime_status()
+    assert status["status"] == "failed"
+    assert status["last_route"]["route_target_page_key"] == "vehicle_dtc.clear.execute"
+    assert status["last_route"]["canonical_path"] == [
+        "Vehicle Diagnostics",
+        "Vehicle DTC Information",
+        "Clear DTCs",
+        "Add All",
+        "OK",
+        "OK",
+    ]
 
 
 def test_registry_navigation_runtime_recover_data_display_records_failed_restore_status(monkeypatch) -> None:
