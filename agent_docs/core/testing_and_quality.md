@@ -16,37 +16,13 @@ This document does not restate the full architecture. For design context, read `
 
 ## Current Test Coverage Areas
 
-| Test file | Main concern |
-| --- | --- |
-| `tests/test_backend_capability_architecture.py` | capability-first architecture and registry behavior |
-| `tests/test_backend_capability_refactor.py` | backend-neutral session/runtime refactor behavior |
-| `tests/test_runtime_session_layers.py` | business-session bindings, decisions, abort, and status logic |
-| `tests/test_runtime_diagnostics_navigation.py` | diagnostics and navigation runtime behavior |
-| `tests/test_gds2_controller_runtime.py` | GDS2 controller/runtime and alias-routing behavior |
-| `tests/test_tunnel_quality.py` | tunnel-quality snapshot normalization and grading |
-| `tests/test_proxy_benchmark.py` | proxy benchmark behavior |
-| `tests/test_server_layout.py` | Flask/server layout and blueprint wiring |
-| `tests/test_repo_layout_consistency.py` | repository/documentation consistency and stale-technology guards |
-| `tests/test_gds2_report_parser.py` | backend-owned GDS2 Data Display report parsing |
-| `tests/test_agent_data_collector.py` | Java agent data collection behavior |
-| `tests/test_diagnostic_buffer.py` | sliding-window sampling quality, delta export, and raw-payload caching safety |
-| `tests/test_agent_navigator.py` | agent command serialization and result handoff behavior |
-| `tests/test_diagnostics_window.py` | diagnostics window button-state and session-status UI logic |
-| `tests/test_client_gui.py` | tray-app config persistence, status updates, and diagnostics launch wiring |
-| `tests/test_device_explorer.py` | Windows Device Explorer selection and convenience flow behavior |
-| `tests/test_llm_client.py` | diagnostic prompt assembly, streaming fallback, and verdict parsing |
-| `tests/test_ai_engine.py` | AI payload conversion, cache TTL handling, confidence capping, and SSE session flow |
-| `tests/test_vehicle_mapping.py` | persisted vehicle/module/category mapping and discovery helpers |
-| `tests/test_vci_proxy_auth_config.py` | PSK auth helpers and proxy config mapping |
-| `tests/test_vci_proxy_caches.py` | `ReadMsgs`/filter/ioctl cache behavior and invalidation |
-| `tests/test_vci_proxy_cache_vbatt.py` | legacy VBATT cache TTL and invalidation behavior |
-| `tests/test_vci_proxy_protocol.py` | proxy protocol header and encode/decode regressions |
-| `tests/test_session_streams.py` | business-session SSE iteration, keepalive behavior, and terminal cleanup |
-| `tests/test_session_api_handlers.py` | session AI/live-data/navigation handler status mapping and SSE binding |
-| `tests/test_gds2_orchestration_core.py` | constrained planner, policy guard, and deterministic executor logic |
-| `tests/test_reverse_client.py` | reverse client registration, dispatch, and prewarm behavior |
-| `tests/test_reverse_server.py` | reverse server authentication, cache helpers, and tunnel probe behavior |
-| `tests/test_j2534_driver.py` | J2534 struct conversion, registry discovery, and DLL path selection |
+The suite is organized around these areas instead of a permanently complete file list:
+
+- platform contracts, backend registry, session runtime, API handlers, SSE, and bootstrap/node allocation
+- GDS2 backend behavior, registry navigation runtime, route graph/navigation proofing, controller state, reports, and simulated system flows
+- AI diagnosis, OpenAI-compatible client configuration, prompt/streaming behavior, sampling quality, and provider error handling
+- VCI proxy, reverse tunnel, auth/config, cache behavior, J2534 driver/worker, virtual DLL observability, tray GUI, and diagnostics window
+- observability, artifact upload/delivery, local-vs-cloud comparison tooling, repository layout, stale-technology guards, and cloud startup scripts
 
 ## What To Validate By Change Type
 
@@ -79,7 +55,7 @@ python -m pytest tests\test_tunnel_quality.py tests\test_proxy_benchmark.py test
 Run at least:
 
 ```bash
-python -m pytest tests\test_server_layout.py tests\test_runtime_session_layers.py tests\test_runtime_diagnostics_navigation.py -q
+python -m pytest tests\test_server_layout.py tests\test_api_security_guards.py tests\test_runtime_session_layers.py tests\test_runtime_diagnostics_navigation.py -q
 ```
 
 ### If you change documentation structure or repository policy
@@ -121,6 +97,7 @@ Examples of items that must stay current:
 - `backend_name` vs `workflow`
 - `src/gds2_orchestration/` vs removed `src/agentic`
 - no LangGraph framing in current product docs
+- OpenAI-compatible AI config vs legacy provider names
 - current supported API surfaces
 
 ## Full Test Suite Command

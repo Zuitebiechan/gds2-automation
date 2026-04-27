@@ -375,7 +375,7 @@ Recommended production exposure:
 | --- | --- |
 | `app.py` | thin top-level API entrypoint |
 | `server/app.py` | Flask app bootstrap |
-| `%APPDATA%\VCI_Proxy\config.json` | local GUI/client configuration and ZhipuAI key storage |
+| `%APPDATA%\VCI_Proxy\config.json` | local GUI/client configuration and optional AI provider settings |
 | `%PROGRAMDATA%\VCI_Proxy\tunnel_quality.json` | persisted tunnel-quality snapshot |
 | `~/gds2-data/latest.json` | GDS2 Java-agent output |
 | `gds2_web.log` | current API log file produced by `server/app.py` |
@@ -384,7 +384,8 @@ Recommended production exposure:
 
 Current secret-handling rule:
 
-- ZhipuAI API keys belong in `%APPDATA%\VCI_Proxy\config.json`
+- AI provider credentials should come from `OPENAI_API_KEY` or `%APPDATA%\VCI_Proxy\config.json` key `openai_api_key`
+- optional OpenAI-compatible settings are `OPENAI_BASE_URL`, `OPENAI_MODEL`, and `OPENAI_REASONING_EFFORT`, or config keys `openai_base_url`, `openai_model`, and `openai_reasoning_effort`
 - reverse-tunnel PSK tokens and `DIAGNOSTIC_API_TOKEN` should be injected through local config or environment variables, not committed into source
 - TLS private keys and private CA bundles should be stored outside the repository and provisioned per environment
 - do not commit API keys or other secrets into source

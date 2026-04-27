@@ -14,7 +14,7 @@ Today it contains:
 
 - a platform-neutral backend contract and worker-runtime layer in `diagnostic_platform/`
 - a GDS2 backend facade in `backends/gds2/`
-- GDS2-specific automation, navigation, streaming, and workflow code in `src/`
+- GDS2-specific automation, navigation, streaming, and legacy orchestration compatibility exports in `src/`
 - a supported Flask API surface in `server/`
 - a reverse-tunnel and local tray client stack in `vci_proxy/`
 
@@ -71,8 +71,8 @@ The runtime architecture is described in `agent_docs/core/platform_architecture.
 The platform is designed around backend-neutral contracts, but the current implementation scope is still transitional:
 
 - `gds2` is the only registered production backend
-- GDS2-specific deterministic orchestration still lives under `src/gds2_orchestration/`
-- parts of the platform runtime still reference GDS2-owned types while the capability-first transition is completed
+- `src/gds2_orchestration/` is now mainly a compatibility export layer
+- some shared action names still carry GDS2 terminology while the capability-first transition is completed
 
 Those backend-boundary details are documented in `agent_docs/core/backend_architecture.md` and `agent_docs/core/code_structure.md`.
 

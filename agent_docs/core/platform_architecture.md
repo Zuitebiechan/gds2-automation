@@ -107,7 +107,7 @@ Key objects:
 
 ## Business Session Model
 
-Business sessions are managed by `SessionOrchestrator` in `src/gds2_orchestration/session_orchestrator.py`.
+Business sessions are managed by `SessionOrchestrator` in `diagnostic_platform/session_orchestrator.py`.
 
 The orchestrator owns:
 
@@ -144,7 +144,7 @@ Raised when deterministic navigation or selection encounters an ambiguous branch
 
 Decision payload generation lives across:
 
-- `src/gds2_orchestration/session_orchestrator.py`
+- `diagnostic_platform/session_orchestrator.py`
 - `diagnostic_platform/runtime/session_decisions.py`
 - `diagnostic_platform/runtime/session_preflight.py`
 
@@ -181,8 +181,8 @@ The architecture direction is platform-neutral, but the implementation is not ye
 
 Important current facts:
 
-- `SessionOrchestrator` still lives under `src/gds2_orchestration/`
-- some runtime helpers still import GDS2 action/planner types
+- `src/gds2_orchestration/` remains as a legacy compatibility export layer
+- the shared deterministic action schema still carries GDS2 action naming while backend-neutral action contracts mature
 - only `GDS2DiagnosticBackend` is registered in the backend registry
 
 This means the platform boundary is the target architecture, while some internals are still being migrated toward it.
@@ -194,7 +194,7 @@ The platform also depends on runtime facts outside Python package boundaries:
 - GDS2 is a separate OEM application process
 - the Java agent writes state to `~/gds2-data/latest.json`
 - the reverse tunnel publishes tunnel-quality snapshots to `%PROGRAMDATA%/VCI_Proxy/tunnel_quality.json`
-- secrets such as the ZhipuAI API key live in `%APPDATA%/VCI_Proxy/config.json`
+- OpenAI-compatible AI provider settings can live in environment variables or `%APPDATA%/VCI_Proxy/config.json`
 
 ## Read Next
 

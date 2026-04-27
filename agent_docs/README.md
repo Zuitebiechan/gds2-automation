@@ -57,5 +57,6 @@ Use it as the primary source of truth after the code itself. Each document has a
 - Put durable design and behavior documentation under `agent_docs/`.
 - Keep `README.md` as a project entrypoint, not a full design specification.
 - Keep `AGENTS.md` as a lightweight working guide that points here.
+- Keep documents concise; prefer one owning document plus links over repeated explanations.
 - When updating behavior, update the single owning document instead of copying the same explanation into multiple files.
 - When a document needs detail owned elsewhere, reference the target file path directly, for example `agent_docs/core/api_design.md`.

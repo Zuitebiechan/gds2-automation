@@ -11,7 +11,7 @@ This repository is no longer a GDS2-only codebase. GDS2 is the first backend, bu
 
 - platform-neutral contracts and runtime code in `diagnostic_platform/`
 - OEM/backend-specific implementations in `backends/`
-- GDS2-specific automation and orchestration in `src/`
+- GDS2-specific automation plus legacy orchestration compatibility exports in `src/`
 - local proxy, tray client, and tunnel code in `vci_proxy/`
 
 ## Documentation

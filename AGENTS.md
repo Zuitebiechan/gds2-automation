@@ -35,7 +35,7 @@ High-level layers:
 
 - `diagnostic_platform/`: platform contracts, backend registry, worker runtime, session/runtime helpers, SSE helpers
 - `backends/`: per-backend facades behind the shared contract
-- `src/`: GDS2-specific automation, navigation, streaming, diagnosis, and deterministic orchestration
+- `src/`: GDS2-specific automation, navigation, streaming, diagnosis, and legacy orchestration compatibility exports
 - `server/`: supported HTTP surfaces and Flask app bootstrap
 - `vci_proxy/`: reverse tunnel, local tray client, J2534 integration, tunnel-quality tracking
 - `tests/`: durable regression tests
@@ -59,6 +59,8 @@ High-level layers:
 - The authoritative documentation set lives under `agent_docs/`.
 - `README.md` is the entrypoint, not the full design spec.
 - `AGENTS.md` should stay lightweight and should link to detailed docs instead of duplicating them.
+- Keep docs concise; prefer links to the owning document over duplicated detail.
+- When changing routes, runtime behavior, config keys, package ownership, or deployment flow, update the single owning document in the same change.
 - Local benchmark artifacts belong under `reports/network_benchmarks/` and are not authoritative design docs.
 
 ## Delegation Preference

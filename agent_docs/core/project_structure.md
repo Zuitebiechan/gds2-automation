@@ -14,7 +14,7 @@ This document does not explain runtime behavior or HTTP semantics. For those, re
 | `backends/` | OEM/backend facades behind the shared contract | `gds2` is the only production backend today |
 | `diagnostic_platform/` | Platform-neutral contracts, registry, runtime helpers, SSE helpers | Canonical platform-layer namespace |
 | `server/` | Supported Flask blueprints and API glue | Owns `/api/session/*`, `/api/diagnose/*`, `/api/navigate/*` |
-| `src/` | GDS2-specific automation and deterministic orchestration | Treat as GDS2-specific unless clearly generalized |
+| `src/` | GDS2-specific automation plus legacy orchestration compatibility exports | Treat as GDS2-specific unless clearly generalized |
 | `tests/` | Durable regression tests | Do not use for throwaway validation |
 | `vci_proxy/` | Reverse tunnel, tray client, J2534 integration, diagnostics window | Spans cloud-side reverse server and local-side client |
 | `reports/` | Raw or ad-hoc measurement artifacts | Not part of the authoritative design doc set |
@@ -100,8 +100,7 @@ Owns GDS2-specific implementation detail, including:
 - native automation helpers
 - navigation controller logic
 - streaming and collector logic
-- workflow-style utilities such as interactive navigation helpers
-- deterministic GDS2 orchestration under `src/gds2_orchestration/`
+- legacy deterministic GDS2 orchestration compatibility exports under `src/gds2_orchestration/`
 
 This area should not become the place where future OEM backends are added.
 

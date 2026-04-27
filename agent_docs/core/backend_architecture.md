@@ -178,10 +178,11 @@ The platform layer no longer treats GDS2 as the only conceptual backend, but som
 
 Current examples:
 
-- deterministic action schema and executor in `src/gds2_orchestration/`
+- legacy deterministic orchestration compatibility exports in `src/gds2_orchestration/`
 - page navigation behavior in `src/navigation/`
 - data collection and streaming helpers in `src/streaming/`
-- session orchestration class in `src/gds2_orchestration/session_orchestrator.py`
+
+Current shared action primitives live in `diagnostic_platform/action_schema.py` and `diagnostic_platform/action_runtime.py`; GDS2-specific planner, policy, and adapter behavior lives under `backends/gds2/`.
 
 ## Capability Enforcement
 

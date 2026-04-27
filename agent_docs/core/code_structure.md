@@ -43,9 +43,11 @@ It owns:
 - shared deterministic action schema in `diagnostic_platform/action_schema.py`
 - shared deterministic action-runtime primitives in `diagnostic_platform/action_runtime.py`
 - shared business-session models in `diagnostic_platform/session_models.py`
+- the business-session orchestrator in `diagnostic_platform/session_orchestrator.py`
 - shared branch-planning result models in `diagnostic_platform/branch_planning.py`
-- the business-session orchestrator boundary in `diagnostic_platform/session_orchestrator.py`
 - backend-registry bootstrap in `diagnostic_platform/backend_registry.py`
+- node-allocation and readiness helpers in `diagnostic_platform/node_allocation.py`
+- observability helpers in `diagnostic_platform/observability*.py`
 - runtime state and execution helpers under `diagnostic_platform/runtime/`
 - shared SSE utilities such as `diagnostic_platform/sse.py`
 
@@ -92,7 +94,6 @@ Major areas:
 | `src/native/` | native automation helpers |
 | `src/navigation/` | page model and navigation controller logic |
 | `src/streaming/` | data collectors and streaming buffers |
-| `src/workflows/` | workflow-style utility wrappers such as interactive navigation helpers |
 | `src/gds2_orchestration/` | compatibility exports for legacy deterministic GDS2 orchestration import paths |
 
 The former `src/agentic` namespace has already been removed. Planner and action-adapter ownership now lives under `backends/gds2/`, while `src/gds2_orchestration/` remains as a legacy compatibility layer.
