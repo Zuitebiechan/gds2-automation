@@ -6,6 +6,8 @@ This document covers the reverse tunnel, local tray client, virtual J2534 path, 
 
 This document does not restate all deployment commands. For environment setup and runtime commands, read `agent_docs/ops/deployment_and_operations.md`.
 
+For the staged plan to reduce cloud GDS2 live-data latency in the Proxy J2534 architecture, read `agent_docs/ops/proxy_j2534_latency_optimization.md`.
+
 ## Purpose
 
 The VCI proxy subsystem allows cloud-side OEM software to communicate with a real J2534 device that physically exists on the local side.

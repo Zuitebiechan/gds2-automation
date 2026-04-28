@@ -29,6 +29,10 @@ def _write_latest_json(path, *, extraction_count=1, version="2.0"):
     )
 
 
+def _write_agent_payload(path: Path, payload: dict[str, object]) -> None:
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="gbk")
+
+
 def _read_cloud_events(tmp_path: Path) -> list[dict[str, object]]:
     flush_product_log_writers()
     raw_dir = tmp_path / "RPA_Diagnostic" / "observability" / "cloud" / "raw"
@@ -153,6 +157,152 @@ def test_run_page_guard_emits_guard_failed_event(tmp_path, monkeypatch) -> None:
     assert guard_failed["connection_epoch"] == "epoch-collector-1"
     assert guard_failed["module"] == "Engine Control Module"
     assert guard_failed["data_category"] == "Engine Data"
+
+
+def test_read_and_parse_emits_focus_parameter_samples(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("PRODUCT_LOG_CLOUD_ROOT", raising=False)
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+    monkeypatch.setattr(collector_module.time, "time", lambda: 1_710_000_000.223)
+    ActiveSessionSnapshotStore().write(
+        {
+            "session_id": "session-collector-values",
+            "backend_name": "gds2",
+            "operation_kind": "live_data.start",
+            "selected_module": "Engine Control Module",
+            "selected_data_category": "Engine Data",
+            "current_page": "data_display",
+            "navigation_session_id": None,
+            "ai_session_id": None,
+            "live_data_active": True,
+            "connection_epoch": "epoch-collector-values",
+        }
+    )
+    json_path = tmp_path / "latest.json"
+    _write_agent_payload(
+        json_path,
+        {
+            "timestamp": 1_710_000_000_123,
+            "extractionCount": 11,
+            "extractionDurationMs": 8,
+            "pageContext": {"page": "data_display"},
+            "tables": [
+                {
+                    "tableType": "data_display",
+                    "columns": ["Control Module", "Parameter Name", "Value", "Unit"],
+                    "rows": [
+                        {
+                            "Control Module": " Engine Control Module",
+                            "Parameter Name": " Engine Speed",
+                            "Value": "900 ",
+                            "Unit": " RPM",
+                        },
+                        {
+                            "Control Module": " Engine Control Module",
+                            "Parameter Name": " Accelerator Pedal Position",
+                            "Value": "12 ",
+                            "Unit": " %",
+                        },
+                        {
+                            "Control Module": " Engine Control Module",
+                            "Parameter Name": " Coolant Temp",
+                            "Value": "88 ",
+                            "Unit": " C",
+                        },
+                    ],
+                }
+            ],
+        },
+    )
+    collector = AgentDataCollector(json_path=json_path)
+
+    snapshot = collector._read_and_parse()
+
+    assert snapshot is not None
+    events = _read_cloud_events(tmp_path)
+    focus = next(
+        event
+        for event in events
+        if event["event_type"] == "agent.collector.focus_parameters_sampled"
+    )
+    assert focus["session_id"] == "session-collector-values"
+    assert focus["connection_epoch"] == "epoch-collector-values"
+    assert focus["operation_kind"] == "agent_data_value_sample"
+    assert focus["page"] == "data_display"
+    assert focus["module"] == "Engine Control Module"
+    assert focus["data_category"] == "Engine Data"
+    assert focus["extraction_count"] == 11
+    assert focus["extraction_duration_ms"] == 8
+    assert focus["agent_timestamp_s"] == 1_710_000_000.123
+    assert focus["collector_lag_ms"] == 100.0
+    assert focus["missing_target_keys"] == []
+    assert focus["parameter_values"] == {
+        "engine_speed": "900",
+        "accelerator_pedal_position": "12",
+    }
+    assert focus["parameters"] == [
+        {
+            "key": "engine_speed",
+            "name": "Engine Speed",
+            "value": "900",
+            "unit": "RPM",
+            "module": "Engine Control Module",
+            "changed": False,
+        },
+        {
+            "key": "accelerator_pedal_position",
+            "name": "Accelerator Pedal Position",
+            "value": "12",
+            "unit": "%",
+            "module": "Engine Control Module",
+            "changed": False,
+        },
+    ]
+
+    _write_agent_payload(
+        json_path,
+        {
+            "timestamp": 1_710_000_000_223,
+            "extractionCount": 12,
+            "extractionDurationMs": 7,
+            "pageContext": {"page": "data_display"},
+            "tables": [
+                {
+                    "tableType": "data_display",
+                    "columns": ["Control Module", "Parameter Name", "Value", "Unit"],
+                    "rows": [
+                        {
+                            "Control Module": " Engine Control Module",
+                            "Parameter Name": " Engine Speed",
+                            "Value": "1100 ",
+                            "Unit": " RPM",
+                        },
+                        {
+                            "Control Module": " Engine Control Module",
+                            "Parameter Name": " Accelerator Pedal Position",
+                            "Value": "38 ",
+                            "Unit": " %",
+                        },
+                    ],
+                }
+            ],
+        },
+    )
+    next_mtime = json_path.stat().st_mtime + 1.0
+    os.utime(json_path, (next_mtime, next_mtime))
+
+    collector._read_and_parse()
+
+    focus_events = [
+        event
+        for event in _read_cloud_events(tmp_path)
+        if event["event_type"] == "agent.collector.focus_parameters_sampled"
+    ]
+    assert focus_events[-1]["parameter_values"] == {
+        "engine_speed": "1100",
+        "accelerator_pedal_position": "38",
+    }
+    assert focus_events[-1]["parameters"][0]["changed"] is True
+    assert focus_events[-1]["parameters"][0]["previous_value"] == "900"
 
 
 def test_guard_event_signature_stringifies_non_json_values() -> None:

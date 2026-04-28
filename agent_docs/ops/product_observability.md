@@ -213,6 +213,7 @@ Current runtime behavior:
   - emits recovery attempted / succeeded / failed events
 - `src/streaming/agent_data_collector.py`
   - emits availability, snapshot, guard-failed, started, and stopped collector events
+  - emits focused value-level Data Display samples for `Engine Speed` and `Accelerator Pedal Position` with Java Agent timestamps, collector lag, extraction counters, and active session context
 - `vci_proxy/reverse_server.py`
   - emits tunnel lifecycle, probe, tunnel-quality, proxy-request staged events, and reverse-server process lifecycle events
 - `vci_proxy/reverse_client.py`

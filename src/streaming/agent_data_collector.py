@@ -43,11 +43,85 @@ _AGENT_JSON_ENCODINGS: Tuple[str, ...] = ("gbk", "utf-8", "latin-1")
 _AGENT_AVAILABILITY_MAX_AGE_SECONDS = 10.0
 _AGENT_AVAILABILITY_READ_ATTEMPTS = 3
 _AGENT_AVAILABILITY_RETRY_DELAY_SECONDS = 0.05
+_FOCUS_PARAMETER_ALIASES: dict[str, tuple[str, ...]] = {
+    "engine_speed": ("engine speed", "rpm"),
+    "accelerator_pedal_position": ("accelerator pedal position",),
+}
+_FOCUS_PARAMETER_KEYS: tuple[str, ...] = (
+    "engine_speed",
+    "accelerator_pedal_position",
+)
 
 
 def _guard_event_signature(payload: Any) -> str:
     """Build one stable guard-event signature without crashing on odd values."""
     return _json_dumps_safe(_mapping_or_empty(payload), sort_keys=True)
+
+
+def _clean_text(value: Any) -> str:
+    return str(value if value is not None else "").strip()
+
+
+def _normalize_parameter_name(value: Any) -> str:
+    return " ".join(_clean_text(value).casefold().split())
+
+
+def _focus_parameter_key(parameter_name: Any) -> str | None:
+    normalized_name = _normalize_parameter_name(parameter_name)
+    if not normalized_name:
+        return None
+
+    for key, aliases in _FOCUS_PARAMETER_ALIASES.items():
+        for alias in aliases:
+            normalized_alias = _normalize_parameter_name(alias)
+            if normalized_name == normalized_alias:
+                return key
+            if key == "accelerator_pedal_position" and normalized_name.startswith(
+                f"{normalized_alias} "
+            ):
+                return key
+    return None
+
+
+def _extract_focus_parameter_samples(
+    parameters: list[dict[str, str]],
+    previous_values: dict[str, str],
+) -> tuple[list[dict[str, Any]], list[str], dict[str, str]]:
+    """Extract value-level samples for parameters that diagnose visible lag."""
+    samples: list[dict[str, Any]] = []
+    current_values: dict[str, str] = {}
+    seen_keys: set[str] = set()
+
+    for parameter in parameters:
+        key = _focus_parameter_key(parameter.get("name"))
+        if key is None:
+            continue
+
+        name = _clean_text(parameter.get("name"))
+        module = _clean_text(parameter.get("module"))
+        value = _clean_text(parameter.get("value"))
+        unit = _clean_text(parameter.get("unit"))
+        identity = f"{key}|{module}|{unit}"
+        previous_value = previous_values.get(identity)
+        current_values[identity] = value
+        seen_keys.add(key)
+
+        sample: dict[str, Any] = {
+            "key": key,
+            "name": name,
+            "value": value,
+            "unit": unit,
+            "module": module,
+            "changed": previous_value is not None and previous_value != value,
+        }
+        if previous_value is not None:
+            sample["previous_value"] = previous_value
+        samples.append(sample)
+
+    order = {key: index for index, key in enumerate(_FOCUS_PARAMETER_KEYS)}
+    samples.sort(key=lambda item: (order.get(str(item.get("key")), 99), str(item.get("name"))))
+    missing_keys = [key for key in _FOCUS_PARAMETER_KEYS if key not in seen_keys]
+    return samples, missing_keys, current_values
 
 
 @dataclass
@@ -158,7 +232,7 @@ def _parse_agent_json(data: dict) -> AgentSnapshot:
 def _build_parameter(row: dict, columns: list) -> dict[str, str]:
     """Build one normalized parameter row."""
     return {
-        'module': _get_row_value(row, columns, ['Module']),
+        'module': _get_row_value(row, columns, ['Module', 'Control Module']),
         'name': _get_row_value(row, columns, ['Parameter Name']),
         'value': _get_row_value(row, columns, ['Value']),
         'unit': _get_row_value(row, columns, ['Unit', 'Units']),
@@ -339,6 +413,7 @@ class AgentDataCollector:
         self._last_snapshot: Optional[AgentSnapshot] = None
         self._fatal_error: Optional[str] = None
         self._last_guard_event_signature: Optional[str] = None
+        self._last_focus_parameter_values: Dict[str, str] = {}
 
     def start(self):
         """Start polling the Agent JSON file."""
@@ -656,6 +731,7 @@ class AgentDataCollector:
                 dtc_count=len(snapshot.dtcs),
                 parameter_count=len(snapshot.parameters),
             )
+            self._emit_focus_parameter_sample(snapshot)
 
             return snapshot
 
@@ -672,6 +748,33 @@ class AgentDataCollector:
                 json_path=str(self._json_path),
             )
             return None
+
+    def _emit_focus_parameter_sample(self, snapshot: AgentSnapshot) -> None:
+        """Emit value-level samples for lag-sensitive Data Display parameters."""
+        samples, missing_keys, current_values = _extract_focus_parameter_samples(
+            snapshot.parameters,
+            self._last_focus_parameter_values,
+        )
+        if not samples:
+            return
+
+        self._last_focus_parameter_values = current_values
+        emit_collector_event(
+            "agent.collector.focus_parameters_sampled",
+            operation_kind="agent_data_value_sample",
+            reason="focus_parameters_sampled",
+            page="data_display",
+            extraction_count=snapshot.extraction_count,
+            extraction_duration_ms=snapshot.extraction_duration_ms,
+            agent_timestamp_s=snapshot.agent_timestamp_s,
+            collected_at_s=snapshot.collected_at_s,
+            collector_lag_ms=snapshot.collector_lag_ms,
+            page_context=snapshot.page_context,
+            target_keys=list(_FOCUS_PARAMETER_KEYS),
+            missing_target_keys=missing_keys,
+            parameters=samples,
+            parameter_values={str(sample["key"]): sample["value"] for sample in samples},
+        )
 
     def _detect_param_changes(self, new_params: List[dict]) -> List[dict]:
         """Detect parameter value changes."""
