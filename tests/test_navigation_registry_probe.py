@@ -928,6 +928,100 @@ def test_registry_route_executor_waits_for_data_display_controls_before_back(mon
     assert result["final_page"] == "data_display"
 
 
+def test_registry_route_executor_accepts_data_display_when_agent_stays_loading(monkeypatch) -> None:
+    monkeypatch.setattr("backends.gds2.registry_navigation_runtime.time.sleep", lambda _seconds: None)
+
+    class _Controller:
+        def go_back(self):  # pragma: no cover - must not be called
+            raise AssertionError("must not leave visual data_display after target action")
+
+        def go_home(self):  # pragma: no cover - must not be called
+            raise AssertionError("must not Home-recover after target action")
+
+    class _RouteNavigator:
+        graph: dict[str, object] = {}
+
+        def __init__(self) -> None:
+            self.page = "data_list"
+            self.executed: list[dict[str, str]] = []
+
+        def capture_settled_snapshot(self):
+            if self.page == "loading_after_target":
+                return {
+                    "effective_page_id": "loading",
+                    "observed_actions": [
+                        {"kind": "button", "label": "Back"},
+                        {"kind": "button", "label": "Home"},
+                    ],
+                    "list_items": [],
+                    "navigation_path": [],
+                }
+            return {
+                "effective_page_id": "data_list",
+                "observed_actions": [
+                    {"kind": "button", "label": "Back"},
+                    {"kind": "list_item", "label": "Engine Data"},
+                ],
+                "list_items": ["Engine Data"],
+                "navigation_path": ["Module Diagnostics", "Engine Control Module", "Data Display"],
+            }
+
+        def resolve_bridge_action(self, snapshot):
+            return None
+
+        def snapshot_action_match(self, snapshot, label, *, kind=None):
+            return find_action_match(snapshot.get("observed_actions") or [], label, kind=kind)
+
+        def execute_action(self, action: dict[str, str]) -> None:
+            self.executed.append({"kind": str(action["kind"]), "label": str(action["label"])})
+            if action != {"kind": "list_item", "label": "Engine Data"}:
+                raise AssertionError(f"unexpected action: {action}")
+            self.page = "loading_after_target"
+
+        def match_snapshot(self, snapshot):
+            return None
+
+    route_navigator = _RouteNavigator()
+    runtime = RegistryNavigationRuntime(
+        controller=_Controller(),
+        route_navigator=route_navigator,
+        entries=[],
+    )
+
+    result = runtime.execute_registry_route(
+        entry={
+            "page_key": "data.engine_data",
+            "page_kind": "data_display",
+            "canonical_path": ["Module Diagnostics", "Engine Control Module", "Data Display", "Engine Data"],
+            "route_steps": [
+                {"kind": "list_item", "label": "Module Diagnostics"},
+                {"kind": "list_item", "label": "Engine Control Module"},
+                {"kind": "list_item", "label": "Data Display"},
+                {"kind": "list_item", "label": "Engine Data"},
+            ],
+            "target_action": {"kind": "list_item", "label": "Engine Data"},
+            "success_criteria": {
+                "page_id_any": ["data_display"],
+                "all_of": [
+                    {"kind": "button", "label": "Create Report"},
+                    {"kind": "button", "label": "Back"},
+                ],
+                "any_of": [
+                    {"kind": "button", "label": "Clear DTCs"},
+                    {"kind": "button", "label": "Add Bookmark"},
+                ],
+            },
+        },
+        max_iterations=5,
+        max_backtracks=1,
+    )
+
+    assert route_navigator.executed == [{"kind": "list_item", "label": "Engine Data"}]
+    assert result["final_page"] == "data_display"
+    assert result["final_snapshot"]["classification_evidence"]["rule"] == "target_action_loading_terminal_page"
+    assert result["recovery_actions"][-1]["kind"] == "terminal_loading"
+
+
 def test_registry_route_executor_uses_startup_target_before_home_recovery(monkeypatch) -> None:
     monkeypatch.setattr("backends.gds2.registry_navigation_runtime.time.sleep", lambda _seconds: None)
 

@@ -599,6 +599,42 @@ def should_wait_for_terminal_success(
     )
 
 
+def terminal_loading_page_id(
+    *,
+    entry: dict[str, Any],
+    success_criteria: dict[str, Any],
+    snapshot: dict[str, Any],
+    executed_actions: list[dict[str, str]],
+    target_action: dict[str, Any],
+) -> str | None:
+    if str(entry.get("page_kind") or "").strip() != "data_display":
+        return None
+    if not route_action_executed(executed_actions, target_action):
+        return None
+    if str(snapshot.get("effective_page_id") or "").strip() not in {"loading", "unknown"}:
+        return None
+    if [str(item).strip() for item in snapshot.get("list_items") or [] if str(item).strip()]:
+        return None
+    page_candidates = {
+        str(item).strip()
+        for item in success_criteria.get("page_id_any") or []
+        if str(item).strip()
+    }
+    if "data_display" not in page_candidates:
+        return None
+    return "data_display"
+
+
+def accept_terminal_loading_snapshot(snapshot: dict[str, Any], *, page_id: str) -> dict[str, Any]:
+    accepted = copy.deepcopy(snapshot)
+    accepted["effective_page_id"] = page_id
+    evidence = dict(accepted.get("classification_evidence") or {})
+    evidence["rule"] = "target_action_loading_terminal_page"
+    evidence["raw_effective_page_id"] = snapshot.get("effective_page_id")
+    accepted["classification_evidence"] = evidence
+    return accepted
+
+
 def button_enabled_map(snapshot: dict[str, Any], page_info: dict[str, Any]) -> dict[str, bool]:
     enabled = {
         str(key): bool(value)
@@ -1595,6 +1631,40 @@ class GDS2RegistryRouteExecutor:
             if cancel_checker is not None:
                 cancel_checker()
             snapshot = ports.route_navigator.capture_settled_snapshot()
+            terminal_loading_page = terminal_loading_page_id(
+                entry=entry,
+                success_criteria=success_criteria,
+                snapshot=snapshot,
+                executed_actions=executed_actions,
+                target_action=target_action,
+            )
+            if terminal_loading_page is not None:
+                final_snapshot = accept_terminal_loading_snapshot(
+                    snapshot,
+                    page_id=terminal_loading_page,
+                )
+                recovery_actions.append(
+                    {
+                        "kind": "terminal_loading",
+                        "label": terminal_loading_page,
+                        "reason": "target action reached terminal page while Agent still reports loading",
+                        "success": True,
+                        "state": {
+                            "raw_effective_page_id": snapshot.get("effective_page_id"),
+                            "target_action": dict(target_action),
+                        },
+                    }
+                )
+                return {
+                    "matched_start_node_id": ports.route_navigator.match_snapshot(start_snapshot),
+                    "recovery_actions": recovery_actions,
+                    "planned_path": route_steps,
+                    "executed_actions": executed_actions,
+                    "final_page": terminal_loading_page,
+                    "final_snapshot": final_snapshot,
+                    "state_trace": state_trace,
+                    "match_diagnostics": match_diagnostics,
+                }
             loading_result = recovery.handle_loading(
                 snapshot=snapshot,
                 loading_watchdog=loading_watchdog,
