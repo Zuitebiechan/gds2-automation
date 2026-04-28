@@ -24,6 +24,7 @@ from backends.gds2.registry_navigation_runtime import (
     select_next_route_step,
     should_defer_recovery_for_route_action,
     should_try_pending_list_action,
+    diagnostics_menu_has_target_root,
     startup_target_list_action,
 )
 from backends.gds2.registry_navigation_runtime import RegistryNavigationRuntime
@@ -523,6 +524,79 @@ def test_select_next_route_step_prefers_required_step_when_optional_is_unavailab
         "kind": "list_item",
         "label": "Module Diagnostics",
     }
+
+
+def test_select_next_route_step_prefers_visible_required_step_over_optional_enter() -> None:
+    route_steps = [
+        {"kind": "button", "label": "Diagnostics", "optional": True},
+        {"kind": "device", "label": "VCI Proxy (Remote)", "optional": True},
+        {"kind": "button", "label": "Enter", "optional": True},
+        {"kind": "list_item", "label": "Vehicle Diagnostics"},
+    ]
+    snapshot = {
+        "effective_page_id": "diagnostics_menu",
+        "observed_actions": [
+            {"kind": "button", "label": "Back"},
+            {"kind": "button", "label": "Home"},
+            {"kind": "button", "label": "Enter"},
+            {"kind": "list_item", "label": "Module Diagnostics"},
+            {"kind": "list_item", "label": "Vehicle Diagnostics"},
+        ],
+        "list_items": ["Module Diagnostics", "Vehicle Diagnostics", "Session Manager"],
+    }
+
+    assert select_next_route_step(route_steps, [], snapshot) == {
+        "kind": "list_item",
+        "label": "Vehicle Diagnostics",
+    }
+
+
+def test_diagnostics_menu_has_target_root_ignores_stale_module_breadcrumb() -> None:
+    snapshot = {
+        "effective_page_id": "diagnostics_menu",
+        "observed_actions": [
+            {"kind": "button", "label": "Back"},
+            {"kind": "button", "label": "Home"},
+            {"kind": "list_item", "label": "Module Diagnostics"},
+            {"kind": "list_item", "label": "Vehicle Diagnostics"},
+        ],
+        "list_items": ["Module Diagnostics", "Vehicle Diagnostics", "Session Manager"],
+        "navigation_path": ["Module Diagnostics"],
+    }
+
+    assert diagnostics_menu_has_target_root(snapshot, ["Vehicle Diagnostics"]) is True
+
+
+def test_common_ancestor_recovery_stops_at_diagnostics_menu_target_root() -> None:
+    class _Controller:
+        def go_back(self):  # pragma: no cover - should not be called
+            raise AssertionError("diagnostics_menu should select target instead of Back-recovering")
+
+        def go_home(self):  # pragma: no cover - should not be called
+            raise AssertionError("diagnostics_menu should select target instead of Home-recovering")
+
+    class _Navigator:
+        def capture_settled_snapshot(self):
+            return {
+                "effective_page_id": "diagnostics_menu",
+                "observed_actions": [
+                    {"kind": "button", "label": "Back"},
+                    {"kind": "button", "label": "Home"},
+                    {"kind": "list_item", "label": "Module Diagnostics"},
+                    {"kind": "list_item", "label": "Vehicle Diagnostics"},
+                ],
+                "list_items": ["Module Diagnostics", "Vehicle Diagnostics", "Session Manager"],
+                "navigation_path": ["Module Diagnostics"],
+            }
+
+    actions = recover_to_registry_common_ancestor(
+        controller=_Controller(),
+        route_navigator=_Navigator(),
+        target_path=["Vehicle Diagnostics"],
+        max_backtracks=3,
+    )
+
+    assert actions == []
 
 
 def test_registry_route_executor_tries_graph_action_before_home_recovery() -> None:

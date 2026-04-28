@@ -423,7 +423,10 @@ def select_next_route_step(
         candidates.append(normalized_step)
 
     for candidate in candidates:
-        if action_available(snapshot, candidate):
+        if not bool(candidate.get("optional")) and action_available(snapshot, candidate):
+            return candidate
+    for candidate in candidates:
+        if bool(candidate.get("optional")) and action_available(snapshot, candidate):
             return candidate
     if candidates:
         for candidate in candidates:
@@ -476,6 +479,23 @@ def should_try_pending_list_action(
     if graph_page_has_action(graph, page_id, pending_route_step):
         return True
     return False
+
+
+def diagnostics_menu_has_target_root(snapshot: dict[str, Any], target_path: list[str]) -> bool:
+    if str(snapshot.get("effective_page_id") or "").strip() != "diagnostics_menu":
+        return False
+    if not target_path:
+        return False
+    target_label = str(target_path[0]).strip()
+    if not target_label:
+        return False
+    if action_available(snapshot, {"kind": "list_item", "label": target_label}):
+        return True
+    return target_label in {
+        str(item).strip()
+        for item in snapshot.get("list_items") or []
+        if str(item).strip()
+    }
 
 
 def startup_target_list_action(
@@ -1075,6 +1095,8 @@ def recover_to_registry_common_ancestor(
                 policy=policy,
             ):
                 continue
+        if diagnostics_menu_has_target_root(snapshot, target_path):
+            return recovery_actions
         current_path = [
             str(item).strip()
             for item in snapshot.get("navigation_path") or []
