@@ -22,6 +22,7 @@ from backends.gds2.registry_navigation_runtime import (
     recover_to_registry_common_ancestor,
     run_probe,
     select_next_route_step,
+    should_try_pending_list_action,
 )
 from backends.gds2.registry_navigation_runtime import RegistryNavigationRuntime
 from backends.gds2.registry_navigation_runtime import (
@@ -575,6 +576,147 @@ def test_registry_route_executor_tries_graph_action_before_home_recovery() -> No
     result = runtime.execute_registry_route(
         entry=entry,
         max_iterations=3,
+        max_backtracks=1,
+    )
+
+    assert route_navigator.executed == [{"kind": "list_item", "label": "Module Diagnostics"}]
+    assert result["final_page"] == "module_list"
+
+
+def test_should_try_pending_list_action_allows_target_path_on_empty_menu_snapshot() -> None:
+    snapshot = {
+        "effective_page_id": "diagnostics_menu",
+        "observed_actions": [
+            {"kind": "button", "label": "Back"},
+            {"kind": "button", "label": "Home"},
+            {"kind": "button", "label": "Enter"},
+        ],
+        "list_items": [],
+    }
+
+    assert should_try_pending_list_action(
+        graph={},
+        snapshot=snapshot,
+        pending_route_step={"kind": "list_item", "label": "Module Diagnostics"},
+        target_path=["Module Diagnostics"],
+    ) is True
+
+
+def test_registry_route_executor_lets_vehicle_selection_state_handle_disabled_enter(monkeypatch) -> None:
+    monkeypatch.setattr("backends.gds2.registry_navigation_runtime.time.sleep", lambda _seconds: None)
+
+    class _Nav:
+        def get_page_id(self):
+            return {
+                "page_id": "vehicle_selection",
+                "vehicle_selection_status": "connecting",
+                "button_enabled": {"Enter": False, "Back": True},
+            }
+
+    class _Controller:
+        nav = _Nav()
+
+        def click_enter(self):  # pragma: no cover - should not be called
+            raise AssertionError("disabled Enter must be handled by vehicle-selection state")
+
+        def go_home(self):  # pragma: no cover - should not be called
+            raise AssertionError("vehicle_selection should not Home-recover")
+
+        def go_back(self):  # pragma: no cover - should not be called
+            raise AssertionError("vehicle_selection should not Back-recover")
+
+    class _RouteNavigator:
+        graph = {
+            "nodes": {
+                "diagnostics": {
+                    "page_id": "diagnostics_menu",
+                    "observed_actions": [
+                        {"kind": "list_item", "label": "Module Diagnostics"},
+                    ],
+                },
+            }
+        }
+
+        def __init__(self) -> None:
+            self.snapshots = [
+                {
+                    "effective_page_id": "vehicle_selection",
+                    "observed_actions": [
+                        {"kind": "button", "label": "Back"},
+                        {"kind": "button", "label": "Enter"},
+                    ],
+                    "list_items": [],
+                    "navigation_path": [],
+                },
+                {
+                    "effective_page_id": "vehicle_selection",
+                    "observed_actions": [
+                        {"kind": "button", "label": "Back"},
+                        {"kind": "button", "label": "Enter"},
+                    ],
+                    "list_items": [],
+                    "navigation_path": [],
+                },
+                {
+                    "effective_page_id": "diagnostics_menu",
+                    "observed_actions": [
+                        {"kind": "button", "label": "Back"},
+                        {"kind": "button", "label": "Home"},
+                    ],
+                    "list_items": [],
+                    "navigation_path": [],
+                },
+                {
+                    "effective_page_id": "module_list",
+                    "observed_actions": [
+                        {"kind": "list_item", "label": "Engine Control Module"},
+                    ],
+                    "list_items": ["Engine Control Module"],
+                    "navigation_path": ["Module Diagnostics"],
+                },
+            ]
+            self.executed: list[dict[str, str]] = []
+
+        def capture_settled_snapshot(self):
+            if len(self.snapshots) > 1:
+                return self.snapshots.pop(0)
+            return self.snapshots[0]
+
+        def resolve_bridge_action(self, snapshot):
+            if snapshot["effective_page_id"] == "vehicle_selection":
+                return {"kind": "button", "label": "Enter"}
+            return None
+
+        def snapshot_action_match(self, snapshot, label, *, kind=None):
+            return find_action_match(snapshot.get("observed_actions") or [], label, kind=kind)
+
+        def execute_action(self, action: dict[str, str]) -> None:
+            self.executed.append({"kind": str(action["kind"]), "label": str(action["label"])})
+
+        def match_snapshot(self, snapshot):
+            return None
+
+    route_navigator = _RouteNavigator()
+    runtime = RegistryNavigationRuntime(
+        controller=_Controller(),
+        route_navigator=route_navigator,
+        entries=[],
+    )
+
+    result = runtime.execute_registry_route(
+        entry={
+            "page_key": "diagnostics.module_diagnostics",
+            "canonical_path": ["Module Diagnostics"],
+            "route_steps": [
+                {"kind": "button", "label": "Enter", "optional": True},
+                {"kind": "list_item", "label": "Module Diagnostics"},
+            ],
+            "success_criteria": {
+                "page_id_any": ["module_list"],
+                "all_of": [{"kind": "list_item", "label": "Engine Control Module"}],
+            },
+        },
+        max_iterations=4,
         max_backtracks=1,
     )
 

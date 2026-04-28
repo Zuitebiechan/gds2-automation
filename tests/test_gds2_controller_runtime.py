@@ -1068,6 +1068,27 @@ def test_navigation_controller_snapshot_waits_for_menu_list_after_empty_cache() 
     )
 
 
+def test_navigation_controller_snapshot_excludes_disabled_buttons() -> None:
+    class _AgentNav:
+        def get_page_id(self):
+            return {"page_id": "vehicle_selection", "confidence": "high"}
+
+        def get_buttons(self):
+            return [
+                {"text": "Back", "enabled": True},
+                {"text": "Enter", "enabled": False},
+            ]
+
+        def get_list_items(self, list_index: int = 0):
+            return []
+
+    controller = NavigationController(nav=_AgentNav())
+
+    snapshot = controller.get_controller_snapshot()
+
+    assert snapshot.buttons == ("Back",)
+
+
 def test_navigation_controller_detects_clear_dtcs_pages_via_heuristic_fallback() -> None:
     class _HeuristicNav:
         def __init__(self, buttons, items) -> None:

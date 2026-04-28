@@ -113,6 +113,15 @@ class NavigationController:
         self._last_detection_mode = "unknown"
         self._last_detection_confidence = "unknown"
 
+    @staticmethod
+    def _enabled_button_texts(buttons: List[Dict[str, Any]]) -> List[str]:
+        """Return text labels for buttons that are not explicitly disabled."""
+        return [
+            str(button.get("text") or "")
+            for button in buttons
+            if button.get("text") and button.get("enabled", True) is not False
+        ]
+
     def set_cancel_checker(self, cancel_checker) -> None:
         self._cancel_checker = cancel_checker
 
@@ -363,7 +372,7 @@ class NavigationController:
             # Pre-cache buttons and items for get_snapshot() reuse
             try:
                 _buttons = self.nav.get_buttons()
-                self._cached_button_texts = [b.get('text', '') for b in _buttons if b.get('text')]
+                self._cached_button_texts = self._enabled_button_texts(_buttons)
                 self._cached_items = self.nav.get_list_items(0) or []
                 self._cache_time = time.time()
             except Exception:
@@ -957,7 +966,7 @@ class NavigationController:
     def get_visible_buttons(self) -> List[str]:
         """Get list of visible button texts."""
         buttons = self.nav.get_buttons()
-        return [b.get('text', '') for b in buttons if b.get('text')]
+        return self._enabled_button_texts(buttons)
 
     def get_list_items(self, list_index: int = 0) -> List[str]:
         """Get list items from current page."""

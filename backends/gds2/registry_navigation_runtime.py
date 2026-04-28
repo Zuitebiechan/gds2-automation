@@ -456,6 +456,29 @@ def graph_page_has_action(graph: dict[str, Any], page_id: str, action: dict[str,
     return False
 
 
+def should_try_pending_list_action(
+    *,
+    graph: dict[str, Any],
+    snapshot: dict[str, Any],
+    pending_route_step: dict[str, Any] | None,
+    target_path: list[str],
+) -> bool:
+    """Return whether to try a pending list action despite an incomplete snapshot."""
+    if pending_route_step is None:
+        return False
+    if str(pending_route_step.get("kind") or "") != "list_item":
+        return False
+    page_id = str(snapshot.get("effective_page_id") or "").strip()
+    if page_id not in {"diagnostics_menu", "module_list", "module_submenu", "data_list", "sub_data_list"}:
+        return False
+    if action_available(snapshot, pending_route_step):
+        return False
+    if graph_page_has_action(graph, page_id, pending_route_step):
+        return True
+    label = str(pending_route_step.get("label") or "").strip()
+    return bool(label and label in {str(item).strip() for item in target_path if str(item).strip()})
+
+
 def button_enabled_map(snapshot: dict[str, Any], page_info: dict[str, Any]) -> dict[str, bool]:
     enabled = {
         str(key): bool(value)
@@ -589,7 +612,9 @@ def handle_vehicle_selection(
     if next_action == "select_device_and_continue":
         next_action = "select_device"
     if not next_action:
-        next_action = decide_vehicle_selection_action(page_info, labels)
+        enabled = button_enabled_map(snapshot, page_info)
+        enabled_labels = {label for label in labels if enabled.get(label, False)}
+        next_action = decide_vehicle_selection_action(page_info, enabled_labels)
     params = dict((selected_policy or {}).get("params") or {})
     device_name = normalize_default_vci_name(params.get("device_name") or device_name)
 
@@ -1504,6 +1529,14 @@ class GDS2RegistryRouteExecutor:
                 )
                 continue
 
+            if recovery.handle_vehicle_selection(
+                snapshot=snapshot,
+                target_path=target_path,
+                state_trace=state_trace,
+                recovery_actions=recovery_actions,
+            ):
+                continue
+
             if pending_route_step is None and target_label and target_kind:
                 target_match = ports.route_navigator.snapshot_action_match(snapshot, target_label, kind=target_kind)
                 if target_match.ambiguous:
@@ -1538,12 +1571,11 @@ class GDS2RegistryRouteExecutor:
                 continue
 
             if (
-                pending_route_step is not None
-                and not action_available(snapshot, pending_route_step)
-                and graph_page_has_action(
-                    graph,
-                    str(snapshot.get("effective_page_id") or ""),
-                    pending_route_step,
+                should_try_pending_list_action(
+                    graph=graph,
+                    snapshot=snapshot,
+                    pending_route_step=pending_route_step,
+                    target_path=target_path,
                 )
             ):
                 before_signature = snapshot_signature(snapshot)
@@ -1561,14 +1593,6 @@ class GDS2RegistryRouteExecutor:
                         "label": str(pending_route_step["label"]),
                     }
                 )
-                continue
-
-            if recovery.handle_vehicle_selection(
-                snapshot=snapshot,
-                target_path=target_path,
-                state_trace=state_trace,
-                recovery_actions=recovery_actions,
-            ):
                 continue
 
             recovered = recovery.recover_to_common_ancestor(
