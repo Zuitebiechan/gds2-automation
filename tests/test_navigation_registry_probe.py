@@ -313,6 +313,40 @@ def test_success_criteria_supports_all_any_and_path_prefix() -> None:
     assert details["matched_any_of"] == [{"kind": "button", "label": "Create Report"}]
 
 
+def test_success_criteria_accepts_full_path_when_contains_prefix_is_shorter() -> None:
+    snapshot = {
+        "effective_page_id": "data_display",
+        "navigation_path": ["Module Diagnostics", "Engine Control Module", "Data Display", "Engine Data"],
+        "observed_actions": [
+            {"kind": "button", "label": "Back"},
+            {"kind": "button", "label": "Create Report"},
+            {"kind": "button", "label": "Add Bookmark"},
+        ],
+    }
+
+    success, details = evaluate_success_criteria(
+        snapshot,
+        {
+            "page_id_any": ["data_display"],
+            "all_of": [
+                {"kind": "button", "label": "Create Report"},
+                {"kind": "button", "label": "Back"},
+            ],
+            "any_of": [
+                {"kind": "button", "label": "Clear DTCs"},
+                {"kind": "button", "label": "Add Bookmark"},
+            ],
+            "navigation_path_contains_prefix": [
+                "Module Diagnostics",
+                "Engine Control Module",
+            ],
+        },
+    )
+
+    assert success is True
+    assert details["path_ok"] is True
+
+
 def test_success_criteria_supports_variants() -> None:
     snapshot = {
         "effective_page_id": "clear_dtcs_selection",
@@ -776,6 +810,121 @@ def test_registry_route_executor_executes_visible_data_target_before_recovery(mo
     )
 
     assert route_navigator.executed == [{"kind": "list_item", "label": "Engine Data"}]
+    assert result["final_page"] == "data_display"
+
+
+def test_registry_route_executor_waits_for_data_display_controls_before_back(monkeypatch) -> None:
+    monkeypatch.setattr("backends.gds2.registry_navigation_runtime.time.sleep", lambda _seconds: None)
+
+    class _Controller:
+        def go_back(self):  # pragma: no cover - must not be called
+            raise AssertionError("must not leave data_display while waiting for target controls")
+
+        def go_home(self):  # pragma: no cover - must not be called
+            raise AssertionError("must not Home-recover from data_display")
+
+    class _RouteNavigator:
+        graph: dict[str, object] = {}
+
+        def __init__(self) -> None:
+            self.page = "data_list"
+            self.executed: list[dict[str, str]] = []
+            self.data_display_reads = 0
+
+        def capture_settled_snapshot(self):
+            if self.page == "data_display":
+                self.data_display_reads += 1
+                if self.data_display_reads == 1:
+                    return {
+                        "effective_page_id": "data_display",
+                        "observed_actions": [
+                            {"kind": "button", "label": "Back"},
+                        ],
+                        "list_items": [],
+                        "navigation_path": [
+                            "Module Diagnostics",
+                            "Engine Control Module",
+                            "Data Display",
+                            "Engine Data",
+                        ],
+                    }
+                return {
+                    "effective_page_id": "data_display",
+                    "observed_actions": [
+                        {"kind": "button", "label": "Back"},
+                        {"kind": "button", "label": "Create Report"},
+                        {"kind": "button", "label": "Add Bookmark"},
+                    ],
+                    "list_items": [],
+                    "navigation_path": [
+                        "Module Diagnostics",
+                        "Engine Control Module",
+                        "Data Display",
+                        "Engine Data",
+                    ],
+                }
+            return {
+                "effective_page_id": "data_list",
+                "observed_actions": [
+                    {"kind": "button", "label": "Back"},
+                    {"kind": "list_item", "label": "Engine Data"},
+                ],
+                "list_items": ["Engine Data"],
+                "navigation_path": ["Module Diagnostics", "Engine Control Module", "Data Display"],
+            }
+
+        def resolve_bridge_action(self, snapshot):
+            return None
+
+        def snapshot_action_match(self, snapshot, label, *, kind=None):
+            return find_action_match(snapshot.get("observed_actions") or [], label, kind=kind)
+
+        def execute_action(self, action: dict[str, str]) -> None:
+            self.executed.append({"kind": str(action["kind"]), "label": str(action["label"])})
+            if action != {"kind": "list_item", "label": "Engine Data"}:
+                raise AssertionError(f"unexpected action: {action}")
+            self.page = "data_display"
+
+        def match_snapshot(self, snapshot):
+            return None
+
+    route_navigator = _RouteNavigator()
+    runtime = RegistryNavigationRuntime(
+        controller=_Controller(),
+        route_navigator=route_navigator,
+        entries=[],
+    )
+
+    result = runtime.execute_registry_route(
+        entry={
+            "page_key": "data.engine_data",
+            "canonical_path": ["Module Diagnostics", "Engine Control Module", "Data Display", "Engine Data"],
+            "route_steps": [
+                {"kind": "list_item", "label": "Module Diagnostics"},
+                {"kind": "list_item", "label": "Engine Control Module"},
+                {"kind": "list_item", "label": "Data Display"},
+                {"kind": "list_item", "label": "Engine Data"},
+            ],
+            "target_action": {"kind": "list_item", "label": "Engine Data"},
+            "success_criteria": {
+                "page_id_any": ["data_display"],
+                "all_of": [
+                    {"kind": "button", "label": "Create Report"},
+                    {"kind": "button", "label": "Back"},
+                ],
+                "any_of": [
+                    {"kind": "button", "label": "Clear DTCs"},
+                    {"kind": "button", "label": "Add Bookmark"},
+                ],
+                "navigation_path_contains_prefix": ["Module Diagnostics", "Engine Control Module"],
+            },
+        },
+        max_iterations=5,
+        max_backtracks=1,
+    )
+
+    assert route_navigator.executed == [{"kind": "list_item", "label": "Engine Data"}]
+    assert route_navigator.data_display_reads == 2
     assert result["final_page"] == "data_display"
 
 

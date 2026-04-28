@@ -152,7 +152,7 @@ def navigation_path_matches(snapshot: dict[str, Any], expected_path: list[str], 
     if mode == "prefix":
         return actual[: len(expected)] == expected
     if mode == "contains_prefix":
-        return expected[: len(actual)] == actual
+        return actual[: len(expected)] == expected or expected[: len(actual)] == actual
     return actual == expected
 
 
@@ -551,6 +551,52 @@ def should_defer_recovery_for_route_action(
         target_action=target_action,
         target_path=target_path,
     ) is not None
+
+
+def route_action_executed(executed_actions: list[dict[str, str]], action: dict[str, Any]) -> bool:
+    kind = str(action.get("kind") or "").strip()
+    label = str(action.get("label") or "").strip()
+    if not kind or not label:
+        return False
+    return any(
+        str(executed.get("kind") or "").strip() == kind
+        and str(executed.get("label") or "").strip() == label
+        for executed in executed_actions
+    )
+
+
+def should_wait_for_terminal_success(
+    *,
+    snapshot: dict[str, Any],
+    success_details: dict[str, Any],
+    executed_actions: list[dict[str, str]],
+    target_action: dict[str, Any],
+) -> bool:
+    if not route_action_executed(executed_actions, target_action):
+        return False
+    if not bool(success_details.get("page_ok")):
+        return False
+    page_id = str(snapshot.get("effective_page_id") or "").strip()
+    if page_id not in {"data_display", "sub_data_list", "module_list"}:
+        return False
+    return bool(
+        success_details.get("missing_all_of")
+        or (
+            success_details.get("required_any_of")
+            and not success_details.get("matched_any_of")
+        )
+        or not bool(success_details.get("path_ok", True))
+        or any(
+            not bool(detail.get("page_ok"))
+            or detail.get("missing_all_of")
+            or (
+                detail.get("required_any_of")
+                and not detail.get("matched_any_of")
+            )
+            or not bool(detail.get("path_ok", True))
+            for detail in success_details.get("variant_results") or []
+        )
+    )
 
 
 def button_enabled_map(snapshot: dict[str, Any], page_info: dict[str, Any]) -> dict[str, bool]:
@@ -1593,6 +1639,23 @@ class GDS2RegistryRouteExecutor:
                         "state_trace": state_trace,
                         "match_diagnostics": match_diagnostics,
                     }
+                if should_wait_for_terminal_success(
+                    snapshot=snapshot,
+                    success_details=_details,
+                    executed_actions=executed_actions,
+                    target_action=target_action,
+                ):
+                    recovery_actions.append(
+                        {
+                            "kind": "wait",
+                            "label": str(snapshot.get("effective_page_id") or "target_page"),
+                            "reason": "waiting for target page success criteria",
+                            "success": True,
+                            "state": _details,
+                        }
+                    )
+                    time.sleep(1.0)
+                    continue
 
             button_labels = snapshot_action_labels(snapshot, kind="button")
             pending_route_step = select_next_route_step(route_steps, executed_actions, snapshot)
