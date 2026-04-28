@@ -479,6 +479,60 @@ def should_try_pending_list_action(
     return bool(label and label in {str(item).strip() for item in target_path if str(item).strip()})
 
 
+def startup_target_list_action(
+    *,
+    snapshot: dict[str, Any],
+    pending_route_step: dict[str, Any] | None,
+    target_action: dict[str, Any],
+    target_path: list[str],
+) -> dict[str, str] | None:
+    """Return a diagnostics-start list action that should be attempted before recovery."""
+    target_labels = {str(item).strip() for item in target_path if str(item).strip()}
+    if "Module Diagnostics" not in target_labels:
+        return None
+
+    page_id = str(snapshot.get("effective_page_id") or "").strip()
+    buttons = snapshot_action_labels(snapshot, kind="button")
+    if page_id == "diagnostics_menu":
+        deep_menu_state = True
+    elif page_id in {"loading", "unknown"}:
+        deep_menu_state = bool({"Back", "Home", "Vehicle Menu", "Enter"} & buttons)
+    else:
+        deep_menu_state = False
+    if not deep_menu_state:
+        return None
+
+    candidates = [pending_route_step or {}, target_action or {}]
+    for candidate in candidates:
+        kind = str(candidate.get("kind") or "").strip()
+        label = str(candidate.get("label") or "").strip()
+        if kind == "list_item" and label == "Module Diagnostics":
+            return {"kind": kind, "label": label}
+    return None
+
+
+def execute_startup_target_list_action(
+    *,
+    route_navigator: GDS2RouteNavigator,
+    snapshot: dict[str, Any],
+    action: dict[str, str],
+) -> dict[str, Any]:
+    before_signature = snapshot_signature(snapshot)
+    label = str(action["label"])
+    page_id = str(snapshot.get("effective_page_id") or "unknown")
+    try:
+        route_navigator.execute_action(action)
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"Registry route expected '{label}' from {page_id}, "
+            f"but the list item did not become available: {exc}"
+        ) from exc
+    after_snapshot = route_navigator.capture_settled_snapshot()
+    if snapshot_signature(after_snapshot) == before_signature:
+        raise RuntimeError(f"Registry route action '{label}' did not advance from {page_id}")
+    return after_snapshot
+
+
 def button_enabled_map(snapshot: dict[str, Any], page_info: dict[str, Any]) -> dict[str, bool]:
     enabled = {
         str(key): bool(value)
@@ -1591,6 +1645,26 @@ class GDS2RegistryRouteExecutor:
                     {
                         "kind": str(pending_route_step["kind"]),
                         "label": str(pending_route_step["label"]),
+                    }
+                )
+                continue
+
+            startup_action = startup_target_list_action(
+                snapshot=snapshot,
+                pending_route_step=pending_route_step,
+                target_action=target_action,
+                target_path=target_path,
+            )
+            if startup_action is not None:
+                execute_startup_target_list_action(
+                    route_navigator=ports.route_navigator,
+                    snapshot=snapshot,
+                    action=startup_action,
+                )
+                executed_actions.append(
+                    {
+                        "kind": str(startup_action["kind"]),
+                        "label": str(startup_action["label"]),
                     }
                 )
                 continue

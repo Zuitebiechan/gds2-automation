@@ -1363,7 +1363,7 @@ def test_navigation_controller_click_enter_retries_vehicle_selection() -> None:
     assert result.choices == ["Module Diagnostics"]
 
 
-def test_navigation_controller_click_enter_returns_to_diagnostics_menu_after_auto_skip() -> None:
+def test_navigation_controller_click_enter_keeps_module_list_after_auto_skip() -> None:
     class _EnterNav:
         def __init__(self) -> None:
             self.clicks: list[str] = []
@@ -1376,17 +1376,17 @@ def test_navigation_controller_click_enter_returns_to_diagnostics_menu_after_aut
     controller = NavigationController(nav=nav)
     controller._current_page = GDS2Page.VEHICLE_SELECTION
 
-    transitions = iter([GDS2Page.MODULE_LIST, GDS2Page.DIAGNOSTICS_MENU])
+    transitions = iter([GDS2Page.MODULE_LIST])
     controller.wait_for_page_transition = lambda old_page, timeout: next(transitions)
     controller.dismiss_warning_dialog = lambda: False
-    controller.get_list_items = lambda list_index=0: ["Module Diagnostics"]
+    controller.get_list_items = lambda list_index=0: ["Engine Control Module"]
 
     result = controller.click_enter()
 
-    assert nav.clicks == ["Enter", "Back"]
+    assert nav.clicks == ["Enter"]
     assert result.success is True
-    assert result.page == GDS2Page.DIAGNOSTICS_MENU
-    assert result.choices == ["Module Diagnostics"]
+    assert result.page == GDS2Page.MODULE_LIST
+    assert result.choices == ["Engine Control Module"]
 
 
 def test_navigation_controller_select_data_category_records_sub_list_context() -> None:

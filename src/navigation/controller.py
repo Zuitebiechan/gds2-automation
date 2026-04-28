@@ -1107,24 +1107,6 @@ class NavigationController:
         self.nav.click_button("Enter")
         return self._run_enter_transition("Page still did not transition after Enter retry")
 
-    def _return_to_diagnostics_menu(self, page: GDS2Page) -> GDS2Page:
-        """Undo GDS2 auto-skip when Enter lands directly on Module List."""
-        if page != GDS2Page.MODULE_LIST:
-            return page
-
-        logger.info("NAV module_list auto-skip detected; returning to diagnostics_menu")
-        self._check_cancel()
-        back_result = self.nav.click_button("Back")
-        if back_result.get('success'):
-            return self._wait_for_transition_or_detect(
-                GDS2Page.MODULE_LIST,
-                timeout=15,
-                timeout_message="Page did not transition after auto-skip Back click",
-                detect_retries=2,
-                retry_delay=1.0,
-            )
-        return page
-
     @staticmethod
     def _page_has_list_choices(page: GDS2Page) -> bool:
         """Return whether the current page should expose list choices."""
@@ -1859,7 +1841,8 @@ class NavigationController:
 
         Retries page detection if still at Vehicle Selection after clicking.
         If GDS2 auto-navigates to Module List (skipping Diagnostics Menu),
-        clicks Back to return to Diagnostics Menu.
+        keep the advanced page; the registry/session runtime treats Module
+        List as a valid diagnostics-start target.
 
         Returns:
             NavigationResult with next page after clicking Enter
@@ -1878,7 +1861,6 @@ class NavigationController:
 
                 new_page = self._run_enter_transition("Page did not transition after Enter click")
                 new_page = self._retry_enter_from_vehicle_selection(new_page)
-                new_page = self._return_to_diagnostics_menu(new_page)
 
                 if new_page == GDS2Page.VEHICLE_SELECTION:
                     self._emit_ui_event(
