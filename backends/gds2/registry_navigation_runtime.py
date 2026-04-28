@@ -475,8 +475,7 @@ def should_try_pending_list_action(
         return False
     if graph_page_has_action(graph, page_id, pending_route_step):
         return True
-    label = str(pending_route_step.get("label") or "").strip()
-    return bool(label and label in {str(item).strip() for item in target_path if str(item).strip()})
+    return False
 
 
 def startup_target_list_action(
@@ -531,6 +530,27 @@ def execute_startup_target_list_action(
     if snapshot_signature(after_snapshot) == before_signature:
         raise RuntimeError(f"Registry route action '{label}' did not advance from {page_id}")
     return after_snapshot
+
+
+def should_defer_recovery_for_route_action(
+    *,
+    snapshot: dict[str, Any],
+    pending_route_step: dict[str, Any] | None,
+    target_action: dict[str, Any],
+    target_path: list[str],
+) -> bool:
+    if str(snapshot.get("effective_page_id") or "").strip() == "vehicle_selection":
+        return False
+    if pending_route_step is not None and action_available(snapshot, pending_route_step):
+        return True
+    if target_action and action_available(snapshot, target_action):
+        return True
+    return startup_target_list_action(
+        snapshot=snapshot,
+        pending_route_step=pending_route_step,
+        target_action=target_action,
+        target_path=target_path,
+    ) is not None
 
 
 def button_enabled_map(snapshot: dict[str, Any], page_info: dict[str, Any]) -> dict[str, bool]:
@@ -1505,16 +1525,25 @@ class GDS2RegistryRouteExecutor:
         )
         match_diagnostics: list[dict[str, Any]] = []
         recovery = ports.recovery_coordinator()
-
-        recovery_actions = recovery.recover_to_common_ancestor(
-            target_path=target_path,
-            max_backtracks=max_backtracks,
-            recovery_data_category=route_recovery_data_category,
-            recovery_sub_category=route_recovery_sub_category,
-            use_legacy_data_display_recovery=use_legacy_data_display_recovery,
-        )
         executed_actions: list[dict[str, str]] = []
         start_snapshot = ports.route_navigator.capture_settled_snapshot()
+        initial_pending_route_step = select_next_route_step(route_steps, executed_actions, start_snapshot)
+
+        if should_defer_recovery_for_route_action(
+            snapshot=start_snapshot,
+            pending_route_step=initial_pending_route_step,
+            target_action=target_action,
+            target_path=target_path,
+        ):
+            recovery_actions: list[dict[str, Any]] = []
+        else:
+            recovery_actions = recovery.recover_to_common_ancestor(
+                target_path=target_path,
+                max_backtracks=max_backtracks,
+                recovery_data_category=route_recovery_data_category,
+                recovery_sub_category=route_recovery_sub_category,
+                use_legacy_data_display_recovery=use_legacy_data_display_recovery,
+            )
 
         for _ in range(max_iterations):
             if cancel_checker is not None:
@@ -1649,37 +1678,6 @@ class GDS2RegistryRouteExecutor:
                 )
                 continue
 
-            startup_action = startup_target_list_action(
-                snapshot=snapshot,
-                pending_route_step=pending_route_step,
-                target_action=target_action,
-                target_path=target_path,
-            )
-            if startup_action is not None:
-                execute_startup_target_list_action(
-                    route_navigator=ports.route_navigator,
-                    snapshot=snapshot,
-                    action=startup_action,
-                )
-                executed_actions.append(
-                    {
-                        "kind": str(startup_action["kind"]),
-                        "label": str(startup_action["label"]),
-                    }
-                )
-                continue
-
-            recovered = recovery.recover_to_common_ancestor(
-                target_path=target_path,
-                max_backtracks=max_backtracks,
-                recovery_data_category=route_recovery_data_category,
-                recovery_sub_category=route_recovery_sub_category,
-                use_legacy_data_display_recovery=use_legacy_data_display_recovery,
-            )
-            if recovered:
-                recovery_actions.extend(recovered)
-                continue
-
             pending_match = None
             if pending_route_step is not None:
                 pending_match = ports.route_navigator.snapshot_action_match(
@@ -1720,6 +1718,37 @@ class GDS2RegistryRouteExecutor:
                     continue
                 ports.route_navigator.execute_action(pending_route_step)
                 executed_actions.append({"kind": str(pending_route_step["kind"]), "label": str(pending_route_step["label"])})
+                continue
+
+            startup_action = startup_target_list_action(
+                snapshot=snapshot,
+                pending_route_step=pending_route_step,
+                target_action=target_action,
+                target_path=target_path,
+            )
+            if startup_action is not None:
+                execute_startup_target_list_action(
+                    route_navigator=ports.route_navigator,
+                    snapshot=snapshot,
+                    action=startup_action,
+                )
+                executed_actions.append(
+                    {
+                        "kind": str(startup_action["kind"]),
+                        "label": str(startup_action["label"]),
+                    }
+                )
+                continue
+
+            recovered = recovery.recover_to_common_ancestor(
+                target_path=target_path,
+                max_backtracks=max_backtracks,
+                recovery_data_category=route_recovery_data_category,
+                recovery_sub_category=route_recovery_sub_category,
+                use_legacy_data_display_recovery=use_legacy_data_display_recovery,
+            )
+            if recovered:
+                recovery_actions.extend(recovered)
                 continue
 
             if "Back" in button_labels and str(snapshot.get("effective_page_id") or "") != "vehicle_selection":

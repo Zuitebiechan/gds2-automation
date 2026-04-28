@@ -22,6 +22,7 @@ from backends.gds2.registry_navigation_runtime import (
     recover_to_registry_common_ancestor,
     run_probe,
     select_next_route_step,
+    should_defer_recovery_for_route_action,
     should_try_pending_list_action,
     startup_target_list_action,
 )
@@ -584,7 +585,7 @@ def test_registry_route_executor_tries_graph_action_before_home_recovery() -> No
     assert result["final_page"] == "module_list"
 
 
-def test_should_try_pending_list_action_allows_target_path_on_empty_menu_snapshot() -> None:
+def test_should_try_pending_list_action_allows_graph_action_on_empty_menu_snapshot() -> None:
     snapshot = {
         "effective_page_id": "diagnostics_menu",
         "observed_actions": [
@@ -596,11 +597,38 @@ def test_should_try_pending_list_action_allows_target_path_on_empty_menu_snapsho
     }
 
     assert should_try_pending_list_action(
-        graph={},
+        graph={
+            "nodes": {
+                "diagnostics": {
+                    "page_id": "diagnostics_menu",
+                    "observed_actions": [
+                        {"kind": "list_item", "label": "Module Diagnostics"},
+                    ],
+                },
+            },
+        },
         snapshot=snapshot,
         pending_route_step={"kind": "list_item", "label": "Module Diagnostics"},
         target_path=["Module Diagnostics"],
     ) is True
+
+
+def test_should_try_pending_list_action_does_not_force_invisible_data_target() -> None:
+    snapshot = {
+        "effective_page_id": "module_submenu",
+        "observed_actions": [
+            {"kind": "button", "label": "Back"},
+            {"kind": "list_item", "label": "Data Display"},
+        ],
+        "list_items": ["Data Display"],
+    }
+
+    assert should_try_pending_list_action(
+        graph={},
+        snapshot=snapshot,
+        pending_route_step={"kind": "list_item", "label": "Engine Data"},
+        target_path=["Module Diagnostics", "Engine Control Module", "Data Display", "Engine Data"],
+    ) is False
 
 
 def test_startup_target_list_action_uses_target_when_optional_step_is_pending() -> None:
@@ -621,6 +649,134 @@ def test_startup_target_list_action_uses_target_when_optional_step_is_pending() 
         target_action={"kind": "list_item", "label": "Module Diagnostics"},
         target_path=["Module Diagnostics"],
     ) == {"kind": "list_item", "label": "Module Diagnostics"}
+
+
+def test_should_defer_recovery_for_visible_pending_route_action() -> None:
+    snapshot = {
+        "effective_page_id": "data_list",
+        "observed_actions": [
+            {"kind": "button", "label": "Back"},
+            {"kind": "list_item", "label": "Engine Data"},
+        ],
+        "list_items": ["Engine Data"],
+        "navigation_path": ["Module Diagnostics", "Engine Control Module", "Diagnostic Trouble Codes (DTC)"],
+    }
+
+    assert should_defer_recovery_for_route_action(
+        snapshot=snapshot,
+        pending_route_step={"kind": "list_item", "label": "Engine Data"},
+        target_action={"kind": "list_item", "label": "Engine Data"},
+        target_path=["Module Diagnostics", "Engine Control Module", "Data Display", "Engine Data"],
+    ) is True
+
+
+def test_should_defer_recovery_keeps_vehicle_selection_policy_in_charge() -> None:
+    snapshot = {
+        "effective_page_id": "vehicle_selection",
+        "observed_actions": [
+            {"kind": "button", "label": "Back"},
+            {"kind": "button", "label": "Enter"},
+        ],
+        "list_items": [],
+        "navigation_path": [],
+    }
+
+    assert should_defer_recovery_for_route_action(
+        snapshot=snapshot,
+        pending_route_step={"kind": "button", "label": "Enter"},
+        target_action={},
+        target_path=["Module Diagnostics"],
+    ) is False
+
+
+def test_registry_route_executor_executes_visible_data_target_before_recovery(monkeypatch) -> None:
+    monkeypatch.setattr("backends.gds2.registry_navigation_runtime.time.sleep", lambda _seconds: None)
+
+    class _Controller:
+        def click_navigation_path_item(self, label: str):  # pragma: no cover - must not be called
+            raise AssertionError(f"must not breadcrumb-recover before visible target: {label}")
+
+        def go_back(self):  # pragma: no cover - must not be called
+            raise AssertionError("must not Back-recover before visible target")
+
+        def go_home(self):  # pragma: no cover - must not be called
+            raise AssertionError("must not Home-recover before visible target")
+
+    class _RouteNavigator:
+        graph: dict[str, object] = {}
+
+        def __init__(self) -> None:
+            self.page = "data_list"
+            self.executed: list[dict[str, str]] = []
+
+        def capture_settled_snapshot(self):
+            if self.page == "data_display":
+                return {
+                    "effective_page_id": "data_display",
+                    "observed_actions": [
+                        {"kind": "button", "label": "Create Report"},
+                        {"kind": "button", "label": "Back"},
+                    ],
+                    "list_items": [],
+                    "navigation_path": ["Module Diagnostics", "Engine Control Module", "Data Display", "Engine Data"],
+                }
+            return {
+                "effective_page_id": "data_list",
+                "observed_actions": [
+                    {"kind": "button", "label": "Back"},
+                    {"kind": "list_item", "label": "Engine Data"},
+                ],
+                "list_items": ["Engine Data"],
+                "navigation_path": ["Module Diagnostics", "Engine Control Module", "Diagnostic Trouble Codes (DTC)"],
+            }
+
+        def resolve_bridge_action(self, snapshot):
+            return None
+
+        def snapshot_action_match(self, snapshot, label, *, kind=None):
+            return find_action_match(snapshot.get("observed_actions") or [], label, kind=kind)
+
+        def execute_action(self, action: dict[str, str]) -> None:
+            self.executed.append({"kind": str(action["kind"]), "label": str(action["label"])})
+            if action != {"kind": "list_item", "label": "Engine Data"}:
+                raise AssertionError(f"unexpected action: {action}")
+            self.page = "data_display"
+
+        def match_snapshot(self, snapshot):
+            return None
+
+    route_navigator = _RouteNavigator()
+    runtime = RegistryNavigationRuntime(
+        controller=_Controller(),
+        route_navigator=route_navigator,
+        entries=[],
+    )
+
+    result = runtime.execute_registry_route(
+        entry={
+            "page_key": "data.engine_data",
+            "canonical_path": ["Module Diagnostics", "Engine Control Module", "Data Display", "Engine Data"],
+            "route_steps": [
+                {"kind": "list_item", "label": "Module Diagnostics"},
+                {"kind": "list_item", "label": "Engine Control Module"},
+                {"kind": "list_item", "label": "Data Display"},
+                {"kind": "list_item", "label": "Engine Data"},
+            ],
+            "target_action": {"kind": "list_item", "label": "Engine Data"},
+            "success_criteria": {
+                "page_id_any": ["data_display"],
+                "all_of": [
+                    {"kind": "button", "label": "Create Report"},
+                    {"kind": "button", "label": "Back"},
+                ],
+            },
+        },
+        max_iterations=4,
+        max_backtracks=1,
+    )
+
+    assert route_navigator.executed == [{"kind": "list_item", "label": "Engine Data"}]
+    assert result["final_page"] == "data_display"
 
 
 def test_registry_route_executor_uses_startup_target_before_home_recovery(monkeypatch) -> None:
