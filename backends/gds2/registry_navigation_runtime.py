@@ -599,6 +599,25 @@ def should_wait_for_terminal_success(
     )
 
 
+def terminal_page_after_target_action(
+    *,
+    entry: dict[str, Any],
+    snapshot: dict[str, Any],
+    success_details: dict[str, Any],
+    executed_actions: list[dict[str, str]],
+    target_action: dict[str, Any],
+) -> str | None:
+    page_kind = str(entry.get("page_kind") or "").strip()
+    page_id = str(snapshot.get("effective_page_id") or "").strip()
+    if page_kind != "data_display" or page_id != "data_display":
+        return None
+    if not route_action_executed(executed_actions, target_action):
+        return None
+    if not bool(success_details.get("page_ok")):
+        return None
+    return page_id
+
+
 def terminal_loading_page_id(
     *,
     entry: dict[str, Any],
@@ -1608,6 +1627,8 @@ class GDS2RegistryRouteExecutor:
         match_diagnostics: list[dict[str, Any]] = []
         recovery = ports.recovery_coordinator()
         executed_actions: list[dict[str, str]] = []
+        terminal_success_waits = 0
+        max_terminal_success_waits = 3
         start_snapshot = ports.route_navigator.capture_settled_snapshot()
         initial_pending_route_step = select_next_route_step(route_steps, executed_actions, start_snapshot)
 
@@ -1709,12 +1730,20 @@ class GDS2RegistryRouteExecutor:
                         "state_trace": state_trace,
                         "match_diagnostics": match_diagnostics,
                     }
+                terminal_page = terminal_page_after_target_action(
+                    entry=entry,
+                    snapshot=snapshot,
+                    success_details=_details,
+                    executed_actions=executed_actions,
+                    target_action=target_action,
+                )
                 if should_wait_for_terminal_success(
                     snapshot=snapshot,
                     success_details=_details,
                     executed_actions=executed_actions,
                     target_action=target_action,
-                ):
+                ) and terminal_success_waits < max_terminal_success_waits:
+                    terminal_success_waits += 1
                     recovery_actions.append(
                         {
                             "kind": "wait",
@@ -1726,6 +1755,26 @@ class GDS2RegistryRouteExecutor:
                     )
                     time.sleep(1.0)
                     continue
+                if terminal_page is not None:
+                    recovery_actions.append(
+                        {
+                            "kind": "terminal_page",
+                            "label": terminal_page,
+                            "reason": "target action reached terminal page before all controls were detected",
+                            "success": True,
+                            "state": _details,
+                        }
+                    )
+                    return {
+                        "matched_start_node_id": ports.route_navigator.match_snapshot(start_snapshot),
+                        "recovery_actions": recovery_actions,
+                        "planned_path": route_steps,
+                        "executed_actions": executed_actions,
+                        "final_page": terminal_page,
+                        "final_snapshot": snapshot,
+                        "state_trace": state_trace,
+                        "match_diagnostics": match_diagnostics,
+                    }
 
             button_labels = snapshot_action_labels(snapshot, kind="button")
             pending_route_step = select_next_route_step(route_steps, executed_actions, snapshot)
