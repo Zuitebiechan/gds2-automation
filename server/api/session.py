@@ -2,7 +2,7 @@
 
 Provides endpoints for session lifecycle, SSE event streaming,
 user decision submission, and abort.  Operates on the in-memory
-SessionOrchestrator and does not touch existing diagnostics routes.
+SessionOrchestrator.
 """
 
 # pyright: reportMissingImports=false

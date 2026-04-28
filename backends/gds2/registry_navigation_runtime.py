@@ -23,7 +23,7 @@ from backends.gds2.navigation_registry import (
     rebuild_registry_database,
 )
 from backends.gds2.runtime_status import GDS2NavigationRuntimeStatusRecorder
-from backends.gds2.route_graph import load_graph, merge_graph_files
+from backends.gds2.route_graph import load_graph, merge_graph_files, node_has_action
 from backends.gds2.route_navigator import GDS2RouteNavigator
 from backends.gds2.vehicle_dtc_status import is_vehicle_dtc_information_label
 from diagnostic_platform.session_observability import emit_gds2_ui_event
@@ -426,6 +426,9 @@ def select_next_route_step(
         if action_available(snapshot, candidate):
             return candidate
     if candidates:
+        for candidate in candidates:
+            if not bool(candidate.get("optional")):
+                return candidate
         return candidates[0]
     return None
 
@@ -436,6 +439,21 @@ def snapshot_action_labels(snapshot: dict[str, Any], *, kind: str | None = None)
         for action in snapshot.get("observed_actions") or []
         if (kind is None or str(action.get("kind") or "") == kind)
     }
+
+
+def graph_page_has_action(graph: dict[str, Any], page_id: str, action: dict[str, Any]) -> bool:
+    """Return whether the learned route graph says this page exposes an action."""
+    normalized_page = str(page_id or "").strip()
+    label = str(action.get("label") or "").strip()
+    kind = str(action.get("kind") or "").strip() or None
+    if not normalized_page or not label:
+        return False
+    for node in (graph.get("nodes") or {}).values():
+        if str(node.get("page_id") or "").strip() != normalized_page:
+            continue
+        if node_has_action(node, label, kind=kind):
+            return True
+    return False
 
 
 def button_enabled_map(snapshot: dict[str, Any], page_info: dict[str, Any]) -> dict[str, bool]:
@@ -1517,6 +1535,32 @@ class GDS2RegistryRouteExecutor:
             if bridge_action is not None:
                 ports.route_navigator.execute_action(bridge_action)
                 executed_actions.append({"kind": str(bridge_action["kind"]), "label": str(bridge_action["label"])})
+                continue
+
+            if (
+                pending_route_step is not None
+                and not action_available(snapshot, pending_route_step)
+                and graph_page_has_action(
+                    graph,
+                    str(snapshot.get("effective_page_id") or ""),
+                    pending_route_step,
+                )
+            ):
+                before_signature = snapshot_signature(snapshot)
+                ports.route_navigator.execute_action(pending_route_step)
+                after_snapshot = ports.route_navigator.capture_settled_snapshot()
+                if snapshot_signature(after_snapshot) == before_signature:
+                    raise RuntimeError(
+                        "Registry route action "
+                        f"'{pending_route_step['label']}' did not advance from "
+                        f"{snapshot.get('effective_page_id') or 'unknown'}"
+                    )
+                executed_actions.append(
+                    {
+                        "kind": str(pending_route_step["kind"]),
+                        "label": str(pending_route_step["label"]),
+                    }
+                )
                 continue
 
             if recovery.handle_vehicle_selection(

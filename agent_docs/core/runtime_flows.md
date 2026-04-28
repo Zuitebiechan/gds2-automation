@@ -249,14 +249,6 @@ Current GDS2 implementation note:
 - `Read DTCs` waits for that summary table to be ready; rows still reporting `Waiting For Data...` keep the operation unavailable
 - Vehicle summary reads return `dtc_display_mode=vehicle_summary`, with `DTC Count`, control module, module status, and DLC pin mapped into the normalized payload
 
-### Direct diagnostics
-
-Entry:
-
-- `GET /api/diagnose/dtcs`
-
-This performs a similar operation directly against the backend outside the business-session model.
-
 ## Clear-DTC Flow
 
 ### Session-bound
@@ -282,18 +274,6 @@ Current GDS2 implementation note:
 - on `Vehicle DTC Information`, `Clear DTCs` stays on the Vehicle Diagnostics branch and executes `Clear DTCs -> Add All -> OK -> OK` from the current page after the summary table is ready
 - the registry runtime is responsible for Clear DTCs same-page verification, loading restart policy, device-explorer recovery, J2534 disconnect handling, and navigation-path correction before resuming the requested clear flow
 - backend state now exposes `navigation_runtime_status`, which records the latest route target, matched state/policy trace, recovery actions, and terminal reason for the most recent registry-runtime operation
-
-### Direct diagnostics
-
-Entry:
-
-- `POST /api/diagnose/clear_dtcs`
-
-Behavior:
-
-- resolve module/data-category context when supplied
-- call backend clear-DTC behavior directly
-- return normalized clear result payload
 
 ## Live-Data Flow
 

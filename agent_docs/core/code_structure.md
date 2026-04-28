@@ -24,8 +24,8 @@ Important files:
 
 - `server/app.py`
 - `server/api/session.py`
-- `server/api/diagnostics.py`
 - `server/api/navigate.py`
+- `server/api/ai_engine_config.py`
 - `server/api/session_dependencies.py`
 - `server/api/session_ai_handlers.py`
 - `server/api/session_live_data_handlers.py`
@@ -63,7 +63,7 @@ The runtime package is split by concern:
 | `diagnostic_platform/runtime/session_backends.py` | Backend resolution and capability enforcement for sessions |
 | `diagnostic_platform/runtime/session_state.py` | Session binding helpers for worker-local subordinate state |
 | `diagnostic_platform/runtime/session_streams.py` | SSE stream generation for sessions, navigation, AI, and live data |
-| `diagnostic_platform/runtime/diagnostics_runtime.py` | Direct diagnostics API helpers |
+| `diagnostic_platform/runtime/diagnostics_runtime.py` | Shared DTC/live-data/AI helper functions used by session flows |
 | `diagnostic_platform/runtime/navigation_runtime.py` | Standalone navigation runtime used by direct navigation and session subflows |
 
 ## `backends/`

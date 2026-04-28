@@ -158,7 +158,7 @@ The runtime layer is intentionally split into reusable services instead of keepi
 | `diagnostic_platform/runtime/session_preflight.py` | diagnostics start, network gate, override lifecycle |
 | `diagnostic_platform/runtime/session_decisions.py` | backend/network/branch decision resolution |
 | `diagnostic_platform/runtime/session_actions.py` | session-bound AI, navigation, live data, DTC, and action helpers |
-| `diagnostic_platform/runtime/diagnostics_runtime.py` | direct diagnostics API helpers |
+| `diagnostic_platform/runtime/diagnostics_runtime.py` | shared diagnostics helpers used by session-backed DTC and diagnostics flows |
 | `diagnostic_platform/runtime/navigation_runtime.py` | standalone navigation runtime |
 | `diagnostic_platform/runtime/session_streams.py` | SSE stream generators |
 

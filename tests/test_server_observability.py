@@ -78,7 +78,6 @@ def _install_fake_flask_stack(
     fake_flask_cors.CORS = lambda app, *args, **kwargs: app
     monkeypatch.setitem(sys.modules, "flask_cors", fake_flask_cors)
     monkeypatch.delitem(sys.modules, "server.app", raising=False)
-    monkeypatch.delitem(sys.modules, "server.api.diagnostics", raising=False)
     monkeypatch.delitem(sys.modules, "server.api.navigate", raising=False)
     monkeypatch.delitem(sys.modules, "server.api.session", raising=False)
     monkeypatch.delitem(sys.modules, "server.api.http_utils", raising=False)

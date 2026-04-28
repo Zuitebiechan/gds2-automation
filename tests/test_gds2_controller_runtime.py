@@ -1035,6 +1035,39 @@ def test_navigation_controller_maps_clear_dtcs_agent_page_ids() -> None:
     assert confirmation.detect_current_page(retries=0) == GDS2Page.CLEAR_DTCS_CONFIRMATION
 
 
+def test_navigation_controller_snapshot_waits_for_menu_list_after_empty_cache() -> None:
+    class _AgentNav:
+        def __init__(self) -> None:
+            self.list_calls = 0
+
+        def get_page_id(self):
+            return {"page_id": "diagnostics_menu", "confidence": "high"}
+
+        def get_buttons(self):
+            return [
+                {"text": "Back", "enabled": True},
+                {"text": "Home", "enabled": True},
+                {"text": "Enter", "enabled": True},
+            ]
+
+        def get_list_items(self, list_index: int = 0):
+            self.list_calls += 1
+            if self.list_calls == 1:
+                return []
+            return ["Module Diagnostics", "Vehicle Diagnostics", "Session Manager"]
+
+    controller = NavigationController(nav=_AgentNav())
+
+    snapshot = controller.get_controller_snapshot()
+
+    assert snapshot.raw_page_id == "diagnostics_menu"
+    assert snapshot.list_items == (
+        "Module Diagnostics",
+        "Vehicle Diagnostics",
+        "Session Manager",
+    )
+
+
 def test_navigation_controller_detects_clear_dtcs_pages_via_heuristic_fallback() -> None:
     class _HeuristicNav:
         def __init__(self, buttons, items) -> None:

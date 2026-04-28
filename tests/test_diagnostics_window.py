@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import queue
 import threading
 import types
 import tkinter as tk
@@ -76,6 +77,44 @@ class _Text:
         return None
 
 
+class _ImmediateThread:
+    def __init__(self, target=None, daemon=None, name=None):
+        self.target = target
+
+    def start(self):
+        if self.target is not None:
+            self.target()
+
+
+class _EmptyStreamingResponse:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def iter_lines(self, decode_unicode=True):
+        return iter([])
+
+
+def _capture_empty_stream_get(monkeypatch) -> dict[str, object]:
+    captured: dict[str, object] = {}
+
+    def _fake_get(url, stream=None, timeout=None, headers=None):
+        captured["url"] = url
+        captured["stream"] = stream
+        captured["timeout"] = timeout
+        captured["headers"] = headers
+        return _EmptyStreamingResponse()
+
+    monkeypatch.setattr(threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr("vci_proxy.diagnostics_window.requests.get", _fake_get)
+    return captured
+
+
 def _build_window(*, current_page: str = "") -> DiagnosticsWindow:
     window = DiagnosticsWindow.__new__(DiagnosticsWindow)
     window._selected_module = _Var("ECM")
@@ -118,8 +157,19 @@ def _build_window(*, current_page: str = "") -> DiagnosticsWindow:
     window._clear_dtc_button = _Widget()
     window._start_stream_button = _Widget()
     window._ai_diagnose_button = _Widget()
+    window._stop_stream_button = _Widget()
+    window._ai_retry_button = _Widget()
     window._module_combo = _Widget()
     window._data_combo = _Widget()
+    window._ai_status_text = _Var("")
+    window._ai_result_text = _Text()
+    window._cached_payload_id = "payload-123"
+    window._vin = "VIN123"
+    window._api_base = "https://cust001.diag.example.com"
+    window._api_token = "api-secret"
+    window._queue = queue.Queue()
+    window._sse_response = None
+    window._ai_sse_response = None
     window._workflow_goal = "none"
     window._last_workflow_intent = ""
     window._active_assignment = None
@@ -665,6 +715,171 @@ def test_on_read_dtcs_clicked_blocks_vehicle_branch_while_dtc_table_loading() ->
 
     assert calls == []
     assert warnings == [("Vehicle DTC Loading", "Vehicle DTC Information is still loading.")]
+
+
+def test_on_ai_diagnose_clicked_posts_session_ai_request() -> None:
+    window = _build_window(current_page="data_display")
+    calls: list[tuple[str, str, dict[str, object]]] = []
+    window._api_call = lambda method, endpoint, **kwargs: calls.append((method, endpoint, kwargs))
+
+    window._on_ai_diagnose_clicked()
+
+    assert calls == [
+        (
+            "POST",
+            "/api/session/ai_diagnose",
+            {
+                "json_data": {
+                    "module": "ECM",
+                    "data_category": "Diagnostic Data Display",
+                    "vin": "VIN123",
+                    "session_id": "session-123",
+                },
+                "callback_event": "ai_start_result",
+            },
+        )
+    ]
+
+
+def test_on_ai_diagnose_clicked_requires_session() -> None:
+    window = _build_window(current_page="data_display")
+    window._session_id = None
+    calls: list[tuple[str, str, dict[str, object]]] = []
+    warnings: list[tuple[str, str]] = []
+    window._api_call = lambda method, endpoint, **kwargs: calls.append((method, endpoint, kwargs))
+
+    original = messagebox.showwarning
+    messagebox.showwarning = lambda title, message: warnings.append((title, message))
+    try:
+        window._on_ai_diagnose_clicked()
+    finally:
+        messagebox.showwarning = original
+
+    assert calls == []
+    assert warnings == [("Session Required", "Please click Start Session first.")]
+
+
+def test_on_ai_retry_clicked_posts_session_retry_request() -> None:
+    window = _build_window(current_page="data_display")
+    calls: list[tuple[str, str, dict[str, object]]] = []
+    window._api_call = lambda method, endpoint, **kwargs: calls.append((method, endpoint, kwargs))
+
+    window._on_ai_retry_clicked()
+
+    assert calls == [
+        (
+            "POST",
+            "/api/session/ai_diagnose/retry",
+            {
+                "json_data": {
+                    "cached_payload_id": "payload-123",
+                    "vin": "VIN123",
+                    "module": "ECM",
+                    "data_category": "Diagnostic Data Display",
+                    "session_id": "session-123",
+                },
+                "callback_event": "ai_start_result",
+            },
+        )
+    ]
+
+
+def test_on_start_stream_clicked_posts_session_live_data_request() -> None:
+    window = _build_window(current_page="data_display")
+    calls: list[tuple[str, str, dict[str, object]]] = []
+    window._api_call = lambda method, endpoint, **kwargs: calls.append((method, endpoint, kwargs))
+
+    window._on_start_stream_clicked()
+
+    assert calls == [
+        (
+            "POST",
+            "/api/session/live_data/start",
+            {
+                "json_data": {
+                    "session_id": "session-123",
+                    "module": "ECM",
+                    "data_category": "Diagnostic Data Display",
+                },
+                "callback_event": "live_start_result",
+            },
+        )
+    ]
+
+
+def test_on_start_stream_clicked_requires_session() -> None:
+    window = _build_window(current_page="data_display")
+    window._session_id = None
+    calls: list[tuple[str, str, dict[str, object]]] = []
+    warnings: list[tuple[str, str]] = []
+    window._api_call = lambda method, endpoint, **kwargs: calls.append((method, endpoint, kwargs))
+
+    original = messagebox.showwarning
+    messagebox.showwarning = lambda title, message: warnings.append((title, message))
+    try:
+        window._on_start_stream_clicked()
+    finally:
+        messagebox.showwarning = original
+
+    assert calls == []
+    assert warnings == [("Session Required", "Please click Start Session first.")]
+
+
+def test_on_stop_stream_clicked_posts_session_live_data_stop() -> None:
+    window = _build_window(current_page="data_display")
+    calls: list[tuple[str, str, dict[str, object]]] = []
+    window._api_call = lambda method, endpoint, **kwargs: calls.append((method, endpoint, kwargs))
+
+    window._on_stop_stream_clicked()
+
+    assert calls == [
+        (
+            "POST",
+            "/api/session/live_data/stop",
+            {
+                "json_data": {"session_id": "session-123"},
+                "callback_event": "live_stop_result",
+            },
+        )
+    ]
+
+
+def test_on_stop_stream_clicked_requires_session() -> None:
+    window = _build_window(current_page="data_display")
+    window._session_id = None
+    calls: list[tuple[str, str, dict[str, object]]] = []
+    warnings: list[tuple[str, str]] = []
+    window._api_call = lambda method, endpoint, **kwargs: calls.append((method, endpoint, kwargs))
+
+    original = messagebox.showwarning
+    messagebox.showwarning = lambda title, message: warnings.append((title, message))
+    try:
+        window._on_stop_stream_clicked()
+    finally:
+        messagebox.showwarning = original
+
+    assert calls == []
+    assert warnings == [("Session Required", "Please click Start Session first.")]
+
+
+def test_live_data_sse_uses_session_endpoint(monkeypatch) -> None:
+    window = _build_window(current_page="data_display")
+    captured = _capture_empty_stream_get(monkeypatch)
+
+    window._start_sse_thread()
+
+    assert captured["url"] == "https://cust001.diag.example.com/api/session/live_data/events?session_id=session-123"
+    assert captured["headers"] == {"X-API-Token": "api-secret"}
+
+
+def test_ai_sse_uses_session_endpoint(monkeypatch) -> None:
+    window = _build_window(current_page="data_display")
+    captured = _capture_empty_stream_get(monkeypatch)
+
+    window._start_ai_sse_thread("session-123")
+
+    assert captured["url"] == "https://cust001.diag.example.com/api/session/ai_diagnose/events?session_id=session-123"
+    assert captured["headers"] == {"X-API-Token": "api-secret"}
 
 
 def test_refresh_action_buttons_disables_clear_dtcs_while_ai_pending() -> None:

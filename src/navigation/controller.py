@@ -585,6 +585,18 @@ class NavigationController:
             else:
                 buttons = self.get_visible_buttons()
                 items = self.get_list_items(0)
+            if not items and page in {
+                GDS2Page.DIAGNOSTICS_MENU,
+                GDS2Page.MODULE_LIST,
+                GDS2Page.MODULE_SUBMENU,
+                GDS2Page.DATA_LIST,
+                GDS2Page.SUB_DATA_LIST,
+            }:
+                items = self.wait_for_list(0, max_attempts=3)
+                if items:
+                    self._cached_items = list(items)
+                    self._cached_button_texts = list(buttons)
+                    self._cache_time = time.time()
             return ControllerSnapshot(
                 raw_page_id=page.value,
                 buttons=tuple(buttons),

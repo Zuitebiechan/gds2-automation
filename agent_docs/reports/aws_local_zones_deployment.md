@@ -1,4 +1,4 @@
-# 北美 AWS Local Zones 部署建议报告
+﻿# 北美 AWS Local Zones 部署建议报告
 
 ## 文档角色
 
@@ -24,7 +24,7 @@
 对当前产品阶段而言，延迟最敏感的部分包括：
 
 - reverse-tunnel J2534 往返
-- `/api/session/*`、`/api/diagnose/*`、`/api/navigate/*` 请求
+- `/api/session/*`、`/api/navigate/*` 请求
 - SSE 进度流
 - live data / DTC 读取等交互操作
 
@@ -36,7 +36,6 @@
 
 - 当前支持的公开 API 仍是：
   - `/api/session/*`
-  - `/api/diagnose/*`
   - `/api/navigate/*`
 - 当前 worker 模型仍是：
   - `1 worker process = 1 active business session = 1 active backend bundle`
@@ -119,7 +118,7 @@ AWS Local Zone Windows EC2
 - Java Agent
 - `python -m vci_proxy.reverse_server`
 - `python app.py --port 8080`
-- 与 `/api/session/*`、`/api/diagnose/*`、`/api/navigate/*` 直接相关的运行时
+- 与 `/api/session/*`、`/api/navigate/*` 直接相关的运行时
 
 ### 哪些内容可以留在父 Region
 
@@ -202,8 +201,8 @@ AMI 至少应包含：
 在决定是否长期采用 Local Zone 之前，应至少验证：
 
 1. 客户端到 worker 的 RTT
-2. `POST /api/diagnose/start` 总耗时
-3. `GET /api/diagnose/dtcs` 总耗时
+2. `POST /api/session/start_diagnostics` 总耗时
+3. `POST /api/session/dtcs` 总耗时
 4. live stream 从启动到第一条 SSE 的耗时
 5. session start 到首个可操作状态的时间
 6. reverse-tunnel 代表性请求/响应耗时

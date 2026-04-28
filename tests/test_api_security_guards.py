@@ -368,39 +368,6 @@ def test_navigate_events_rejects_non_string_session_id(monkeypatch):
     }
 
 
-def test_diagnose_select_module_rejects_non_object_json_body(monkeypatch):
-    _install_fake_flask_stack(monkeypatch, ["bad-payload"])
-    diagnostics_api = _fresh_import(monkeypatch, "server.api.diagnostics")
-
-    payload, status = diagnostics_api.diagnose_select_module()
-
-    assert status == 400
-    assert payload == {
-        "success": False,
-        "error": "JSON request body must be an object",
-    }
-
-
-def test_diagnose_select_module_rejects_non_string_module(monkeypatch):
-    _install_fake_flask_stack(monkeypatch, {"module": {"name": "ECM"}})
-    diagnostics_api = _fresh_import(monkeypatch, "server.api.diagnostics")
-    monkeypatch.setattr(
-        diagnostics_api,
-        "select_diagnostic_module",
-        lambda **kwargs: (_ for _ in ()).throw(
-            AssertionError("select_diagnostic_module should not be called")
-        ),
-    )
-
-    payload, status = diagnostics_api.diagnose_select_module()
-
-    assert status == 400
-    assert payload == {
-        "success": False,
-        "error": "module must be a string",
-    }
-
-
 def test_session_events_rejects_non_string_session_id(monkeypatch):
     _install_fake_flask_stack(monkeypatch, None, path="/api/session/events", method="GET")
     session_api = _fresh_import(monkeypatch, "server.api.session")
@@ -472,140 +439,6 @@ def test_session_ai_handler_hides_internal_error_details(monkeypatch):
     }
 
 
-def test_workflow_recovery_error_exposes_optional_metadata(monkeypatch):
-    _install_fake_flask_stack(monkeypatch, {})
-    diagnostics_api = _fresh_import(monkeypatch, "server.api.diagnostics")
-    monkeypatch.setattr(
-        diagnostics_api,
-        "build_diagnostics_start_payload",
-        lambda **kwargs: (_ for _ in ()).throw(
-            diagnostics_api.WorkflowRecoveryError(
-                "Need to restart workflow",
-                target_page="main_menu",
-                reasoning="Recover from stale page state",
-            )
-        ),
-    )
-
-    payload, status = diagnostics_api.diagnose_start()
-
-    assert status == 200
-    assert payload == {
-        "success": False,
-        "recovered": True,
-        "recovery_target": "main_menu",
-        "reasoning": "Recover from stale page state",
-        "error": "Need to restart workflow",
-    }
-
-
-def test_diagnose_live_data_start_rejects_invalid_interval_ms(monkeypatch):
-    _install_fake_flask_stack(monkeypatch, {"data_category": "Live Data", "interval_ms": "fast"})
-    diagnostics_api = _fresh_import(monkeypatch, "server.api.diagnostics")
-    monkeypatch.setattr(
-        diagnostics_api,
-        "start_live_data_stream",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("start_live_data_stream should not be called")
-        ),
-    )
-
-    payload, status = diagnostics_api.diagnose_live_data_start()
-
-    assert status == 400
-    assert payload == {
-        "success": False,
-        "error": "interval_ms must be an integer",
-    }
-
-
-def test_diagnose_ai_retry_rejects_non_string_cached_payload_id(monkeypatch):
-    _install_fake_flask_stack(monkeypatch, {"cached_payload_id": ["bad"]})
-    diagnostics_api = _fresh_import(monkeypatch, "server.api.diagnostics")
-    monkeypatch.setattr(
-        diagnostics_api,
-        "retry_public_ai_diagnosis",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("retry_public_ai_diagnosis should not be called")
-        ),
-    )
-
-    payload, status = diagnostics_api.diagnose_ai_retry()
-
-    assert status == 400
-    assert payload == {
-        "success": False,
-        "error": "cached_payload_id must be a string",
-    }
-
-
-def test_diagnose_dtcs_rejects_non_string_module_query(monkeypatch):
-    _install_fake_flask_stack(monkeypatch, None, path="/api/diagnose/dtcs", method="GET")
-    diagnostics_api = _fresh_import(monkeypatch, "server.api.diagnostics")
-    diagnostics_api.request.args = {
-        "backend_name": "fakecore",
-        "module": ["bad"],
-        "data_category": "",
-    }
-    monkeypatch.setattr(
-        diagnostics_api,
-        "_get_backend",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("_get_backend should not be called")
-        ),
-    )
-
-    payload, status = diagnostics_api.diagnose_dtcs()
-
-    assert status == 400
-    assert payload == {
-        "success": False,
-        "error": "module must be a string",
-        "dtcs": [],
-    }
-
-
-def test_diagnose_dtcs_hides_internal_error_details(monkeypatch):
-    _install_fake_flask_stack(monkeypatch, None, path="/api/diagnose/dtcs", method="GET")
-    diagnostics_api = _fresh_import(monkeypatch, "server.api.diagnostics")
-    diagnostics_api.request.args = {"backend_name": "fakecore", "module": "", "data_category": ""}
-    monkeypatch.setattr(diagnostics_api, "_get_backend", lambda backend_name=None: object())
-    monkeypatch.setattr(diagnostics_api, "_ensure_backend_capability", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        diagnostics_api,
-        "read_diagnostic_dtcs",
-        lambda **kwargs: (_ for _ in ()).throw(Exception("secret stack path")),
-    )
-
-    payload, status = diagnostics_api.diagnose_dtcs()
-
-    assert status == 500
-    assert payload == {
-        "success": False,
-        "error": "Internal server error",
-        "dtcs": [],
-    }
-
-
-def test_diagnose_ai_events_rejects_non_string_session_id(monkeypatch):
-    _install_fake_flask_stack(
-        monkeypatch,
-        None,
-        path="/api/diagnose/ai_diagnose/events",
-        method="GET",
-    )
-    diagnostics_api = _fresh_import(monkeypatch, "server.api.diagnostics")
-    diagnostics_api.request.args = {"session_id": ["bad"]}
-
-    payload, status = diagnostics_api.diagnose_ai_events()
-
-    assert status == 400
-    assert payload == {
-        "success": False,
-        "error": "session_id must be a string",
-    }
-
-
 def test_load_zhipu_api_key_ignores_non_string_config_value(monkeypatch, tmp_path):
     _install_fake_flask_stack(monkeypatch, None)
     config_dir = tmp_path / "VCI_Proxy"
@@ -615,9 +448,9 @@ def test_load_zhipu_api_key_ignores_non_string_config_value(monkeypatch, tmp_pat
         encoding="utf-8",
     )
     monkeypatch.setenv("APPDATA", str(tmp_path))
-    diagnostics_api = _fresh_import(monkeypatch, "server.api.diagnostics")
+    ai_engine_config = _fresh_import(monkeypatch, "server.api.ai_engine_config")
 
-    assert diagnostics_api._load_zhipu_api_key() is None
+    assert ai_engine_config._load_zhipu_api_key() is None
 
 
 def test_load_openai_config_reads_appdata_config(monkeypatch, tmp_path):
@@ -641,12 +474,12 @@ def test_load_openai_config_reads_appdata_config(monkeypatch, tmp_path):
         encoding="utf-8",
     )
     monkeypatch.setenv("APPDATA", str(tmp_path))
-    diagnostics_api = _fresh_import(monkeypatch, "server.api.diagnostics")
+    ai_engine_config = _fresh_import(monkeypatch, "server.api.ai_engine_config")
 
-    assert diagnostics_api._load_openai_api_key() == "team-key"
-    assert diagnostics_api._load_openai_base_url() == "https://moacode.org/team/v1"
-    assert diagnostics_api._load_openai_model() == "gpt-5.4"
-    assert diagnostics_api._load_openai_reasoning_effort() == "none"
+    assert ai_engine_config._load_openai_api_key() == "team-key"
+    assert ai_engine_config._load_openai_base_url() == "https://moacode.org/team/v1"
+    assert ai_engine_config._load_openai_model() == "gpt-5.4"
+    assert ai_engine_config._load_openai_reasoning_effort() == "none"
 
 
 def test_build_ai_engine_prefers_openai_env_over_config(monkeypatch, tmp_path):
@@ -669,7 +502,7 @@ def test_build_ai_engine_prefers_openai_env_over_config(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENAI_BASE_URL", "https://env.example/v1")
     monkeypatch.setenv("OPENAI_MODEL", "gpt-5.4")
     monkeypatch.setenv("OPENAI_REASONING_EFFORT", "none")
-    diagnostics_api = _fresh_import(monkeypatch, "server.api.diagnostics")
+    ai_engine_config = _fresh_import(monkeypatch, "server.api.ai_engine_config")
 
     captured = {}
 
@@ -677,9 +510,9 @@ def test_build_ai_engine_prefers_openai_env_over_config(monkeypatch, tmp_path):
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    monkeypatch.setattr(diagnostics_api, "AIEngine", _FakeAIEngine)
+    monkeypatch.setattr(ai_engine_config, "AIEngine", _FakeAIEngine)
 
-    diagnostics_api._build_ai_engine()
+    ai_engine_config._build_ai_engine()
 
     assert captured == {
         "api_key": "env-key",

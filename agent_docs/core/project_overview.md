@@ -39,15 +39,15 @@ For GDS2, DTC and live-data operations are expected to happen from the Data Disp
 Only these HTTP surfaces are treated as supported product surfaces:
 
 - `/api/session/*`
-- `/api/diagnose/*`
 - `/api/navigate/*`
 
 The intended product-facing surface is `/api/session/*`.
 
-The other two surfaces are still supported, but they are lower-level capability/debug surfaces:
+The other supported lower-level surface is:
 
-- `/api/diagnose/*` exposes direct backend diagnostics operations
 - `/api/navigate/*` exposes standalone navigation execution
+
+Legacy direct diagnostics routes have been removed; diagnostics clients should use `/api/session/*`.
 
 Route-by-route details are documented in `agent_docs/core/api_design.md`.
 

@@ -2134,6 +2134,11 @@ class DiagnosticsWindow:
             messagebox.showwarning("Data Category Required", "Please select a data category.")
             return
 
+        if not self._session_id:
+            messagebox.showwarning("Session Required", "Please click Start Session first.")
+            self._set_session_hint("Please click Start Session first, then run AI Diagnose.")
+            return
+
         if self._session_id and not self._session_category_confirmed:
             messagebox.showwarning(
                 "Category Not Confirmed",
@@ -2156,21 +2161,25 @@ class DiagnosticsWindow:
         self._set_ai_result_text("")
         self._append_agent_message("user", f"启动 AI Diagnostics（{module} / {category}）")
 
-        path = "/api/diagnose/ai_diagnose"
-        payload = {"module": module, "data_category": category, "vin": self._vin}
-        if self._session_id:
-            path = "/api/session/ai_diagnose"
-            payload["session_id"] = self._session_id
-
         self._api_call(
             "POST",
-            path,
-            json_data=payload,
+            "/api/session/ai_diagnose",
+            json_data={
+                "module": module,
+                "data_category": category,
+                "vin": self._vin,
+                "session_id": self._session_id,
+            },
             callback_event="ai_start_result",
         )
 
     def _on_ai_retry_clicked(self) -> None:
         if not self._cached_payload_id:
+            return
+
+        if not self._session_id:
+            messagebox.showwarning("Session Required", "Please click Start Session first.")
+            self._set_session_hint("Please click Start Session first, then retry AI Diagnose.")
             return
 
         module = self._selected_module.get().strip()
@@ -2189,20 +2198,17 @@ class DiagnosticsWindow:
         self._set_ai_result_text("")
         self._append_agent_message("user", "重试 AI Diagnostics")
 
-        path = "/api/diagnose/ai_diagnose/retry"
         payload = {
             "cached_payload_id": self._cached_payload_id,
             "vin": self._vin,
             "module": module,
             "data_category": category,
+            "session_id": self._session_id,
         }
-        if self._session_id:
-            path = "/api/session/ai_diagnose/retry"
-            payload["session_id"] = self._session_id
 
         self._api_call(
             "POST",
-            path,
+            "/api/session/ai_diagnose/retry",
             json_data=payload,
             callback_event="ai_start_result",
         )
@@ -2373,7 +2379,12 @@ class DiagnosticsWindow:
             messagebox.showwarning("Data Category Required", "Please select a data category.")
             return
 
-        if self._session_id and not self._session_category_confirmed:
+        if not self._session_id:
+            messagebox.showwarning("Session Required", "Please click Start Session first.")
+            self._set_session_hint("Please click Start Session first, then run Start Stream.")
+            return
+
+        if not self._session_category_confirmed:
             messagebox.showwarning(
                 "Category Not Confirmed",
                 "In Session mode, please click Select next to Data Category before Start Stream.",
@@ -2385,31 +2396,31 @@ class DiagnosticsWindow:
         self._stop_stream_button.configure(state=tk.DISABLED)
         self._set_status_text("Starting live stream...")
 
-        path = "/api/diagnose/live_data/start"
-        payload = {"data_category": category}
-        if self._session_id:
-            path = "/api/session/live_data/start"
-            payload = {
+        self._api_call(
+            "POST",
+            "/api/session/live_data/start",
+            json_data={
                 "session_id": self._session_id,
                 "module": module,
                 "data_category": category,
-            }
-        self._api_call(
-            "POST",
-            path,
-            json_data=payload,
+            },
             callback_event="live_start_result",
         )
 
     def _on_stop_stream_clicked(self) -> None:
+        if not self._session_id:
+            messagebox.showwarning("Session Required", "Please click Start Session first.")
+            self._set_session_hint("Please click Start Session first, then stop a live stream.")
+            return
+
         self._stop_stream_button.configure(state=tk.DISABLED)
         self._set_status_text("Stopping live stream...")
-        path = "/api/diagnose/live_data/stop"
-        payload = None
-        if self._session_id:
-            path = "/api/session/live_data/stop"
-            payload = {"session_id": self._session_id}
-        self._api_call("POST", path, json_data=payload, callback_event="live_stop_result")
+        self._api_call(
+            "POST",
+            "/api/session/live_data/stop",
+            json_data={"session_id": self._session_id},
+            callback_event="live_stop_result",
+        )
 
     def _on_data_category_selected(self) -> None:
         """Enable actions only after user selects a data category."""
@@ -2900,13 +2911,14 @@ class DiagnosticsWindow:
     def _start_sse_thread(self) -> None:
         """Start background thread consuming SSE events."""
         self._stop_sse_thread()
+        if not self._session_id:
+            self._queue.put(("sse_error", {"error": "Session required for live data stream."}))
+            return
+
         self._sse_running = True
 
         def _sse_worker() -> None:
-            if self._session_id:
-                path = f"/api/session/live_data/events?session_id={self._session_id}"
-            else:
-                path = "/api/diagnose/live_data/events"
+            path = f"/api/session/live_data/events?session_id={self._session_id}"
             url = f"{self._api_base}{path}"
             try:
                 with requests.get(
@@ -3185,13 +3197,15 @@ class DiagnosticsWindow:
 
     def _start_ai_sse_thread(self, session_id: str) -> None:
         self._stop_ai_sse_thread()
+        if not session_id:
+            self._queue.put(("ai_error", {"error": "session_id required"}))
+            self._queue.put(("ai_done", {}))
+            return
+
         self._ai_sse_running = True
 
         def _ai_sse_worker() -> None:
-            if self._session_id and session_id == self._session_id:
-                path = f"/api/session/ai_diagnose/events?session_id={session_id}"
-            else:
-                path = f"/api/diagnose/ai_diagnose/events?session_id={session_id}"
+            path = f"/api/session/ai_diagnose/events?session_id={session_id}"
             url = f"{self._api_base}{path}"
             try:
                 with requests.get(

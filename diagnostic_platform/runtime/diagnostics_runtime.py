@@ -132,7 +132,7 @@ def read_diagnostic_dtcs(
     module_name: str,
     data_category: str,
 ) -> dict[str, Any]:
-    """Read DTCs for the direct diagnostics API."""
+    """Read DTCs through a backend diagnostics capability."""
     state = backend.get_state()
     current_page = getattr(state, "current_page", "")
 
@@ -190,7 +190,7 @@ def clear_diagnostic_dtcs(
     module_name: str,
     data_category: str,
 ) -> dict[str, Any]:
-    """Clear DTCs for the direct diagnostics API."""
+    """Clear DTCs through a backend diagnostics capability."""
     state = backend.get_state()
     current_page = getattr(state, "current_page", "")
 

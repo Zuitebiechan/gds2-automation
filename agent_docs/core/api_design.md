@@ -11,7 +11,6 @@ This document does not try to explain all internal runtime logic. For the actual
 The supported public surfaces are:
 
 - `/api/session/*`
-- `/api/diagnose/*`
 - `/api/navigate/*`
 
 Recommended product-facing surface:
@@ -20,7 +19,6 @@ Recommended product-facing surface:
 
 Lower-level but still supported surfaces:
 
-- `/api/diagnose/*`
 - `/api/navigate/*`
 
 ## Common Response Conventions
@@ -167,29 +165,6 @@ Stable snapshot fields:
 - `connection_epoch`
 - `updated_at`
 
-## `/api/diagnose/*`
-
-This is the lower-level direct diagnostics surface.
-
-Current routes:
-
-- `POST /api/diagnose/start`
-- `GET /api/diagnose/dtcs`
-- `POST /api/diagnose/clear_dtcs`
-- `POST /api/diagnose/select_module`
-- `POST /api/diagnose/live_data/start`
-- `GET /api/diagnose/live_data/events`
-- `POST /api/diagnose/live_data/stop`
-- `POST /api/diagnose/ai_diagnose`
-- `GET /api/diagnose/ai_diagnose/events`
-- `POST /api/diagnose/ai_diagnose/retry`
-
-Use this surface when you need direct backend capability access without business-session orchestration.
-
-Recovered direct diagnostics responses preserve compatibility fields such as
-`recovered`, `recovery_target`, and `reasoning`. `/api/diagnose/dtcs` error
-responses preserve `dtcs: []`.
-
 ## `/api/navigate/*`
 
 This is the standalone navigation surface.
@@ -216,6 +191,7 @@ Current runtime binding rule:
 
 - Clients should migrate to `backend_name`.
 - Clients should not treat `workflow` as the long-term canonical field.
+- Legacy direct diagnostics routes were removed. Diagnostics clients must use `/api/session/*`.
 - The unified GUI should prefer sending vehicle identity such as `brand`, and let the platform resolve backend selection.
 - Explicit `backend_name` input still exists for compatibility and tooling, but it is not the preferred product-facing routing model.
 

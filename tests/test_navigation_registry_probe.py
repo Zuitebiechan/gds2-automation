@@ -30,6 +30,7 @@ from backends.gds2.registry_navigation_runtime import (
     GDS2RegistryRouteExecutor,
 )
 from backends.gds2.registry_navigation_runtime import evaluate_success_criteria
+from src.navigation.action_matcher import find_action_match
 from diagnostic_platform.runtime.navigation_runtime import NavSession
 
 
@@ -467,6 +468,118 @@ def test_select_next_route_step_handles_duplicate_button_labels_in_sequence() ->
         ],
         snapshot,
     ) == {"kind": "button", "label": "OK"}
+
+
+def test_select_next_route_step_prefers_required_step_when_optional_is_unavailable() -> None:
+    route_steps = [
+        {"kind": "device", "label": "VCI Proxy (Remote)", "optional": True},
+        {"kind": "list_item", "label": "Module Diagnostics"},
+    ]
+    snapshot = {
+        "observed_actions": [
+            {"kind": "button", "label": "Back"},
+            {"kind": "button", "label": "Home"},
+        ],
+    }
+
+    assert select_next_route_step(route_steps, [], snapshot) == {
+        "kind": "list_item",
+        "label": "Module Diagnostics",
+    }
+
+
+def test_registry_route_executor_tries_graph_action_before_home_recovery() -> None:
+    class _Controller:
+        def __init__(self) -> None:
+            self.home_calls = 0
+
+        def go_home(self):  # pragma: no cover - should not be called
+            self.home_calls += 1
+            raise AssertionError("route executor should not recover Home from diagnostics_menu")
+
+        def go_back(self):  # pragma: no cover - should not be called
+            raise AssertionError("route executor should not recover Back from diagnostics_menu")
+
+    class _RouteNavigator:
+        graph = {
+            "nodes": {
+                "diagnostics": {
+                    "page_id": "diagnostics_menu",
+                    "observed_actions": [
+                        {"kind": "list_item", "label": "Module Diagnostics"},
+                    ],
+                },
+            }
+        }
+
+        def __init__(self) -> None:
+            self.page = "diagnostics_menu"
+            self.executed: list[dict[str, str]] = []
+
+        def capture_settled_snapshot(self) -> dict[str, object]:
+            if self.page == "module_list":
+                return {
+                    "effective_page_id": "module_list",
+                    "observed_actions": [
+                        {"kind": "list_item", "label": "Engine Control Module"},
+                    ],
+                    "list_items": ["Engine Control Module"],
+                    "navigation_path": ["Module Diagnostics"],
+                }
+            return {
+                "effective_page_id": "diagnostics_menu",
+                "observed_actions": [
+                    {"kind": "button", "label": "Back"},
+                    {"kind": "button", "label": "Home"},
+                    {"kind": "button", "label": "Enter"},
+                ],
+                "list_items": [],
+                "navigation_path": [],
+            }
+
+        def resolve_bridge_action(self, snapshot):
+            return None
+
+        def snapshot_action_match(self, snapshot, label, *, kind=None):
+            return find_action_match(snapshot.get("observed_actions") or [], label, kind=kind)
+
+        def execute_action(self, action: dict[str, str]) -> None:
+            self.executed.append({"kind": str(action["kind"]), "label": str(action["label"])})
+            if action == {"kind": "list_item", "label": "Module Diagnostics"}:
+                self.page = "module_list"
+                return
+            raise AssertionError(f"unexpected action: {action}")
+
+        def match_snapshot(self, snapshot):
+            return None
+
+    route_navigator = _RouteNavigator()
+    runtime = RegistryNavigationRuntime(
+        controller=_Controller(),
+        route_navigator=route_navigator,
+        entries=[],
+    )
+    entry = {
+        "page_key": "diagnostics.module_diagnostics",
+        "canonical_path": ["Module Diagnostics"],
+        "route_steps": [
+            {"kind": "device", "label": "VCI Proxy (Remote)", "optional": True},
+            {"kind": "list_item", "label": "Module Diagnostics"},
+        ],
+        "success_criteria": {
+            "page_id_any": ["module_list"],
+            "all_of": [{"kind": "list_item", "label": "Engine Control Module"}],
+        },
+    }
+
+    result = runtime.execute_registry_route(
+        entry=entry,
+        max_iterations=3,
+        max_backtracks=1,
+    )
+
+    assert route_navigator.executed == [{"kind": "list_item", "label": "Module Diagnostics"}]
+    assert result["final_page"] == "module_list"
 
 
 def test_executed_actions_available_requires_all_markers() -> None:

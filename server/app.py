@@ -31,7 +31,6 @@ from diagnostic_platform.observability_artifacts import (
     cleanup_product_observability,
     resolve_product_log_settings,
 )
-from server.api.diagnostics import diagnostics_bp
 from server.api.navigate import navigate_bp
 from server.api.session import session_bp
 from server.api.session_dependencies import (
@@ -408,7 +407,6 @@ def create_app(settings: ServerRuntimeSettings | None = None) -> Flask:
     _install_api_request_observability(app)
     _install_api_token_guard(app, resolved_settings)
     _install_api_failure_logger(app)
-    app.register_blueprint(diagnostics_bp)
     app.register_blueprint(session_bp)
     app.register_blueprint(navigate_bp)
     return app
@@ -476,7 +474,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         else:
             logger.info("API endpoint http://localhost:%s", settings.port)
-        logger.info("API routes /api/diagnose/* /api/navigate/* /api/session/*")
+        logger.info("API routes /api/session/* /api/navigate/*")
         if readiness_started:
             logger.info("Booting-node readiness monitor started")
 

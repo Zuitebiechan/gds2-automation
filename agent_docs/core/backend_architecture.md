@@ -186,7 +186,7 @@ Current shared action primitives live in `diagnostic_platform/action_schema.py` 
 
 ## Capability Enforcement
 
-Capability checks are used in the session and diagnostics APIs before execution.
+Capability checks are used in `/api/session/*` handlers before execution.
 
 Examples:
 
@@ -194,7 +194,7 @@ Examples:
 - session AI diagnose flows require `AI_DATA_COLLECTION`
 - session navigation flows require `NAVIGATION`
 - session execute flows require `GENERIC_ACTIONS`
-- session and diagnostics clear-DTC flows require `CLEAR_DTCS`
+- session clear-DTC flows require `CLEAR_DTCS`
 
 Unsupported capability requests are surfaced as deterministic failures, typically `501 Not Implemented`.
 

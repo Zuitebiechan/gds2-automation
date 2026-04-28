@@ -49,7 +49,6 @@ High-level layers:
 - Use `diagnostic_platform/` as the canonical platform-layer name in code and docs.
 - Route supported behavior through:
   - `/api/session/*`
-  - `/api/diagnose/*`
   - `/api/navigate/*`
 - Keep durable regression coverage in `tests/`.
 - Remove dead code and stale docs when replacing flows.

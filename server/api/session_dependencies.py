@@ -143,9 +143,9 @@ def get_bound_backend(
 
 
 def get_ai_engine():
-    from . import diagnostics as diagnostics_api
+    from . import ai_engine_config
 
-    return diagnostics_api._get_ai_engine()
+    return ai_engine_config.get_ai_engine()
 
 
 def get_executor() -> Any:

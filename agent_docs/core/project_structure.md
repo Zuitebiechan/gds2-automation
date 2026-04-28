@@ -13,7 +13,7 @@ This document does not explain runtime behavior or HTTP semantics. For those, re
 | `agent_docs/` | Authoritative project documentation | Use this first after the code itself |
 | `backends/` | OEM/backend facades behind the shared contract | `gds2` is the only production backend today |
 | `diagnostic_platform/` | Platform-neutral contracts, registry, runtime helpers, SSE helpers | Canonical platform-layer namespace |
-| `server/` | Supported Flask blueprints and API glue | Owns `/api/session/*`, `/api/diagnose/*`, `/api/navigate/*` |
+| `server/` | Supported Flask blueprints and API glue | Owns `/api/session/*` and `/api/navigate/*` |
 | `src/` | GDS2-specific automation plus legacy orchestration compatibility exports | Treat as GDS2-specific unless clearly generalized |
 | `tests/` | Durable regression tests | Do not use for throwaway validation |
 | `vci_proxy/` | Reverse tunnel, tray client, J2534 integration, diagnostics window | Spans cloud-side reverse server and local-side client |
@@ -84,8 +84,8 @@ Current structure:
 
 - `server/app.py`: app creation and blueprint registration
 - `server/api/session.py`: business-session routes
-- `server/api/diagnostics.py`: direct diagnostics routes
 - `server/api/navigate.py`: direct navigation routes
+- `server/api/ai_engine_config.py`: AI provider configuration used by session AI routes
 - `server/api/session_*_handlers.py`: session domain handlers
 - `server/api/session_dependencies.py`: session-side runtime wiring helpers
 

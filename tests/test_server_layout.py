@@ -58,7 +58,6 @@ def _install_fake_flask_stack(monkeypatch):
     fake_flask_cors.CORS = lambda app, *args, **kwargs: app
     monkeypatch.setitem(sys.modules, "flask_cors", fake_flask_cors)
     monkeypatch.delitem(sys.modules, "server.app", raising=False)
-    monkeypatch.delitem(sys.modules, "server.api.diagnostics", raising=False)
     monkeypatch.delitem(sys.modules, "server.api.navigate", raising=False)
     monkeypatch.delitem(sys.modules, "server.api.session", raising=False)
     monkeypatch.delitem(sys.modules, "server.api.http_utils", raising=False)
@@ -71,9 +70,9 @@ def test_server_app_factory_registers_supported_blueprints(monkeypatch):
     app = server_app.create_app()
     routes = {rule.rule for rule in app.url_map.iter_rules()}
 
-    assert {"diagnostics", "session", "navigate"} <= set(app.blueprints)
-    assert "/api/diagnose/start" in routes
-    assert "/api/diagnose/clear_dtcs" in routes
+    assert {"session", "navigate"} <= set(app.blueprints)
+    assert "diagnostics" not in app.blueprints
+    assert not any(route.startswith("/api/diagnose") for route in routes)
     assert "/api/session/start" in routes
     assert "/api/session/clear_dtcs" in routes
     assert "/api/session/bootstrap/ready" in routes

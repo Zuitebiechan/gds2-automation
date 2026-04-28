@@ -1,7 +1,7 @@
 """Shared worker-scoped runtime container.
 
 This module centralizes process-level state that used to live separately in
-`server/api/session.py`, `server/api/diagnostics.py`, `server/api/navigate.py`,
+`server/api/session.py`, `server/api/navigate.py`,
 and `diagnostic_platform/sse.py`.
 
 Current MVP assumption:

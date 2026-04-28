@@ -38,7 +38,6 @@ For benchmark artifacts and ad-hoc local measurements, use `reports/network_benc
 - Supported production backend: `gds2`
 - Supported public API surfaces:
   - `/api/session/*`
-  - `/api/diagnose/*`
   - `/api/navigate/*`
 - Current worker model:
   - `1 worker process = 1 active business session = 1 active backend bundle`

@@ -68,7 +68,6 @@ def _install_fake_flask_stack(monkeypatch, payload=None):
     monkeypatch.setitem(sys.modules, "flask_cors", fake_flask_cors)
     for module_name in (
         "server.app",
-        "server.api.diagnostics",
         "server.api.navigate",
         "server.api.session",
         "server.api.http_utils",
