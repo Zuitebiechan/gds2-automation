@@ -395,6 +395,8 @@ class WorkerRuntime:
 
     def set_live_data_active(self, session_id: str, active: bool) -> None:
         with self.state_lock:
+            if not active and self.business_session_binding.session_id != session_id:
+                return
             self.bind_business_session(session_id)
             self.business_session_binding.live_data_active = active
 

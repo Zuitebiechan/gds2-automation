@@ -12,7 +12,7 @@ import gzip
 import hashlib
 import json
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -31,6 +31,13 @@ TRIGGER_EVENT_TYPES = {
 
 PLACEHOLDER_SESSION_IDS = {"no-session"}
 PLACEHOLDER_CONNECTION_EPOCHS = {"no-epoch"}
+SESSION_START_EVENT_TYPES = {"session.lifecycle.started"}
+SESSION_TERMINAL_EVENT_TYPES = {
+    "session.lifecycle.aborted",
+    "session.lifecycle.completed",
+    "session.lifecycle.failed",
+}
+SESSION_TRACE_WINDOW_MARGIN_SEC = 2.0
 
 NEXT_CHECKS_BY_DOMAIN = {
     "cloud_dll_local_proxy": [
@@ -167,9 +174,11 @@ def _select_related_events(
             selected_positions.add(position)
             queue.append(position)
 
+    use_epoch_selector = session_id is None
+
     if session_id:
         add_positions(by_session.get(session_id, []))
-    if connection_epoch:
+    elif connection_epoch:
         add_positions(by_epoch.get(connection_epoch, []))
     if not selected_positions and session_id:
         add_positions(position for position, event in enumerate(events) if event.get("session_id") is None)
@@ -182,6 +191,8 @@ def _select_related_events(
             ("worker_request_id", by_worker_id, event.get("worker_request_id")),
             ("connection_epoch", by_epoch, event.get("connection_epoch")),
         ):
+            if index_name == "connection_epoch" and not use_epoch_selector:
+                continue
             key = _hashable_index_value(value)
             if key is None:
                 continue
@@ -192,6 +203,72 @@ def _select_related_events(
             add_positions(index.get(key, []))
 
     return _sort_events(events[position] for position in selected_positions)
+
+
+def _derive_session_trace_window(
+    events: list[dict[str, Any]],
+    *,
+    session_id: str,
+) -> tuple[datetime | None, datetime | None]:
+    session_events = _sort_events(
+        event for event in events if str(event.get("session_id") or "").strip() == session_id
+    )
+    if not session_events:
+        return None, None
+
+    start_event = next(
+        (
+            event
+            for event in session_events
+            if str(event.get("event_type") or "") in SESSION_START_EVENT_TYPES
+        ),
+        session_events[0],
+    )
+    start = _parse_ts(start_event.get("ts"))
+    end: datetime | None = None
+    for event in session_events:
+        if str(event.get("event_type") or "") not in SESSION_TERMINAL_EVENT_TYPES:
+            continue
+        event_ts = _parse_ts(event.get("ts"))
+        if event_ts >= start:
+            end = event_ts
+            break
+
+    if start != datetime.min.replace(tzinfo=timezone.utc):
+        start = start - timedelta(seconds=SESSION_TRACE_WINDOW_MARGIN_SEC)
+    if end is not None:
+        end = end + timedelta(seconds=SESSION_TRACE_WINDOW_MARGIN_SEC)
+    return start, end
+
+
+def _filter_session_trace_window(
+    events: list[dict[str, Any]],
+    *,
+    session_id: str | None,
+) -> list[dict[str, Any]]:
+    session_id = _normalize_selector(session_id, placeholders=PLACEHOLDER_SESSION_IDS)
+    if session_id is None:
+        return events
+
+    start, end = _derive_session_trace_window(events, session_id=session_id)
+    filtered: list[dict[str, Any]] = []
+    for event in events:
+        event_session_id = _normalize_selector(
+            event.get("session_id"),
+            placeholders=PLACEHOLDER_SESSION_IDS,
+        )
+        if event_session_id is not None and event_session_id != session_id:
+            continue
+
+        if start is not None or end is not None:
+            event_ts = _parse_ts(event.get("ts"))
+            if event_ts != datetime.min.replace(tzinfo=timezone.utc):
+                if start is not None and event_ts < start:
+                    continue
+                if end is not None and event_ts > end:
+                    continue
+        filtered.append(event)
+    return _sort_events(filtered)
 
 
 def _discover_artifacts(cloud_root: Path | None, local_root: Path | None) -> tuple[list[Path], list[Path]]:
@@ -416,6 +493,7 @@ def assemble_session_trace(
         session_id=resolved_session_id,
         connection_epoch=resolved_connection_epoch,
     )
+    timeline = _filter_session_trace_window(timeline, session_id=resolved_session_id)
 
     if resolved_session_id is None:
         resolved_session_id = _normalize_selector(

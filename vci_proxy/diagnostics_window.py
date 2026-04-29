@@ -1226,6 +1226,13 @@ class DiagnosticsWindow:
         callback_event: str = "api_result",
     ) -> None:
         """Make one API call against an explicit base URL."""
+        request_session_id = ""
+        for source in (json_data, query_params):
+            if not isinstance(source, dict):
+                continue
+            request_session_id = str(source.get("session_id") or "").strip()
+            if request_session_id:
+                break
 
         def _worker() -> None:
             url = f"{base_url.rstrip('/')}/{endpoint.lstrip('/')}"
@@ -1266,9 +1273,15 @@ class DiagnosticsWindow:
                         "error": data.get("error") or f"HTTP {resp.status_code} {resp.reason}",
                     }
 
+                if request_session_id and isinstance(data, dict):
+                    data.setdefault("_request_session_id", request_session_id)
+
                 self._queue.put((callback_event, data))
             except Exception as exc:
-                self._queue.put((callback_event, {"success": False, "error": str(exc)}))
+                data = {"success": False, "error": str(exc)}
+                if request_session_id:
+                    data["_request_session_id"] = request_session_id
+                self._queue.put((callback_event, data))
 
         threading.Thread(target=_worker, daemon=True, name=f"diag-api-{callback_event}").start()
 
@@ -1582,6 +1595,36 @@ class DiagnosticsWindow:
 
     def _is_aborted_status(self, status: Any) -> bool:
         return str(status or "").strip().lower() == "aborted"
+
+    def _session_id_from_payload(self, payload: dict[str, Any]) -> str:
+        for key in ("session_id", "_request_session_id", "active_session_id"):
+            value = str(payload.get(key) or "").strip()
+            if value:
+                return value
+
+        error_text = self._error_message(payload, "")
+        for pattern in (
+            r"session_id=([A-Za-z0-9_-]+)",
+            r"\b[Ss]ession\s+['\"]?([A-Za-z0-9_-]+)['\"]?\s+not\s+found\b",
+        ):
+            match = re.search(pattern, error_text)
+            if match:
+                return match.group(1)
+        return ""
+
+    def _is_stale_session_payload(self, payload: dict[str, Any]) -> bool:
+        payload_session_id = self._session_id_from_payload(payload)
+        if not payload_session_id:
+            return False
+
+        current_session_id = str(getattr(self, "_session_id", "") or "").strip()
+        terminal_session_id = str(getattr(self, "_session_terminal_session_id", "") or "").strip()
+        allowed_session_ids = {
+            session_id for session_id in (current_session_id, terminal_session_id) if session_id
+        }
+        if not allowed_session_ids:
+            return True
+        return payload_session_id not in allowed_session_ids
 
     def _begin_abort_finalization(
         self,
@@ -2747,6 +2790,8 @@ class DiagnosticsWindow:
 
     def _handle_session_status_result(self, payload: dict[str, Any]) -> None:
         self._session_status_refresh_inflight = False
+        if self._is_stale_session_payload(payload):
+            return
         if self._handle_missing_session(payload, action="Session refresh"):
             return
         if not payload.get("success"):
@@ -3685,6 +3730,8 @@ class DiagnosticsWindow:
         )
 
     def _handle_session_progress(self, payload: dict[str, Any]) -> None:
+        if self._is_stale_session_payload(payload):
+            return
         message = payload.get("message", "Processing...")
         workflow = payload.get("workflow")
         text = message
@@ -3694,6 +3741,8 @@ class DiagnosticsWindow:
         self._append_agent_message("agent", text)
 
     def _handle_session_decision_required(self, payload: dict[str, Any]) -> None:
+        if self._is_stale_session_payload(payload):
+            return
         decision = payload.get("decision")
         if decision:
             if not self._prompt_decision(decision):
@@ -3703,6 +3752,8 @@ class DiagnosticsWindow:
             self._session_status_var.set("Decision required but no details received.")
 
     def _handle_session_decision_resolved(self, payload: dict[str, Any]) -> None:
+        if self._is_stale_session_payload(payload):
+            return
         self._close_decision_modal()
         self._set_agent_prompt(None, "", [])
         option_id = payload.get("option_id", "?")
@@ -3712,6 +3763,8 @@ class DiagnosticsWindow:
         self._append_agent_message("agent", f"决策已应用：{option_id}")
 
     def _handle_session_decision_timeout(self, payload: dict[str, Any]) -> None:
+        if self._is_stale_session_payload(payload):
+            return
         self._close_decision_modal()
         self._set_agent_prompt(None, "", [])
         message = payload.get("message") or "Decision timed out. Applying fallback option."
@@ -3724,6 +3777,8 @@ class DiagnosticsWindow:
         self._append_agent_message("agent", message)
 
     def _handle_session_error(self, payload: dict[str, Any]) -> None:
+        if self._is_stale_session_payload(payload):
+            return
         error = payload.get("error", "Unknown error")
         self._session_status_var.set(f"Session error: {error}")
         self._start_button.configure(state=tk.DISABLED)
@@ -3731,10 +3786,7 @@ class DiagnosticsWindow:
         self._append_agent_message("agent", f"Session 错误：{error}")
 
     def _handle_session_done(self, payload: dict[str, Any]) -> None:
-        payload_session_id = str(payload.get("session_id") or "").strip()
-        current_session_id = str(getattr(self, "_session_id", "") or "").strip()
-        terminal_session_id = str(getattr(self, "_session_terminal_session_id", "") or "").strip()
-        if payload_session_id and payload_session_id not in {current_session_id, terminal_session_id}:
+        if self._is_stale_session_payload(payload):
             return
 
         aborted = bool(payload.get("aborted")) or self._is_aborted_status(payload.get("status"))
@@ -3840,6 +3892,8 @@ class DiagnosticsWindow:
                 self._agent_prompt_submit_button.configure(state=tk.NORMAL)
 
     def _handle_session_abort_result(self, payload: dict[str, Any]) -> None:
+        if self._is_stale_session_payload(payload):
+            return
         if payload.get("success"):
             self._begin_abort_finalization(
                 session_id=str(payload.get("session_id") or self._session_id or "").strip(),
@@ -4254,6 +4308,8 @@ class DiagnosticsWindow:
                             chunk = line[6:]
                             try:
                                 payload = json.loads(chunk)
+                                if isinstance(payload, dict):
+                                    payload.setdefault("session_id", session_id)
                                 if current_event:
                                     self._queue.put(
                                         (f"session_{current_event}", payload)
@@ -4262,7 +4318,7 @@ class DiagnosticsWindow:
                                 continue
             except Exception as exc:
                 if self._session_sse_running:
-                    self._queue.put(("session_error", {"error": str(exc)}))
+                    self._queue.put(("session_error", {"session_id": session_id, "error": str(exc)}))
             finally:
                 self._session_sse_response = None
 

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
+import threading
 from typing import Any, Callable
 
 from diagnostic_platform.session_models import SessionContext
 
-from .session_actions import abort_active_execution
+from .diagnostics_runtime import stop_live_data_stream as stop_diagnostics_live_data_stream
+from .navigation_runtime import abort_navigation_session as abort_worker_navigation_session
 from diagnostic_platform.session_observability import emit_session_runtime_event
 from .session_backends import summarize_backend_state
 from .session_preflight import get_session_network_snapshot
@@ -22,9 +25,158 @@ logger = logging.getLogger(__name__)
 _TERMINAL_SESSION_STATUSES = {"completed", "failed", "aborted"}
 
 
+@dataclass(frozen=True)
+class _AbortExecutionSnapshot:
+    navigation_session_id: str | None
+    ai_session_id: str | None
+    live_data_active: bool
+    backend: Any | None
+    navigation_handle: Any | None
+
+
 def _session_status_value(session: Any) -> str:
     status = getattr(session, "status", "")
     return str(getattr(status, "value", status) or "")
+
+
+def _capture_abort_execution_snapshot(
+    runtime: WorkerRuntime,
+    *,
+    session_id: str,
+) -> _AbortExecutionSnapshot:
+    binding = runtime.get_business_session_binding(session_id)
+    bundle = runtime.get_active_backend_bundle(session_id)
+    backend = bundle.backend if bundle is not None else runtime.backend
+    navigation_handle = bundle.navigation_handle if bundle is not None else None
+    return _AbortExecutionSnapshot(
+        navigation_session_id=binding.navigation_session_id,
+        ai_session_id=binding.ai_session_id,
+        live_data_active=bool(binding.live_data_active),
+        backend=backend,
+        navigation_handle=navigation_handle,
+    )
+
+
+def _abort_snapshot_navigation(
+    runtime: WorkerRuntime,
+    *,
+    session: Any,
+    snapshot: _AbortExecutionSnapshot,
+) -> None:
+    nav_sid = snapshot.navigation_session_id
+    if not nav_sid:
+        return
+
+    try:
+        if snapshot.navigation_handle is not None:
+            snapshot.navigation_handle.abort_navigation_session(runtime, nav_sid)
+        else:
+            abort_worker_navigation_session(runtime, nav_sid)
+    except (LookupError, ValueError):
+        pass
+    except Exception:
+        logger.exception(
+            "Failed to abort navigation session %s for business session %s",
+            nav_sid,
+            getattr(session, "session_id", "unknown"),
+        )
+    finally:
+        runtime.clear_navigation_session(getattr(session, "session_id", ""))
+
+
+def _abort_snapshot_live_data(
+    runtime: WorkerRuntime,
+    *,
+    session: Any,
+    snapshot: _AbortExecutionSnapshot,
+) -> None:
+    if not snapshot.live_data_active:
+        return
+
+    try:
+        if snapshot.backend is not None:
+            stop_diagnostics_live_data_stream(runtime, backend=snapshot.backend)
+    except Exception:
+        logger.exception(
+            "Failed to stop live data for business session %s",
+            getattr(session, "session_id", "unknown"),
+        )
+    finally:
+        session_id = getattr(session, "session_id", "")
+        binding = runtime.get_business_session_binding(session_id)
+        if binding.session_id == session_id:
+            runtime.set_live_data_active(session_id, False)
+
+
+def _abort_snapshot_ai(
+    runtime: WorkerRuntime,
+    *,
+    session: Any,
+    snapshot: _AbortExecutionSnapshot,
+    get_ai_engine: Callable[[], Any],
+) -> None:
+    ai_sid = snapshot.ai_session_id
+    if not ai_sid:
+        return
+
+    try:
+        get_ai_engine().abort_session(ai_sid)
+    except Exception:
+        logger.exception(
+            "Failed to abort AI session %s for business session %s",
+            ai_sid,
+            getattr(session, "session_id", "unknown"),
+        )
+    finally:
+        runtime.clear_ai_session(getattr(session, "session_id", ""))
+
+
+def _cleanup_aborted_session_execution(
+    runtime: WorkerRuntime,
+    *,
+    session: Any,
+    snapshot: _AbortExecutionSnapshot,
+    get_ai_engine: Callable[[], Any],
+) -> None:
+    session_id = getattr(session, "session_id", "unknown")
+    try:
+        _abort_snapshot_navigation(runtime, session=session, snapshot=snapshot)
+        _abort_snapshot_live_data(runtime, session=session, snapshot=snapshot)
+        _abort_snapshot_ai(
+            runtime,
+            session=session,
+            snapshot=snapshot,
+            get_ai_engine=get_ai_engine,
+        )
+    except Exception:
+        logger.exception("Failed to cleanup aborted session execution for %s", session_id)
+    finally:
+        try:
+            clear_business_session(runtime, session_id)
+        except Exception:
+            logger.exception("Failed to clear worker binding after abort for %s", session_id)
+
+
+def _start_abort_cleanup_thread(
+    runtime: WorkerRuntime,
+    *,
+    session: Any,
+    snapshot: _AbortExecutionSnapshot,
+    get_ai_engine: Callable[[], Any],
+) -> None:
+    session_id = str(getattr(session, "session_id", "") or "unknown")
+    thread = threading.Thread(
+        target=_cleanup_aborted_session_execution,
+        kwargs={
+            "runtime": runtime,
+            "session": session,
+            "snapshot": snapshot,
+            "get_ai_engine": get_ai_engine,
+        },
+        daemon=True,
+        name=f"session-abort-cleanup-{session_id}",
+    )
+    thread.start()
 
 
 def _clear_stale_worker_binding(
@@ -168,10 +320,15 @@ def abort_business_session(
 ) -> dict[str, Any]:
     """Abort one business session and clear worker bindings."""
     session = orchestrator.get_session(session_id)
+    execution_snapshot = _capture_abort_execution_snapshot(runtime, session_id=session_id)
     runtime.cancel_operation(session_id)
-    abort_active_execution(runtime, session, get_ai_engine=get_ai_engine)
     session = orchestrator.abort_session(session_id, reason)
-    clear_business_session(runtime, session_id)
+    _start_abort_cleanup_thread(
+        runtime,
+        session=session,
+        snapshot=execution_snapshot,
+        get_ai_engine=get_ai_engine,
+    )
     logger.info("SESSION %s aborted reason=%s", session_id, reason or "user")
     return {
         "success": True,

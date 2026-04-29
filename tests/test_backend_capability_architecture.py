@@ -4,6 +4,7 @@ import importlib
 import importlib.util
 import inspect
 import sys
+import time
 import types
 from pathlib import Path
 from typing import Any
@@ -50,6 +51,15 @@ def _require_attr(obj: Any, name: str) -> Any:
 def _assert_no_retired_workflow_markers(source: str, context: str = "source") -> None:
     for marker in _RETIRED_WORKFLOW_MARKERS:
         assert marker not in source, f"{marker!r} should not appear in {context}"
+
+
+def _wait_until(predicate, *, timeout: float = 2.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()
 
 
 def _require_module(module_name: str):
@@ -747,7 +757,7 @@ def test_session_status_does_not_rebind_aborted_session(monkeypatch):
             get_ai_engine=lambda: types.SimpleNamespace(abort_session=lambda _sid: None),
         )
 
-        assert runtime.get_business_session_binding(session_id).session_id is None
+        assert _wait_until(lambda: runtime.get_business_session_binding(session_id).session_id is None)
         assert runtime.get_active_backend_bundle(session_id) is None
 
         fake_request.args = {"session_id": session_id}
@@ -807,7 +817,7 @@ def test_session_events_does_not_rebind_aborted_session(monkeypatch):
             get_ai_engine=lambda: types.SimpleNamespace(abort_session=lambda _sid: None),
         )
 
-        assert runtime.get_business_session_binding(session_id).session_id is None
+        assert _wait_until(lambda: runtime.get_business_session_binding(session_id).session_id is None)
         assert runtime.get_active_backend_bundle(session_id) is None
 
         fake_request.args = {"session_id": session_id}

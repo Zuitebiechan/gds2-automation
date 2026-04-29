@@ -265,6 +265,78 @@ def test_observability_analysis_treats_placeholder_epoch_as_missing(tmp_path: Pa
     assert trace["page_context"]["page"] == "data_display"
 
 
+def test_observability_session_trace_does_not_expand_to_other_sessions_in_same_epoch() -> None:
+    events = [
+        _event(
+            "2026-04-22T00:00:00Z",
+            "session_runtime",
+            "session.lifecycle.started",
+            session_id="session-1",
+            connection_epoch="epoch-shared",
+        ),
+        _event(
+            "2026-04-22T00:00:01Z",
+            "reverse_server",
+            "proxy.request.forwarded_to_tunnel",
+            session_id="session-1",
+            connection_epoch="epoch-shared",
+            proxy_seq=100,
+        ),
+        _event(
+            "2026-04-22T00:00:02Z",
+            "reverse_client",
+            "proxy.request.client_received",
+            connection_epoch="epoch-shared",
+            proxy_seq=100,
+            worker_request_id="wrk-100",
+        ),
+        _event(
+            "2026-04-22T00:00:03Z",
+            "session_runtime",
+            "session.lifecycle.aborted",
+            session_id="session-1",
+            connection_epoch="epoch-shared",
+        ),
+        _event(
+            "2026-04-22T00:00:04Z",
+            "session_runtime",
+            "session.lifecycle.started",
+            session_id="session-2",
+            connection_epoch="epoch-shared",
+        ),
+        _event(
+            "2026-04-22T00:00:05Z",
+            "reverse_server",
+            "proxy.request.forwarded_to_tunnel",
+            session_id="session-2",
+            connection_epoch="epoch-shared",
+            proxy_seq=200,
+        ),
+        _event(
+            "2026-04-22T00:00:06Z",
+            "reverse_client",
+            "proxy.request.client_received",
+            connection_epoch="epoch-shared",
+            proxy_seq=200,
+            worker_request_id="wrk-200",
+        ),
+    ]
+
+    trace = assemble_session_trace(
+        events=events,
+        session_id="session-1",
+        connection_epoch="epoch-shared",
+    )
+
+    assert [event["event_type"] for event in trace["timeline"]] == [
+        "session.lifecycle.started",
+        "proxy.request.forwarded_to_tunnel",
+        "proxy.request.client_received",
+        "session.lifecycle.aborted",
+    ]
+    assert {event.get("proxy_seq") for event in trace["timeline"] if event.get("proxy_seq")} == {100}
+
+
 def test_observability_analysis_generates_incident_bundle_for_proxy_timeout() -> None:
     events = [
         _event("2026-04-22T00:00:00Z", "reverse_server", "tunnel.quality.changed", session_id="session-1", connection_epoch="epoch-7", network_grade="block", tunnel_status="blocked", reason="probe_failures"),

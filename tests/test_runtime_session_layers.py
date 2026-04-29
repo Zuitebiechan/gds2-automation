@@ -8,6 +8,7 @@ import pytest
 
 import diagnostic_platform.session_orchestrator as platform_session_orchestrator_module
 import diagnostic_platform.runtime.session_state as session_state_module
+import diagnostic_platform.runtime.session_lifecycle as session_lifecycle_module
 import src.gds2_orchestration.session_orchestrator as session_orchestrator_module
 import diagnostic_platform.runtime.worker_runtime as worker_runtime_module
 from diagnostic_platform.runtime.navigation_runtime import NavSession, NavSessionStatus
@@ -54,6 +55,15 @@ def _start_gds2_session(monkeypatch):
     )
     session = orchestrator.get_session(payload["session_id"])
     return runtime, orchestrator, session, payload
+
+
+def _wait_until(predicate, *, timeout: float = 2.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()
 
 
 def test_start_business_session_binds_worker_and_keeps_execution_state_out_of_session(monkeypatch):
@@ -1002,9 +1012,10 @@ def test_abort_business_session_clears_worker_bindings(monkeypatch):
         get_ai_engine=lambda: ai_engine,
     )
 
-    binding = runtime.get_business_session_binding(session.session_id)
     assert payload["success"] is True
     assert payload["status"] == "aborted"
+    assert _wait_until(lambda: backend.stop_calls == 1)
+    binding = runtime.get_business_session_binding(session.session_id)
     assert binding.session_id is None
     assert binding.navigation_session_id is None
     assert binding.ai_session_id is None
@@ -1030,6 +1041,97 @@ def test_abort_business_session_cancels_active_worker_operation(monkeypatch):
 
     with pytest.raises(worker_runtime_module.OperationCancelledError):
         operation.check_cancelled()
+
+
+def test_abort_business_session_returns_before_execution_cleanup_finishes(monkeypatch):
+    runtime, orchestrator, session, _ = _start_gds2_session(monkeypatch)
+    cleanup_started = threading.Event()
+    cleanup_release = threading.Event()
+    cleanup_finished = threading.Event()
+
+    def _blocking_cleanup(*, runtime, session, snapshot, get_ai_engine):
+        assert runtime is runtime_obj
+        assert session.session_id == session_id
+        cleanup_started.set()
+        cleanup_release.wait(timeout=2.0)
+        cleanup_finished.set()
+
+    runtime_obj = runtime
+    session_id = session.session_id
+    monkeypatch.setattr(
+        session_lifecycle_module,
+        "_cleanup_aborted_session_execution",
+        _blocking_cleanup,
+    )
+
+    payload = abort_business_session(
+        runtime,
+        orchestrator=orchestrator,
+        session_id=session.session_id,
+        reason="user_cancelled",
+        get_ai_engine=lambda: MagicMock(),
+    )
+
+    assert payload["status"] == "aborted"
+    assert orchestrator.get_session(session.session_id).status.value == "aborted"
+    assert orchestrator.get_active_session() is None
+    assert cleanup_started.wait(timeout=1.0)
+    assert cleanup_finished.is_set() is False
+
+    restarted = start_business_session(
+        runtime,
+        orchestrator=orchestrator,
+        context=SessionContext(brand="Chevrolet", model="Malibu", vin="VIN456"),
+    )
+
+    assert restarted["success"] is True
+    assert restarted["session_id"] != session.session_id
+    assert runtime.get_business_session_binding(restarted["session_id"]).session_id == restarted["session_id"]
+
+    cleanup_release.set()
+    assert cleanup_finished.wait(timeout=1.0)
+
+
+def test_aborted_session_cleanup_snapshot_does_not_clear_new_session(monkeypatch):
+    runtime, orchestrator, old_session, _ = _start_gds2_session(monkeypatch)
+    runtime.bind_ai_session(old_session.session_id, "ai-old")
+    runtime.set_live_data_active(old_session.session_id, True)
+
+    class BackendWithLiveStop:
+        name = "gds2"
+
+        def __init__(self):
+            self.stop_calls = 0
+
+        def stop_live_data_session(self):
+            self.stop_calls += 1
+            return {"success": True, "message": "Live data stopped"}
+
+    backend = BackendWithLiveStop()
+    runtime.backend = backend
+    snapshot = session_lifecycle_module._capture_abort_execution_snapshot(
+        runtime,
+        session_id=old_session.session_id,
+    )
+    orchestrator.abort_session(old_session.session_id, "user_cancelled")
+
+    restarted = start_business_session(
+        runtime,
+        orchestrator=orchestrator,
+        context=SessionContext(brand="Chevrolet", model="Malibu", vin="VIN456"),
+    )
+    ai_engine = MagicMock()
+
+    session_lifecycle_module._cleanup_aborted_session_execution(
+        runtime,
+        session=old_session,
+        snapshot=snapshot,
+        get_ai_engine=lambda: ai_engine,
+    )
+
+    assert backend.stop_calls == 1
+    ai_engine.abort_session.assert_called_once_with("ai-old")
+    assert runtime.get_business_session_binding(restarted["session_id"]).session_id == restarted["session_id"]
 
 
 def test_build_session_status_payload_does_not_rebind_aborted_session(monkeypatch):
@@ -1064,7 +1166,9 @@ def test_build_session_status_payload_does_not_rebind_aborted_session(monkeypatc
         get_ai_engine=lambda: MagicMock(),
     )
 
-    assert runtime.get_business_session_binding(session.session_id).session_id is None
+    assert _wait_until(
+        lambda: runtime.get_business_session_binding(session.session_id).session_id is None
+    )
 
     status = build_session_status_payload(
         runtime,

@@ -558,6 +558,50 @@ def test_handle_session_status_result_finalizes_aborted_session_without_session_
     assert window._session_hint_var.get() == "Abort completed. You can start a new session."
 
 
+def test_handle_session_status_result_ignores_stale_aborted_session() -> None:
+    window = _build_window(current_page="data_display")
+    window._session_id = "session-new"
+    window._active_branch = "module"
+
+    window._handle_session_status_result(
+        {
+            "success": True,
+            "session_id": "session-old",
+            "status": "aborted",
+            "reason": "user_cancelled",
+            "backend_state_summary": {
+                "current_page": "vehicle_selection",
+            },
+        }
+    )
+
+    assert window._session_id == "session-new"
+    assert window._session_abort_finalizing is False
+    assert window._session_start_button.state is None
+    assert window._current_page == "data_display"
+
+
+def test_handle_session_abort_result_ignores_stale_abort_response() -> None:
+    window = _build_window(current_page="data_display")
+    refresh_calls: list[str] = []
+    window._session_id = "session-new"
+    window._request_session_status_refresh = lambda: refresh_calls.append("refresh")
+
+    window._handle_session_abort_result(
+        {
+            "success": True,
+            "session_id": "session-old",
+            "status": "aborted",
+        }
+    )
+
+    assert window._session_id == "session-new"
+    assert window._session_abort_finalizing is False
+    assert window._session_terminal_session_id is None
+    assert window._session_start_button.state is None
+    assert refresh_calls == []
+
+
 def test_handle_session_status_result_resets_stale_missing_session() -> None:
     window = _build_window(current_page="data_display")
 
