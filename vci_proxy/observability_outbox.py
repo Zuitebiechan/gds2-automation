@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import base64
+import gzip
 import hashlib
 import json
 import os
 import shutil
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -31,39 +33,57 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> Path:
     return path
 
 
+def _normalize_context_value(value: Any, *, placeholder: str) -> str | None:
+    text = str(value or "").strip()
+    if not text or text.lower() == placeholder:
+        return None
+    return text
+
+
+def _context_from_payload(payload: Any) -> tuple[str | None, str | None]:
+    if not isinstance(payload, dict):
+        return None, None
+    return (
+        _normalize_context_value(payload.get("session_id"), placeholder="no-session"),
+        _normalize_context_value(payload.get("connection_epoch"), placeholder="no-epoch"),
+    )
+
+
 def _read_jsonl_first_context(path: Path) -> tuple[str | None, str | None]:
-    try:
-        text = path.read_text(encoding="utf-8")
-    except Exception:
-        return None, None
-    stripped = text.strip()
-    if not stripped:
-        return None, None
-    try:
-        payload = json.loads(stripped)
-        if isinstance(payload, dict):
-            session_id = payload.get("session_id")
-            connection_epoch = payload.get("connection_epoch")
-            return (
-                str(session_id) if session_id not in (None, "") else None,
-                str(connection_epoch) if connection_epoch not in (None, "") else None,
-            )
-    except Exception:
-        pass
-    for line in text.splitlines():
-        if not line.strip():
-            continue
+    session_id: str | None = None
+    connection_epoch: str | None = None
+
+    if path.suffix != ".gz":
         try:
-            payload = json.loads(line)
+            payload = json.loads(path.read_text(encoding="utf-8").strip())
+            session_id, connection_epoch = _context_from_payload(payload)
+            if session_id and connection_epoch:
+                return session_id, connection_epoch
         except Exception:
-            continue
-        session_id = payload.get("session_id")
-        connection_epoch = payload.get("connection_epoch")
-        return (
-            str(session_id) if session_id not in (None, "") else None,
-            str(connection_epoch) if connection_epoch not in (None, "") else None,
-        )
-    return None, None
+            pass
+
+    try:
+        if path.suffix == ".gz":
+            handle = gzip.open(path, "rt", encoding="utf-8")
+        else:
+            handle = path.open("rt", encoding="utf-8")
+    except Exception:
+        return session_id, connection_epoch
+
+    with handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                payload = json.loads(line)
+            except Exception:
+                continue
+            payload_session_id, payload_connection_epoch = _context_from_payload(payload)
+            session_id = session_id or payload_session_id
+            connection_epoch = connection_epoch or payload_connection_epoch
+            if session_id and connection_epoch:
+                break
+    return session_id, connection_epoch
 
 
 class ObservabilityOutbox:
@@ -166,14 +186,25 @@ class ObservabilityOutbox:
         opener: Any | None = None,
     ) -> dict[str, Any]:
         uploaded_count = 0
+        failed_count = 0
         open_request = opener or urllib.request.urlopen
         for manifest_path in sorted(self.pending_dir.glob("*.json")):
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            artifact_path = Path(manifest["artifact_path"])
-            if not artifact_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                artifact_path = Path(manifest["artifact_path"])
+            except Exception:
+                failed_count += 1
                 continue
-            artifact_bytes = artifact_path.read_bytes()
+            if not artifact_path.exists():
+                failed_count += 1
+                continue
+            try:
+                artifact_bytes = artifact_path.read_bytes()
+            except OSError:
+                failed_count += 1
+                continue
             if len(artifact_bytes) > max(1, int(max_artifact_mb)) * 1024 * 1024:
+                failed_count += 1
                 continue
             body = {
                 "client_instance_id": manifest["client_instance_id"],
@@ -193,9 +224,14 @@ class ObservabilityOutbox:
                 },
                 method="POST",
             )
-            response = open_request(request)
-            status = int(getattr(response, "status", 200) or 200)
+            try:
+                response = open_request(request)
+                status = int(getattr(response, "status", 200) or 200)
+            except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError):
+                failed_count += 1
+                continue
             if status >= 400:
+                failed_count += 1
                 continue
             self.uploaded_dir.mkdir(parents=True, exist_ok=True)
             try:
@@ -204,7 +240,7 @@ class ObservabilityOutbox:
                 pass
             shutil.move(str(manifest_path), str(self.uploaded_dir / manifest_path.name))
             uploaded_count += 1
-        return {"uploaded_count": uploaded_count}
+        return {"uploaded_count": uploaded_count, "failed_count": failed_count}
 
 
 __all__ = [

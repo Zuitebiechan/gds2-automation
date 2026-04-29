@@ -11,6 +11,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -27,6 +28,9 @@ TRIGGER_EVENT_TYPES = {
     "ai.stream.error",
     "live_data.stream.error",
 }
+
+PLACEHOLDER_SESSION_IDS = {"no-session"}
+PLACEHOLDER_CONNECTION_EPOCHS = {"no-epoch"}
 
 NEXT_CHECKS_BY_DOMAIN = {
     "cloud_dll_local_proxy": [
@@ -87,6 +91,15 @@ def _has_value(value: Any) -> bool:
     return value not in (None, "", [], {})
 
 
+def _normalize_selector(value: Any, *, placeholders: set[str]) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.lower() in placeholders:
+        return None
+    return text
+
+
 def _is_abnormal(event: dict[str, Any]) -> bool:
     return bool(
         str(event.get("status") or "").lower() == "error"
@@ -103,23 +116,110 @@ def _latest_non_empty(events: list[dict[str, Any]], key: str) -> Any:
     return None
 
 
+def _hashable_index_value(value: Any) -> Any | None:
+    if value in (None, ""):
+        return None
+    try:
+        hash(value)
+    except TypeError:
+        return None
+    return value
+
+
+def _append_index(index: dict[Any, list[int]], value: Any, position: int) -> None:
+    key = _hashable_index_value(value)
+    if key is None:
+        return
+    index.setdefault(key, []).append(position)
+
+
+def _select_related_events(
+    events: list[dict[str, Any]],
+    *,
+    session_id: str | None,
+    connection_epoch: str | None,
+) -> list[dict[str, Any]]:
+    session_id = _normalize_selector(session_id, placeholders=PLACEHOLDER_SESSION_IDS)
+    connection_epoch = _normalize_selector(connection_epoch, placeholders=PLACEHOLDER_CONNECTION_EPOCHS)
+    if not session_id and not connection_epoch:
+        return _sort_events(events)
+
+    by_session: dict[Any, list[int]] = {}
+    by_epoch: dict[Any, list[int]] = {}
+    by_dll_seq: dict[Any, list[int]] = {}
+    by_proxy_seq: dict[Any, list[int]] = {}
+    by_worker_id: dict[Any, list[int]] = {}
+    for position, event in enumerate(events):
+        _append_index(by_session, event.get("session_id"), position)
+        _append_index(by_epoch, event.get("connection_epoch"), position)
+        _append_index(by_dll_seq, event.get("dll_seq"), position)
+        _append_index(by_proxy_seq, event.get("proxy_seq"), position)
+        _append_index(by_worker_id, event.get("worker_request_id"), position)
+
+    selected_positions: set[int] = set()
+    expanded_index_keys: set[tuple[str, Any]] = set()
+    queue: deque[int] = deque()
+
+    def add_positions(positions: Iterable[int]) -> None:
+        for position in positions:
+            if position in selected_positions:
+                continue
+            selected_positions.add(position)
+            queue.append(position)
+
+    if session_id:
+        add_positions(by_session.get(session_id, []))
+    if connection_epoch:
+        add_positions(by_epoch.get(connection_epoch, []))
+    if not selected_positions and session_id:
+        add_positions(position for position, event in enumerate(events) if event.get("session_id") is None)
+
+    while queue:
+        event = events[queue.popleft()]
+        for index_name, index, value in (
+            ("dll_seq", by_dll_seq, event.get("dll_seq")),
+            ("proxy_seq", by_proxy_seq, event.get("proxy_seq")),
+            ("worker_request_id", by_worker_id, event.get("worker_request_id")),
+            ("connection_epoch", by_epoch, event.get("connection_epoch")),
+        ):
+            key = _hashable_index_value(value)
+            if key is None:
+                continue
+            expanded_key = (index_name, key)
+            if expanded_key in expanded_index_keys:
+                continue
+            expanded_index_keys.add(expanded_key)
+            add_positions(index.get(key, []))
+
+    return _sort_events(events[position] for position in selected_positions)
+
+
 def _discover_artifacts(cloud_root: Path | None, local_root: Path | None) -> tuple[list[Path], list[Path]]:
     raw_paths: list[Path] = []
     aux_paths: list[Path] = []
+    raw_seen: set[Path] = set()
+
+    def add_raw_paths(paths: Iterable[Path]) -> None:
+        for path in paths:
+            if path in raw_seen:
+                continue
+            raw_seen.add(path)
+            raw_paths.append(path)
+
     for root in (cloud_root, local_root):
         if root is None:
             continue
         raw_dir = root / "raw"
         if raw_dir.exists():
-            raw_paths.extend(sorted(raw_dir.glob("*.jsonl")))
-            raw_paths.extend(sorted(raw_dir.glob("*.jsonl.gz")))
-            raw_paths.extend(sorted(raw_dir.glob("*.gz")))
+            add_raw_paths(sorted(raw_dir.glob("*.jsonl")))
+            add_raw_paths(sorted(raw_dir.glob("*.jsonl.gz")))
+            add_raw_paths(sorted(raw_dir.glob("*.gz")))
     if cloud_root is not None:
         uploads_dir = cloud_root / "uploads"
         if uploads_dir.exists():
-            raw_paths.extend(sorted(uploads_dir.rglob("*.jsonl")))
-            raw_paths.extend(sorted(uploads_dir.rglob("*.jsonl.gz")))
-            raw_paths.extend(sorted(uploads_dir.rglob("*.gz")))
+            add_raw_paths(sorted(uploads_dir.rglob("*.jsonl")))
+            add_raw_paths(sorted(uploads_dir.rglob("*.jsonl.gz")))
+            add_raw_paths(sorted(uploads_dir.rglob("*.gz")))
     if cloud_root is not None:
         snapshot_path = cloud_root / "active_session_snapshot.json"
         if snapshot_path.exists():
@@ -169,47 +269,11 @@ def _expand_related_events(
     session_id: str | None,
     connection_epoch: str | None,
 ) -> list[dict[str, Any]]:
-    if not session_id and not connection_epoch:
-        return _sort_events(events)
-
-    selected = [
-        event for event in events
-        if (session_id and event.get("session_id") == session_id)
-        or (connection_epoch and event.get("connection_epoch") == connection_epoch)
-    ]
-
-    if not selected and session_id:
-        selected = [event for event in events if event.get("session_id") is None]
-
-    changed = True
-    while changed:
-        changed = False
-        dll_seqs = {event.get("dll_seq") for event in selected if event.get("dll_seq") is not None}
-        proxy_seqs = {event.get("proxy_seq") for event in selected if event.get("proxy_seq") is not None}
-        worker_ids = {
-            event.get("worker_request_id")
-            for event in selected
-            if event.get("worker_request_id") not in (None, "")
-        }
-        epochs = {
-            event.get("connection_epoch")
-            for event in selected
-            if event.get("connection_epoch") not in (None, "")
-        }
-        for event in events:
-            if event in selected:
-                continue
-            if (
-                (session_id and event.get("session_id") == session_id)
-                or (event.get("dll_seq") in dll_seqs if event.get("dll_seq") is not None else False)
-                or (event.get("proxy_seq") in proxy_seqs if event.get("proxy_seq") is not None else False)
-                or (event.get("worker_request_id") in worker_ids if event.get("worker_request_id") else False)
-                or (event.get("connection_epoch") in epochs if event.get("connection_epoch") else False)
-            ):
-                selected.append(event)
-                changed = True
-
-    return _sort_events(selected)
+    return _select_related_events(
+        events,
+        session_id=session_id,
+        connection_epoch=connection_epoch,
+    )
 
 
 def _stream_related_events(
@@ -218,47 +282,18 @@ def _stream_related_events(
     session_id: str | None,
     connection_epoch: str | None,
 ) -> list[dict[str, Any]]:
-    selected: list[dict[str, Any]] = []
-    selected_keys: set[tuple[str, int]] = set()
-    changed = True
-
-    while changed:
-        changed = False
-        dll_seqs = {event.get("dll_seq") for event in selected if event.get("dll_seq") is not None}
-        proxy_seqs = {event.get("proxy_seq") for event in selected if event.get("proxy_seq") is not None}
-        worker_ids = {
-            event.get("worker_request_id")
-            for event in selected
-            if event.get("worker_request_id") not in (None, "")
-        }
-        epochs = {
-            event.get("connection_epoch")
-            for event in selected
-            if event.get("connection_epoch") not in (None, "")
-        }
-
-        for raw_path in raw_paths:
-            for event in _iter_event_file(raw_path):
-                event_key = (
-                    str(event.get("source_artifact") or ""),
-                    int(event.get("source_line") or 0),
-                )
-                if event_key in selected_keys:
-                    continue
-
-                if (
-                    (session_id and event.get("session_id") == session_id)
-                    or (connection_epoch and event.get("connection_epoch") == connection_epoch)
-                    or (event.get("dll_seq") in dll_seqs if event.get("dll_seq") is not None else False)
-                    or (event.get("proxy_seq") in proxy_seqs if event.get("proxy_seq") is not None else False)
-                    or (event.get("worker_request_id") in worker_ids if event.get("worker_request_id") else False)
-                    or (event.get("connection_epoch") in epochs if event.get("connection_epoch") else False)
-                ):
-                    selected.append(event)
-                    selected_keys.add(event_key)
-                    changed = True
-
-    return _sort_events(selected)
+    session_id = _normalize_selector(session_id, placeholders=PLACEHOLDER_SESSION_IDS)
+    connection_epoch = _normalize_selector(connection_epoch, placeholders=PLACEHOLDER_CONNECTION_EPOCHS)
+    if not session_id and not connection_epoch:
+        return []
+    events: list[dict[str, Any]] = []
+    for raw_path in raw_paths:
+        events.extend(_iter_event_file(raw_path))
+    return _select_related_events(
+        events,
+        session_id=session_id,
+        connection_epoch=connection_epoch,
+    )
 
 
 def _derive_page_context(events: list[dict[str, Any]], snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -332,36 +367,50 @@ def assemble_session_trace(
 ) -> dict[str, Any]:
     cloud_root_path = Path(cloud_root) if cloud_root is not None else None
     local_root_path = Path(local_root) if local_root is not None else None
+    session_id = _normalize_selector(session_id, placeholders=PLACEHOLDER_SESSION_IDS)
+    connection_epoch = _normalize_selector(connection_epoch, placeholders=PLACEHOLDER_CONNECTION_EPOCHS)
 
     source_artifacts: list[str] = []
     snapshot: dict[str, Any] = {}
     loaded_events = list(events or [])
     if events is None:
         raw_paths, aux_paths = _discover_artifacts(cloud_root_path, local_root_path)
-        if session_id or connection_epoch:
-            loaded_events.extend(
-                _stream_related_events(
-                    raw_paths,
-                    session_id=session_id,
-                    connection_epoch=connection_epoch,
-                )
-            )
-            source_artifacts.extend(
-                str(Path(event["source_artifact"]).resolve())
-                for event in loaded_events
-                if event.get("source_artifact")
-            )
-        else:
-            for raw_path in raw_paths:
-                loaded_events.extend(_read_event_file(raw_path))
-                source_artifacts.append(str(raw_path.resolve()))
         snapshot_path = aux_paths[0] if aux_paths else None
         snapshot = _read_snapshot(snapshot_path)
         if snapshot_path is not None:
             source_artifacts.append(str(snapshot_path.resolve()))
 
-    resolved_session_id = session_id or str(snapshot.get("session_id") or "") or None
-    resolved_connection_epoch = connection_epoch or str(snapshot.get("connection_epoch") or "") or None
+        snapshot_session_id = _normalize_selector(
+            snapshot.get("session_id"),
+            placeholders=PLACEHOLDER_SESSION_IDS,
+        )
+        snapshot_connection_epoch = _normalize_selector(
+            snapshot.get("connection_epoch"),
+            placeholders=PLACEHOLDER_CONNECTION_EPOCHS,
+        )
+        stream_session_id = session_id or snapshot_session_id
+        stream_connection_epoch = connection_epoch or snapshot_connection_epoch
+        if stream_session_id or stream_connection_epoch:
+            loaded_events.extend(
+                _stream_related_events(
+                    raw_paths,
+                    session_id=stream_session_id,
+                    connection_epoch=stream_connection_epoch,
+                )
+            )
+        else:
+            for raw_path in raw_paths:
+                loaded_events.extend(_read_event_file(raw_path))
+                source_artifacts.append(str(raw_path.resolve()))
+
+    resolved_session_id = session_id or _normalize_selector(
+        snapshot.get("session_id"),
+        placeholders=PLACEHOLDER_SESSION_IDS,
+    )
+    resolved_connection_epoch = connection_epoch or _normalize_selector(
+        snapshot.get("connection_epoch"),
+        placeholders=PLACEHOLDER_CONNECTION_EPOCHS,
+    )
     timeline = _expand_related_events(
         loaded_events,
         session_id=resolved_session_id,
@@ -369,12 +418,18 @@ def assemble_session_trace(
     )
 
     if resolved_session_id is None:
-        resolved_session_id = _latest_non_empty(timeline, "session_id")
+        resolved_session_id = _normalize_selector(
+            _latest_non_empty(timeline, "session_id"),
+            placeholders=PLACEHOLDER_SESSION_IDS,
+        )
     if resolved_connection_epoch is None:
-        resolved_connection_epoch = _latest_non_empty(timeline, "connection_epoch")
+        resolved_connection_epoch = _normalize_selector(
+            _latest_non_empty(timeline, "connection_epoch"),
+            placeholders=PLACEHOLDER_CONNECTION_EPOCHS,
+        )
 
     source_artifacts.extend(
-        str(Path(event["source_artifact"]).resolve())
+        str(event["source_artifact"])
         for event in timeline
         if event.get("source_artifact")
     )

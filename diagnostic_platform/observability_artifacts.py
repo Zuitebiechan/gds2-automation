@@ -135,6 +135,22 @@ def materialize_session_artifacts(
     return {"trace": trace, "trace_path": trace_path, "incident_paths": incident_paths}
 
 
+def _normalize_context_value(value: Any, *, placeholder: str) -> str | None:
+    text = str(value or "").strip()
+    if not text or text.lower() == placeholder:
+        return None
+    return text
+
+
+def _context_from_payload(payload: Any) -> tuple[str | None, str | None]:
+    if not isinstance(payload, dict):
+        return None, None
+    return (
+        _normalize_context_value(payload.get("session_id"), placeholder="no-session"),
+        _normalize_context_value(payload.get("connection_epoch"), placeholder="no-epoch"),
+    )
+
+
 def _discover_connection_context_from_artifact(path: Path) -> tuple[str | None, str | None]:
     if path.suffix == ".gz":
         import gzip
@@ -144,17 +160,21 @@ def _discover_connection_context_from_artifact(path: Path) -> tuple[str | None, 
         handle = path.open("rt", encoding="utf-8")
 
     with handle:
+        session_id: str | None = None
+        connection_epoch: str | None = None
         for line in handle:
             if not line.strip():
                 continue
-            payload = json.loads(line)
-            session_id = payload.get("session_id")
-            connection_epoch = payload.get("connection_epoch")
-            return (
-                str(session_id) if session_id not in (None, "") else None,
-                str(connection_epoch) if connection_epoch not in (None, "") else None,
-            )
-    return None, None
+            try:
+                payload = json.loads(line)
+            except Exception:
+                continue
+            payload_session_id, payload_connection_epoch = _context_from_payload(payload)
+            session_id = session_id or payload_session_id
+            connection_epoch = connection_epoch or payload_connection_epoch
+            if session_id and connection_epoch:
+                break
+    return session_id, connection_epoch
 
 
 def ingest_uploaded_artifact(
@@ -165,7 +185,7 @@ def ingest_uploaded_artifact(
 ) -> dict[str, Any]:
     cloud_root_path = _resolve_cloud_root(cloud_root)
     client_instance_id = str(payload.get("client_instance_id") or "").strip()
-    connection_epoch = str(payload.get("connection_epoch") or "").strip()
+    connection_epoch = _normalize_context_value(payload.get("connection_epoch"), placeholder="no-epoch") or "no-epoch"
     artifact_id = str(payload.get("artifact_id") or "").strip()
     artifact_name = str(payload.get("artifact_name") or "").strip()
     content_base64 = str(payload.get("content_base64") or "").strip()
@@ -195,7 +215,7 @@ def ingest_uploaded_artifact(
             },
         )
 
-    session_id = str(payload.get("session_id") or "").strip() or None
+    session_id = _normalize_context_value(payload.get("session_id"), placeholder="no-session")
     if session_id is None:
         try:
             session_id, _ = _discover_connection_context_from_artifact(artifact_path)

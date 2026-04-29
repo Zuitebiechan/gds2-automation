@@ -223,6 +223,48 @@ def test_observability_analysis_assembles_session_trace_from_cloud_and_local_eve
     assert len(trace["source_artifacts"]) == 3
 
 
+def test_observability_analysis_treats_placeholder_epoch_as_missing(tmp_path: Path) -> None:
+    cloud_root = tmp_path / "ProgramData" / "RPA_Diagnostic" / "observability" / "cloud"
+    raw_dir = cloud_root / "raw"
+    raw_dir.mkdir(parents=True)
+    (cloud_root / "active_session_snapshot.json").write_text(
+        json.dumps(
+            {
+                "session_id": "session-5",
+                "backend_name": "gds2",
+                "operation_kind": "live_data.start",
+                "selected_module": "Engine Control Module",
+                "selected_data_category": "Engine Data",
+                "current_page": "module_list",
+                "navigation_session_id": None,
+                "ai_session_id": None,
+                "live_data_active": True,
+                "connection_epoch": "epoch-5",
+                "updated_at": "2026-04-22T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    event = _event(
+        "2026-04-22T00:00:01Z",
+        "session_runtime",
+        "session.live_data.started",
+        session_id="session-5",
+        connection_epoch="epoch-5",
+        page="data_display",
+        module="Engine Control Module",
+        data_category="Engine Data",
+    )
+    (raw_dir / "cloud.jsonl").write_text(json.dumps(event), encoding="utf-8")
+
+    trace = assemble_session_trace(cloud_root=cloud_root, connection_epoch="no-epoch")
+
+    assert trace["session_id"] == "session-5"
+    assert trace["connection_epoch"] == "epoch-5"
+    assert [event["event_type"] for event in trace["timeline"]] == ["session.live_data.started"]
+    assert trace["page_context"]["page"] == "data_display"
+
+
 def test_observability_analysis_generates_incident_bundle_for_proxy_timeout() -> None:
     events = [
         _event("2026-04-22T00:00:00Z", "reverse_server", "tunnel.quality.changed", session_id="session-1", connection_epoch="epoch-7", network_grade="block", tunnel_status="blocked", reason="probe_failures"),

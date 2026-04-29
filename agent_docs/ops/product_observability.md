@@ -186,6 +186,9 @@ Current runtime behavior:
 - cloud-side startup runs best-effort retention cleanup for raw/session-trace/incident/uploaded artifacts
 - tray client startup runs best-effort cleanup for uploaded outbox entries
 - tray client runs a background uploader loop that stages local artifacts into the outbox and uploads them to the cloud ingest API
+- local outbox staging scans artifact contents for the first non-placeholder `session_id` and `connection_epoch`; leading lifecycle events without session context do not force the upload into `no-epoch`
+- trace assembly treats `no-session` and `no-epoch` as missing selectors and falls back to the active snapshot or raw-event context before materializing a trace
+- transient upload/API failures leave pending manifests in place for the next uploader pass instead of crashing the tray background loop
 
 ## Current Component Usage
 

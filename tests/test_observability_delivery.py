@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import time
+import urllib.error
 from pathlib import Path
 
 from diagnostic_platform.observability import JsonlWriter, emit_event
@@ -129,6 +130,91 @@ def test_ingest_uploaded_artifact_stores_file_dedupes_and_refreshes_trace(tmp_pa
     assert list(get_cloud_session_traces_dir(cloud_root).glob("*.json"))
 
 
+def test_ingest_uploaded_artifact_discovers_context_after_initial_empty_event(tmp_path: Path) -> None:
+    cloud_root = tmp_path / "ProgramData" / "RPA_Diagnostic" / "observability" / "cloud"
+    payload_bytes = "\n".join(
+        [
+            json.dumps(_event("2026-04-22T00:00:00Z", "reverse_client", "tunnel.lifecycle.connected")),
+            json.dumps(
+                _event(
+                    "2026-04-22T00:00:01Z",
+                    "j2534_worker",
+                    "worker.rpc.failed",
+                    session_id="session-8",
+                    connection_epoch="epoch-8",
+                    worker_request_id="wrk-80",
+                    status="error",
+                    failure_code="RuntimeError",
+                    failure_domain="local_j2534_driver",
+                )
+            ),
+        ]
+    ).encode("utf-8")
+    payload = {
+        "client_instance_id": "client-8",
+        "connection_epoch": "no-epoch",
+        "artifact_id": "artifact-8",
+        "artifact_name": "local.jsonl",
+        "artifact_type": "raw",
+        "session_id": None,
+        "content_base64": base64.b64encode(payload_bytes).decode("ascii"),
+    }
+
+    result = ingest_uploaded_artifact(payload, cloud_root=cloud_root)
+
+    trace_payload = json.loads(result["trace_path"].read_text(encoding="utf-8"))
+    assert trace_payload["session_id"] == "session-8"
+    assert trace_payload["connection_epoch"] == "epoch-8"
+    assert [event["event_type"] for event in trace_payload["timeline"]] == [
+        "worker.rpc.failed",
+    ]
+
+
+def test_materialize_session_artifacts_ignores_placeholder_epoch(tmp_path: Path) -> None:
+    cloud_root = tmp_path / "ProgramData" / "RPA_Diagnostic" / "observability" / "cloud"
+    raw_dir = cloud_root / "raw"
+    raw_dir.mkdir(parents=True)
+    (cloud_root / "active_session_snapshot.json").write_text(
+        json.dumps(
+            {
+                "session_id": "session-9",
+                "backend_name": "gds2",
+                "operation_kind": "live_data.start",
+                "selected_module": "Engine Control Module",
+                "selected_data_category": "Engine Data",
+                "current_page": "module_list",
+                "navigation_session_id": None,
+                "ai_session_id": None,
+                "live_data_active": True,
+                "connection_epoch": "epoch-9",
+                "updated_at": "2026-04-22T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (raw_dir / "cloud.jsonl").write_text(
+        json.dumps(
+            _event(
+                "2026-04-22T00:00:01Z",
+                "session_runtime",
+                "session.live_data.started",
+                session_id="session-9",
+                connection_epoch="epoch-9",
+                page="data_display",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    result = materialize_session_artifacts(cloud_root=cloud_root, connection_epoch="no-epoch")
+
+    trace_payload = json.loads(result["trace_path"].read_text(encoding="utf-8"))
+    assert trace_payload["session_id"] == "session-9"
+    assert trace_payload["connection_epoch"] == "epoch-9"
+    assert trace_payload["key_metrics"]["event_count"] == 1
+    assert trace_payload["page_context"]["page"] == "data_display"
+
+
 def test_observability_outbox_queues_and_uploads_pending_artifacts(tmp_path: Path) -> None:
     appdata = tmp_path / "AppData"
     local_root = appdata / "VCI_Proxy" / "observability"
@@ -190,6 +276,90 @@ def test_observability_outbox_queues_and_uploads_pending_artifacts(tmp_path: Pat
     assert not staged_artifact_path.exists()
     assert observed["url"].endswith("/api/session/logs/upload")
     assert observed["headers"]["X-api-token"] == "api-secret"
+
+
+def test_observability_outbox_stages_context_after_initial_empty_event(tmp_path: Path) -> None:
+    appdata = tmp_path / "AppData"
+    local_root = appdata / "VCI_Proxy" / "observability"
+    raw_dir = local_root / "raw"
+    raw_dir.mkdir(parents=True)
+    artifact = raw_dir / "local.jsonl"
+    artifact.write_text(
+        "\n".join(
+            [
+                json.dumps(_event("2026-04-22T00:00:00Z", "reverse_client", "tunnel.lifecycle.connected")),
+                json.dumps(
+                    _event(
+                        "2026-04-22T00:00:01Z",
+                        "reverse_client",
+                        "proxy.request.client_received",
+                        session_id="session-6",
+                        connection_epoch="epoch-6",
+                        proxy_seq=60,
+                    )
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    stale = time.time() - 10
+    os.utime(artifact, (stale, stale))
+
+    outbox = ObservabilityOutbox(appdata=appdata)
+    staged = outbox.stage_default_artifacts(
+        client_instance_id="client-6",
+        local_root=local_root,
+        min_age_seconds=0,
+    )
+
+    assert staged["queued_count"] == 1
+    pending = outbox.list_pending()
+    assert pending[0]["session_id"] == "session-6"
+    assert pending[0]["connection_epoch"] == "epoch-6"
+
+
+def test_observability_outbox_upload_failure_keeps_pending_manifest(tmp_path: Path) -> None:
+    appdata = tmp_path / "AppData"
+    local_root = appdata / "VCI_Proxy" / "observability"
+    raw_dir = local_root / "raw"
+    raw_dir.mkdir(parents=True)
+    artifact = raw_dir / "local.jsonl"
+    artifact.write_text(
+        json.dumps(
+            _event(
+                "2026-04-22T00:00:00Z",
+                "reverse_client",
+                "proxy.request.client_received",
+                session_id="session-10",
+                connection_epoch="epoch-10",
+            )
+        ),
+        encoding="utf-8",
+    )
+    stale = time.time() - 10
+    os.utime(artifact, (stale, stale))
+
+    outbox = ObservabilityOutbox(appdata=appdata)
+    outbox.stage_default_artifacts(
+        client_instance_id="client-10",
+        local_root=local_root,
+        min_age_seconds=0,
+    )
+    pending = outbox.list_pending()
+    staged_artifact_path = Path(pending[0]["artifact_path"])
+
+    def _failing_opener(request):
+        raise urllib.error.HTTPError(request.full_url, 502, "Bad Gateway", hdrs=None, fp=None)
+
+    uploaded = outbox.upload_pending(
+        api_base_url="https://diag.example:8080",
+        opener=_failing_opener,
+    )
+
+    assert uploaded["uploaded_count"] == 0
+    assert uploaded["failed_count"] == 1
+    assert len(outbox.list_pending()) == 1
+    assert staged_artifact_path.exists()
 
 
 def test_observability_outbox_stages_pretty_printed_json_artifacts(tmp_path: Path) -> None:
