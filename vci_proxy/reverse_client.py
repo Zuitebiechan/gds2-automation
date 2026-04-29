@@ -22,6 +22,7 @@ from diagnostic_platform.observability import (
 )
 from vci_proxy.auth import compute_signature
 from vci_proxy.benchmark import attach_timing_trailer
+from vci_proxy.cache_read_msgs import BUFFER_EMPTY
 from vci_proxy.cache_ioctl import IoctlCache
 from vci_proxy.config import ProxyConfig
 from vci_proxy.j2534_driver import J2534Driver
@@ -33,6 +34,7 @@ from vci_proxy.protocol import (
     MsgType,
     ProtocolDecoder,
     ProtocolEncoder,
+    attach_read_msgs_prefetch_bundle,
 )
 from vci_proxy.tls_utils import harden_tls_context
 
@@ -74,6 +76,7 @@ class ReverseProxyClient:
             "reverse_client",
             root=get_local_observability_root() / "raw",
         )
+        self._server_read_ahead_enabled = False
 
     @staticmethod
     def _describe_task_state(task: Optional[asyncio.Task]) -> str:
@@ -201,6 +204,13 @@ class ReverseProxyClient:
         if callable(call_with_context):
             return call_with_context(method_name, args, log_context=log_context)
         return getattr(self.driver, method_name)(*args)
+
+    @staticmethod
+    def _auth_message_enables_read_ahead(message: str) -> bool:
+        return any(
+            token.strip().lower() == "read_ahead=1"
+            for token in message.replace(",", ";").split(";")
+        )
 
     async def _run_driver_call(
         self,
@@ -632,6 +642,7 @@ class ReverseProxyClient:
         attempt_label: str = "attempt=unknown",
     ) -> bool:
         """Register with the server using auth or the legacy heartbeat path."""
+        self._server_read_ahead_enabled = False
         if self.config.auth.enabled and self.config.auth.token:
             timestamp = int(time.time())
             signature = compute_signature(self.config.auth.token, timestamp)
@@ -652,6 +663,7 @@ class ReverseProxyClient:
                 )
                 magic, length, msg_type, _sequence = Message.decode_header(header)
                 if magic != MAGIC:
+                    self._server_read_ahead_enabled = False
                     logger.error("Invalid magic in auth response: %#x", magic)
                     return False
 
@@ -660,6 +672,9 @@ class ReverseProxyClient:
 
                 if msg_type == MsgType.AUTH_RSP:
                     success, message = ProtocolDecoder.decode_auth_rsp(body)
+                    self._server_read_ahead_enabled = (
+                        success and self._auth_message_enables_read_ahead(message)
+                    )
                     if success:
                         logger.info("Reverse server authentication succeeded")
                         self._emit_client_event(
@@ -687,6 +702,7 @@ class ReverseProxyClient:
                     return success
 
                 if msg_type == MsgType.HEARTBEAT_ACK:
+                    self._server_read_ahead_enabled = False
                     logger.warning(
                         "[CLIENT_CONN] instance=%s %s server accepted auth as legacy heartbeat",
                         self._instance_id,
@@ -706,6 +722,7 @@ class ReverseProxyClient:
                     attempt_label,
                     msg_type,
                 )
+                self._server_read_ahead_enabled = False
                 self._emit_client_event(
                     "reverse_client.lifecycle.auth_failed",
                     status="error",
@@ -717,6 +734,7 @@ class ReverseProxyClient:
                 )
                 return False
             except asyncio.TimeoutError:
+                self._server_read_ahead_enabled = False
                 logger.error(
                     "[CLIENT_CONN] instance=%s %s auth response timeout after %ss",
                     self._instance_id,
@@ -986,16 +1004,82 @@ class ReverseProxyClient:
             num_msgs,
             timeout,
             request_context=request_context,
-            ok_codes=(0, 0x10),
+            ok_codes=(0, BUFFER_EMPTY),
             result_metadata={"channel_id": channel_id, "num_msgs": num_msgs},
         )
         self._log_j2534_result(
             "ReadMsgs",
             ret,
             detail=f" channel_id={channel_id} count={len(messages)}",
-            ok_codes=(0, 0x10),
+            ok_codes=(0, BUFFER_EMPTY),
         )
         return ProtocolEncoder.encode_read_msgs_rsp(ret, messages, sequence)
+
+    async def _collect_read_ahead_bodies(
+        self,
+        channel_id: int,
+        request_context: LogContext,
+    ) -> list[bytes]:
+        read_ahead = self.config.read_ahead
+        if (
+            not read_ahead.enabled
+            or not self._server_read_ahead_enabled
+            or read_ahead.window_ms <= 0
+            or read_ahead.max_reads <= 0
+            or read_ahead.max_messages <= 0
+        ):
+            return []
+
+        deadline = time.monotonic() + max(0, read_ahead.window_ms) / 1000.0
+        collected: list[bytes] = []
+        collected_messages = 0
+        for read_index in range(read_ahead.max_reads):
+            if time.monotonic() > deadline:
+                break
+
+            remaining = read_ahead.max_messages - collected_messages
+            if remaining <= 0:
+                break
+
+            try:
+                ret, messages = await self._run_driver_call(
+                    "read_msgs",
+                    channel_id,
+                    remaining,
+                    read_ahead.read_timeout_ms,
+                    request_context=request_context,
+                    ok_codes=(0, BUFFER_EMPTY),
+                    result_metadata={
+                        "channel_id": channel_id,
+                        "num_msgs": remaining,
+                        "read_ahead": True,
+                        "read_ahead_index": read_index,
+                    },
+                )
+            except Exception:
+                logger.warning(
+                    "Read-ahead failed after WRITE_MSGS_REQ on channel_id=%s",
+                    channel_id,
+                    exc_info=True,
+                )
+                break
+
+            if ret != 0 or not messages:
+                continue
+
+            limited_messages = messages[:remaining]
+            collected_messages += len(limited_messages)
+            collected.append(
+                ProtocolEncoder.encode_read_msgs_rsp(0, limited_messages, 0)[HEADER_SIZE:]
+            )
+
+        if collected:
+            logger.debug(
+                "Collected %s read-ahead ReadMsgs response(s) after write on channel_id=%s",
+                len(collected),
+                channel_id,
+            )
+        return collected
 
     async def _handle_write_msgs(self, body: bytes, sequence: int, request_context: LogContext | None = None) -> bytes:
         channel_id, messages, timeout = ProtocolDecoder.decode_write_msgs_req(body)
@@ -1017,7 +1101,16 @@ class ReverseProxyClient:
             ret,
             detail=f" channel_id={channel_id} written={num_written} requested={len(messages)}",
         )
-        return ProtocolEncoder.encode_write_msgs_rsp(ret, num_written, sequence)
+        response = ProtocolEncoder.encode_write_msgs_rsp(ret, num_written, sequence)
+        if ret != 0:
+            return response
+
+        read_rsp_bodies = await self._collect_read_ahead_bodies(channel_id, request_context)
+        return attach_read_msgs_prefetch_bundle(
+            response,
+            channel_id=channel_id,
+            read_rsp_bodies=read_rsp_bodies,
+        )
 
     async def _handle_read_version(self, body: bytes, sequence: int, request_context: LogContext | None = None) -> bytes:
         device_id = ProtocolDecoder.decode_read_version_req(body)
@@ -1220,6 +1313,43 @@ def main() -> None:
         default=5,
         help="IOCTL cache TTL in seconds",
     )
+    parser.add_argument(
+        "--read-ahead",
+        dest="read_ahead",
+        action="store_true",
+        default=None,
+        help="Enable local ReadMsgs read-ahead after successful writes (or VCI_PROXY_READ_AHEAD=1)",
+    )
+    parser.add_argument(
+        "--no-read-ahead",
+        dest="read_ahead",
+        action="store_false",
+        help="Disable local ReadMsgs read-ahead even if VCI_PROXY_READ_AHEAD is set",
+    )
+    parser.add_argument(
+        "--read-ahead-window-ms",
+        type=int,
+        default=None,
+        help="Read-ahead collection window in ms (default: 200 or VCI_PROXY_READ_AHEAD_WINDOW_MS)",
+    )
+    parser.add_argument(
+        "--read-ahead-max-reads",
+        type=int,
+        default=None,
+        help="Maximum local ReadMsgs calls after one successful write (default: 3 or VCI_PROXY_READ_AHEAD_MAX_READS)",
+    )
+    parser.add_argument(
+        "--read-ahead-read-timeout-ms",
+        type=int,
+        default=None,
+        help="Timeout passed to local ReadMsgs read-ahead calls (default: 0 or VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS)",
+    )
+    parser.add_argument(
+        "--read-ahead-max-messages",
+        type=int,
+        default=None,
+        help="Maximum prefetched messages retained per channel (default: 16 or VCI_PROXY_READ_AHEAD_MAX_MESSAGES)",
+    )
     args = parser.parse_args()
 
     config = ProxyConfig.from_args(
@@ -1231,6 +1361,11 @@ def main() -> None:
         vbatt_ttl=args.vbatt_ttl,
         no_ioctl_cache=args.no_ioctl_cache,
         ioctl_ttl=args.ioctl_ttl,
+        read_ahead_enabled=args.read_ahead,
+        read_ahead_window_ms=args.read_ahead_window_ms,
+        read_ahead_max_reads=args.read_ahead_max_reads,
+        read_ahead_read_timeout_ms=args.read_ahead_read_timeout_ms,
+        read_ahead_max_messages=args.read_ahead_max_messages,
     )
 
     print("=" * 50)
@@ -1242,6 +1377,11 @@ def main() -> None:
     print(
         f"IOCTL cache: {'enabled' if config.ioctl_cache.enabled else 'disabled'} "
         f"(TTL={config.ioctl_cache.ttl_s}s)"
+    )
+    print(
+        f"Read-ahead: {'enabled' if config.read_ahead.enabled else 'disabled'} "
+        f"(window={config.read_ahead.window_ms}ms, max_reads={config.read_ahead.max_reads}, "
+        f"timeout={config.read_ahead.read_timeout_ms}ms, max_messages={config.read_ahead.max_messages})"
     )
     print("Press Ctrl+C to stop")
     print("=" * 50)

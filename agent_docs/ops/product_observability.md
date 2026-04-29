@@ -216,6 +216,9 @@ Current runtime behavior:
   - emits focused value-level Data Display samples for `Engine Speed` and `Accelerator Pedal Position` with Java Agent timestamps, collector lag, extraction counters, and active session context
 - `vci_proxy/reverse_server.py`
   - emits tunnel lifecycle, probe, tunnel-quality, proxy-request staged events, and reverse-server process lifecycle events
+  - proxy-request events for `READ_MSGS_REQ` include decoded request metadata (`channel_id`, `num_msgs`, `timeout`) and, when applicable, `last_write_seq` plus `post_write_age_ms`
+  - proxy-request response events for `READ_MSGS_RSP` include `return_code`, `message_count`, `payload_bytes`, and `read_result` (`empty` or `data`)
+  - `WRITE_MSGS_REQ` request events include `channel_id`, `write_message_count`, `timeout`, and `write_payload_bytes` without logging raw payload data
 - `vci_proxy/reverse_client.py`
   - emits reverse tunnel connection lifecycle, request receipt, and J2534 call events
 - `vci_proxy/j2534_worker.py`

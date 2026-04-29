@@ -50,6 +50,14 @@ def _import_client_gui(monkeypatch, tmp_path):
     )
 
     monkeypatch.setenv("APPDATA", str(tmp_path))
+    for name in (
+        "VCI_PROXY_READ_AHEAD",
+        "VCI_PROXY_READ_AHEAD_WINDOW_MS",
+        "VCI_PROXY_READ_AHEAD_MAX_READS",
+        "VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS",
+        "VCI_PROXY_READ_AHEAD_MAX_MESSAGES",
+    ):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setitem(sys.modules, "pystray", fake_pystray)
     sys.modules.pop("vci_proxy.client_gui", None)
     return importlib.import_module("vci_proxy.client_gui")
@@ -79,6 +87,11 @@ def test_load_config_merges_saved_values_with_defaults(monkeypatch, tmp_path) ->
         "tls_enabled": False,
         "tls_ca_file": "",
         "tls_server_name": "",
+        "read_ahead_enabled": False,
+        "read_ahead_window_ms": 200,
+        "read_ahead_max_reads": 3,
+        "read_ahead_read_timeout_ms": 0,
+        "read_ahead_max_messages": 16,
     }
 
 
@@ -95,11 +108,85 @@ def test_save_config_persists_json(monkeypatch, tmp_path) -> None:
         "tls_enabled": True,
         "tls_ca_file": "C:/certs/ca.pem",
         "tls_server_name": "diag.example",
+        "read_ahead_enabled": False,
+        "read_ahead_window_ms": 200,
+        "read_ahead_max_reads": 3,
+        "read_ahead_read_timeout_ms": 0,
+        "read_ahead_max_messages": 16,
     }
 
     client_gui.save_config(config)
 
     assert json.loads(client_gui.CONFIG_FILE.read_text(encoding="utf-8")) == config
+
+
+def test_config_int_preserves_explicit_zero(monkeypatch, tmp_path) -> None:
+    client_gui = _import_client_gui(monkeypatch, tmp_path)
+
+    assert client_gui.config_int({"value": 0}, "value", 200) == 0
+    assert client_gui.config_int({"value": "0"}, "value", 200) == 0
+    assert client_gui.config_int({"value": ""}, "value", 200) == 200
+    assert client_gui.config_int({}, "value", 200) == 200
+
+
+def test_apply_read_ahead_env_overrides_uses_shared_env_names(monkeypatch, tmp_path) -> None:
+    client_gui = _import_client_gui(monkeypatch, tmp_path)
+    monkeypatch.setenv("VCI_PROXY_READ_AHEAD", "1")
+    monkeypatch.setenv("VCI_PROXY_READ_AHEAD_WINDOW_MS", "250")
+    monkeypatch.setenv("VCI_PROXY_READ_AHEAD_MAX_READS", "4")
+    monkeypatch.setenv("VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS", "1")
+    monkeypatch.setenv("VCI_PROXY_READ_AHEAD_MAX_MESSAGES", "10")
+
+    updated = client_gui.apply_read_ahead_env_overrides(
+        {
+            "read_ahead_enabled": False,
+            "read_ahead_window_ms": 200,
+            "read_ahead_max_reads": 3,
+            "read_ahead_read_timeout_ms": 0,
+            "read_ahead_max_messages": 16,
+            "host": "diag.example",
+        }
+    )
+
+    assert updated == {
+        "read_ahead_enabled": True,
+        "read_ahead_window_ms": 250,
+        "read_ahead_max_reads": 4,
+        "read_ahead_read_timeout_ms": 1,
+        "read_ahead_max_messages": 10,
+        "host": "diag.example",
+    }
+
+
+def test_effective_runtime_config_applies_read_ahead_env_overrides(monkeypatch, tmp_path) -> None:
+    client_gui = _import_client_gui(monkeypatch, tmp_path)
+    monkeypatch.setenv("VCI_PROXY_READ_AHEAD", "1")
+    monkeypatch.setenv("VCI_PROXY_READ_AHEAD_MAX_MESSAGES", "8")
+
+    app = client_gui.VCIProxyTrayApp()
+    app._config = {
+        "api_scheme": "http",
+        "host": "diag.example",
+        "port": 9000,
+        "api_port": 8080,
+        "api_token": "",
+        "auth_token": "secret",
+        "dll_path": "",
+        "tls_enabled": False,
+        "tls_ca_file": "",
+        "tls_server_name": "",
+        "read_ahead_enabled": False,
+        "read_ahead_window_ms": 200,
+        "read_ahead_max_reads": 3,
+        "read_ahead_read_timeout_ms": 0,
+        "read_ahead_max_messages": 16,
+    }
+
+    cfg = app._effective_runtime_config()
+
+    assert cfg["read_ahead_enabled"] is True
+    assert cfg["read_ahead_window_ms"] == 200
+    assert cfg["read_ahead_max_messages"] == 8
 
 
 def test_format_driver_label_shows_driver_architecture_without_python_warning(monkeypatch, tmp_path) -> None:
@@ -222,6 +309,11 @@ def test_start_client_builds_reverse_proxy_client_and_starts_thread(monkeypatch,
         "tls_enabled": True,
         "tls_ca_file": "C:/certs/ca.pem",
         "tls_server_name": "diag.example",
+        "read_ahead_enabled": False,
+        "read_ahead_window_ms": 200,
+        "read_ahead_max_reads": 3,
+        "read_ahead_read_timeout_ms": 0,
+        "read_ahead_max_messages": 16,
     }
     assert callable(observed["on_status_change"])
     assert app._client_thread.started is True
@@ -919,6 +1011,11 @@ def test_run_settings_dialog_defers_restart_when_active_session_exists(monkeypat
         "tls_enabled": False,
         "tls_ca_file": "",
         "tls_server_name": "",
+        "read_ahead_enabled": False,
+        "read_ahead_window_ms": 200,
+        "read_ahead_max_reads": 3,
+        "read_ahead_read_timeout_ms": 0,
+        "read_ahead_max_messages": 16,
     }
     app._client_thread = types.SimpleNamespace(is_alive=lambda: True)
     monkeypatch.setattr(client_gui, "ConfigDialog", _FakeDialog)

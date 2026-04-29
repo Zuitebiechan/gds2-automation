@@ -147,6 +147,15 @@ Recommended behavior:
 read_cache_post_write_bypass_ms = 150
 ```
 
+Implementation note:
+
+- The reverse server exposes this as `--read-cache-post-write-bypass-ms`.
+- The default is `150`.
+- Set it to `0` to disable the post-write invalidation/forced-bypass behavior.
+  With Phase 2 adaptive TTL enabled, writes may still enter active TTL mode. To
+  approximate the previous fixed empty-cache behavior, also set
+  `--read-cache-active-window-ms 0` and `--read-cache-max-timeout-ms -1`.
+
 Expected effect:
 
 - Slightly more real tunnel reads after writes.
@@ -182,6 +191,17 @@ read_cache_idle_ttl_ms = 150
 read_cache_active_ttl_ms = 25
 read_cache_active_window_ms = 500
 ```
+
+Implementation note:
+
+- The reverse server keeps the existing `--read-cache-ttl` flag as the idle TTL.
+- Active TTL is exposed as `--read-cache-active-ttl-ms`.
+- Active mode duration is exposed as `--read-cache-active-window-ms`.
+- `--read-cache-max-timeout-ms` limits empty-cache hits to zero or very small
+  `ReadMsgs` polls; the default is `25`, and `-1` allows all timeouts.
+- Active mode is entered after `WRITE_MSGS_REQ`, successful data reads,
+  `START_FILTER_REQ`, `STOP_FILTER_REQ`, and non-cacheable/mutating `IOCTL_REQ`.
+- Real `ReadMsgs` data remains consume-once and is never replayed from cache.
 
 Expected effect:
 
@@ -225,23 +245,67 @@ Protocol changes likely needed:
 - Add an internal sideband message type for prefetched `READ_MSGS` data, or
 - Add an internal transaction response that carries `WRITE_MSGS_RSP` plus a bounded prefetch bundle.
 
-Recommended feature flags:
+Implementation note:
+
+- The first Phase 3 implementation uses the internal transaction-response option.
+- The local reverse client keeps replying with a normal `WRITE_MSGS_RSP`, but when
+  read-ahead is enabled, the server advertised `read_ahead=1` during tunnel
+  authentication, and the write succeeds, it appends an internal `PRF0` prefetch
+  bundle before the timing trailer.
+- The cloud reverse server always strips that internal bundle before replying to
+  the virtual DLL. It records bundled read data only when its own read-ahead flag
+  is enabled.
+- Prefetched frames are stored in a per-channel consume-once FIFO. The FIFO is
+  checked before the empty `ReadMsgs` cache so real prefetched data cannot be
+  masked by a recent `BUFFER_EMPTY` cache entry.
+- A later ordinary `WRITE_MSGS_REQ` does not clear already-prefetched frames.
+  Those frames were already consumed from the local driver, so dropping them
+  would create missing data and break queue ordering. They remain ahead of any
+  newer read-ahead frames and are served in FIFO order.
+- This first cut returns up to the number of prefetched messages requested by
+  GDS2. It does not yet merge a partial prefetched response with an additional
+  tunnel read or wait for a separate grace window; those behaviors remain
+  hardening items after real-vehicle validation.
+
+Unified runtime config:
 
 ```text
-read_ahead_enabled = false
-read_ahead_window_ms = 200
-read_ahead_max_reads = 3
-read_ahead_read_timeout_ms = 0
-read_ahead_max_messages = 16
+VCI_PROXY_READ_AHEAD=0
+VCI_PROXY_READ_AHEAD_WINDOW_MS=200
+VCI_PROXY_READ_AHEAD_MAX_READS=3
+VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS=0
+VCI_PROXY_READ_AHEAD_MAX_MESSAGES=16
 ```
+
+Set `VCI_PROXY_READ_AHEAD=1` in both the cloud reverse server environment and
+the local reverse client/tray environment to enable the feature without adding
+long command-line arguments. The reverse server can read these values from the
+repo `.env` file when `python-dotenv` is installed; the tray client applies the
+same names as runtime overrides on top of `%APPDATA%/VCI_Proxy/config.json`.
+Set `VCI_PROXY_READ_AHEAD_WINDOW_MS` to `0` to keep the feature configured but
+prevent local read collection. CLI flags still exist for one-off tests:
+`--read-ahead`, `--no-read-ahead`, `--read-ahead-window-ms`,
+`--read-ahead-max-reads`, `--read-ahead-read-timeout-ms`, and
+`--read-ahead-max-messages`.
 
 Important behavior rules:
 
-- If write fails, do not read ahead.
+- If write fails, do not read ahead; the cloud server also clears any pending
+  prefetched frames for that channel on write error, forward failure, or response
+  timeout because channel ordering is no longer confidently tied to a successful
+  write chain.
+- If the reverse server does not advertise read-ahead capability during tunnel
+  authentication, the local reverse client does not perform read-ahead even if
+  its local config flag is set.
 - If channel state changes, clear prefetch FIFO.
 - If `STOP_FILTER_REQ`, mutating `IOCTL_REQ`, `DISCONNECT_REQ`, or `CLOSE_REQ` occurs, clear affected FIFO.
-- If GDS2 requests more messages than prefetched, serve prefetched messages first, then fall through to tunnel read if needed.
-- If a `READ_MSGS_REQ` arrives while read-ahead is in progress, the server may wait for a very small grace window, for example `20-40ms`, then fall back to a real tunnel read.
+- If GDS2 requests more messages than prefetched, the current implementation can
+  return fewer messages from the FIFO, matching normal `PassThruReadMsgs`
+  behavior. A future hardening pass can add partial FIFO plus tunnel merge if
+  logs show it is necessary.
+- If a `READ_MSGS_REQ` arrives while read-ahead is in progress, a future
+  hardening pass may wait for a very small grace window, for example `20-40ms`,
+  then fall back to a real tunnel read.
 
 Expected effect:
 
@@ -422,4 +486,3 @@ A successful optimization should meet all of these:
 - Are there protocol-specific differences between CAN, ISO15765, and other J2534 protocols that require separate read-ahead tuning?
 - Should read-ahead be allowed globally, or only for allowlisted modules/data categories after validation?
 - What is the best freshness target for cloud GDS2: match local `1-2s`, or accept a defined cloud threshold such as `<3s`?
-

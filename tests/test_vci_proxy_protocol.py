@@ -5,10 +5,13 @@ import pytest
 from vci_proxy.protocol import (
     HEADER_SIZE,
     MAGIC,
+    PREFETCH_MAGIC,
     Message,
     MsgType,
     ProtocolDecoder,
     ProtocolEncoder,
+    attach_read_msgs_prefetch_bundle,
+    strip_read_msgs_prefetch_bundle,
 )
 
 
@@ -124,3 +127,49 @@ def test_start_filter_decoder_rejects_truncated_embedded_message() -> None:
 
     with pytest.raises(ValueError, match="StartFilterReq: truncated data"):
         ProtocolDecoder.decode_start_filter_req(truncated_body)
+
+
+def test_read_msgs_prefetch_bundle_round_trips_inside_write_response() -> None:
+    messages = [
+        {
+            "protocol_id": 6,
+            "rx_status": 0,
+            "tx_flags": 0,
+            "timestamp": 123,
+            "data": b"\x62\xf4\x0c",
+        }
+    ]
+    write_rsp = ProtocolEncoder.encode_write_msgs_rsp(0, 1, sequence=17)
+    read_rsp_body = ProtocolEncoder.encode_read_msgs_rsp(0, messages, sequence=0)[HEADER_SIZE:]
+
+    bundled = attach_read_msgs_prefetch_bundle(
+        write_rsp,
+        channel_id=99,
+        read_rsp_bodies=[read_rsp_body],
+    )
+
+    magic, length, msg_type, sequence = Message.decode_header(bundled[:HEADER_SIZE])
+    assert magic == MAGIC
+    assert length == len(bundled)
+    assert msg_type == MsgType.WRITE_MSGS_RSP
+    assert sequence == 17
+    assert PREFETCH_MAGIC.to_bytes(4, "big") in bundled[HEADER_SIZE:]
+
+    clean_body, bundle = strip_read_msgs_prefetch_bundle(bundled[HEADER_SIZE:])
+    assert clean_body == write_rsp[HEADER_SIZE:]
+    assert bundle is not None
+    assert bundle.channel_id == 99
+    assert bundle.read_rsp_bodies == (read_rsp_body,)
+    assert ProtocolDecoder.decode_read_msgs_rsp(bundle.read_rsp_bodies[0]) == (0, messages)
+
+
+def test_read_msgs_prefetch_bundle_rejects_truncated_bundle() -> None:
+    write_rsp = ProtocolEncoder.encode_write_msgs_rsp(0, 1, sequence=17)
+    bundled = attach_read_msgs_prefetch_bundle(
+        write_rsp,
+        channel_id=99,
+        read_rsp_bodies=[b"\x00\x00\x00\x00"],
+    )
+
+    with pytest.raises(ValueError, match="truncated before response body"):
+        strip_read_msgs_prefetch_bundle(bundled[HEADER_SIZE:-1])

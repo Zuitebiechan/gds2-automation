@@ -19,7 +19,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Mapping, Optional
 from urllib.parse import urlparse
 
 from PIL import Image, ImageDraw
@@ -31,7 +31,12 @@ except ImportError:
     sys.exit(1)
 
 from vci_proxy.reverse_client import ReverseProxyClient
-from vci_proxy.config import ProxyConfig
+from vci_proxy.config import (
+    ProxyConfig,
+    ReadAheadConfig,
+    read_ahead_config_from_env,
+    read_ahead_env_is_configured,
+)
 from vci_proxy.observability_outbox import ObservabilityOutbox
 from diagnostic_platform.observability_artifacts import (
     cleanup_product_observability,
@@ -58,6 +63,11 @@ DEFAULT_CONFIG = {
     "tls_enabled": False,
     "tls_ca_file": "",
     "tls_server_name": "",
+    "read_ahead_enabled": False,
+    "read_ahead_window_ms": 200,
+    "read_ahead_max_reads": 3,
+    "read_ahead_read_timeout_ms": 0,
+    "read_ahead_max_messages": 16,
 }
 
 TUNNEL_RESTART_KEYS = (
@@ -68,6 +78,11 @@ TUNNEL_RESTART_KEYS = (
     "tls_enabled",
     "tls_ca_file",
     "tls_server_name",
+    "read_ahead_enabled",
+    "read_ahead_window_ms",
+    "read_ahead_max_reads",
+    "read_ahead_read_timeout_ms",
+    "read_ahead_max_messages",
 )
 
 
@@ -97,6 +112,43 @@ def format_driver_label(
 def normalize_config(config: dict | None) -> dict:
     """Merge partial config values with defaults for forward compatibility."""
     return {**DEFAULT_CONFIG, **(config or {})}
+
+
+def config_int(cfg: dict[str, Any], key: str, default: int) -> int:
+    value = cfg.get(key)
+    if value is None or value == "":
+        return default
+    return int(value)
+
+
+def apply_read_ahead_env_overrides(
+    cfg: dict[str, Any],
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Apply shared read-ahead env settings to a runtime config copy."""
+    if not read_ahead_env_is_configured(environ=environ):
+        return dict(cfg)
+
+    base = ReadAheadConfig(
+        enabled=bool(cfg.get("read_ahead_enabled")),
+        window_ms=config_int(cfg, "read_ahead_window_ms", 200),
+        max_reads=config_int(cfg, "read_ahead_max_reads", 3),
+        read_timeout_ms=config_int(cfg, "read_ahead_read_timeout_ms", 0),
+        max_messages=config_int(cfg, "read_ahead_max_messages", 16),
+    )
+    read_ahead = read_ahead_config_from_env(base, environ=environ)
+    updated = dict(cfg)
+    updated.update(
+        {
+            "read_ahead_enabled": read_ahead.enabled,
+            "read_ahead_window_ms": read_ahead.window_ms,
+            "read_ahead_max_reads": read_ahead.max_reads,
+            "read_ahead_read_timeout_ms": read_ahead.read_timeout_ms,
+            "read_ahead_max_messages": read_ahead.max_messages,
+        }
+    )
+    return updated
 
 
 def load_config() -> dict:
@@ -724,7 +776,7 @@ class VCIProxyTrayApp:
         elif parsed.hostname:
             cfg["host"] = parsed.hostname
 
-        return cfg
+        return apply_read_ahead_env_overrides(cfg)
 
     def _effective_api_base_url(self) -> str:
         assignment = self._active_node_assignment or {}
@@ -814,11 +866,12 @@ class VCIProxyTrayApp:
 
         cfg = self._effective_runtime_config()
         logger.info(
-            "[GUI_CTRL] starting reverse client pid=%s host=%s port=%s tls=%s api=%s://%s:%s dll_configured=%s",
+            "[GUI_CTRL] starting reverse client pid=%s host=%s port=%s tls=%s read_ahead=%s api=%s://%s:%s dll_configured=%s",
             os.getpid(),
             cfg.get("host"),
             cfg.get("port"),
             bool(cfg.get("tls_enabled")),
+            bool(cfg.get("read_ahead_enabled")),
             cfg.get("api_scheme") or "http",
             cfg.get("host"),
             cfg.get("api_port"),
@@ -829,6 +882,11 @@ class VCIProxyTrayApp:
             tls_enabled=bool(cfg.get("tls_enabled")),
             tls_ca_file=cfg.get("tls_ca_file") or None,
             tls_server_name=cfg.get("tls_server_name") or None,
+            read_ahead_enabled=bool(cfg.get("read_ahead_enabled")),
+            read_ahead_window_ms=config_int(cfg, "read_ahead_window_ms", 200),
+            read_ahead_max_reads=config_int(cfg, "read_ahead_max_reads", 3),
+            read_ahead_read_timeout_ms=config_int(cfg, "read_ahead_read_timeout_ms", 0),
+            read_ahead_max_messages=config_int(cfg, "read_ahead_max_messages", 16),
         )
 
         self._client = ReverseProxyClient(

@@ -9,6 +9,7 @@ from vci_proxy.config import (
     AuthConfig,
     IoctlCacheConfig,
     ProxyConfig,
+    ReadAheadConfig,
     ReadMsgsCacheConfig,
 )
 
@@ -51,28 +52,128 @@ def test_proxy_config_from_args_maps_flat_cli_flags_to_nested_configs() -> None:
         auth_timeout_s=7,
         no_read_cache=True,
         read_cache_ttl=75,
+        read_cache_post_write_bypass_ms=25,
+        read_cache_active_ttl_ms=15,
+        read_cache_active_window_ms=300,
+        read_cache_max_timeout_ms=10,
         no_filter_dedup=True,
         no_vbatt_cache=True,
         vbatt_ttl=9,
         no_ioctl_cache=True,
         ioctl_ttl=11,
+        read_ahead_enabled=True,
+        read_ahead_window_ms=125,
+        read_ahead_max_reads=4,
+        read_ahead_read_timeout_ms=5,
+        read_ahead_max_messages=12,
     )
 
     assert config == ProxyConfig(
-        read_msgs_cache=ReadMsgsCacheConfig(enabled=False, ttl_ms=75),
+        read_msgs_cache=ReadMsgsCacheConfig(
+            enabled=False,
+            ttl_ms=75,
+            post_write_bypass_ms=25,
+            active_ttl_ms=15,
+            active_window_ms=300,
+            max_cacheable_timeout_ms=10,
+        ),
         auth=AuthConfig(enabled=True, token="shared-secret", auth_timeout_s=7),
         vbatt_cache=config.vbatt_cache.__class__(enabled=False, ttl_s=9),
         filter_dedup=config.filter_dedup.__class__(enabled=False),
         ioctl_cache=IoctlCacheConfig(enabled=False, ttl_s=11),
+        read_ahead=ReadAheadConfig(
+            enabled=True,
+            window_ms=125,
+            max_reads=4,
+            read_timeout_ms=5,
+            max_messages=12,
+        ),
+    )
+
+
+def test_proxy_config_from_args_uses_shared_read_ahead_env_defaults() -> None:
+    config = ProxyConfig.from_args(
+        environ={
+            "VCI_PROXY_READ_AHEAD": "1",
+            "VCI_PROXY_READ_AHEAD_WINDOW_MS": "175",
+            "VCI_PROXY_READ_AHEAD_MAX_READS": "5",
+            "VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS": "2",
+            "VCI_PROXY_READ_AHEAD_MAX_MESSAGES": "9",
+        }
+    )
+
+    assert config.read_ahead == ReadAheadConfig(
+        enabled=True,
+        window_ms=175,
+        max_reads=5,
+        read_timeout_ms=2,
+        max_messages=9,
+    )
+
+
+def test_proxy_config_explicit_read_ahead_args_override_env_defaults() -> None:
+    config = ProxyConfig.from_args(
+        environ={
+            "VCI_PROXY_READ_AHEAD": "1",
+            "VCI_PROXY_READ_AHEAD_WINDOW_MS": "175",
+            "VCI_PROXY_READ_AHEAD_MAX_READS": "5",
+            "VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS": "2",
+            "VCI_PROXY_READ_AHEAD_MAX_MESSAGES": "9",
+        },
+        read_ahead_enabled=False,
+        read_ahead_window_ms=0,
+        read_ahead_max_reads=1,
+        read_ahead_read_timeout_ms=0,
+        read_ahead_max_messages=4,
+    )
+
+    assert config.read_ahead == ReadAheadConfig(
+        enabled=False,
+        window_ms=0,
+        max_reads=1,
+        read_timeout_ms=0,
+        max_messages=4,
+    )
+
+
+def test_proxy_config_read_ahead_env_falls_back_on_invalid_values() -> None:
+    config = ProxyConfig.from_args(
+        environ={
+            "VCI_PROXY_READ_AHEAD": "maybe",
+            "VCI_PROXY_READ_AHEAD_WINDOW_MS": "bad",
+            "VCI_PROXY_READ_AHEAD_MAX_READS": "",
+        }
+    )
+
+    assert config.read_ahead == ReadAheadConfig(
+        enabled=False,
+        window_ms=200,
+        max_reads=3,
+        read_timeout_ms=0,
+        max_messages=16,
     )
 
 
 def test_proxy_config_defaults_are_enabled_and_frozen() -> None:
     config = ProxyConfig()
 
-    assert config.read_msgs_cache == ReadMsgsCacheConfig(enabled=True, ttl_ms=150)
+    assert config.read_msgs_cache == ReadMsgsCacheConfig(
+        enabled=True,
+        ttl_ms=150,
+        post_write_bypass_ms=150,
+        active_ttl_ms=25,
+        active_window_ms=500,
+        max_cacheable_timeout_ms=25,
+    )
     assert config.auth == AuthConfig(enabled=True, token=None, auth_timeout_s=10)
     assert config.ioctl_cache == IoctlCacheConfig(enabled=True, ttl_s=5)
+    assert config.read_ahead == ReadAheadConfig(
+        enabled=False,
+        window_ms=200,
+        max_reads=3,
+        read_timeout_ms=0,
+        max_messages=16,
+    )
 
     with pytest.raises(FrozenInstanceError):
         config.auth.enabled = True

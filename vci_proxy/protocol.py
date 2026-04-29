@@ -10,6 +10,7 @@ from typing import List, Optional, Tuple
 
 MAGIC = 0x4A325334  # "J254" in ASCII
 HEADER_SIZE = 14
+PREFETCH_MAGIC = 0x50524630  # "PRF0"
 
 
 class MsgType(IntEnum):
@@ -65,6 +66,83 @@ class Message:
         if len(data) < HEADER_SIZE:
             raise ValueError(f"Header too short: {len(data)} < {HEADER_SIZE}")
         return struct.unpack(">IIHI", data[:HEADER_SIZE])
+
+
+@dataclass(frozen=True)
+class ReadMsgsPrefetchBundle:
+    """Internal bundle of local-side ReadMsgs responses."""
+    channel_id: int
+    read_rsp_bodies: Tuple[bytes, ...]
+
+
+def attach_read_msgs_prefetch_bundle(
+    encoded_response: bytes,
+    *,
+    channel_id: int,
+    read_rsp_bodies: List[bytes] | Tuple[bytes, ...],
+) -> bytes:
+    """Append an internal read-ahead bundle to a WRITE_MSGS_RSP frame.
+
+    The bundle lives inside the response body and is stripped by the reverse
+    server before replying to the virtual DLL. It is not part of the public
+    J2534-facing wire contract.
+    """
+    if not read_rsp_bodies or len(encoded_response) < HEADER_SIZE:
+        return encoded_response
+
+    magic, old_length, msg_type, _sequence = Message.decode_header(
+        encoded_response[:HEADER_SIZE]
+    )
+    if magic != MAGIC or msg_type != MsgType.WRITE_MSGS_RSP:
+        return encoded_response
+
+    bundle = struct.pack(">III", PREFETCH_MAGIC, channel_id, len(read_rsp_bodies))
+    for rsp_body in read_rsp_bodies:
+        bundle += struct.pack(">I", len(rsp_body)) + rsp_body
+
+    new_length = old_length + len(bundle)
+    return (
+        encoded_response[:4]
+        + struct.pack(">I", new_length)
+        + encoded_response[8:]
+        + bundle
+    )
+
+
+def strip_read_msgs_prefetch_bundle(
+    write_rsp_body: bytes,
+) -> Tuple[bytes, Optional[ReadMsgsPrefetchBundle]]:
+    """Strip an internal read-ahead bundle from a WRITE_MSGS_RSP body."""
+    base_len = 8
+    if len(write_rsp_body) < base_len + 12:
+        return write_rsp_body, None
+
+    marker = struct.unpack(">I", write_rsp_body[base_len:base_len + 4])[0]
+    if marker != PREFETCH_MAGIC:
+        return write_rsp_body, None
+
+    channel_id, response_count = struct.unpack(
+        ">II", write_rsp_body[base_len + 4:base_len + 12]
+    )
+    offset = base_len + 12
+    read_rsp_bodies: list[bytes] = []
+    for _ in range(response_count):
+        if offset + 4 > len(write_rsp_body):
+            raise ValueError("ReadMsgs prefetch bundle truncated before response length")
+        rsp_len = struct.unpack(">I", write_rsp_body[offset:offset + 4])[0]
+        offset += 4
+        if offset + rsp_len > len(write_rsp_body):
+            raise ValueError("ReadMsgs prefetch bundle truncated before response body")
+        read_rsp_bodies.append(write_rsp_body[offset:offset + rsp_len])
+        offset += rsp_len
+
+    if offset != len(write_rsp_body):
+        raise ValueError("ReadMsgs prefetch bundle has trailing bytes")
+
+    return write_rsp_body[:base_len], ReadMsgsPrefetchBundle(
+        channel_id=channel_id,
+        read_rsp_bodies=tuple(read_rsp_bodies),
+    )
 
 
 class ProtocolEncoder:

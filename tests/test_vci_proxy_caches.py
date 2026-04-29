@@ -14,7 +14,9 @@ from vci_proxy.config import (
     IoctlCacheConfig,
     ReadMsgsCacheConfig,
 )
+from vci_proxy.prefetch_read_msgs import PrefetchReadMsgsBuffer
 from vci_proxy.protocol import HEADER_SIZE, Message, MsgType, ProtocolDecoder
+from vci_proxy.protocol import ProtocolEncoder
 
 
 def test_read_msgs_cache_serves_recent_buffer_empty_response(monkeypatch) -> None:
@@ -41,7 +43,7 @@ def test_read_msgs_cache_misses_when_disabled_expired_or_invalidated(monkeypatch
     assert disabled.try_serve_from_cache(1, 1, 1, 1) is None
 
     cache = ReadMsgsCache(ReadMsgsCacheConfig(enabled=True, ttl_ms=150))
-    monotonic_values = iter([20.0, 20.3, 20.4])
+    monotonic_values = iter([20.0, 20.3, 20.4, 20.4])
     monkeypatch.setattr("vci_proxy.cache_read_msgs.time.monotonic", lambda: next(monotonic_values))
 
     cache.record_result(44, BUFFER_EMPTY)
@@ -51,6 +53,211 @@ def test_read_msgs_cache_misses_when_disabled_expired_or_invalidated(monkeypatch
     cache.invalidate_channel(44)
     cache.clear()
     assert cache.stats == (0, 2)
+
+
+def test_read_msgs_cache_bypasses_empty_cache_after_same_channel_write(monkeypatch) -> None:
+    cache = ReadMsgsCache(
+        ReadMsgsCacheConfig(
+            enabled=True,
+            ttl_ms=500,
+            post_write_bypass_ms=150,
+            active_ttl_ms=500,
+        )
+    )
+    monotonic_values = iter([10.0, 10.01, 10.02, 10.03, 10.2])
+    monkeypatch.setattr("vci_proxy.cache_read_msgs.time.monotonic", lambda: next(monotonic_values))
+
+    cache.record_result(44, BUFFER_EMPTY)
+    cache.record_write(44)
+    cache.record_result(44, BUFFER_EMPTY)
+
+    assert cache.try_serve_from_cache(44, 1, 1, 1) is None
+    response = cache.try_serve_from_cache(44, 1, 1, 2)
+    assert response is not None
+    assert ProtocolDecoder.decode_read_msgs_rsp(response[HEADER_SIZE:]) == (BUFFER_EMPTY, [])
+    assert cache.stats == (1, 1)
+
+
+def test_read_msgs_cache_post_write_bypass_does_not_affect_unrelated_channels(monkeypatch) -> None:
+    cache = ReadMsgsCache(
+        ReadMsgsCacheConfig(enabled=True, ttl_ms=150, post_write_bypass_ms=150)
+    )
+    monotonic_values = iter([20.0, 20.0, 20.01, 20.02])
+    monkeypatch.setattr("vci_proxy.cache_read_msgs.time.monotonic", lambda: next(monotonic_values))
+
+    cache.record_result(44, BUFFER_EMPTY)
+    cache.record_result(45, BUFFER_EMPTY)
+    cache.record_write(44)
+
+    response = cache.try_serve_from_cache(45, 1, 1, 9)
+
+    assert response is not None
+    assert ProtocolDecoder.decode_read_msgs_rsp(response[HEADER_SIZE:]) == (BUFFER_EMPTY, [])
+    assert cache.stats == (1, 0)
+
+
+def test_read_msgs_cache_post_write_bypass_zero_keeps_empty_entry_but_still_uses_active_ttl(monkeypatch) -> None:
+    cache = ReadMsgsCache(
+        ReadMsgsCacheConfig(
+            enabled=True,
+            ttl_ms=150,
+            post_write_bypass_ms=0,
+            active_ttl_ms=25,
+            active_window_ms=500,
+        )
+    )
+    monotonic_values = iter([30.0, 30.01, 30.02, 30.04])
+    monkeypatch.setattr("vci_proxy.cache_read_msgs.time.monotonic", lambda: next(monotonic_values))
+
+    cache.record_result(44, BUFFER_EMPTY)
+    cache.record_write(44)
+
+    response = cache.try_serve_from_cache(44, 1, 1, 9)
+    assert response is not None
+    assert cache.try_serve_from_cache(44, 1, 1, 10) is None
+    assert cache.stats == (1, 1)
+
+
+def test_read_msgs_cache_can_restore_legacy_write_behavior_with_active_window_disabled(monkeypatch) -> None:
+    cache = ReadMsgsCache(
+        ReadMsgsCacheConfig(
+            enabled=True,
+            ttl_ms=150,
+            post_write_bypass_ms=0,
+            active_window_ms=0,
+        )
+    )
+    monotonic_values = iter([30.0, 30.01, 30.04])
+    monkeypatch.setattr("vci_proxy.cache_read_msgs.time.monotonic", lambda: next(monotonic_values))
+
+    cache.record_result(44, BUFFER_EMPTY)
+    cache.record_write(44)
+    response = cache.try_serve_from_cache(44, 1, 1, 9)
+
+    assert response is not None
+    assert ProtocolDecoder.decode_read_msgs_rsp(response[HEADER_SIZE:]) == (BUFFER_EMPTY, [])
+    assert cache.stats == (1, 0)
+
+
+def test_read_msgs_cache_uses_short_active_ttl_after_write(monkeypatch) -> None:
+    cache = ReadMsgsCache(
+        ReadMsgsCacheConfig(
+            enabled=True,
+            ttl_ms=150,
+            post_write_bypass_ms=0,
+            active_ttl_ms=25,
+            active_window_ms=500,
+        )
+    )
+    monotonic_values = iter([40.0, 40.01, 40.04])
+    monkeypatch.setattr("vci_proxy.cache_read_msgs.time.monotonic", lambda: next(monotonic_values))
+
+    cache.record_result(55, BUFFER_EMPTY)
+    cache.record_write(55)
+
+    assert cache.try_serve_from_cache(55, 1, 1, 9) is None
+    assert cache.stats == (0, 1)
+
+
+def test_read_msgs_cache_uses_idle_ttl_when_channel_is_quiet(monkeypatch) -> None:
+    cache = ReadMsgsCache(
+        ReadMsgsCacheConfig(
+            enabled=True,
+            ttl_ms=150,
+            post_write_bypass_ms=0,
+            active_ttl_ms=25,
+            active_window_ms=50,
+        )
+    )
+    monotonic_values = iter([50.0, 50.2, 50.3])
+    monkeypatch.setattr("vci_proxy.cache_read_msgs.time.monotonic", lambda: next(monotonic_values))
+
+    cache.record_write(66)
+    cache.record_result(66, BUFFER_EMPTY)
+    response = cache.try_serve_from_cache(66, 1, 1, 9)
+
+    assert response is not None
+    assert ProtocolDecoder.decode_read_msgs_rsp(response[HEADER_SIZE:]) == (BUFFER_EMPTY, [])
+    assert cache.stats == (1, 0)
+
+
+def test_read_msgs_cache_recent_data_read_uses_active_ttl_without_caching_data(monkeypatch) -> None:
+    cache = ReadMsgsCache(
+        ReadMsgsCacheConfig(
+            enabled=True,
+            ttl_ms=150,
+            post_write_bypass_ms=0,
+            active_ttl_ms=25,
+            active_window_ms=500,
+        )
+    )
+    monotonic_values = iter([60.0, 60.01, 60.05])
+    monkeypatch.setattr("vci_proxy.cache_read_msgs.time.monotonic", lambda: next(monotonic_values))
+
+    cache.record_result(77, 0, message_count=2)
+    cache.record_result(77, BUFFER_EMPTY)
+
+    assert cache.try_serve_from_cache(77, 1, 1, 9) is None
+    assert cache.stats == (0, 1)
+
+
+def test_read_msgs_cache_only_serves_small_timeout_polls(monkeypatch) -> None:
+    cache = ReadMsgsCache(
+        ReadMsgsCacheConfig(
+            enabled=True,
+            ttl_ms=150,
+            max_cacheable_timeout_ms=10,
+        )
+    )
+    monotonic_values = iter([70.0, 70.01, 70.02])
+    monkeypatch.setattr("vci_proxy.cache_read_msgs.time.monotonic", lambda: next(monotonic_values))
+
+    cache.record_result(88, BUFFER_EMPTY)
+    assert cache.try_serve_from_cache(88, 1, 25, 9) is None
+    response = cache.try_serve_from_cache(88, 1, 10, 10)
+
+    assert response is not None
+    assert ProtocolDecoder.decode_read_msgs_rsp(response[HEADER_SIZE:]) == (BUFFER_EMPTY, [])
+
+
+def test_prefetch_read_msgs_buffer_serves_data_once_in_fifo_order() -> None:
+    buffer = PrefetchReadMsgsBuffer(enabled=True, max_messages=3)
+    first = {"protocol_id": 6, "rx_status": 0, "tx_flags": 0, "timestamp": 1, "data": b"\x01"}
+    second = {"protocol_id": 6, "rx_status": 0, "tx_flags": 0, "timestamp": 2, "data": b"\x02"}
+    read_rsp_body = ProtocolEncoder.encode_read_msgs_rsp(
+        0,
+        [first, second],
+        sequence=0,
+    )[HEADER_SIZE:]
+
+    assert buffer.record_read_rsp_body(44, read_rsp_body) == 2
+
+    response = buffer.try_serve(44, num_msgs=1, sequence=10)
+    assert response is not None
+    _magic, _length, msg_type, sequence = Message.decode_header(response[:HEADER_SIZE])
+    assert (msg_type, sequence) == (MsgType.READ_MSGS_RSP, 10)
+    assert ProtocolDecoder.decode_read_msgs_rsp(response[HEADER_SIZE:]) == (0, [first])
+
+    response = buffer.try_serve(44, num_msgs=2, sequence=11)
+    assert response is not None
+    assert ProtocolDecoder.decode_read_msgs_rsp(response[HEADER_SIZE:]) == (0, [second])
+    assert buffer.try_serve(44, num_msgs=1, sequence=12) is None
+
+
+def test_prefetch_read_msgs_buffer_ignores_empty_and_clears_channel() -> None:
+    buffer = PrefetchReadMsgsBuffer(enabled=True, max_messages=3)
+    empty_body = ProtocolEncoder.encode_read_msgs_rsp(BUFFER_EMPTY, [], sequence=0)[HEADER_SIZE:]
+    data_body = ProtocolEncoder.encode_read_msgs_rsp(
+        0,
+        [{"protocol_id": 6, "data": b"\x7e"}],
+        sequence=0,
+    )[HEADER_SIZE:]
+
+    assert buffer.record_read_rsp_body(44, empty_body) == 0
+    assert buffer.record_read_rsp_body(44, data_body) == 1
+    buffer.clear_channel(44)
+
+    assert buffer.try_serve(44, num_msgs=1, sequence=12) is None
 
 
 def test_filter_dedup_cache_reuses_successful_start_filter_response_and_cleans_up() -> None:

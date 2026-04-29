@@ -40,7 +40,16 @@ from .benchmark import (
     make_proxy_benchmark_event,
     strip_timing_trailer,
 )
-from .protocol import MAGIC, HEADER_SIZE, MsgType, MSG_NAMES, ProtocolDecoder, ProtocolEncoder
+from .prefetch_read_msgs import PrefetchReadMsgsBuffer
+from .protocol import (
+    MAGIC,
+    HEADER_SIZE,
+    MSG_NAMES,
+    MsgType,
+    ProtocolDecoder,
+    ProtocolEncoder,
+    strip_read_msgs_prefetch_bundle,
+)
 from .tls_utils import harden_tls_context
 from .tunnel_quality import (
     TunnelQualityTracker,
@@ -192,6 +201,13 @@ class ReverseProxyServer:
         self._filter_cache = FilterDeduplicationCache(self.config.filter_dedup)
         # Generalized read-only IOCTL cache (replaces VBATT-only cache)
         self._ioctl_cache = IoctlCache(self.config.ioctl_cache)
+        # Consume-once store for local-side ReadMsgs read-ahead data.
+        self._prefetch_read_msgs = PrefetchReadMsgsBuffer(
+            enabled=self.config.read_ahead.enabled,
+            max_messages=self.config.read_ahead.max_messages,
+        )
+        # channel_id -> (dll sequence, monotonic timestamp)
+        self._last_write_by_channel: dict[int, tuple[int | None, float]] = {}
 
     def _current_observability_context(
         self,
@@ -303,6 +319,67 @@ class ReverseProxyServer:
                 return
             logger.warning("Failed to emit proxy observability event: %s", event_type, exc_info=True)
 
+    @staticmethod
+    def _message_payload_bytes(messages: list[dict]) -> int:
+        return sum(len(message.get("data", b"")) for message in messages)
+
+    def _request_observability_fields(self, msg_type: int, body: bytes) -> dict[str, object]:
+        fields: dict[str, object] = {}
+        try:
+            if msg_type == MsgType.READ_MSGS_REQ:
+                channel_id, num_msgs, timeout = ProtocolDecoder.decode_read_msgs_req(body)
+                fields.update(
+                    {
+                        "channel_id": channel_id,
+                        "num_msgs": num_msgs,
+                        "timeout": timeout,
+                    }
+                )
+                marker = self._last_write_by_channel.get(channel_id)
+                if marker is not None:
+                    last_write_seq, last_write_ts = marker
+                    fields["last_write_seq"] = last_write_seq
+                    fields["post_write_age_ms"] = round(
+                        max(0.0, (time.monotonic() - last_write_ts) * 1000.0), 3
+                    )
+            elif msg_type == MsgType.WRITE_MSGS_REQ:
+                channel_id, messages, timeout = ProtocolDecoder.decode_write_msgs_req(body)
+                fields.update(
+                    {
+                        "channel_id": channel_id,
+                        "write_message_count": len(messages),
+                        "timeout": timeout,
+                        "write_payload_bytes": self._message_payload_bytes(messages),
+                    }
+                )
+        except Exception:
+            fields["decode_error"] = True
+        return fields
+
+    def _response_observability_fields(self, resp_type: int | None, resp_body: bytes) -> dict[str, object]:
+        if resp_type != MsgType.READ_MSGS_RSP:
+            return {}
+        try:
+            return_code, messages = ProtocolDecoder.decode_read_msgs_rsp(resp_body)
+            message_count = len(messages)
+            return {
+                "return_code": return_code,
+                "message_count": message_count,
+                "payload_bytes": self._message_payload_bytes(messages),
+                "read_result": "data" if message_count else "empty",
+            }
+        except Exception:
+            return {"response_decode_error": True}
+
+    def _cache_miss_reason(self, msg_type: int, request_fields: dict[str, object]) -> str:
+        if msg_type != MsgType.READ_MSGS_REQ:
+            return "cache_miss"
+        age_ms = request_fields.get("post_write_age_ms")
+        bypass_ms = self.config.read_msgs_cache.post_write_bypass_ms
+        if isinstance(age_ms, (int, float)) and bypass_ms > 0 and age_ms <= bypass_ms:
+            return "post_write_bypass"
+        return "cache_miss"
+
     def _emit_process_lifecycle_event(
         self,
         event_type: str,
@@ -348,6 +425,11 @@ class ReverseProxyServer:
 
         return context
 
+    def _auth_success_message(self) -> str:
+        if self.config.read_ahead.enabled:
+            return "ok;read_ahead=1"
+        return "ok"
+
     async def start(self):
         """启动服务器"""
         # 启动 VCI 监听服务
@@ -369,7 +451,11 @@ class ReverseProxyServer:
             logger.info("Reverse tunnel TLS enabled")
         if self.config.read_msgs_cache.enabled:
             logger.info(
-                f"ReadMsgs cache enabled (TTL={self.config.read_msgs_cache.ttl_ms}ms)"
+                f"ReadMsgs cache enabled (idle TTL={self.config.read_msgs_cache.ttl_ms}ms, "
+                f"active TTL={self.config.read_msgs_cache.active_ttl_ms}ms, "
+                f"active window={self.config.read_msgs_cache.active_window_ms}ms, "
+                f"post-write bypass={self.config.read_msgs_cache.post_write_bypass_ms}ms, "
+                f"max timeout={self.config.read_msgs_cache.max_cacheable_timeout_ms}ms)"
             )
         if self.config.filter_dedup.enabled:
             logger.info("Filter deduplication enabled")
@@ -381,6 +467,14 @@ class ReverseProxyServer:
             logger.info(
                 f"IOCTL cache enabled (TTL={self.config.ioctl_cache.ttl_s}s, "
                 f"covers GET_CONFIG/READ_VBATT/READ_PROG_VOLTAGE)"
+            )
+        if self.config.read_ahead.enabled:
+            logger.info(
+                "Read-ahead enabled (window=%sms, max_reads=%s, timeout=%sms, max_messages=%s)",
+                self.config.read_ahead.window_ms,
+                self.config.read_ahead.max_reads,
+                self.config.read_ahead.read_timeout_ms,
+                self.config.read_ahead.max_messages,
             )
         if self.benchmark_writer is not None:
             logger.info("Proxy benchmark logging enabled: %s", self.benchmark_writer.path)
@@ -460,6 +554,7 @@ class ReverseProxyServer:
         self._read_cache.clear()
         self._filter_cache.clear()
         self._ioctl_cache.invalidate()
+        self._prefetch_read_msgs.clear()
         for seq, future in pending:
             if not future.done():
                 future.set_exception(ConnectionError("VCI Proxy 已断开"))
@@ -534,7 +629,11 @@ class ReverseProxyServer:
             if not self.config.auth.enabled:
                 # Auth not required, but client sent AUTH_REQ -- accept it
                 logger.info("Auth not required, accepting AUTH_REQ")
-                rsp = ProtocolEncoder.encode_auth_rsp(True, "ok", sequence)
+                rsp = ProtocolEncoder.encode_auth_rsp(
+                    True,
+                    self._auth_success_message(),
+                    sequence,
+                )
                 try:
                     writer.write(rsp)
                     await writer.drain()
@@ -554,6 +653,8 @@ class ReverseProxyServer:
             if success and self._is_replayed_auth(signature, timestamp):
                 success = False
                 reason = "replay detected"
+            if success:
+                reason = self._auth_success_message()
             rsp = ProtocolEncoder.encode_auth_rsp(success, reason, sequence)
             try:
                 writer.write(rsp)
@@ -831,6 +932,33 @@ class ReverseProxyServer:
                 if sequence in self.response_futures:
                     future = self.response_futures.pop(sequence)
                     clean_body, hw_ms = strip_timing_trailer(body)
+                    if msg_type == MsgType.WRITE_MSGS_RSP:
+                        try:
+                            clean_body, prefetch_bundle = strip_read_msgs_prefetch_bundle(
+                                clean_body
+                            )
+                        except ValueError:
+                            logger.warning(
+                                "Discarding malformed ReadMsgs prefetch bundle seq=%s",
+                                sequence,
+                                exc_info=True,
+                            )
+                            clean_body = clean_body[:8]
+                        else:
+                            if (
+                                prefetch_bundle is not None
+                                and self.config.read_ahead.enabled
+                            ):
+                                recorded = self._prefetch_read_msgs.record_read_rsp_bodies(
+                                    prefetch_bundle.channel_id,
+                                    prefetch_bundle.read_rsp_bodies,
+                                )
+                                if recorded:
+                                    logger.debug(
+                                        "Recorded %s prefetched ReadMsgs message(s) for channel_id=%s",
+                                        recorded,
+                                        prefetch_bundle.channel_id,
+                                    )
                     future.set_result((msg_type, clean_body, hw_ms))
                 else:
                     logger.warning(f"收到未知消息: type={msg_type:#x}, seq={sequence}")
@@ -895,10 +1023,10 @@ class ReverseProxyServer:
             writer.close()
 
     def _try_serve_cached(self, msg_type: int, body: bytes,
-                          sequence: int) -> tuple[Optional[bytes], Optional[int]]:
+                          sequence: int) -> tuple[Optional[bytes], Optional[int], str | None]:
         """Try to serve the request from cache.
 
-        Returns (cached_response, ioctl_id).
+        Returns (cached_response, ioctl_id, cache_reason).
         cached_response is None if cache miss.
         ioctl_id is set when msg_type is IOCTL_REQ (needed for recording later).
         """
@@ -906,16 +1034,20 @@ class ReverseProxyServer:
 
         if msg_type == MsgType.READ_MSGS_REQ:
             channel_id, num_msgs, timeout = ProtocolDecoder.decode_read_msgs_req(body)
+            prefetched = self._prefetch_read_msgs.try_serve(channel_id, num_msgs, sequence)
+            if prefetched is not None:
+                return prefetched, ioctl_id, "prefetch_hit"
+
             cached = self._read_cache.try_serve_from_cache(
                 channel_id, num_msgs, timeout, sequence
             )
             if cached is not None:
-                return cached, ioctl_id
+                return cached, ioctl_id, "cache_hit"
 
         elif msg_type == MsgType.START_FILTER_REQ:
             cached = self._filter_cache.try_dedup(body, sequence)
             if cached is not None:
-                return cached, ioctl_id
+                return cached, ioctl_id, "cache_hit"
 
         elif msg_type == MsgType.IOCTL_REQ:
             channel_id, ioctl_id, _input = ProtocolDecoder.decode_ioctl_req(body)
@@ -923,24 +1055,55 @@ class ReverseProxyServer:
             if cached is not None:
                 ret, output_data = cached
                 resp = ProtocolEncoder.encode_ioctl_rsp(ret, output_data, sequence)
-                return resp, ioctl_id
+                return resp, ioctl_id, "cache_hit"
 
-        return None, ioctl_id
+        return None, ioctl_id, None
 
-    def _invalidate_caches(self, msg_type: int, body: bytes):
+    def _invalidate_caches(self, msg_type: int, body: bytes, sequence: int | None = None):
         """Invalidate caches based on the request type."""
         if msg_type == MsgType.DISCONNECT_REQ:
             channel_id = ProtocolDecoder.decode_disconnect_req(body)
             self._read_cache.invalidate_channel(channel_id)
             self._filter_cache.invalidate_channel(channel_id)
             self._ioctl_cache.invalidate_channel(channel_id)
+            self._prefetch_read_msgs.clear_channel(channel_id)
+            self._last_write_by_channel.pop(channel_id, None)
         elif msg_type == MsgType.CLOSE_REQ:
             self._read_cache.clear()
             self._filter_cache.clear()
             self._ioctl_cache.invalidate()
+            self._prefetch_read_msgs.clear()
+            self._last_write_by_channel.clear()
+        elif msg_type == MsgType.WRITE_MSGS_REQ:
+            channel_id, _messages, _timeout = ProtocolDecoder.decode_write_msgs_req(body)
+            now = time.monotonic()
+            self._read_cache.record_write(channel_id, now=now)
+            self._last_write_by_channel[channel_id] = (sequence, now)
+        elif msg_type == MsgType.START_FILTER_REQ:
+            channel_id, _filter_type, _mask, _pattern, _flow = (
+                ProtocolDecoder.decode_start_filter_req(body)
+            )
+            self._read_cache.mark_channel_active(channel_id, invalidate_empty=True)
+            self._prefetch_read_msgs.clear_channel(channel_id)
         elif msg_type == MsgType.STOP_FILTER_REQ:
-            _ch_id, filter_id = ProtocolDecoder.decode_stop_filter_req(body)
+            channel_id, filter_id = ProtocolDecoder.decode_stop_filter_req(body)
+            self._read_cache.mark_channel_active(channel_id, invalidate_empty=True)
+            self._prefetch_read_msgs.clear_channel(channel_id)
             self._filter_cache.on_stop_filter(filter_id)
+        elif msg_type == MsgType.IOCTL_REQ:
+            channel_id, ioctl_id, _input = ProtocolDecoder.decode_ioctl_req(body)
+            if not self._ioctl_cache.is_cacheable(ioctl_id):
+                self._read_cache.mark_channel_active(channel_id, invalidate_empty=True)
+                self._prefetch_read_msgs.clear_channel(channel_id)
+
+    def _clear_prefetch_after_failed_write(self, msg_type: int, body: bytes) -> None:
+        if msg_type != MsgType.WRITE_MSGS_REQ:
+            return
+        try:
+            channel_id, _messages, _timeout = ProtocolDecoder.decode_write_msgs_req(body)
+        except Exception:
+            return
+        self._prefetch_read_msgs.clear_channel(channel_id)
 
     def _record_in_caches(self, msg_type: int, body: bytes,
                           resp_type: int, resp_body: bytes,
@@ -948,12 +1111,24 @@ class ReverseProxyServer:
         """Record response in caches for future lookups."""
         if msg_type == MsgType.READ_MSGS_REQ:
             channel_id = struct.unpack('>I', body[:4])[0]
-            return_code = struct.unpack('>I', resp_body[:4])[0]
-            self._read_cache.record_result(channel_id, return_code)
+            return_code, messages = ProtocolDecoder.decode_read_msgs_rsp(resp_body)
+            self._read_cache.record_result(
+                channel_id,
+                return_code,
+                message_count=len(messages),
+            )
 
         elif msg_type == MsgType.START_FILTER_REQ and resp_type == MsgType.START_FILTER_RSP:
             return_code, filter_id = ProtocolDecoder.decode_start_filter_rsp(resp_body)
             self._filter_cache.record_result(body, filter_id, return_code, resp_body)
+
+        elif msg_type == MsgType.WRITE_MSGS_REQ:
+            if resp_type != MsgType.WRITE_MSGS_RSP:
+                self._clear_prefetch_after_failed_write(msg_type, body)
+                return
+            return_code, _num_written = ProtocolDecoder.decode_write_msgs_rsp(resp_body)
+            if return_code != 0:
+                self._clear_prefetch_after_failed_write(msg_type, body)
 
         elif msg_type == MsgType.IOCTL_REQ and ioctl_id is not None and resp_type == MsgType.IOCTL_RSP:
             channel_id = struct.unpack('>I', body[:4])[0]
@@ -1210,24 +1385,30 @@ class ReverseProxyServer:
 
                 msg_name = MSG_NAMES.get(msg_type, f"0x{msg_type:04x}")
                 started_at_s = time.time()
+                request_fields = self._request_observability_fields(msg_type, body)
                 self._emit_proxy_request_event(
                     "proxy.request.received_from_dll",
                     dll_seq=sequence,
                     msg_name=msg_name,
                     reason="received_from_dll",
+                    **request_fields,
                 )
 
                 # Try serving from cache
-                cached, ioctl_id = self._try_serve_cached(msg_type, body, sequence)
+                cached, ioctl_id, cache_reason = self._try_serve_cached(
+                    msg_type, body, sequence
+                )
                 if cached is not None:
                     self._emit_proxy_request_event(
                         "proxy.request.cache_decision",
                         dll_seq=sequence,
                         msg_name=msg_name,
                         cache_hit=True,
-                        reason="cache_hit",
+                        reason=cache_reason or "cache_hit",
+                        **request_fields,
                     )
                     resp_type, resp_body = decode_benchmark_response(cached)
+                    response_fields = self._response_observability_fields(resp_type, resp_body)
                     self._record_benchmark_event(
                         started_at_s=started_at_s,
                         duration_ms=0.0,
@@ -1246,6 +1427,8 @@ class ReverseProxyServer:
                         msg_name=msg_name,
                         cache_hit=True,
                         reason="cache_reply",
+                        **request_fields,
+                        **response_fields,
                     )
                     continue
                 self._emit_proxy_request_event(
@@ -1253,11 +1436,12 @@ class ReverseProxyServer:
                     dll_seq=sequence,
                     msg_name=msg_name,
                     cache_hit=False,
-                    reason="cache_miss",
+                    reason=self._cache_miss_reason(msg_type, request_fields),
+                    **request_fields,
                 )
 
                 # Invalidate caches as needed
-                self._invalidate_caches(msg_type, body)
+                self._invalidate_caches(msg_type, body, sequence)
 
                 # 转发请求到 VCI Proxy
                 new_seq = self._next_sequence()
@@ -1279,10 +1463,12 @@ class ReverseProxyServer:
                         proxy_seq=new_seq,
                         msg_name=msg_name,
                         reason="forwarded_to_tunnel",
+                        **request_fields,
                     )
                 except Exception as e:
                     logger.error(f"转发请求失败: {e}")
                     self.response_futures.pop(new_seq, None)
+                    self._clear_prefetch_after_failed_write(msg_type, body)
                     self._emit_proxy_request_event(
                         "proxy.request.failed",
                         dll_seq=sequence,
@@ -1292,6 +1478,7 @@ class ReverseProxyServer:
                         failure_code="forward_failed",
                         failure_domain="cloud_proxy_tunnel",
                         reason=str(e),
+                        **request_fields,
                     )
                     break
 
@@ -1302,6 +1489,7 @@ class ReverseProxyServer:
                     network_ms = max(0.0, fwd_ms - float(hw_ms or 0.0))
 
                     self._record_in_caches(msg_type, body, resp_type, resp_body, ioctl_id)
+                    response_fields = self._response_observability_fields(resp_type, resp_body)
                     self._record_benchmark_event(
                         started_at_s=started_at_s,
                         duration_ms=fwd_ms,
@@ -1322,6 +1510,8 @@ class ReverseProxyServer:
                         hw_ms=hw_ms,
                         network_ms=network_ms,
                         reason="response_received",
+                        **request_fields,
+                        **response_fields,
                     )
 
                     # 发送响应给客户端（使用原始 sequence）
@@ -1339,6 +1529,8 @@ class ReverseProxyServer:
                         hw_ms=hw_ms,
                         network_ms=network_ms,
                         reason="reply_sent",
+                        **request_fields,
+                        **response_fields,
                     )
 
                     if fwd_ms > 1000:
@@ -1353,6 +1545,7 @@ class ReverseProxyServer:
                     self.response_futures.pop(new_seq, None)
                     fwd_ms = (time.monotonic() - fwd_start) * 1000
                     reason = "VCI_DISCONNECTED" if isinstance(e, ConnectionError) else "TIMEOUT"
+                    self._clear_prefetch_after_failed_write(msg_type, body)
                     self._record_benchmark_event(
                         started_at_s=started_at_s,
                         duration_ms=fwd_ms,
@@ -1373,6 +1566,7 @@ class ReverseProxyServer:
                         failure_domain="cloud_proxy_tunnel",
                         reason="wait_response_timeout" if isinstance(e, asyncio.TimeoutError) else "wait_response_connection_lost",
                         duration_ms=fwd_ms,
+                        **request_fields,
                     )
                     logger.error(f"[PROXY] {msg_name} seq={sequence} {reason} after {fwd_ms:.0f}ms")
                     break
@@ -1460,6 +1654,26 @@ def main():
                        help='Disable ReadMsgs BUFFER_EMPTY cache')
     parser.add_argument('--read-cache-ttl', type=int, default=150,
                        help='ReadMsgs cache TTL in ms (默认: 150)')
+    parser.add_argument('--read-cache-post-write-bypass-ms', type=int, default=150,
+                       help='Bypass ReadMsgs empty cache after same-channel writes in ms (default: 150; 0 disables)')
+    parser.add_argument('--read-cache-active-ttl-ms', type=int, default=25,
+                       help='ReadMsgs empty cache TTL while a channel is active in ms (default: 25)')
+    parser.add_argument('--read-cache-active-window-ms', type=int, default=500,
+                       help='Window after writes/data/filter mutations that uses active TTL in ms (default: 500)')
+    parser.add_argument('--read-cache-max-timeout-ms', type=int, default=25,
+                       help='Only cache ReadMsgs polls whose timeout is at or below this value in ms (default: 25; -1 allows all)')
+    parser.add_argument('--read-ahead', dest='read_ahead', action='store_true', default=None,
+                       help='Enable consume-once ReadMsgs prefetch serving after successful writes (or VCI_PROXY_READ_AHEAD=1)')
+    parser.add_argument('--no-read-ahead', dest='read_ahead', action='store_false',
+                       help='Disable read-ahead even if VCI_PROXY_READ_AHEAD is set')
+    parser.add_argument('--read-ahead-window-ms', type=int, default=None,
+                       help='Read-ahead collection window in ms (default: 200 or VCI_PROXY_READ_AHEAD_WINDOW_MS)')
+    parser.add_argument('--read-ahead-max-reads', type=int, default=None,
+                       help='Maximum local ReadMsgs calls after one successful write (default: 3 or VCI_PROXY_READ_AHEAD_MAX_READS)')
+    parser.add_argument('--read-ahead-read-timeout-ms', type=int, default=None,
+                       help='Timeout passed to local read-ahead ReadMsgs calls in ms (default: 0 or VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS)')
+    parser.add_argument('--read-ahead-max-messages', type=int, default=None,
+                       help='Maximum prefetched messages retained per channel (default: 16 or VCI_PROXY_READ_AHEAD_MAX_MESSAGES)')
     parser.add_argument('--no-filter-dedup', action='store_true',
                        help='Disable StartFilter deduplication')
     parser.add_argument('--no-vbatt-cache', action='store_true',
@@ -1485,6 +1699,15 @@ def main():
         tls_require_client_cert=args.tls_require_client_cert,
         no_read_cache=args.no_read_cache,
         read_cache_ttl=args.read_cache_ttl,
+        read_cache_post_write_bypass_ms=args.read_cache_post_write_bypass_ms,
+        read_cache_active_ttl_ms=args.read_cache_active_ttl_ms,
+        read_cache_active_window_ms=args.read_cache_active_window_ms,
+        read_cache_max_timeout_ms=args.read_cache_max_timeout_ms,
+        read_ahead_enabled=args.read_ahead,
+        read_ahead_window_ms=args.read_ahead_window_ms,
+        read_ahead_max_reads=args.read_ahead_max_reads,
+        read_ahead_read_timeout_ms=args.read_ahead_read_timeout_ms,
+        read_ahead_max_messages=args.read_ahead_max_messages,
         no_filter_dedup=args.no_filter_dedup,
         no_vbatt_cache=args.no_vbatt_cache,
         vbatt_ttl=args.vbatt_ttl,
@@ -1509,9 +1732,21 @@ def main():
     logger.info("Auth: %s", "enabled" if config.auth.enabled else "disabled")
     logger.info("TLS: %s", "enabled" if config.tls.enabled else "disabled")
     logger.info(
-        "ReadMsgs cache: %s (TTL=%sms)",
+        "ReadMsgs cache: %s (idle TTL=%sms, active TTL=%sms, active window=%sms, post-write bypass=%sms, max timeout=%sms)",
         "enabled" if config.read_msgs_cache.enabled else "disabled",
         config.read_msgs_cache.ttl_ms,
+        config.read_msgs_cache.active_ttl_ms,
+        config.read_msgs_cache.active_window_ms,
+        config.read_msgs_cache.post_write_bypass_ms,
+        config.read_msgs_cache.max_cacheable_timeout_ms,
+    )
+    logger.info(
+        "Read-ahead: %s (window=%sms, max_reads=%s, timeout=%sms, max_messages=%s)",
+        "enabled" if config.read_ahead.enabled else "disabled",
+        config.read_ahead.window_ms,
+        config.read_ahead.max_reads,
+        config.read_ahead.read_timeout_ms,
+        config.read_ahead.max_messages,
     )
     logger.info(
         "Filter dedup: %s",

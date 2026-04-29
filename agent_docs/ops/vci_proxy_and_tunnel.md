@@ -195,8 +195,19 @@ TLS-related keys are:
 - `tls_ca_file`
 - `tls_server_name`
 
+Read-ahead keys are also accepted for guarded Phase 3 testing:
+
+- `read_ahead_enabled`
+- `read_ahead_window_ms`
+- `read_ahead_max_reads`
+- `read_ahead_read_timeout_ms`
+- `read_ahead_max_messages`
+
 These values are passed through to `vci_proxy.reverse_client.ReverseProxyClient`
-when the tray app starts the local tunnel client.
+when the tray app starts the local tunnel client. The shared
+`VCI_PROXY_READ_AHEAD*` environment variables override these saved values at
+runtime, which lets deployment scripts turn the feature on or off without
+editing the tray JSON file.
 
 ## Cache Layers
 
@@ -205,6 +216,102 @@ The proxy stack currently includes multiple request-side optimizations.
 ### `ReadMsgs` cache
 
 `ReadMsgsCache` short-circuits repeated empty-buffer polls for a short TTL.
+The cloud reverse server now also marks same-channel `WRITE_MSGS_REQ` calls.
+When `read_cache_post_write_bypass_ms` is greater than `0`, a write invalidates
+that channel's empty-read cache and forces immediate same-channel `READ_MSGS_REQ`
+calls through the tunnel during the configured bypass window. Set the bypass
+window to `0` to disable only the post-write invalidation/forced-bypass behavior.
+When Phase 2 adaptive TTL is enabled, writes may still put the channel into active
+TTL mode. To fully approximate the older fixed-TTL behavior, also set
+`--read-cache-active-window-ms 0` and `--read-cache-max-timeout-ms -1`.
+
+The empty-read cache is adaptive:
+
+- quiet channels use the idle TTL, default `150ms`
+- active channels use the active TTL, default `25ms`
+- active mode lasts for `500ms` after writes, data reads, filter mutations, or
+  mutating IOCTLs
+- only `ReadMsgs` polls with timeout at or below `25ms` are cacheable by default
+
+Reverse server flags:
+
+- `--no-read-cache`
+- `--read-cache-ttl <milliseconds>`; idle empty-cache TTL
+- `--read-cache-post-write-bypass-ms <milliseconds>`; default `150`, `0` disables
+  the post-write invalidation/bypass behavior
+- `--read-cache-active-ttl-ms <milliseconds>`; default `25`
+- `--read-cache-active-window-ms <milliseconds>`; default `500`
+- `--read-cache-max-timeout-ms <milliseconds>`; default `25`, `-1` allows all
+  `ReadMsgs` timeouts to use empty-cache hits
+
+### Local-side `ReadMsgs` read-ahead
+
+Phase 3 read-ahead is disabled by default. It must be enabled on both the cloud
+reverse server and the local reverse client. During tunnel authentication, the
+server advertises `read_ahead=1` only when its flag is enabled; the local client
+will not perform read-ahead without that capability marker. This avoids the
+unsafe mismatch where a client consumes local ECU frames but a server is not
+prepared to preserve them.
+
+After a successful `WRITE_MSGS_REQ`, the local client can trigger a bounded
+number of local `PassThruReadMsgs` calls near the VCI. Any data frames consumed
+by those local reads are returned to the server in an internal `WRITE_MSGS_RSP`
+prefetch bundle, stripped before the virtual DLL sees the response, and stored
+in a per-channel consume-once FIFO.
+
+This is not a reusable data cache. Each prefetched frame was consumed once from
+the local J2534 driver and can be served at most once to a later cloud-side
+`READ_MSGS_REQ`. The FIFO is checked before the empty-read cache so a recent
+`BUFFER_EMPTY` entry cannot hide prefetched data.
+
+An ordinary later `WRITE_MSGS_REQ` does not clear already-prefetched frames.
+Those frames were already consumed from the local driver, so dropping them would
+create missing data and break queue ordering. They remain ahead of any newer
+read-ahead frames and are served in FIFO order.
+
+A failed write is treated differently. If a `WRITE_MSGS_REQ` returns an error,
+cannot be forwarded, or times out while waiting for a local response, the cloud
+server clears pending prefetched frames for that channel before any later
+`READ_MSGS_REQ` can use them.
+
+Unified runtime config:
+
+- `VCI_PROXY_READ_AHEAD=1` enables read-ahead for both reverse server and
+  reverse client processes when present in their environment.
+- `VCI_PROXY_READ_AHEAD_WINDOW_MS=200`
+- `VCI_PROXY_READ_AHEAD_MAX_READS=3`
+- `VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS=0`
+- `VCI_PROXY_READ_AHEAD_MAX_MESSAGES=16`
+
+The reverse server also loads the repo `.env` file when `python-dotenv` is
+installed, so the cloud process can be started with the normal command after the
+settings are in `.env` or the service manager environment. The tray client
+applies the same environment names as runtime overrides on top of its
+`%APPDATA%/VCI_Proxy/config.json` values. If an env value is present, it wins
+over the saved tray value; unset it to return control to the saved config.
+
+Reverse server and reverse client CLI overrides:
+
+- `--read-ahead`; enables read-ahead for this process
+- `--no-read-ahead`; disables read-ahead even if `VCI_PROXY_READ_AHEAD` is set
+- `--read-ahead-window-ms <milliseconds>`; default `200`, `0` disables local
+  read collection
+- `--read-ahead-max-reads <count>`; default `3`
+- `--read-ahead-read-timeout-ms <milliseconds>`; default `0`
+- `--read-ahead-max-messages <count>`; default `16`
+
+FIFO cleanup:
+
+- `DISCONNECT_REQ` clears that channel
+- `CLOSE_REQ` clears all channels
+- `START_FILTER_REQ`, `STOP_FILTER_REQ`, and non-cacheable/mutating `IOCTL_REQ`
+  clear the affected channel
+
+Current limitation: if GDS2 requests more messages than are prefetched, the
+server can return fewer messages from the FIFO rather than merging with an
+additional tunnel read. That keeps the first implementation conservative and
+avoids duplicating consumed frames. Real-vehicle A/B logs should decide whether a
+partial FIFO plus tunnel-merge hardening pass is worthwhile.
 
 ### Filter deduplication
 
