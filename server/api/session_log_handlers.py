@@ -23,6 +23,7 @@ def upload_session_logs(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
             data,
             cloud_root=get_cloud_observability_root(),
             max_artifact_mb=settings.max_artifact_mb,
+            materialize_async=True,
         )
         return {
             "success": True,
@@ -30,6 +31,7 @@ def upload_session_logs(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
             "artifact_path": str(Path(result["artifact_path"])),
             "trace_path": str(result["trace_path"]) if result.get("trace_path") is not None else None,
             "incident_paths": [str(path) for path in result.get("incident_paths", [])],
+            "materialization": result.get("materialization", "completed"),
         }, 201 if not result["deduped"] else 200
     except ValueError as exc:
         return {"success": False, "error": str(exc)}, 400

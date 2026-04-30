@@ -5,7 +5,12 @@ import importlib
 import json
 import sys
 import types
+import time
+import threading
 from pathlib import Path
+
+import diagnostic_platform.observability_artifacts as observability_artifacts
+from diagnostic_platform.observability_artifacts import wait_for_observability_artifact_jobs
 
 
 def _install_fake_flask_stack(monkeypatch, payload=None):
@@ -138,6 +143,8 @@ def test_session_logs_upload_handler_ingests_artifact(monkeypatch, tmp_path: Pat
     assert response_payload["success"] is True
     assert response_payload["deduped"] is False
     assert Path(response_payload["artifact_path"]).exists()
+    assert response_payload["materialization"] == "queued"
+    assert wait_for_observability_artifact_jobs(timeout_s=5.0)
 
 
 def test_session_logs_upload_handler_rejects_artifact_over_limit(monkeypatch, tmp_path: Path) -> None:
@@ -221,3 +228,60 @@ def test_session_logs_upload_handler_streams_uploaded_jsonl_without_read_text(mo
     assert status == 201
     assert response_payload["success"] is True
     assert response_payload["deduped"] is False
+    assert response_payload["materialization"] == "queued"
+    assert wait_for_observability_artifact_jobs(timeout_s=5.0)
+
+
+def test_session_logs_upload_handler_queues_materialization_without_blocking(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    payload = {
+        "client_instance_id": "client-slow",
+        "connection_epoch": "epoch-slow",
+        "artifact_id": "artifact-slow",
+        "artifact_name": "slow.jsonl",
+        "artifact_type": "raw",
+        "session_id": "session-slow",
+        "content_base64": base64.b64encode(
+            json.dumps(
+                {
+                    "schema_version": "observability.v1",
+                    "ts": "2026-04-22T00:00:00Z",
+                    "component": "reverse_client",
+                    "component_instance_id": "reverse_client:pid:startup",
+                    "event_type": "proxy.request.client_received",
+                    "session_id": "session-slow",
+                    "connection_epoch": "epoch-slow",
+                    "proxy_seq": 20,
+                    "status": "ok",
+                }
+            ).encode("utf-8")
+        ).decode("ascii"),
+    }
+    _install_fake_flask_stack(monkeypatch, payload)
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
+    started = threading.Event()
+    release = threading.Event()
+
+    def _blocked_materialize(*args, **kwargs):
+        started.set()
+        release.wait(timeout=2.0)
+        return {"trace_path": None, "incident_paths": []}
+
+    monkeypatch.setattr(observability_artifacts, "materialize_session_artifacts", _blocked_materialize)
+    session_api = importlib.import_module("server.api.session")
+
+    before = time.perf_counter()
+    response_payload, status = session_api.session_logs_upload()
+    elapsed_ms = (time.perf_counter() - before) * 1000.0
+
+    try:
+        assert status == 201
+        assert response_payload["success"] is True
+        assert response_payload["materialization"] == "queued"
+        assert elapsed_ms < 250.0
+        assert started.wait(timeout=1.0)
+    finally:
+        release.set()
+        assert wait_for_observability_artifact_jobs(timeout_s=5.0)

@@ -3,17 +3,20 @@ from __future__ import annotations
 import base64
 import json
 import os
+import threading
 import time
 import urllib.error
 from pathlib import Path
 
 from diagnostic_platform.observability import JsonlWriter, emit_event
+import diagnostic_platform.observability_artifacts as observability_artifacts
 from diagnostic_platform.observability_artifacts import (
     cleanup_product_observability,
     get_cloud_incidents_dir,
     get_cloud_session_traces_dir,
     ingest_uploaded_artifact,
     materialize_session_artifacts,
+    wait_for_observability_artifact_jobs,
 )
 from vci_proxy.observability_outbox import ObservabilityOutbox
 
@@ -96,11 +99,52 @@ def test_emit_event_auto_materializes_cloud_trace_and_bundle(tmp_path: Path, mon
         operation_kind="j2534:PassThruReadMsgs",
     )
     writer.close()
+    assert wait_for_observability_artifact_jobs(timeout_s=5.0)
 
     trace_files = list(get_cloud_session_traces_dir(tmp_path / "ProgramData").glob("*.json"))
     incident_files = list(get_cloud_incidents_dir(tmp_path / "ProgramData").glob("*.json"))
     assert trace_files
     assert incident_files
+
+
+def test_emit_event_queues_materialization_without_blocking_request_thread(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    writer = JsonlWriter(
+        tmp_path / "ProgramData" / "RPA_Diagnostic" / "observability" / "cloud" / "raw" / "server.jsonl"
+    )
+    started = threading.Event()
+    release = threading.Event()
+
+    def _blocked_materialize(*args, **kwargs):
+        started.set()
+        release.wait(timeout=2.0)
+        return {"trace_path": None, "incident_paths": []}
+
+    monkeypatch.setattr(
+        observability_artifacts,
+        "materialize_session_artifacts",
+        _blocked_materialize,
+    )
+
+    before = time.perf_counter()
+    emit_event(
+        writer,
+        component="session_runtime",
+        event_type="session.lifecycle.aborted",
+        session_id="session-async",
+        connection_epoch="epoch-async",
+    )
+    elapsed_ms = (time.perf_counter() - before) * 1000.0
+
+    try:
+        assert elapsed_ms < 250.0
+        assert started.wait(timeout=1.0)
+    finally:
+        release.set()
+        assert wait_for_observability_artifact_jobs(timeout_s=5.0)
+        writer.close()
 
 
 def test_ingest_uploaded_artifact_stores_file_dedupes_and_refreshes_trace(tmp_path: Path) -> None:

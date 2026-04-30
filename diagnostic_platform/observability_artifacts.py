@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import base64
+import atexit
 import json
+import logging
 import os
+import queue
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from diagnostic_platform.observability import get_cloud_observability_root
 from diagnostic_platform.observability_analysis import assemble_session_trace, generate_incident_bundle
@@ -31,6 +35,23 @@ INCIDENT_TRIGGER_EVENT_TYPES = {
     "ai.stream.error",
     "live_data.stream.error",
 }
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _MaterializationJob:
+    cloud_root: Path
+    session_id: str | None
+    connection_epoch: str | None
+    local_root: str | Path | None
+    triggering_event_type: str | None
+    flush_callback: Callable[[], Any] | None = None
+
+
+_MATERIALIZATION_QUEUE: queue.Queue[_MaterializationJob] = queue.Queue(maxsize=256)
+_MATERIALIZATION_WORKER_LOCK = threading.Lock()
+_MATERIALIZATION_WORKER: threading.Thread | None = None
 
 
 @dataclass(frozen=True)
@@ -135,6 +156,86 @@ def materialize_session_artifacts(
     return {"trace": trace, "trace_path": trace_path, "incident_paths": incident_paths}
 
 
+def _run_materialization_job(job: _MaterializationJob) -> None:
+    if callable(job.flush_callback):
+        try:
+            job.flush_callback()
+        except Exception:
+            logger.debug("Failed to flush raw writer before artifact materialization", exc_info=True)
+    materialize_session_artifacts(
+        cloud_root=job.cloud_root,
+        session_id=job.session_id,
+        connection_epoch=job.connection_epoch,
+        local_root=job.local_root,
+        triggering_event_type=job.triggering_event_type,
+    )
+
+
+def _materialization_worker_loop() -> None:
+    while True:
+        job = _MATERIALIZATION_QUEUE.get()
+        try:
+            _run_materialization_job(job)
+        except Exception:
+            logger.exception("observability artifact materialization failed")
+        finally:
+            _MATERIALIZATION_QUEUE.task_done()
+
+
+def _ensure_materialization_worker_started() -> None:
+    global _MATERIALIZATION_WORKER
+    with _MATERIALIZATION_WORKER_LOCK:
+        if _MATERIALIZATION_WORKER is not None and _MATERIALIZATION_WORKER.is_alive():
+            return
+        _MATERIALIZATION_WORKER = threading.Thread(
+            target=_materialization_worker_loop,
+            name="observability-artifact-materializer",
+            daemon=True,
+        )
+        _MATERIALIZATION_WORKER.start()
+
+
+def queue_session_artifact_materialization(
+    *,
+    cloud_root: str | Path,
+    session_id: str | None = None,
+    connection_epoch: str | None = None,
+    local_root: str | Path | None = None,
+    triggering_event_type: str | None = None,
+    flush_callback: Callable[[], Any] | None = None,
+) -> bool:
+    """Queue trace/incident refresh work without blocking the caller."""
+    job = _MaterializationJob(
+        cloud_root=_resolve_cloud_root(cloud_root),
+        session_id=session_id,
+        connection_epoch=connection_epoch,
+        local_root=local_root,
+        triggering_event_type=triggering_event_type,
+        flush_callback=flush_callback,
+    )
+    _ensure_materialization_worker_started()
+    try:
+        _MATERIALIZATION_QUEUE.put_nowait(job)
+        return True
+    except queue.Full:
+        logger.warning(
+            "observability artifact materialization queue full; dropping job session_id=%s connection_epoch=%s",
+            session_id,
+            connection_epoch,
+        )
+        return False
+
+
+def wait_for_observability_artifact_jobs(timeout_s: float = 5.0) -> bool:
+    """Best-effort wait for queued artifact work, used by tests and shutdown."""
+    deadline = time.time() + max(0.0, float(timeout_s))
+    while time.time() <= deadline:
+        if _MATERIALIZATION_QUEUE.unfinished_tasks == 0:
+            return True
+        time.sleep(0.01)
+    return _MATERIALIZATION_QUEUE.unfinished_tasks == 0
+
+
 def _normalize_context_value(value: Any, *, placeholder: str) -> str | None:
     text = str(value or "").strip()
     if not text or text.lower() == placeholder:
@@ -182,6 +283,7 @@ def ingest_uploaded_artifact(
     *,
     cloud_root: str | Path | None = None,
     max_artifact_mb: int = 50,
+    materialize_async: bool = False,
 ) -> dict[str, Any]:
     cloud_root_path = _resolve_cloud_root(cloud_root)
     client_instance_id = str(payload.get("client_instance_id") or "").strip()
@@ -222,11 +324,21 @@ def ingest_uploaded_artifact(
         except Exception:
             session_id = None
 
-    refresh = materialize_session_artifacts(
-        cloud_root=cloud_root_path,
-        session_id=session_id,
-        connection_epoch=connection_epoch,
-    )
+    if materialize_async:
+        materialization_queued = queue_session_artifact_materialization(
+            cloud_root=cloud_root_path,
+            session_id=session_id,
+            connection_epoch=connection_epoch,
+        )
+        refresh = {"trace_path": None, "incident_paths": []}
+        materialization = "queued" if materialization_queued else "dropped"
+    else:
+        refresh = materialize_session_artifacts(
+            cloud_root=cloud_root_path,
+            session_id=session_id,
+            connection_epoch=connection_epoch,
+        )
+        materialization = "completed"
 
     return {
         "success": True,
@@ -235,7 +347,10 @@ def ingest_uploaded_artifact(
         "manifest_path": manifest_path,
         "trace_path": refresh.get("trace_path"),
         "incident_paths": refresh.get("incident_paths", []),
+        "materialization": materialization,
     }
+
+
 def _delete_older_than(directory: Path, *, max_age_days: int, now: float) -> None:
     if not directory.exists():
         return
@@ -304,6 +419,7 @@ def maybe_materialize_cloud_artifacts(
     *,
     writer_path: str | Path | None,
     flush_callback: Any | None = None,
+    materialize_async: bool = True,
 ) -> None:
     if writer_path is None:
         return
@@ -313,20 +429,30 @@ def maybe_materialize_cloud_artifacts(
     event_type = str(event_payload.get("event_type") or "")
     if event_type not in SESSION_TERMINAL_EVENT_TYPES and event_type not in INCIDENT_TRIGGER_EVENT_TYPES:
         return
+    cloud_root = path.parent.parent
+    session_id = event_payload.get("session_id")
+    connection_epoch = event_payload.get("connection_epoch")
+    materialize_kwargs = {
+        "cloud_root": cloud_root,
+        "session_id": str(session_id) if session_id not in (None, "") else None,
+        "connection_epoch": str(connection_epoch) if connection_epoch not in (None, "") else None,
+        "triggering_event_type": event_type if event_type in INCIDENT_TRIGGER_EVENT_TYPES else None,
+    }
+    if materialize_async:
+        queue_session_artifact_materialization(
+            **materialize_kwargs,
+            flush_callback=flush_callback if callable(flush_callback) else None,
+        )
+        return
     if callable(flush_callback):
         try:
             flush_callback()
         except Exception:
             pass
-    cloud_root = path.parent.parent
-    session_id = event_payload.get("session_id")
-    connection_epoch = event_payload.get("connection_epoch")
-    materialize_session_artifacts(
-        cloud_root=cloud_root,
-        session_id=str(session_id) if session_id not in (None, "") else None,
-        connection_epoch=str(connection_epoch) if connection_epoch not in (None, "") else None,
-        triggering_event_type=event_type if event_type in INCIDENT_TRIGGER_EVENT_TYPES else None,
-    )
+    materialize_session_artifacts(**materialize_kwargs)
+
+
+atexit.register(wait_for_observability_artifact_jobs, timeout_s=5.0)
 
 
 __all__ = [
@@ -337,6 +463,8 @@ __all__ = [
     "ingest_uploaded_artifact",
     "materialize_session_artifacts",
     "maybe_materialize_cloud_artifacts",
+    "queue_session_artifact_materialization",
+    "wait_for_observability_artifact_jobs",
     "ProductLogSettings",
     "resolve_product_log_settings",
 ]

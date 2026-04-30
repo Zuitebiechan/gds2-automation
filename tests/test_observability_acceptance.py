@@ -6,7 +6,11 @@ import os
 from pathlib import Path
 
 from diagnostic_platform.observability import JsonlWriter, emit_event
-from diagnostic_platform.observability_artifacts import get_cloud_incidents_dir, get_cloud_session_traces_dir
+from diagnostic_platform.observability_artifacts import (
+    get_cloud_incidents_dir,
+    get_cloud_session_traces_dir,
+    wait_for_observability_artifact_jobs,
+)
 from vci_proxy.observability_outbox import ObservabilityOutbox
 
 
@@ -23,6 +27,7 @@ def test_acceptance_success_session_emits_session_trace_only(tmp_path: Path, mon
         connection_epoch="epoch-success-1",
     )
     writer.close()
+    assert wait_for_observability_artifact_jobs(timeout_s=5.0)
 
     trace_files = list(get_cloud_session_traces_dir(programdata).glob("*.json"))
     incident_files = list(get_cloud_incidents_dir(programdata).glob("*.json"))
@@ -47,6 +52,7 @@ def test_acceptance_trigger_incident_emits_bundle(tmp_path: Path, monkeypatch) -
         operation_kind="j2534:PassThruReadMsgs",
     )
     writer.close()
+    assert wait_for_observability_artifact_jobs(timeout_s=5.0)
 
     incident_files = list(get_cloud_incidents_dir(programdata).glob("*.json"))
     assert incident_files

@@ -188,6 +188,7 @@ Current runtime behavior:
 - tray client runs a background uploader loop that stages local artifacts into the outbox and uploads them to the cloud ingest API
 - local outbox staging scans artifact contents for the first non-placeholder `session_id` and `connection_epoch`; leading lifecycle events without session context do not force the upload into `no-epoch`
 - trace assembly treats `no-session` and `no-epoch` as missing selectors and falls back to the active snapshot or raw-event context before materializing a trace
+- runtime-triggered trace/incident materialization runs on a background queue; terminal session events and uploaded local artifacts must not block the API request path while large traces are assembled
 - transient upload/API failures leave pending manifests in place for the next uploader pass instead of crashing the tray background loop
 
 ## Current Component Usage
