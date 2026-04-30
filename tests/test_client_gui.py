@@ -420,6 +420,35 @@ def test_stop_client_waits_for_graceful_shutdown(monkeypatch, tmp_path) -> None:
     assert app._status == "idle"
 
 
+def test_complete_guarded_quit_hides_and_stops_tray(monkeypatch, tmp_path) -> None:
+    client_gui = _import_client_gui(monkeypatch, tmp_path)
+    observed: dict[str, object] = {}
+
+    class _FakeTray:
+        def __init__(self) -> None:
+            self.visible = True
+            self.stopped = False
+
+        def stop(self) -> None:
+            self.stopped = True
+
+    tray = _FakeTray()
+    app = client_gui.VCIProxyTrayApp()
+    app._tray = tray
+    app._diagnostics_guard_controller = types.SimpleNamespace(
+        get_attached_window=lambda: None
+    )
+    app._stop_client = lambda: observed.setdefault("client_stopped", True)
+    app._stop_ui_thread = lambda: observed.setdefault("ui_stopped", True)
+
+    app._complete_guarded_quit()
+
+    assert observed == {"client_stopped": True, "ui_stopped": True}
+    assert tray.visible is False
+    assert tray.stopped is True
+    assert app._tray is None
+
+
 def test_on_settings_dispatches_dialog_work_to_background_thread(monkeypatch, tmp_path) -> None:
     client_gui = _import_client_gui(monkeypatch, tmp_path)
     observed: dict[str, object] = {}

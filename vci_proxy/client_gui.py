@@ -680,8 +680,25 @@ class VCIProxyTrayApp:
                 logger.exception("[GUI_CTRL] failed to destroy diagnostics window during quit")
         self._stop_client()
         self._stop_ui_thread()
-        if self._tray:
-            self._tray.stop()
+        self._stop_tray_icon()
+
+    def _stop_tray_icon(self) -> None:
+        """Hide and stop the tray icon during application shutdown."""
+        tray = self._tray
+        self._tray = None
+        if tray is None:
+            return
+
+        try:
+            tray.visible = False
+        except Exception:
+            logger.debug("[GUI_CTRL] failed to hide tray icon before stop", exc_info=True)
+
+        try:
+            tray.stop()
+            logger.info("[GUI_CTRL] tray icon stopped")
+        except Exception:
+            logger.exception("[GUI_CTRL] failed to stop tray icon")
 
     def _handle_guarded_action_failure(self, action_name: str, reason: str) -> None:
         try:
