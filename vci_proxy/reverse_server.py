@@ -194,6 +194,7 @@ class ReverseProxyServer:
         self._process_started_emitted = False
         self._process_shutdown_started_emitted = False
         self._process_shutdown_finished_emitted = False
+        self._vci_write_collect_supported = False
 
         # P1-1: ReadMsgs BUFFER_EMPTY cache
         self._read_cache = ReadMsgsCache(self.config.read_msgs_cache)
@@ -426,9 +427,20 @@ class ReverseProxyServer:
         return context
 
     def _auth_success_message(self) -> str:
+        capabilities = ["ok"]
         if self.config.read_ahead.enabled:
-            return "ok;read_ahead=1"
-        return "ok"
+            capabilities.append("read_ahead=1")
+            if self.config.read_ahead.transaction_enabled:
+                capabilities.append("write_collect=1")
+        return ";".join(capabilities)
+
+    @staticmethod
+    def _capability_enabled(message: str, capability: str) -> bool:
+        expected = f"{capability}=1"
+        return any(
+            token.strip().lower() == expected
+            for token in str(message or "").replace(",", ";").split(";")
+        )
 
     async def start(self):
         """启动服务器"""
@@ -470,11 +482,12 @@ class ReverseProxyServer:
             )
         if self.config.read_ahead.enabled:
             logger.info(
-                "Read-ahead enabled (window=%sms, max_reads=%s, timeout=%sms, max_messages=%s)",
+                "Read-ahead enabled (window=%sms, max_reads=%s, timeout=%sms, max_messages=%s, transaction=%s)",
                 self.config.read_ahead.window_ms,
                 self.config.read_ahead.max_reads,
                 self.config.read_ahead.read_timeout_ms,
                 self.config.read_ahead.max_messages,
+                "enabled" if self.config.read_ahead.transaction_enabled else "disabled",
             )
         if self.benchmark_writer is not None:
             logger.info("Proxy benchmark logging enabled: %s", self.benchmark_writer.path)
@@ -581,6 +594,7 @@ class ReverseProxyServer:
         Returns True if authenticated, False otherwise.
         """
         peer = writer.get_extra_info("peername")
+        self._vci_write_collect_supported = False
         try:
             header = await asyncio.wait_for(
                 reader.readexactly(HEADER_SIZE),
@@ -629,6 +643,11 @@ class ReverseProxyServer:
             if not self.config.auth.enabled:
                 # Auth not required, but client sent AUTH_REQ -- accept it
                 logger.info("Auth not required, accepting AUTH_REQ")
+                capabilities = ProtocolDecoder.decode_auth_req_capabilities(body)
+                self._vci_write_collect_supported = self._capability_enabled(
+                    capabilities,
+                    "write_collect",
+                )
                 rsp = ProtocolEncoder.encode_auth_rsp(
                     True,
                     self._auth_success_message(),
@@ -647,6 +666,7 @@ class ReverseProxyServer:
                 return True
 
             timestamp, signature = ProtocolDecoder.decode_auth_req(body)
+            capabilities = ProtocolDecoder.decode_auth_req_capabilities(body)
             success, reason = verify_signature(
                 self.config.auth.token, timestamp, signature
             )
@@ -655,6 +675,10 @@ class ReverseProxyServer:
                 reason = "replay detected"
             if success:
                 reason = self._auth_success_message()
+                self._vci_write_collect_supported = self._capability_enabled(
+                    capabilities,
+                    "write_collect",
+                )
             rsp = ProtocolEncoder.encode_auth_rsp(success, reason, sequence)
             try:
                 writer.write(rsp)
@@ -674,6 +698,7 @@ class ReverseProxyServer:
             return success
 
         if msg_type == MsgType.HEARTBEAT:
+            self._vci_write_collect_supported = False
             if self.config.auth.enabled:
                 logger.warning(
                     "Auth required but VCI client sent HEARTBEAT (legacy client)"
@@ -977,6 +1002,7 @@ class ReverseProxyServer:
         finally:
             owns_current_tunnel = self.vci_writer is writer
             if owns_current_tunnel:
+                self._vci_write_collect_supported = False
                 self.vci_connected.clear()
                 self._cancel_pending_futures()
                 await self._cancel_probe_task_async()
@@ -1104,6 +1130,51 @@ class ReverseProxyServer:
         except Exception:
             return
         self._prefetch_read_msgs.clear_channel(channel_id)
+
+    def _should_use_write_collect_transaction(self, msg_type: int, body: bytes) -> bool:
+        if msg_type != MsgType.WRITE_MSGS_REQ:
+            return False
+        read_ahead = self.config.read_ahead
+        if not (
+            read_ahead.enabled
+            and read_ahead.transaction_enabled
+            and self._vci_write_collect_supported
+            and read_ahead.window_ms > 0
+            and read_ahead.max_reads > 0
+            and read_ahead.max_messages > 0
+        ):
+            return False
+        try:
+            ProtocolDecoder.decode_write_msgs_req(body)
+        except Exception:
+            return False
+        return True
+
+    def _build_tunnel_request(
+        self,
+        msg_type: int,
+        body: bytes,
+        sequence: int,
+    ) -> tuple[bytes, int, bytes, str | None]:
+        if self._should_use_write_collect_transaction(msg_type, body):
+            read_ahead = self.config.read_ahead
+            encoded = ProtocolEncoder.encode_write_and_collect_reads_req(
+                body,
+                collect_window_ms=read_ahead.window_ms,
+                max_reads=read_ahead.max_reads,
+                read_timeout_ms=read_ahead.read_timeout_ms,
+                max_messages=read_ahead.max_messages,
+                sequence=sequence,
+            )
+            return (
+                encoded,
+                MsgType.WRITE_AND_COLLECT_READS_REQ,
+                encoded[HEADER_SIZE:],
+                "write_collect_transaction",
+            )
+
+        header = struct.pack('>IIHI', MAGIC, HEADER_SIZE + len(body), msg_type, sequence)
+        return header + body, msg_type, body, None
 
     def _record_in_caches(self, msg_type: int, body: bytes,
                           resp_type: int, resp_body: bytes,
@@ -1451,18 +1522,24 @@ class ReverseProxyServer:
                 self.response_futures[new_seq] = future
 
                 try:
-                    new_header = struct.pack('>IIHI', MAGIC, length, msg_type, new_seq)
+                    tunnel_request, fwd_msg_type, _fwd_body, transaction_reason = self._build_tunnel_request(
+                        msg_type,
+                        body,
+                        new_seq,
+                    )
                     async with self.vci_lock:
                         if self.vci_writer is None:
                             raise ConnectionError("VCI 连接已断开")
-                        self.vci_writer.write(new_header + body)
+                        self.vci_writer.write(tunnel_request)
                         await self.vci_writer.drain()
                     self._emit_proxy_request_event(
                         "proxy.request.forwarded_to_tunnel",
                         dll_seq=sequence,
                         proxy_seq=new_seq,
                         msg_name=msg_name,
-                        reason="forwarded_to_tunnel",
+                        reason=transaction_reason or "forwarded_to_tunnel",
+                        forwarded_msg_type=int(fwd_msg_type),
+                        forwarded_msg_name=MSG_NAMES.get(fwd_msg_type, f"0x{int(fwd_msg_type):04x}"),
                         **request_fields,
                     )
                 except Exception as e:
@@ -1674,6 +1751,10 @@ def main():
                        help='Timeout passed to local read-ahead ReadMsgs calls in ms (default: 0 or VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS)')
     parser.add_argument('--read-ahead-max-messages', type=int, default=None,
                        help='Maximum prefetched messages retained per channel (default: 16 or VCI_PROXY_READ_AHEAD_MAX_MESSAGES)')
+    parser.add_argument('--read-ahead-transaction', dest='read_ahead_transaction', action='store_true', default=None,
+                       help='Enable internal WRITE_AND_COLLECT_READS transaction RPC when the client advertises support (or VCI_PROXY_READ_AHEAD_TRANSACTION=1)')
+    parser.add_argument('--no-read-ahead-transaction', dest='read_ahead_transaction', action='store_false',
+                       help='Disable internal read-ahead transaction RPC even if VCI_PROXY_READ_AHEAD_TRANSACTION is set')
     parser.add_argument('--no-filter-dedup', action='store_true',
                        help='Disable StartFilter deduplication')
     parser.add_argument('--no-vbatt-cache', action='store_true',
@@ -1708,6 +1789,7 @@ def main():
         read_ahead_max_reads=args.read_ahead_max_reads,
         read_ahead_read_timeout_ms=args.read_ahead_read_timeout_ms,
         read_ahead_max_messages=args.read_ahead_max_messages,
+        read_ahead_transaction_enabled=args.read_ahead_transaction,
         no_filter_dedup=args.no_filter_dedup,
         no_vbatt_cache=args.no_vbatt_cache,
         vbatt_ttl=args.vbatt_ttl,
@@ -1741,12 +1823,13 @@ def main():
         config.read_msgs_cache.max_cacheable_timeout_ms,
     )
     logger.info(
-        "Read-ahead: %s (window=%sms, max_reads=%s, timeout=%sms, max_messages=%s)",
+        "Read-ahead: %s (window=%sms, max_reads=%s, timeout=%sms, max_messages=%s, transaction=%s)",
         "enabled" if config.read_ahead.enabled else "disabled",
         config.read_ahead.window_ms,
         config.read_ahead.max_reads,
         config.read_ahead.read_timeout_ms,
         config.read_ahead.max_messages,
+        "enabled" if config.read_ahead.transaction_enabled else "disabled",
     )
     logger.info(
         "Filter dedup: %s",

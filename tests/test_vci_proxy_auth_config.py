@@ -66,6 +66,7 @@ def test_proxy_config_from_args_maps_flat_cli_flags_to_nested_configs() -> None:
         read_ahead_max_reads=4,
         read_ahead_read_timeout_ms=5,
         read_ahead_max_messages=12,
+        read_ahead_transaction_enabled=True,
     )
 
     assert config == ProxyConfig(
@@ -87,6 +88,7 @@ def test_proxy_config_from_args_maps_flat_cli_flags_to_nested_configs() -> None:
             max_reads=4,
             read_timeout_ms=5,
             max_messages=12,
+            transaction_enabled=True,
         ),
     )
 
@@ -99,6 +101,7 @@ def test_proxy_config_from_args_uses_shared_read_ahead_env_defaults() -> None:
             "VCI_PROXY_READ_AHEAD_MAX_READS": "5",
             "VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS": "2",
             "VCI_PROXY_READ_AHEAD_MAX_MESSAGES": "9",
+            "VCI_PROXY_READ_AHEAD_TRANSACTION": "1",
         }
     )
 
@@ -108,6 +111,7 @@ def test_proxy_config_from_args_uses_shared_read_ahead_env_defaults() -> None:
         max_reads=5,
         read_timeout_ms=2,
         max_messages=9,
+        transaction_enabled=True,
     )
 
 
@@ -119,12 +123,14 @@ def test_proxy_config_explicit_read_ahead_args_override_env_defaults() -> None:
             "VCI_PROXY_READ_AHEAD_MAX_READS": "5",
             "VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS": "2",
             "VCI_PROXY_READ_AHEAD_MAX_MESSAGES": "9",
+            "VCI_PROXY_READ_AHEAD_TRANSACTION": "1",
         },
         read_ahead_enabled=False,
         read_ahead_window_ms=0,
         read_ahead_max_reads=1,
         read_ahead_read_timeout_ms=0,
         read_ahead_max_messages=4,
+        read_ahead_transaction_enabled=False,
     )
 
     assert config.read_ahead == ReadAheadConfig(
@@ -133,6 +139,7 @@ def test_proxy_config_explicit_read_ahead_args_override_env_defaults() -> None:
         max_reads=1,
         read_timeout_ms=0,
         max_messages=4,
+        transaction_enabled=False,
     )
 
 

@@ -29,6 +29,7 @@ class MsgType(IntEnum):
     PING_REQ = 0x00FC
     AUTH_REQ = 0x00FE
     HEARTBEAT = 0x00FF
+    WRITE_AND_COLLECT_READS_REQ = 0x0106
 
     # Responses (0x80xx)
     OPEN_RSP = 0x8001
@@ -73,6 +74,16 @@ class ReadMsgsPrefetchBundle:
     """Internal bundle of local-side ReadMsgs responses."""
     channel_id: int
     read_rsp_bodies: Tuple[bytes, ...]
+
+
+@dataclass(frozen=True)
+class WriteAndCollectReadsRequest:
+    """Internal write transaction plus bounded local ReadMsgs collection."""
+    collect_window_ms: int
+    max_reads: int
+    read_timeout_ms: int
+    max_messages: int
+    write_req_body: bytes
 
 
 def attach_read_msgs_prefetch_bundle(
@@ -284,8 +295,15 @@ class ProtocolEncoder:
         return Message(MsgType.HEARTBEAT_ACK, sequence, b"").encode()
 
     @staticmethod
-    def encode_auth_req(timestamp: int, signature: bytes, sequence: int = 0) -> bytes:
+    def encode_auth_req(
+        timestamp: int,
+        signature: bytes,
+        sequence: int = 0,
+        capabilities: str = "",
+    ) -> bytes:
         body = struct.pack(">Q", timestamp) + signature
+        if capabilities:
+            body += capabilities.encode("utf-8")
         return Message(MsgType.AUTH_REQ, sequence, body).encode()
 
     @staticmethod
@@ -358,6 +376,26 @@ class ProtocolEncoder:
         body = struct.pack(">II", return_code, len(output_bytes))
         body += output_bytes
         return Message(MsgType.IOCTL_RSP, sequence, body).encode()
+
+    @staticmethod
+    def encode_write_and_collect_reads_req(
+        write_req_body: bytes,
+        *,
+        collect_window_ms: int,
+        max_reads: int,
+        read_timeout_ms: int,
+        max_messages: int,
+        sequence: int = 0,
+    ) -> bytes:
+        body = struct.pack(
+            ">IIII",
+            max(0, int(collect_window_ms)),
+            max(0, int(max_reads)),
+            max(0, int(read_timeout_ms)),
+            max(0, int(max_messages)),
+        )
+        body += write_req_body
+        return Message(MsgType.WRITE_AND_COLLECT_READS_REQ, sequence, body).encode()
 
 
 class ProtocolDecoder:
@@ -562,8 +600,30 @@ class ProtocolDecoder:
         return timestamp, signature
 
     @staticmethod
+    def decode_auth_req_capabilities(body: bytes) -> str:
+        ProtocolDecoder._check_min_len(body, 40, "AuthReq")
+        return body[40:].decode("utf-8", errors="replace") if len(body) > 40 else ""
+
+    @staticmethod
     def decode_auth_rsp(body: bytes) -> Tuple[bool, str]:
         ProtocolDecoder._check_min_len(body, 1, "AuthRsp")
         success = body[0] != 0
         message = body[1:].decode("utf-8", errors="replace") if len(body) > 1 else ""
         return success, message
+
+    @staticmethod
+    def decode_write_and_collect_reads_req(body: bytes) -> WriteAndCollectReadsRequest:
+        ProtocolDecoder._check_min_len(body, 16, "WriteAndCollectReadsReq")
+        collect_window_ms, max_reads, read_timeout_ms, max_messages = struct.unpack(
+            ">IIII",
+            body[:16],
+        )
+        write_req_body = body[16:]
+        ProtocolDecoder.decode_write_msgs_req(write_req_body)
+        return WriteAndCollectReadsRequest(
+            collect_window_ms=collect_window_ms,
+            max_reads=max_reads,
+            read_timeout_ms=read_timeout_ms,
+            max_messages=max_messages,
+            write_req_body=write_req_body,
+        )

@@ -275,6 +275,7 @@ VCI_PROXY_READ_AHEAD_WINDOW_MS=200
 VCI_PROXY_READ_AHEAD_MAX_READS=3
 VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS=0
 VCI_PROXY_READ_AHEAD_MAX_MESSAGES=16
+VCI_PROXY_READ_AHEAD_TRANSACTION=0
 ```
 
 Set `VCI_PROXY_READ_AHEAD=1` in both the cloud reverse server environment and
@@ -285,8 +286,9 @@ same names as runtime overrides on top of `%APPDATA%/VCI_Proxy/config.json`.
 Set `VCI_PROXY_READ_AHEAD_WINDOW_MS` to `0` to keep the feature configured but
 prevent local read collection. CLI flags still exist for one-off tests:
 `--read-ahead`, `--no-read-ahead`, `--read-ahead-window-ms`,
-`--read-ahead-max-reads`, `--read-ahead-read-timeout-ms`, and
-`--read-ahead-max-messages`.
+`--read-ahead-max-reads`, `--read-ahead-read-timeout-ms`,
+`--read-ahead-max-messages`, `--read-ahead-transaction`, and
+`--no-read-ahead-transaction`.
 
 Important behavior rules:
 
@@ -348,6 +350,22 @@ WRITE_AND_COLLECT_READS_REQ
 - Reverse client performs the write and bounded local reads near the VCI.
 - Reverse server still replies to the virtual DLL with standard `WRITE_MSGS_RSP` and later standard `READ_MSGS_RSP` frames.
 
+Implementation note:
+
+- The guarded first cut adds an internal `WRITE_AND_COLLECT_READS_REQ` frame.
+- The external DLL/GDS2 request remains a normal `WRITE_MSGS_REQ`; the cloud
+  reverse server wraps it only when `VCI_PROXY_READ_AHEAD=1`,
+  `VCI_PROXY_READ_AHEAD_TRANSACTION=1`, and the authenticated local client has
+  advertised `write_collect=1`.
+- The local client advertises `write_collect=1` only when its own read-ahead and
+  transaction flags are enabled. Older clients or clients without that flag
+  automatically fall back to Phase 3/normal write behavior.
+- The transaction request carries the bounded collection parameters
+  `collect_window_ms`, `max_reads`, `read_timeout_ms`, and `max_messages`.
+- The local client still returns a standard `WRITE_MSGS_RSP` plus the same
+  internal consume-once `PRF0` prefetch bundle used by Phase 3. The server strips
+  the bundle before replying to GDS2 and records the frames in the existing FIFO.
+
 Expected effect:
 
 - Stronger RTT reduction than opportunistic read-ahead.
@@ -364,6 +382,9 @@ Validation:
 - Feature-flagged rollout only.
 - Per-vehicle/protocol allowlist until enough evidence exists.
 - Compare live-data correctness against local GDS2.
+- Verify `proxy.request.forwarded_to_tunnel` includes
+  `forwarded_msg_name=WRITE_AND_COLLECT_READS_REQ` only when the transaction
+  flag and client capability are both present.
 
 ### Phase 5: Local-Side Polling Subscription
 

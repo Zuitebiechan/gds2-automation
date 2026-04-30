@@ -14,6 +14,7 @@ READ_AHEAD_WINDOW_MS_ENV = "VCI_PROXY_READ_AHEAD_WINDOW_MS"
 READ_AHEAD_MAX_READS_ENV = "VCI_PROXY_READ_AHEAD_MAX_READS"
 READ_AHEAD_READ_TIMEOUT_MS_ENV = "VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS"
 READ_AHEAD_MAX_MESSAGES_ENV = "VCI_PROXY_READ_AHEAD_MAX_MESSAGES"
+READ_AHEAD_TRANSACTION_ENV = "VCI_PROXY_READ_AHEAD_TRANSACTION"
 
 READ_AHEAD_ENV_NAMES = (
     READ_AHEAD_ENABLED_ENV,
@@ -21,6 +22,7 @@ READ_AHEAD_ENV_NAMES = (
     READ_AHEAD_MAX_READS_ENV,
     READ_AHEAD_READ_TIMEOUT_MS_ENV,
     READ_AHEAD_MAX_MESSAGES_ENV,
+    READ_AHEAD_TRANSACTION_ENV,
 )
 
 _TRUE_VALUES = {"1", "true", "yes", "on", "enabled"}
@@ -121,6 +123,7 @@ class ReadAheadConfig:
     max_reads: int = 3
     read_timeout_ms: int = 0
     max_messages: int = 16
+    transaction_enabled: bool = False
 
 
 def read_ahead_config_from_env(
@@ -142,6 +145,11 @@ def read_ahead_config_from_env(
         max_messages=env_int(
             READ_AHEAD_MAX_MESSAGES_ENV,
             base.max_messages,
+            environ=environ,
+        ),
+        transaction_enabled=env_bool(
+            READ_AHEAD_TRANSACTION_ENV,
+            base.transaction_enabled,
             environ=environ,
         ),
     )
@@ -228,6 +236,11 @@ class ProxyConfig:
                 read_ahead_defaults.max_messages
                 if kwargs.get("read_ahead_max_messages") is None
                 else kwargs.get("read_ahead_max_messages")
+            ),
+            transaction_enabled=(
+                read_ahead_defaults.transaction_enabled
+                if kwargs.get("read_ahead_transaction_enabled") is None
+                else bool(kwargs.get("read_ahead_transaction_enabled"))
             ),
         )
         tls = TlsConfig(

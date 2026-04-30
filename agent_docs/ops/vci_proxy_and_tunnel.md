@@ -202,6 +202,7 @@ Read-ahead keys are also accepted for guarded Phase 3 testing:
 - `read_ahead_max_reads`
 - `read_ahead_read_timeout_ms`
 - `read_ahead_max_messages`
+- `read_ahead_transaction_enabled`
 
 These values are passed through to `vci_proxy.reverse_client.ReverseProxyClient`
 when the tray app starts the local tunnel client. The shared
@@ -282,6 +283,7 @@ Unified runtime config:
 - `VCI_PROXY_READ_AHEAD_MAX_READS=3`
 - `VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS=0`
 - `VCI_PROXY_READ_AHEAD_MAX_MESSAGES=16`
+- `VCI_PROXY_READ_AHEAD_TRANSACTION=0`
 
 The reverse server also loads the repo `.env` file when `python-dotenv` is
 installed, so the cloud process can be started with the normal command after the
@@ -299,6 +301,29 @@ Reverse server and reverse client CLI overrides:
 - `--read-ahead-max-reads <count>`; default `3`
 - `--read-ahead-read-timeout-ms <milliseconds>`; default `0`
 - `--read-ahead-max-messages <count>`; default `16`
+- `--read-ahead-transaction`; enables the internal
+  `WRITE_AND_COLLECT_READS_REQ` RPC when both sides advertise support
+- `--no-read-ahead-transaction`; disables that internal transaction path even if
+  `VCI_PROXY_READ_AHEAD_TRANSACTION` is set
+
+### Internal `WRITE_AND_COLLECT_READS` transaction
+
+The Phase 4 transaction path is disabled by default. It is a server-to-client
+internal frame, not a J2534 API surface. When enabled on both sides, the cloud
+server can wrap an ordinary DLL-side `WRITE_MSGS_REQ` as
+`WRITE_AND_COLLECT_READS_REQ` and include bounded collection parameters. The
+local client performs the write, then local read collection, and returns the same
+standard `WRITE_MSGS_RSP` plus the existing internal `PRF0` prefetch bundle.
+
+Compatibility guardrails:
+
+- the server sends the transaction only when its transaction flag is enabled and
+  the authenticated client advertised `write_collect=1`
+- older clients and clients without the flag receive ordinary `WRITE_MSGS_REQ`
+- GDS2 never sees `WRITE_AND_COLLECT_READS_REQ`; it only sees normal J2534
+  request/response frames
+- prefetched data remains consume-once FIFO data and is stripped before the
+  write response reaches the DLL
 
 FIFO cleanup:
 

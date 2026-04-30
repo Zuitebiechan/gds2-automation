@@ -142,6 +142,37 @@ def test_authenticate_vci_advertises_read_ahead_capability(monkeypatch) -> None:
     assert message == "ok;read_ahead=1"
 
 
+def test_authenticate_vci_negotiates_write_collect_capability(monkeypatch) -> None:
+    server = ReverseProxyServer(
+        config=ProxyConfig.from_args(
+            auth_token="secret",
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+        )
+    )
+    reader = _FakeReader(
+        ProtocolEncoder.encode_auth_req(
+            123,
+            b"x" * 32,
+            sequence=7,
+            capabilities="read_ahead=1;write_collect=1",
+        )
+    )
+    writer = _FakeWriter()
+
+    monkeypatch.setattr("vci_proxy.reverse_server.verify_signature", lambda token, timestamp, signature: (True, "ok"))
+
+    accepted = asyncio.run(server._authenticate_vci(reader, writer))
+
+    assert accepted is True
+    assert server._vci_write_collect_supported is True
+    _magic, length, msg_type, _sequence = Message.decode_header(writer.writes[0][:HEADER_SIZE])
+    assert msg_type == MsgType.AUTH_RSP
+    success, message = ProtocolDecoder.decode_auth_rsp(writer.writes[0][HEADER_SIZE:length])
+    assert success is True
+    assert message == "ok;read_ahead=1;write_collect=1"
+
+
 def test_authenticate_vci_rejects_legacy_heartbeat_when_auth_is_required() -> None:
     server = ReverseProxyServer(config=ProxyConfig.from_args(auth_token="secret"))
     reader = _FakeReader(ProtocolEncoder.encode_heartbeat(sequence=3))
@@ -877,6 +908,7 @@ def test_main_disables_windows_quick_edit_before_starting_server(monkeypatch) ->
             read_ahead_max_reads=3,
             read_ahead_read_timeout_ms=0,
             read_ahead_max_messages=16,
+            read_ahead_transaction=None,
             no_filter_dedup=False,
             no_vbatt_cache=False,
             vbatt_ttl=5,
@@ -1193,6 +1225,72 @@ def test_clear_prefetch_after_failed_write_ignores_non_write_requests() -> None:
     )
 
     assert server._prefetch_read_msgs.try_serve(44, num_msgs=1, sequence=32) is not None
+
+
+def test_build_tunnel_request_wraps_write_when_transaction_enabled_and_supported() -> None:
+    server = ReverseProxyServer(
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+            read_ahead_window_ms=180,
+            read_ahead_max_reads=2,
+            read_ahead_read_timeout_ms=5,
+            read_ahead_max_messages=8,
+        )
+    )
+    server._vci_write_collect_supported = True
+    write_body = ProtocolEncoder.encode_write_msgs_req(
+        44,
+        [{"protocol_id": 6, "data": b"\x22"}],
+        timeout=25,
+    )[HEADER_SIZE:]
+
+    encoded, fwd_type, fwd_body, reason = server._build_tunnel_request(
+        MsgType.WRITE_MSGS_REQ,
+        write_body,
+        sequence=77,
+    )
+    _magic, length, msg_type, sequence = Message.decode_header(encoded[:HEADER_SIZE])
+    request = ProtocolDecoder.decode_write_and_collect_reads_req(fwd_body)
+
+    assert length == len(encoded)
+    assert msg_type == MsgType.WRITE_AND_COLLECT_READS_REQ
+    assert fwd_type == MsgType.WRITE_AND_COLLECT_READS_REQ
+    assert sequence == 77
+    assert reason == "write_collect_transaction"
+    assert request.collect_window_ms == 180
+    assert request.max_reads == 2
+    assert request.read_timeout_ms == 5
+    assert request.max_messages == 8
+    assert request.write_req_body == write_body
+
+
+def test_build_tunnel_request_falls_back_without_client_write_collect_support() -> None:
+    server = ReverseProxyServer(
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+        )
+    )
+    write_body = ProtocolEncoder.encode_write_msgs_req(
+        44,
+        [{"protocol_id": 6, "data": b"\x22"}],
+        timeout=25,
+    )[HEADER_SIZE:]
+
+    encoded, fwd_type, fwd_body, reason = server._build_tunnel_request(
+        MsgType.WRITE_MSGS_REQ,
+        write_body,
+        sequence=77,
+    )
+    _magic, length, msg_type, sequence = Message.decode_header(encoded[:HEADER_SIZE])
+
+    assert length == len(encoded)
+    assert msg_type == MsgType.WRITE_MSGS_REQ
+    assert fwd_type == MsgType.WRITE_MSGS_REQ
+    assert sequence == 77
+    assert fwd_body == write_body
+    assert reason is None
 
 
 def test_handle_proxy_connection_bypasses_read_cache_after_same_channel_write(monkeypatch, tmp_path) -> None:

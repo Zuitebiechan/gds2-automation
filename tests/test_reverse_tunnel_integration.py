@@ -573,6 +573,69 @@ def test_reverse_tunnel_read_ahead_preserves_fifo_order_across_writes(monkeypatc
     asyncio.run(_run())
 
 
+def test_reverse_tunnel_write_collect_transaction_serves_following_read(monkeypatch) -> None:
+    async def _run() -> None:
+        observed: list[tuple[str, object]] = []
+        prefetched_message = {
+            "protocol_id": 6,
+            "rx_status": 0,
+            "tx_flags": 0,
+            "timestamp": 321,
+            "data": b"\x62\xf4\x0c",
+        }
+        read_results = iter([(0, [prefetched_message]), (BUFFER_EMPTY, [])])
+
+        fake_driver = types.SimpleNamespace(
+            dll_path="C:/fake/j2534.dll",
+            write_msgs=lambda channel_id, messages, timeout: (
+                observed.append(("write_msgs", (channel_id, messages, timeout))) or (0, len(messages))
+            ),
+            read_msgs=lambda channel_id, num_msgs, timeout: (
+                observed.append(("read_msgs", (channel_id, num_msgs, timeout))) or next(read_results)
+            ),
+        )
+        config = ProxyConfig.from_args(
+            auth_token="shared-secret",
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+            read_ahead_max_reads=2,
+            read_ahead_max_messages=4,
+            read_ahead_read_timeout_ms=0,
+        )
+        bundle = await _start_reverse_tunnel(monkeypatch, fake_driver, config=config)
+        try:
+            assert bundle["server"]._vci_write_collect_supported is True
+
+            write_rsp = await _proxy_round_trip(
+                bundle["proxy_port"],
+                ProtocolEncoder.encode_write_msgs_req(
+                    9001,
+                    [{"protocol_id": 6, "timestamp": 1, "data": b"\x22"}],
+                    timeout=200,
+                    sequence=102,
+                ),
+            )
+            read_rsp = await _proxy_round_trip(
+                bundle["proxy_port"],
+                ProtocolEncoder.encode_read_msgs_req(9001, num_msgs=4, timeout=0, sequence=103),
+            )
+
+            assert write_rsp[1] == MsgType.WRITE_MSGS_RSP
+            assert len(write_rsp[3]) == 8
+            assert ProtocolDecoder.decode_write_msgs_rsp(write_rsp[3]) == (0, 1)
+            assert read_rsp[1] == MsgType.READ_MSGS_RSP
+            assert ProtocolDecoder.decode_read_msgs_rsp(read_rsp[3]) == (0, [prefetched_message])
+            assert [name for name, _value in observed] == [
+                "write_msgs",
+                "read_msgs",
+                "read_msgs",
+            ]
+        finally:
+            await _stop_reverse_tunnel(bundle)
+
+    asyncio.run(_run())
+
+
 def test_reverse_tunnel_disconnect_invalidates_read_msgs_cache(monkeypatch) -> None:
     async def _run() -> None:
         observed_reads: list[tuple[int, int, int]] = []

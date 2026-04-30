@@ -154,6 +154,28 @@ def test_send_registration_auth_mode_enables_read_ahead_from_server_capability(m
     assert client._server_read_ahead_enabled is True
 
 
+def test_send_registration_auth_mode_advertises_write_collect_capability(monkeypatch) -> None:
+    config = ProxyConfig.from_args(
+        auth_token="shared-secret",
+        read_ahead_enabled=True,
+        read_ahead_transaction_enabled=True,
+    )
+    client = ReverseProxyClient("example.com", 9000, config=config)
+    reader = _FakeReader(ProtocolEncoder.encode_auth_rsp(True, "ok;read_ahead=1;write_collect=1", sequence=0))
+    writer = _FakeWriter()
+
+    monkeypatch.setattr("vci_proxy.reverse_client.time.time", lambda: 1_700_000_000)
+    monkeypatch.setattr("vci_proxy.reverse_client.compute_signature", lambda token, timestamp: b"s" * 32)
+
+    result = asyncio.run(client._send_registration(reader, writer))
+
+    assert result is True
+    assert client._server_read_ahead_enabled is True
+    assert client._server_write_collect_enabled is True
+    body = writer.writes[0][HEADER_SIZE:]
+    assert ProtocolDecoder.decode_auth_req_capabilities(body) == "read_ahead=1;write_collect=1"
+
+
 def test_proxy_config_from_args_populates_tls_settings() -> None:
     config = ProxyConfig.from_args(
         auth_token="shared-secret",
@@ -549,6 +571,75 @@ def test_handle_write_msgs_attaches_prefetch_bundle_when_read_ahead_enabled(monk
         ("write_msgs", 44, 1, 25),
         ("read_msgs", 44, 2, 0),
         ("read_msgs", 44, 1, 0),
+    ]
+
+
+def test_handle_write_and_collect_reads_uses_transaction_limits(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    observed: list[tuple[str, int, int, int]] = []
+    prefetched_message = {
+        "protocol_id": 6,
+        "rx_status": 0,
+        "tx_flags": 0,
+        "timestamp": 123,
+        "data": b"\x62\xf4\x0c",
+    }
+    read_results = iter([(0, [prefetched_message]), (BUFFER_EMPTY, [])])
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+            read_ahead_window_ms=200,
+            read_ahead_max_reads=3,
+            read_ahead_max_messages=8,
+            read_ahead_read_timeout_ms=10,
+        ),
+    )
+    client._server_read_ahead_enabled = True
+    client._server_write_collect_enabled = True
+    client.driver = types.SimpleNamespace(
+        write_msgs=lambda channel_id, messages, timeout: (
+            observed.append(("write_msgs", channel_id, len(messages), timeout))
+            or (0, len(messages))
+        ),
+        read_msgs=lambda channel_id, num_msgs, timeout: (
+            observed.append(("read_msgs", channel_id, num_msgs, timeout))
+            or next(read_results)
+        ),
+    )
+    write_body = ProtocolEncoder.encode_write_msgs_req(
+        44,
+        [{"protocol_id": 6, "data": b"\x22"}],
+        timeout=25,
+        sequence=7,
+    )[HEADER_SIZE:]
+    transaction_body = ProtocolEncoder.encode_write_and_collect_reads_req(
+        write_body,
+        collect_window_ms=150,
+        max_reads=2,
+        read_timeout_ms=5,
+        max_messages=4,
+        sequence=7,
+    )[HEADER_SIZE:]
+
+    response = asyncio.run(
+        client._handle_message(MsgType.WRITE_AND_COLLECT_READS_REQ, transaction_body, sequence=7)
+    )
+    clean_body, bundle = strip_read_msgs_prefetch_bundle(response[HEADER_SIZE:])
+
+    assert clean_body == ProtocolEncoder.encode_write_msgs_rsp(0, 1, sequence=7)[HEADER_SIZE:]
+    assert bundle is not None
+    assert bundle.channel_id == 44
+    assert ProtocolDecoder.decode_read_msgs_rsp(bundle.read_rsp_bodies[0]) == (
+        0,
+        [prefetched_message],
+    )
+    assert observed == [
+        ("write_msgs", 44, 1, 25),
+        ("read_msgs", 44, 4, 5),
+        ("read_msgs", 44, 3, 5),
     ]
 
 

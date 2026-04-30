@@ -93,12 +93,18 @@ def test_protocol_round_trips_start_filter_with_optional_messages() -> None:
 def test_protocol_round_trips_ioctl_and_auth_messages() -> None:
     ioctl_req = ProtocolEncoder.encode_ioctl_req(3, 0x09, b"\x01\x02", sequence=1)
     ioctl_rsp = ProtocolEncoder.encode_ioctl_rsp(0, b"\xAA\xBB", sequence=1)
-    auth_req = ProtocolEncoder.encode_auth_req(1_700_000_000, b"x" * 32, sequence=2)
+    auth_req = ProtocolEncoder.encode_auth_req(
+        1_700_000_000,
+        b"x" * 32,
+        sequence=2,
+        capabilities="read_ahead=1;write_collect=1",
+    )
     auth_rsp = ProtocolEncoder.encode_auth_rsp(True, "ok", sequence=2)
 
     assert ProtocolDecoder.decode_ioctl_req(ioctl_req[HEADER_SIZE:]) == (3, 0x09, b"\x01\x02")
     assert ProtocolDecoder.decode_ioctl_rsp(ioctl_rsp[HEADER_SIZE:]) == (0, b"\xAA\xBB")
     assert ProtocolDecoder.decode_auth_req(auth_req[HEADER_SIZE:]) == (1_700_000_000, b"x" * 32)
+    assert ProtocolDecoder.decode_auth_req_capabilities(auth_req[HEADER_SIZE:]) == "read_ahead=1;write_collect=1"
     assert ProtocolDecoder.decode_auth_rsp(auth_rsp[HEADER_SIZE:]) == (True, "ok")
 
 
@@ -173,3 +179,59 @@ def test_read_msgs_prefetch_bundle_rejects_truncated_bundle() -> None:
 
     with pytest.raises(ValueError, match="truncated before response body"):
         strip_read_msgs_prefetch_bundle(bundled[HEADER_SIZE:-1])
+
+
+def test_write_and_collect_reads_request_wraps_write_body_and_limits() -> None:
+    messages = [
+        {
+            "protocol_id": 6,
+            "rx_status": 0,
+            "tx_flags": 0,
+            "timestamp": 123,
+            "data": b"\x22\xf4\x0c",
+        }
+    ]
+    write_req_body = ProtocolEncoder.encode_write_msgs_req(
+        44,
+        messages,
+        timeout=25,
+        sequence=7,
+    )[HEADER_SIZE:]
+
+    encoded = ProtocolEncoder.encode_write_and_collect_reads_req(
+        write_req_body,
+        collect_window_ms=200,
+        max_reads=3,
+        read_timeout_ms=0,
+        max_messages=16,
+        sequence=99,
+    )
+    magic, length, msg_type, sequence = Message.decode_header(encoded[:HEADER_SIZE])
+    request = ProtocolDecoder.decode_write_and_collect_reads_req(encoded[HEADER_SIZE:])
+
+    assert magic == MAGIC
+    assert length == len(encoded)
+    assert msg_type == MsgType.WRITE_AND_COLLECT_READS_REQ
+    assert sequence == 99
+    assert request.collect_window_ms == 200
+    assert request.max_reads == 3
+    assert request.read_timeout_ms == 0
+    assert request.max_messages == 16
+    assert request.write_req_body == write_req_body
+    assert ProtocolDecoder.decode_write_msgs_req(request.write_req_body) == (44, messages, 25)
+
+
+def test_write_and_collect_reads_request_rejects_truncated_write_body() -> None:
+    with pytest.raises(ValueError, match="WriteAndCollectReadsReq: body too short"):
+        ProtocolDecoder.decode_write_and_collect_reads_req(b"\x00" * 15)
+
+    encoded = ProtocolEncoder.encode_write_and_collect_reads_req(
+        b"\x00\x00\x00\x01",
+        collect_window_ms=200,
+        max_reads=3,
+        read_timeout_ms=0,
+        max_messages=16,
+        sequence=99,
+    )
+    with pytest.raises(ValueError, match="WriteMsgsReq: body too short"):
+        ProtocolDecoder.decode_write_and_collect_reads_req(encoded[HEADER_SIZE:])

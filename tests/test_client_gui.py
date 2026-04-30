@@ -56,6 +56,7 @@ def _import_client_gui(monkeypatch, tmp_path):
         "VCI_PROXY_READ_AHEAD_MAX_READS",
         "VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS",
         "VCI_PROXY_READ_AHEAD_MAX_MESSAGES",
+        "VCI_PROXY_READ_AHEAD_TRANSACTION",
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setitem(sys.modules, "pystray", fake_pystray)
@@ -92,6 +93,7 @@ def test_load_config_merges_saved_values_with_defaults(monkeypatch, tmp_path) ->
         "read_ahead_max_reads": 3,
         "read_ahead_read_timeout_ms": 0,
         "read_ahead_max_messages": 16,
+        "read_ahead_transaction_enabled": False,
     }
 
 
@@ -113,6 +115,7 @@ def test_save_config_persists_json(monkeypatch, tmp_path) -> None:
         "read_ahead_max_reads": 3,
         "read_ahead_read_timeout_ms": 0,
         "read_ahead_max_messages": 16,
+        "read_ahead_transaction_enabled": False,
     }
 
     client_gui.save_config(config)
@@ -136,6 +139,7 @@ def test_apply_read_ahead_env_overrides_uses_shared_env_names(monkeypatch, tmp_p
     monkeypatch.setenv("VCI_PROXY_READ_AHEAD_MAX_READS", "4")
     monkeypatch.setenv("VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS", "1")
     monkeypatch.setenv("VCI_PROXY_READ_AHEAD_MAX_MESSAGES", "10")
+    monkeypatch.setenv("VCI_PROXY_READ_AHEAD_TRANSACTION", "1")
 
     updated = client_gui.apply_read_ahead_env_overrides(
         {
@@ -144,6 +148,7 @@ def test_apply_read_ahead_env_overrides_uses_shared_env_names(monkeypatch, tmp_p
             "read_ahead_max_reads": 3,
             "read_ahead_read_timeout_ms": 0,
             "read_ahead_max_messages": 16,
+            "read_ahead_transaction_enabled": False,
             "host": "diag.example",
         }
     )
@@ -154,6 +159,7 @@ def test_apply_read_ahead_env_overrides_uses_shared_env_names(monkeypatch, tmp_p
         "read_ahead_max_reads": 4,
         "read_ahead_read_timeout_ms": 1,
         "read_ahead_max_messages": 10,
+        "read_ahead_transaction_enabled": True,
         "host": "diag.example",
     }
 
@@ -180,6 +186,7 @@ def test_effective_runtime_config_applies_read_ahead_env_overrides(monkeypatch, 
         "read_ahead_max_reads": 3,
         "read_ahead_read_timeout_ms": 0,
         "read_ahead_max_messages": 16,
+        "read_ahead_transaction_enabled": False,
     }
 
     cfg = app._effective_runtime_config()
@@ -314,6 +321,7 @@ def test_start_client_builds_reverse_proxy_client_and_starts_thread(monkeypatch,
         "read_ahead_max_reads": 3,
         "read_ahead_read_timeout_ms": 0,
         "read_ahead_max_messages": 16,
+        "read_ahead_transaction_enabled": False,
     }
     assert callable(observed["on_status_change"])
     assert app._client_thread.started is True
