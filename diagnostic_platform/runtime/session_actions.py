@@ -134,10 +134,14 @@ def _detect_backend_page(
 ) -> str:
     """Return the current backend page, falling back to backend state when needed."""
     try:
-        return backend.detect_current_page()
-    except (UnsupportedCapabilityError, NotImplementedError):
-        resolved_state = state if state is not None else backend.get_state()
-        return getattr(resolved_state, "current_page", fallback)
+        page = backend.detect_current_page()
+        return str(getattr(page, "value", page) or fallback)
+    except (AttributeError, UnsupportedCapabilityError, NotImplementedError):
+        try:
+            resolved_state = state if state is not None else backend.get_state()
+        except AttributeError:
+            return fallback
+        return str(getattr(resolved_state, "current_page", fallback) or fallback)
 
 
 def _read_backend_state_and_page(backend: Any) -> tuple[Any, str]:
@@ -1094,6 +1098,14 @@ def stop_live_data(
         payload = backend.stop_live_data_session()
     else:
         payload = stop_diagnostics_live_data_stream(runtime, backend=backend)
+    fallback_page = _strip_optional_text(getattr(session, "current_page", ""))
+    try:
+        page_context = _detect_backend_page(backend, fallback=fallback_page)
+    except Exception:
+        logger.debug("Failed to refresh backend page after stopping live data", exc_info=True)
+        page_context = fallback_page
+    if page_context:
+        set_session_current_page(session, page_context, runtime=runtime)
     set_live_data_active(runtime, session, False)
     emit_progress("Live data stopped")
     emit_session_runtime_event(

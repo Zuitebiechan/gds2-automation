@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import logging
 import threading
+import time
 from typing import Any, Callable
 
 from diagnostic_platform.session_models import SessionContext
@@ -139,6 +140,14 @@ def _cleanup_aborted_session_execution(
     get_ai_engine: Callable[[], Any],
 ) -> None:
     session_id = getattr(session, "session_id", "unknown")
+    started = time.perf_counter()
+    logger.info(
+        "SESSION %s abort cleanup started cleanup=async navigation=%s live_data=%s ai=%s",
+        session_id,
+        bool(snapshot.navigation_session_id),
+        snapshot.live_data_active,
+        bool(snapshot.ai_session_id),
+    )
     try:
         _abort_snapshot_navigation(runtime, session=session, snapshot=snapshot)
         _abort_snapshot_live_data(runtime, session=session, snapshot=snapshot)
@@ -155,6 +164,12 @@ def _cleanup_aborted_session_execution(
             clear_business_session(runtime, session_id)
         except Exception:
             logger.exception("Failed to clear worker binding after abort for %s", session_id)
+        duration_ms = (time.perf_counter() - started) * 1000.0
+        logger.info(
+            "SESSION %s abort cleanup completed cleanup=async duration_ms=%.1f",
+            session_id,
+            duration_ms,
+        )
 
 
 def _start_abort_cleanup_thread(
@@ -323,17 +338,25 @@ def abort_business_session(
     execution_snapshot = _capture_abort_execution_snapshot(runtime, session_id=session_id)
     runtime.cancel_operation(session_id)
     session = orchestrator.abort_session(session_id, reason)
+    logger.info(
+        "SESSION %s abort accepted reason=%s cleanup=async navigation=%s live_data=%s ai=%s",
+        session_id,
+        reason or "user",
+        bool(execution_snapshot.navigation_session_id),
+        execution_snapshot.live_data_active,
+        bool(execution_snapshot.ai_session_id),
+    )
     _start_abort_cleanup_thread(
         runtime,
         session=session,
         snapshot=execution_snapshot,
         get_ai_engine=get_ai_engine,
     )
-    logger.info("SESSION %s aborted reason=%s", session_id, reason or "user")
     return {
         "success": True,
         "session_id": session.session_id,
         "status": session.status.value,
+        "cleanup": "async",
     }
 
 

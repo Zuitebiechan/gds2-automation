@@ -431,10 +431,6 @@ class GDS2DiagnosticBackend(DiagnosticBackend):
                 active=False,
             )
 
-        current_page = self.detect_current_page()
-        if current_page == GDS2Page.DATA_DISPLAY.value:
-            self.go_back()
-
         return {"success": True, "message": "Live data stopped"}
 
     def collect_ai_payload(

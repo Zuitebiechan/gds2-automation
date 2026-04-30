@@ -319,13 +319,14 @@ class WorkerRuntime:
                 connection_epoch=binding.connection_epoch,
             )
 
-    def clear_business_session(self, session_id: str | None = None) -> None:
+    def clear_business_session(self, session_id: str | None = None) -> bool:
         with self.state_lock:
             binding = self.business_session_binding
             if session_id is not None and binding.session_id != session_id:
-                return
+                return False
             self.business_session_binding = WorkerSessionBinding()
             self.clear_active_backend_bundle()
+            return True
 
     def start_operation(self, session_id: str, name: str) -> WorkerOperation:
         with self.state_lock:

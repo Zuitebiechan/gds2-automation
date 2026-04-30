@@ -31,8 +31,9 @@ def bind_business_session(runtime: WorkerRuntime, session: Any) -> None:
 
 
 def clear_business_session(runtime: WorkerRuntime, session_id: str) -> None:
-    runtime.clear_business_session(session_id)
-    ActiveSessionSnapshotStore().clear()
+    cleared = runtime.clear_business_session(session_id)
+    if cleared:
+        ActiveSessionSnapshotStore().clear()
 
 
 def set_session_selection(

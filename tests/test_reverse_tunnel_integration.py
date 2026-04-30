@@ -19,7 +19,10 @@ from vci_proxy.reverse_server import ReverseProxyServer
 
 async def _start_reverse_tunnel(monkeypatch, fake_driver, config: ProxyConfig | None = None):
     monkeypatch.setenv("PROGRAMDATA", tempfile.mkdtemp(prefix="rpa-demo-observability-"))
-    config = config or ProxyConfig.from_args(auth_token="shared-secret")
+    config = config or ProxyConfig.from_args(
+        auth_token="shared-secret",
+        read_ahead_enabled=False,
+    )
     server = ReverseProxyServer(config=config)
     vci_server = await asyncio.start_server(
         server._handle_vci_connection,

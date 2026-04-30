@@ -729,6 +729,7 @@ def test_gds2_backend_start_live_data_session_owns_agent_collector(monkeypatch):
 
     assert stop_payload == {"success": True, "message": "Live data stopped"}
     assert created_collectors[0].stop_calls == 1
+    controller.go_back.assert_not_called()
 
 
 def test_gds2_backend_collect_ai_payload_returns_platform_payload(monkeypatch):

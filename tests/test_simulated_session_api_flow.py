@@ -537,7 +537,7 @@ def test_simulated_session_handlers_stream_live_data_without_real_vci(monkeypatc
         "message": "Live data stopped",
     }
     assert runtime.is_live_data_active(session.session_id) is False
-    assert harness.model.page.value == "data_list"
+    assert harness.model.page.value == "data_display"
     assert ("session-simulated", "Live data started: Engine Data") in orchestrator.progress
     assert ("session-simulated", "Live data stopped") in orchestrator.progress
     stream.close()
@@ -953,7 +953,7 @@ def test_simulated_live_data_can_restart_after_stop(monkeypatch) -> None:
     assert len(collector_registry.instances) == 2
 
 
-def test_simulated_clear_dtcs_recovers_after_live_data_stop_using_session_selection(monkeypatch) -> None:
+def test_simulated_clear_dtcs_after_live_data_stop_uses_active_display_context(monkeypatch) -> None:
     runtime = WorkerRuntime()
     session = _session(
         "session-simulated",
@@ -994,7 +994,7 @@ def test_simulated_clear_dtcs_recovers_after_live_data_stop_using_session_select
     )
     assert stop_status == 200
     assert stop_payload["success"] is True
-    assert harness.model.page.value == "data_list"
+    assert harness.model.page.value == "data_display"
 
     clear_payload, clear_status = session_live_data_handlers.clear_session_dtcs(
         {"session_id": session.session_id}

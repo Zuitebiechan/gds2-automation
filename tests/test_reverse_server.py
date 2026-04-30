@@ -103,7 +103,9 @@ def test_resolve_reverse_server_log_path_prefers_log_dir(tmp_path) -> None:
 
 
 def test_authenticate_vci_accepts_valid_auth_request(monkeypatch) -> None:
-    server = ReverseProxyServer(config=ProxyConfig.from_args(auth_token="secret"))
+    server = ReverseProxyServer(
+        config=ProxyConfig.from_args(auth_token="secret", read_ahead_enabled=False)
+    )
     reader = _FakeReader(ProtocolEncoder.encode_auth_req(123, b"x" * 32, sequence=7))
     writer = _FakeWriter()
 

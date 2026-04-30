@@ -189,6 +189,9 @@ def test_phase3_emits_navigation_live_data_and_ai_business_events(tmp_path: Path
         def stop_live_data_session(self):
             return {"stream_active": False}
 
+        def detect_current_page(self):
+            return "data_display"
+
         def get_state(self):
             return types.SimpleNamespace(current_page="data_display", extra={})
 
@@ -202,7 +205,9 @@ def test_phase3_emits_navigation_live_data_and_ai_business_events(tmp_path: Path
         stream_scope="session:test",
         emit_progress=lambda _message: None,
     )
+    session.current_page = "data_list"
     stop_live_data(runtime, session, backend=backend, emit_progress=lambda _message: None)
+    assert session.current_page == "data_display"
 
     engine = types.SimpleNamespace(
         is_active=False,

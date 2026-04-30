@@ -1048,6 +1048,8 @@ def test_abort_business_session_returns_before_execution_cleanup_finishes(monkey
     cleanup_started = threading.Event()
     cleanup_release = threading.Event()
     cleanup_finished = threading.Event()
+    info_calls: list[tuple[object, ...]] = []
+    guard_abort_return_logs = True
 
     def _blocking_cleanup(*, runtime, session, snapshot, get_ai_engine):
         assert runtime is runtime_obj
@@ -1056,6 +1058,11 @@ def test_abort_business_session_returns_before_execution_cleanup_finishes(monkey
         cleanup_release.wait(timeout=2.0)
         cleanup_finished.set()
 
+    def _logger_info(*args, **kwargs):
+        if guard_abort_return_logs:
+            assert not cleanup_started.is_set()
+        info_calls.append(args)
+
     runtime_obj = runtime
     session_id = session.session_id
     monkeypatch.setattr(
@@ -1063,6 +1070,7 @@ def test_abort_business_session_returns_before_execution_cleanup_finishes(monkey
         "_cleanup_aborted_session_execution",
         _blocking_cleanup,
     )
+    monkeypatch.setattr(session_lifecycle_module.logger, "info", _logger_info)
 
     payload = abort_business_session(
         runtime,
@@ -1071,10 +1079,13 @@ def test_abort_business_session_returns_before_execution_cleanup_finishes(monkey
         reason="user_cancelled",
         get_ai_engine=lambda: MagicMock(),
     )
+    guard_abort_return_logs = False
 
     assert payload["status"] == "aborted"
+    assert payload["cleanup"] == "async"
     assert orchestrator.get_session(session.session_id).status.value == "aborted"
     assert orchestrator.get_active_session() is None
+    assert any("abort accepted" in str(call[0]) for call in info_calls)
     assert cleanup_started.wait(timeout=1.0)
     assert cleanup_finished.is_set() is False
 
@@ -1096,6 +1107,11 @@ def test_aborted_session_cleanup_snapshot_does_not_clear_new_session(monkeypatch
     runtime, orchestrator, old_session, _ = _start_gds2_session(monkeypatch)
     runtime.bind_ai_session(old_session.session_id, "ai-old")
     runtime.set_live_data_active(old_session.session_id, True)
+    snapshot_clears: list[str] = []
+
+    class SnapshotStore:
+        def clear(self):
+            snapshot_clears.append("clear")
 
     class BackendWithLiveStop:
         name = "gds2"
@@ -1121,6 +1137,7 @@ def test_aborted_session_cleanup_snapshot_does_not_clear_new_session(monkeypatch
         context=SessionContext(brand="Chevrolet", model="Malibu", vin="VIN456"),
     )
     ai_engine = MagicMock()
+    monkeypatch.setattr(session_state_module, "ActiveSessionSnapshotStore", SnapshotStore)
 
     session_lifecycle_module._cleanup_aborted_session_execution(
         runtime,
@@ -1132,6 +1149,7 @@ def test_aborted_session_cleanup_snapshot_does_not_clear_new_session(monkeypatch
     assert backend.stop_calls == 1
     ai_engine.abort_session.assert_called_once_with("ai-old")
     assert runtime.get_business_session_binding(restarted["session_id"]).session_id == restarted["session_id"]
+    assert snapshot_clears == []
 
 
 def test_build_session_status_payload_does_not_rebind_aborted_session(monkeypatch):
