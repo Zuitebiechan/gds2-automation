@@ -338,6 +338,24 @@ additional tunnel read. That keeps the first implementation conservative and
 avoids duplicating consumed frames. Real-vehicle A/B logs should decide whether a
 partial FIFO plus tunnel-merge hardening pass is worthwhile.
 
+### Manual GDS2 latency observability
+
+When the cloud GDS2 UI is operated manually, the Flask/session live-data
+collector is not active and there may be no `Engine Speed` value-level samples.
+The reverse server therefore emits proxy-layer evidence that still works for
+manual tests:
+
+- `READ_MSGS_REQ` and `WRITE_MSGS_REQ` events include per-channel
+  `live_inter_request_gap_ms` and `live_inter_request_gap_bucket` values.
+- Gaps at or above `1000ms` emit `proxy.j2534.cadence_gap`; `ge_3000ms` marks
+  the class of stall that can plausibly match visible multi-second Data Display
+  lag.
+- Read/write payload evidence is redacted to length, SHA-256 digest, and a
+  16-byte hex prefix sample. Full CAN/J2534 payloads are not written.
+- If a payload visibly matches standard `41 0C` or `62 F4 0C` Engine Speed
+  response patterns, the event includes a best-effort
+  `*_engine_speed_candidate_rpm` field for correlation only.
+
 ### Filter deduplication
 
 `FilterDeduplicationCache` avoids duplicate filter setup work.

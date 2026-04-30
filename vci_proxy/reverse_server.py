@@ -18,6 +18,7 @@ import argparse
 import ssl
 import signal
 import os
+import hashlib
 from typing import Optional
 from pathlib import Path
 
@@ -112,6 +113,10 @@ for level, message in _bootstrap_logs:
 
 MAX_FRAME_BODY_BYTES = 1_000_000
 DEFAULT_FRAME_BODY_READ_TIMEOUT_S = 10.0
+LIVE_DATA_GAP_WARN_MS = 1000.0
+LIVE_DATA_GAP_STALL_MS = 3000.0
+PAYLOAD_SAMPLE_LIMIT = 3
+PAYLOAD_PREFIX_BYTES = 16
 
 
 def _disable_windows_quick_edit() -> None:
@@ -209,6 +214,10 @@ class ReverseProxyServer:
         )
         # channel_id -> (dll sequence, monotonic timestamp)
         self._last_write_by_channel: dict[int, tuple[int | None, float]] = {}
+        # channel_id -> (message name, dll sequence, monotonic timestamp)
+        self._last_live_request_by_channel: dict[int, tuple[str, int | None, float]] = {}
+        # channel_id -> (aggregate payload digest, monotonic timestamp)
+        self._last_read_payload_by_channel: dict[int, tuple[str, float]] = {}
 
     def _current_observability_context(
         self,
@@ -324,6 +333,84 @@ class ReverseProxyServer:
     def _message_payload_bytes(messages: list[dict]) -> int:
         return sum(len(message.get("data", b"")) for message in messages)
 
+    @staticmethod
+    def _payload_digest(data: bytes) -> str:
+        return hashlib.sha256(data).hexdigest()
+
+    @classmethod
+    def _messages_payload_digest(cls, messages: list[dict]) -> str | None:
+        if not messages:
+            return None
+        digest = hashlib.sha256()
+        for message in messages:
+            data = bytes(message.get("data", b"") or b"")
+            digest.update(len(data).to_bytes(4, "big", signed=False))
+            digest.update(data)
+        return digest.hexdigest()
+
+    @staticmethod
+    def _engine_speed_candidate(data: bytes) -> dict[str, object]:
+        candidates = (
+            (b"\x41\x0c", 2, "obd_pid_0c"),
+            (b"\x62\xf4\x0c", 3, "uds_did_f40c"),
+        )
+        for marker, value_offset, source in candidates:
+            start = data.find(marker)
+            if start < 0:
+                continue
+            value_start = start + value_offset
+            if value_start + 2 > len(data):
+                continue
+            raw_value = int.from_bytes(data[value_start:value_start + 2], "big")
+            return {
+                "engine_speed_candidate_rpm": round(raw_value / 4.0, 3),
+                "engine_speed_candidate_source": source,
+                "engine_speed_candidate_offset": start,
+            }
+        return {}
+
+    @classmethod
+    def _message_payload_summary(
+        cls,
+        prefix: str,
+        messages: list[dict],
+    ) -> dict[str, object]:
+        fields: dict[str, object] = {}
+        digest = cls._messages_payload_digest(messages)
+        if digest is not None:
+            fields[f"{prefix}_payload_digest"] = digest
+
+        samples: list[dict[str, object]] = []
+        for index, message in enumerate(messages[:PAYLOAD_SAMPLE_LIMIT]):
+            data = bytes(message.get("data", b"") or b"")
+            sample: dict[str, object] = {
+                "index": index,
+                "protocol_id": int(message.get("protocol_id", 0) or 0),
+                "rx_status": int(message.get("rx_status", 0) or 0),
+                "tx_flags": int(message.get("tx_flags", 0) or 0),
+                "j2534_timestamp": int(message.get("timestamp", 0) or 0),
+                "data_length": len(data),
+                "data_digest": cls._payload_digest(data),
+                "data_prefix_hex": data[:PAYLOAD_PREFIX_BYTES].hex(),
+            }
+            candidate = cls._engine_speed_candidate(data)
+            if candidate:
+                sample.update(candidate)
+                fields.setdefault(
+                    f"{prefix}_engine_speed_candidate_rpm",
+                    candidate["engine_speed_candidate_rpm"],
+                )
+                fields.setdefault(
+                    f"{prefix}_engine_speed_candidate_source",
+                    candidate["engine_speed_candidate_source"],
+                )
+            samples.append(sample)
+
+        if samples:
+            fields[f"{prefix}_payload_sample_count"] = len(samples)
+            fields[f"{prefix}_payload_samples"] = samples
+        return fields
+
     def _request_observability_fields(self, msg_type: int, body: bytes) -> dict[str, object]:
         fields: dict[str, object] = {}
         try:
@@ -351,11 +438,73 @@ class ReverseProxyServer:
                         "write_message_count": len(messages),
                         "timeout": timeout,
                         "write_payload_bytes": self._message_payload_bytes(messages),
+                        **self._message_payload_summary("write", messages),
                     }
                 )
         except Exception:
             fields["decode_error"] = True
         return fields
+
+    def _augment_live_cadence_fields(
+        self,
+        msg_type: int,
+        sequence: int | None,
+        fields: dict[str, object],
+    ) -> None:
+        if msg_type not in (MsgType.READ_MSGS_REQ, MsgType.WRITE_MSGS_REQ):
+            return
+        channel_id = fields.get("channel_id")
+        if not isinstance(channel_id, int):
+            return
+
+        msg_name = MSG_NAMES.get(msg_type, f"0x{int(msg_type):04x}")
+        now = time.monotonic()
+        fields["live_request_kind"] = "read" if msg_type == MsgType.READ_MSGS_REQ else "write"
+        previous = self._last_live_request_by_channel.get(channel_id)
+        if previous is None:
+            fields["live_inter_request_gap_bucket"] = "first_on_channel"
+        else:
+            previous_msg_name, previous_sequence, previous_ts = previous
+            gap_ms = max(0.0, (now - previous_ts) * 1000.0)
+            fields["previous_live_msg_name"] = previous_msg_name
+            fields["previous_live_dll_seq"] = previous_sequence
+            fields["live_inter_request_gap_ms"] = round(gap_ms, 3)
+            if gap_ms >= LIVE_DATA_GAP_STALL_MS:
+                fields["live_inter_request_gap_bucket"] = "ge_3000ms"
+            elif gap_ms >= LIVE_DATA_GAP_WARN_MS:
+                fields["live_inter_request_gap_bucket"] = "ge_1000ms"
+            else:
+                fields["live_inter_request_gap_bucket"] = "lt_1000ms"
+        self._last_live_request_by_channel[channel_id] = (msg_name, sequence, now)
+
+    def _emit_live_cadence_gap_if_needed(
+        self,
+        *,
+        dll_seq: int,
+        msg_name: str,
+        request_fields: dict[str, object],
+    ) -> None:
+        gap_ms = request_fields.get("live_inter_request_gap_ms")
+        if not isinstance(gap_ms, (int, float)) or gap_ms < LIVE_DATA_GAP_WARN_MS:
+            return
+        threshold_ms = (
+            LIVE_DATA_GAP_STALL_MS
+            if gap_ms >= LIVE_DATA_GAP_STALL_MS
+            else LIVE_DATA_GAP_WARN_MS
+        )
+        reason = (
+            "inter_request_gap_ge_3000ms"
+            if threshold_ms == LIVE_DATA_GAP_STALL_MS
+            else "inter_request_gap_ge_1000ms"
+        )
+        self._emit_proxy_request_event(
+            "proxy.j2534.cadence_gap",
+            dll_seq=dll_seq,
+            msg_name=msg_name,
+            reason=reason,
+            live_gap_threshold_ms=threshold_ms,
+            **request_fields,
+        )
 
     def _response_observability_fields(self, resp_type: int | None, resp_body: bytes) -> dict[str, object]:
         if resp_type != MsgType.READ_MSGS_RSP:
@@ -368,9 +517,38 @@ class ReverseProxyServer:
                 "message_count": message_count,
                 "payload_bytes": self._message_payload_bytes(messages),
                 "read_result": "data" if message_count else "empty",
+                **self._message_payload_summary("read", messages),
             }
         except Exception:
             return {"response_decode_error": True}
+
+    def _augment_read_payload_delta_fields(
+        self,
+        request_fields: dict[str, object],
+        response_fields: dict[str, object],
+    ) -> None:
+        if response_fields.get("read_result") != "data":
+            return
+        channel_id = request_fields.get("channel_id")
+        payload_digest = response_fields.get("read_payload_digest")
+        if not isinstance(channel_id, int) or not isinstance(payload_digest, str):
+            return
+
+        now = time.monotonic()
+        previous = self._last_read_payload_by_channel.get(channel_id)
+        if previous is None:
+            response_fields["read_payload_changed"] = True
+            response_fields["read_payload_change_kind"] = "first_data_on_channel"
+        else:
+            previous_digest, previous_ts = previous
+            gap_ms = max(0.0, (now - previous_ts) * 1000.0)
+            response_fields["previous_read_payload_digest"] = previous_digest
+            response_fields["read_payload_observation_gap_ms"] = round(gap_ms, 3)
+            response_fields["read_payload_changed"] = previous_digest != payload_digest
+            response_fields["read_payload_change_kind"] = (
+                "changed" if previous_digest != payload_digest else "unchanged"
+            )
+        self._last_read_payload_by_channel[channel_id] = (payload_digest, now)
 
     def _cache_miss_reason(self, msg_type: int, request_fields: dict[str, object]) -> str:
         if msg_type != MsgType.READ_MSGS_REQ:
@@ -1094,12 +1272,16 @@ class ReverseProxyServer:
             self._ioctl_cache.invalidate_channel(channel_id)
             self._prefetch_read_msgs.clear_channel(channel_id)
             self._last_write_by_channel.pop(channel_id, None)
+            self._last_live_request_by_channel.pop(channel_id, None)
+            self._last_read_payload_by_channel.pop(channel_id, None)
         elif msg_type == MsgType.CLOSE_REQ:
             self._read_cache.clear()
             self._filter_cache.clear()
             self._ioctl_cache.invalidate()
             self._prefetch_read_msgs.clear()
             self._last_write_by_channel.clear()
+            self._last_live_request_by_channel.clear()
+            self._last_read_payload_by_channel.clear()
         elif msg_type == MsgType.WRITE_MSGS_REQ:
             channel_id, _messages, _timeout = ProtocolDecoder.decode_write_msgs_req(body)
             now = time.monotonic()
@@ -1111,16 +1293,19 @@ class ReverseProxyServer:
             )
             self._read_cache.mark_channel_active(channel_id, invalidate_empty=True)
             self._prefetch_read_msgs.clear_channel(channel_id)
+            self._last_read_payload_by_channel.pop(channel_id, None)
         elif msg_type == MsgType.STOP_FILTER_REQ:
             channel_id, filter_id = ProtocolDecoder.decode_stop_filter_req(body)
             self._read_cache.mark_channel_active(channel_id, invalidate_empty=True)
             self._prefetch_read_msgs.clear_channel(channel_id)
+            self._last_read_payload_by_channel.pop(channel_id, None)
             self._filter_cache.on_stop_filter(filter_id)
         elif msg_type == MsgType.IOCTL_REQ:
             channel_id, ioctl_id, _input = ProtocolDecoder.decode_ioctl_req(body)
             if not self._ioctl_cache.is_cacheable(ioctl_id):
                 self._read_cache.mark_channel_active(channel_id, invalidate_empty=True)
                 self._prefetch_read_msgs.clear_channel(channel_id)
+                self._last_read_payload_by_channel.pop(channel_id, None)
 
     def _clear_prefetch_after_failed_write(self, msg_type: int, body: bytes) -> None:
         if msg_type != MsgType.WRITE_MSGS_REQ:
@@ -1457,12 +1642,18 @@ class ReverseProxyServer:
                 msg_name = MSG_NAMES.get(msg_type, f"0x{msg_type:04x}")
                 started_at_s = time.time()
                 request_fields = self._request_observability_fields(msg_type, body)
+                self._augment_live_cadence_fields(msg_type, sequence, request_fields)
                 self._emit_proxy_request_event(
                     "proxy.request.received_from_dll",
                     dll_seq=sequence,
                     msg_name=msg_name,
                     reason="received_from_dll",
                     **request_fields,
+                )
+                self._emit_live_cadence_gap_if_needed(
+                    dll_seq=sequence,
+                    msg_name=msg_name,
+                    request_fields=request_fields,
                 )
 
                 # Try serving from cache
@@ -1480,6 +1671,7 @@ class ReverseProxyServer:
                     )
                     resp_type, resp_body = decode_benchmark_response(cached)
                     response_fields = self._response_observability_fields(resp_type, resp_body)
+                    self._augment_read_payload_delta_fields(request_fields, response_fields)
                     self._record_benchmark_event(
                         started_at_s=started_at_s,
                         duration_ms=0.0,
@@ -1567,6 +1759,7 @@ class ReverseProxyServer:
 
                     self._record_in_caches(msg_type, body, resp_type, resp_body, ioctl_id)
                     response_fields = self._response_observability_fields(resp_type, resp_body)
+                    self._augment_read_payload_delta_fields(request_fields, response_fields)
                     self._record_benchmark_event(
                         started_at_s=started_at_s,
                         duration_ms=fwd_ms,

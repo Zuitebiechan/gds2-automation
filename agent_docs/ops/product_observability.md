@@ -221,8 +221,10 @@ Current runtime behavior:
 - `vci_proxy/reverse_server.py`
   - emits tunnel lifecycle, probe, tunnel-quality, proxy-request staged events, and reverse-server process lifecycle events
   - proxy-request events for `READ_MSGS_REQ` include decoded request metadata (`channel_id`, `num_msgs`, `timeout`) and, when applicable, `last_write_seq` plus `post_write_age_ms`
-  - proxy-request response events for `READ_MSGS_RSP` include `return_code`, `message_count`, `payload_bytes`, and `read_result` (`empty` or `data`)
-  - `WRITE_MSGS_REQ` request events include `channel_id`, `write_message_count`, `timeout`, and `write_payload_bytes` without logging raw payload data
+  - proxy-request response events for `READ_MSGS_RSP` include `return_code`, `message_count`, `payload_bytes`, `read_result` (`empty` or `data`), redacted payload digest/prefix samples, and read-payload change markers
+  - `WRITE_MSGS_REQ` request events include `channel_id`, `write_message_count`, `timeout`, `write_payload_bytes`, and redacted payload digest/prefix samples without logging full raw payload data
+  - manual GDS2 proxy events for `READ_MSGS_REQ` and `WRITE_MSGS_REQ` include per-channel `live_inter_request_gap_ms` / `live_inter_request_gap_bucket`; gaps at or above `1000ms` also emit `proxy.j2534.cadence_gap`
+  - payload samples include a best-effort `*_engine_speed_candidate_rpm` only when standard `41 0C` or `62 F4 0C` Engine Speed response patterns are visible; treat this as a correlation hint, not a protocol guarantee
 - `vci_proxy/reverse_client.py`
   - emits reverse tunnel connection lifecycle, request receipt, and J2534 call events
 - `vci_proxy/j2534_worker.py`

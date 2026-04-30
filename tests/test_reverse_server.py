@@ -1078,6 +1078,141 @@ def test_handle_proxy_connection_emits_read_msgs_cache_hit_metadata(monkeypatch,
     assert replied["read_result"] == "empty"
 
 
+def test_proxy_observability_summarizes_payloads_and_engine_speed_candidate() -> None:
+    server = ReverseProxyServer()
+    engine_speed_message = {
+        "protocol_id": 6,
+        "rx_status": 0,
+        "tx_flags": 0,
+        "timestamp": 123,
+        "data": b"\x05\x62\xf4\x0c\x1f\x40",
+    }
+
+    write_body = ProtocolEncoder.encode_write_msgs_req(
+        77,
+        [engine_speed_message],
+        timeout=25,
+        sequence=10,
+    )[HEADER_SIZE:]
+    request_fields = server._request_observability_fields(
+        MsgType.WRITE_MSGS_REQ,
+        write_body,
+    )
+
+    assert request_fields["write_payload_bytes"] == 6
+    assert request_fields["write_payload_digest"]
+    assert request_fields["write_payload_sample_count"] == 1
+    assert request_fields["write_payload_samples"][0]["data_prefix_hex"] == "0562f40c1f40"
+    assert request_fields["write_engine_speed_candidate_rpm"] == 2000.0
+    assert request_fields["write_engine_speed_candidate_source"] == "uds_did_f40c"
+
+    read_body = ProtocolEncoder.encode_read_msgs_rsp(
+        0,
+        [engine_speed_message],
+        sequence=11,
+    )[HEADER_SIZE:]
+    response_fields = server._response_observability_fields(
+        MsgType.READ_MSGS_RSP,
+        read_body,
+    )
+
+    assert response_fields["return_code"] == 0
+    assert response_fields["message_count"] == 1
+    assert response_fields["payload_bytes"] == 6
+    assert response_fields["read_result"] == "data"
+    assert response_fields["read_payload_digest"]
+    assert response_fields["read_payload_samples"][0]["data_digest"]
+    assert response_fields["read_engine_speed_candidate_rpm"] == 2000.0
+
+
+def test_proxy_observability_tracks_read_payload_changes(monkeypatch) -> None:
+    server = ReverseProxyServer()
+    request_fields = {"channel_id": 77}
+    response_fields = {
+        "read_result": "data",
+        "read_payload_digest": "digest-a",
+    }
+    monotonic_values = iter([10.0, 10.5, 13.0])
+    monkeypatch.setattr(reverse_server_module.time, "monotonic", lambda: next(monotonic_values))
+
+    server._augment_read_payload_delta_fields(request_fields, response_fields)
+
+    assert response_fields["read_payload_changed"] is True
+    assert response_fields["read_payload_change_kind"] == "first_data_on_channel"
+
+    same_response_fields = {
+        "read_result": "data",
+        "read_payload_digest": "digest-a",
+    }
+    server._augment_read_payload_delta_fields(request_fields, same_response_fields)
+
+    assert same_response_fields["read_payload_changed"] is False
+    assert same_response_fields["read_payload_change_kind"] == "unchanged"
+    assert same_response_fields["read_payload_observation_gap_ms"] == pytest.approx(500.0)
+
+    changed_response_fields = {
+        "read_result": "data",
+        "read_payload_digest": "digest-b",
+    }
+    server._augment_read_payload_delta_fields(request_fields, changed_response_fields)
+
+    assert changed_response_fields["read_payload_changed"] is True
+    assert changed_response_fields["read_payload_change_kind"] == "changed"
+    assert changed_response_fields["read_payload_observation_gap_ms"] == pytest.approx(2500.0)
+
+
+def test_proxy_observability_marks_multisecond_live_request_gap(monkeypatch) -> None:
+    server = ReverseProxyServer()
+    monotonic_values = iter([10.0, 13.2])
+    monkeypatch.setattr(reverse_server_module.time, "monotonic", lambda: next(monotonic_values))
+
+    write_fields = {"channel_id": 77}
+    server._augment_live_cadence_fields(MsgType.WRITE_MSGS_REQ, 31, write_fields)
+
+    assert write_fields["live_request_kind"] == "write"
+    assert write_fields["live_inter_request_gap_bucket"] == "first_on_channel"
+
+    read_fields = {"channel_id": 77}
+    server._augment_live_cadence_fields(MsgType.READ_MSGS_REQ, 32, read_fields)
+
+    assert read_fields["live_request_kind"] == "read"
+    assert read_fields["previous_live_msg_name"] == "WRITE_MSGS_REQ"
+    assert read_fields["previous_live_dll_seq"] == 31
+    assert read_fields["live_inter_request_gap_ms"] == pytest.approx(3200.0)
+    assert read_fields["live_inter_request_gap_bucket"] == "ge_3000ms"
+
+
+def test_proxy_observability_emits_live_cadence_gap_event(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+    server = ReverseProxyServer()
+    server._connection_epoch = "epoch-live-gap"
+
+    server._emit_live_cadence_gap_if_needed(
+        dll_seq=32,
+        msg_name="READ_MSGS_REQ",
+        request_fields={
+            "channel_id": 77,
+            "num_msgs": 300,
+            "timeout": 0,
+            "live_request_kind": "read",
+            "previous_live_msg_name": "WRITE_MSGS_REQ",
+            "previous_live_dll_seq": 31,
+            "live_inter_request_gap_ms": 3200.0,
+            "live_inter_request_gap_bucket": "ge_3000ms",
+        },
+    )
+
+    records = _read_product_log_events(tmp_path)
+    gap_event = next(record for record in records if record["event_type"] == "proxy.j2534.cadence_gap")
+
+    assert gap_event["connection_epoch"] == "epoch-live-gap"
+    assert gap_event["dll_seq"] == 32
+    assert gap_event["reason"] == "inter_request_gap_ge_3000ms"
+    assert gap_event["channel_id"] == 77
+    assert gap_event["previous_live_dll_seq"] == 31
+    assert gap_event["live_gap_threshold_ms"] == 3000.0
+
+
 def test_handle_proxy_connection_serves_prefetched_read_msgs_before_empty_cache(monkeypatch, tmp_path) -> None:
     async def _run() -> None:
         monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
