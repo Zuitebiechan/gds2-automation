@@ -8,7 +8,7 @@
 | Status | Planning baseline for future implementation |
 | Owner scope | Proxy J2534 reverse tunnel latency, especially cloud GDS2 live data freshness |
 | Primary code paths | `vci_proxy/reverse_server.py`, `vci_proxy/reverse_client.py`, `vci_proxy/protocol.py`, `vci_proxy/cache_read_msgs.py` |
-| Related docs | `agent_docs/ops/vci_proxy_and_tunnel.md`, `agent_docs/reports/network_ms.md`, `agent_docs/ops/product_observability.md` |
+| Related docs | `agent_docs/ops/vci_proxy_and_tunnel.md`, `agent_docs/reports/network_ms.md`, `agent_docs/ops/product_observability.md`, `agent_docs/ops/proxy_j2534_local_sweep_scheduler.md` |
 
 ## One-Line Conclusion
 
@@ -391,6 +391,10 @@ Validation:
 Goal: move high-frequency J2534 polling near the VCI and stream results to the cloud.
 
 This is the largest architectural change and should not be the first implementation.
+
+The detailed long-term design is maintained in
+`agent_docs/ops/proxy_j2534_local_sweep_scheduler.md`. That document supersedes
+this short roadmap section when implementing Phase 5.
 
 Design idea:
 

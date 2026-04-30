@@ -17,6 +17,7 @@ Use it as the primary source of truth after the code itself. Each document has a
 - If you need environment setup, runtime commands, ports, secrets, or deployment notes, read `agent_docs/ops/deployment_and_operations.md`.
 - If you need reverse tunnel, local tray client, virtual DLL, auth, cache, or tunnel-quality details, read `agent_docs/ops/vci_proxy_and_tunnel.md`.
 - If you need the Proxy J2534 latency optimization roadmap for cloud GDS2 live data, read `agent_docs/ops/proxy_j2534_latency_optimization.md`.
+- If you need the long-term Proxy J2534 local Data Display sweep scheduler design, read `agent_docs/ops/proxy_j2534_local_sweep_scheduler.md`.
 - If you need real-vehicle local-vs-cloud GDS2 log collection and comparison workflow, read `agent_docs/ops/gds2_ab_log_comparison.md`.
 - If you need the product-level observability schema, artifact layout, redaction policy, or incident artifact contract, read `agent_docs/ops/product_observability.md`.
 - If you need AWS Local Zone node allocation, pool sizing, routing, or cost guidance, read `agent_docs/ops/aws_local_zone_node_allocation.md`.
@@ -42,6 +43,7 @@ Use it as the primary source of truth after the code itself. Each document has a
 | `agent_docs/ops/deployment_and_operations.md` | Environment setup, ports, startup, secrets, logs, build/run conventions |
 | `agent_docs/ops/vci_proxy_and_tunnel.md` | Tunnel protocol path, reverse server/client, GUI/tray client, auth, cache, quality tracking |
 | `agent_docs/ops/proxy_j2534_latency_optimization.md` | Cloud GDS2 live-data latency analysis and staged Proxy J2534 optimization plan |
+| `agent_docs/ops/proxy_j2534_local_sweep_scheduler.md` | Long-term local-side read-only Data Display sweep scheduler design for reducing Proxy J2534 tunnel round trips |
 | `agent_docs/ops/gds2_ab_log_comparison.md` | Real-vehicle A/B log capture workflow and local-vs-cloud comparison method |
 | `agent_docs/ops/product_observability.md` | Structured logging schema, artifact layout, redaction rules, and incident artifact contract |
 | `agent_docs/ops/aws_local_zone_customer_node.md` | Plain-language deployment guide for one-customer-per-node AWS Local Zone Windows workers |
