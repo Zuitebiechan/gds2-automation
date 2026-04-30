@@ -24,6 +24,7 @@ class _Widget:
     def __init__(self) -> None:
         self.state = None
         self.values = None
+        self.text = None
         self.visible = True
 
     def configure(self, **kwargs) -> None:
@@ -31,6 +32,8 @@ class _Widget:
             self.state = kwargs["state"]
         if "values" in kwargs:
             self.values = kwargs["values"]
+        if "text" in kwargs:
+            self.text = kwargs["text"]
 
     def grid(self, *args, **kwargs) -> None:
         self.visible = True
@@ -41,21 +44,48 @@ class _Widget:
 
 class _Tree:
     def __init__(self) -> None:
-        self.rows: list[tuple[str, str, str, str]] = []
+        self.rows: list[tuple[object, ...]] = []
         self.headings: dict[str, str] = {}
+        self._ids: list[str] = []
+        self._id_to_index: dict[str, int] = {}
 
-    def get_children(self, _item: str = "") -> list[int]:
-        return list(range(len(self.rows)))
+    def get_children(self, _item: str = "") -> list[str]:
+        return [item_id for item_id in self._ids if item_id in self._id_to_index]
 
-    def delete(self, item_id: int) -> None:
-        if 0 <= item_id < len(self.rows):
-            self.rows[item_id] = ("", "", "", "")
+    def delete(self, item_id: str) -> None:
+        if item_id not in self._id_to_index:
+            return
+        index = self._id_to_index.pop(item_id)
+        self.rows[index] = ()
 
-    def insert(self, _parent: str, _index: str, values: tuple[str, str, str, str]) -> None:
-        self.rows.append(values)
+    def insert(self, _parent: str, _index: str, values: tuple[object, ...]) -> str:
+        item_id = f"I{len(self.rows)}"
+        self._ids.append(item_id)
+        self._id_to_index[item_id] = len(self.rows)
+        self.rows.append(tuple(values))
+        return item_id
+
+    def exists(self, item_id: str) -> bool:
+        return item_id in self._id_to_index
+
+    def item(self, item_id: str, **kwargs):
+        if item_id not in self._id_to_index:
+            return None
+        index = self._id_to_index[item_id]
+        if "values" in kwargs:
+            self.rows[index] = tuple(kwargs["values"])
+        return {"values": self.rows[index]}
 
     def heading(self, key: str, text: str) -> None:
         self.headings[key] = text
+
+
+class _Notebook:
+    def __init__(self) -> None:
+        self.selected = None
+
+    def select(self, index: int) -> None:
+        self.selected = index
 
 
 class _Text:
@@ -123,6 +153,8 @@ def _build_window(*, current_page: str = "") -> DiagnosticsWindow:
     window._active_branch = ""
     window._action_output_mode = "dtc"
     window._stream_active = False
+    window._live_start_pending = False
+    window._live_stop_pending = False
     window._ai_sse_running = False
     window._ai_start_pending = False
     window._auto_ai_start_scheduled = False
@@ -145,6 +177,10 @@ def _build_window(*, current_page: str = "") -> DiagnosticsWindow:
     window._flow_step_hint = _Var("")
     window._dtc_count_text = _Var("")
     window._dtc_tree = _Tree()
+    window._live_tree = _Tree()
+    window._live_param_rows = {}
+    window._live_status_text = _Var("Ready")
+    window._action_output_notebook = _Notebook()
     window._module_label = _Widget()
     window._data_label = _Widget()
     window._select_module_button = _Widget()
@@ -425,6 +461,52 @@ def test_refresh_action_buttons_enables_module_actions_only_when_module_branch_r
     assert window._read_dtc_button.state == tk.NORMAL
     assert window._clear_dtc_button.visible is True
     assert window._clear_dtc_button.state == tk.NORMAL
+    assert window._start_stream_button.visible is True
+    assert window._start_stream_button.state == tk.NORMAL
+    assert window._stop_stream_button.visible is True
+    assert window._stop_stream_button.state == tk.DISABLED
+
+
+def test_refresh_action_buttons_live_active_disables_conflicting_module_actions() -> None:
+    window = _build_window(current_page="data_display")
+    window._active_branch = "module"
+    window._selected_module.set("ECM")
+    window._selected_data_category.set("Engine Data")
+    window._session_category_confirmed = True
+    window._stream_active = True
+
+    window._refresh_action_buttons()
+
+    assert window._ai_diagnose_button.state == tk.DISABLED
+    assert window._read_dtc_button.state == tk.DISABLED
+    assert window._clear_dtc_button.state == tk.DISABLED
+    assert window._start_stream_button.visible is True
+    assert window._start_stream_button.state == tk.DISABLED
+    assert window._stop_stream_button.visible is True
+    assert window._stop_stream_button.state == tk.NORMAL
+
+
+def test_refresh_action_buttons_live_pending_states_disable_duplicate_requests() -> None:
+    window = _build_window(current_page="data_display")
+    window._active_branch = "module"
+    window._selected_module.set("ECM")
+    window._selected_data_category.set("Engine Data")
+    window._session_category_confirmed = True
+    window._live_start_pending = True
+
+    window._refresh_action_buttons()
+
+    assert window._start_stream_button.state == tk.DISABLED
+    assert window._stop_stream_button.state == tk.DISABLED
+
+    window._live_start_pending = False
+    window._session_live_data_active = True
+    window._live_stop_pending = True
+
+    window._refresh_action_buttons()
+
+    assert window._start_stream_button.state == tk.DISABLED
+    assert window._stop_stream_button.state == tk.DISABLED
 
 
 def test_refresh_action_buttons_enables_vehicle_actions_only_on_vehicle_page() -> None:
@@ -438,6 +520,8 @@ def test_refresh_action_buttons_enables_vehicle_actions_only_on_vehicle_page() -
     assert window._module_combo.visible is False
     assert window._data_combo.visible is False
     assert window._ai_diagnose_button.visible is False
+    assert window._start_stream_button.visible is False
+    assert window._stop_stream_button.visible is False
     assert window._read_dtc_button.visible is True
     assert window._read_dtc_button.state == tk.NORMAL
     assert window._clear_dtc_button.visible is True
@@ -844,11 +928,14 @@ def test_on_start_stream_clicked_posts_session_live_data_request() -> None:
                     "session_id": "session-123",
                     "module": "ECM",
                     "data_category": "Diagnostic Data Display",
+                    "interval_ms": 250,
                 },
                 "callback_event": "live_start_result",
             },
         )
     ]
+    assert window._live_start_pending is True
+    assert window._live_status_text.get() == "Starting Live Data..."
 
 
 def test_on_start_stream_clicked_requires_session() -> None:
@@ -886,6 +973,8 @@ def test_on_stop_stream_clicked_posts_session_live_data_stop() -> None:
             },
         )
     ]
+    assert window._live_stop_pending is True
+    assert window._live_status_text.get() == "Stopping Live Data..."
 
 
 def test_on_stop_stream_clicked_requires_session() -> None:
@@ -904,6 +993,145 @@ def test_on_stop_stream_clicked_requires_session() -> None:
 
     assert calls == []
     assert warnings == [("Session Required", "Please click Start Session first.")]
+
+
+def test_handle_live_start_result_selects_live_output_and_clears_stale_rows() -> None:
+    window = _build_window(current_page="data_display")
+    window._active_branch = "module"
+    window._live_start_pending = True
+    stale_id = window._live_tree.insert("", tk.END, values=("Old", "1", "V"))
+    window._live_param_rows["Old"] = stale_id
+    started: list[bool] = []
+    window._start_sse_thread = lambda: started.append(True)
+
+    window._handle_live_start_result({"success": True, "message": "Started"})
+
+    assert window._live_start_pending is False
+    assert window._stream_active is True
+    assert window._session_live_data_active is True
+    assert window._action_output_mode == "live"
+    assert window._action_output_notebook.selected == 2
+    assert window._live_tree.get_children() == []
+    assert window._live_param_rows == {}
+    assert window._live_status_text.get() == "Waiting for first snapshot..."
+    assert started == [True]
+    assert window._stop_stream_button.state == tk.NORMAL
+
+
+def test_handle_live_start_result_failure_clears_pending_and_keeps_stop_disabled() -> None:
+    window = _build_window(current_page="data_display")
+    window._active_branch = "module"
+    window._live_start_pending = True
+
+    window._handle_live_start_result({"success": False, "error": "backend rejected"})
+
+    assert window._live_start_pending is False
+    assert window._stream_active is False
+    assert window._session_live_data_active is False
+    assert window._stop_stream_button.state == tk.DISABLED
+    assert window._live_status_text.get() == "Start failed: backend rejected"
+
+
+def test_handle_live_stop_result_success_stops_sse_and_disables_stop() -> None:
+    window = _build_window(current_page="data_display")
+    window._active_branch = "module"
+    window._stream_active = True
+    window._session_live_data_active = True
+    window._live_stop_pending = True
+    stopped: list[bool] = []
+    window._stop_sse_thread = lambda: stopped.append(True)
+
+    window._handle_live_stop_result({"success": True, "message": "Stopped"})
+
+    assert stopped == [True]
+    assert window._live_stop_pending is False
+    assert window._stream_active is False
+    assert window._session_live_data_active is False
+    assert window._stop_stream_button.state == tk.DISABLED
+    assert window._live_status_text.get() == "Stopped"
+
+
+def test_handle_live_stop_result_failure_keeps_stop_available_for_retry() -> None:
+    window = _build_window(current_page="data_display")
+    window._active_branch = "module"
+    window._session_live_data_active = True
+    window._live_stop_pending = True
+    window._stop_sse_thread = lambda: None
+
+    window._handle_live_stop_result({"success": False, "error": "timeout"})
+
+    assert window._live_stop_pending is False
+    assert window._stream_active is False
+    assert window._session_live_data_active is True
+    assert window._stop_stream_button.state == tk.NORMAL
+    assert window._live_status_text.get() == "Stop failed: timeout"
+
+
+def test_handle_sse_snapshot_updates_existing_live_tree_rows_in_place() -> None:
+    window = _build_window(current_page="data_display")
+
+    window._handle_sse_snapshot(
+        {
+            "type": "snapshot",
+            "extraction_count": 1,
+            "parameters": [
+                {"name": "RPM", "value": "800", "unit": "rpm"},
+                {"name": "Coolant Temp", "value": "91", "unit": "C"},
+            ],
+        }
+    )
+    window._handle_sse_snapshot(
+        {
+            "type": "snapshot",
+            "extraction_count": 2,
+            "parameters": [{"name": "RPM", "value": "820", "unit": "rpm"}],
+        }
+    )
+
+    assert window._live_tree.get_children() == ["I0"]
+    assert window._live_tree.rows[0] == ("RPM", "820", "rpm")
+    assert window._live_param_rows == {"RPM": "I0"}
+    assert window._live_status_text.get() == "Streaming #2 - 1 parameter(s), 0 changed"
+
+
+def test_handle_sse_snapshot_clears_rows_for_empty_latest_snapshot() -> None:
+    window = _build_window(current_page="data_display")
+
+    window._handle_sse_snapshot(
+        {
+            "type": "snapshot",
+            "parameters": [{"name": "RPM", "value": "800", "unit": "rpm"}],
+        }
+    )
+    window._handle_sse_snapshot({"type": "snapshot", "parameters": []})
+
+    assert window._live_tree.get_children() == []
+    assert window._live_param_rows == {}
+    assert window._live_status_text.get() == "Streaming live data - 0 parameter(s)"
+
+
+def test_handle_sse_error_does_not_reenable_conflicting_actions_while_session_live_active() -> None:
+    window = _build_window(current_page="data_display")
+    window._active_branch = "module"
+    window._selected_module.set("ECM")
+    window._selected_data_category.set("Engine Data")
+    window._session_category_confirmed = True
+    window._stream_active = True
+    window._session_live_data_active = True
+    window._live_start_pending = True
+    window._live_stop_pending = True
+    window._stop_sse_thread = lambda: None
+
+    window._handle_sse_error({"error": "disconnect"})
+
+    assert window._stream_active is False
+    assert window._live_start_pending is False
+    assert window._live_stop_pending is False
+    assert window._ai_diagnose_button.state == tk.DISABLED
+    assert window._read_dtc_button.state == tk.DISABLED
+    assert window._clear_dtc_button.state == tk.DISABLED
+    assert window._stop_stream_button.state == tk.NORMAL
+    assert window._live_status_text.get() == "Live Data error: disconnect"
 
 
 def test_live_data_sse_uses_session_endpoint(monkeypatch) -> None:

@@ -419,6 +419,7 @@ class DiagnosticsWindow:
     POLL_INTERVAL_MS = 100
     SESSION_STATUS_POLL_INTERVAL_MS = 1500
     BOOTSTRAP_ASSIGNMENT_RETRY_LIMIT = 1
+    LIVE_DATA_INTERVAL_MS = 250
     _VEHICLE_DTC_INFORMATION_LABEL = "Vehicle DTC Information"
     _VEHICLE_DTC_LOADING_MESSAGE = (
         "Vehicle DTC Information is still loading. "
@@ -458,6 +459,8 @@ class DiagnosticsWindow:
         self._sse_thread: Optional[threading.Thread] = None
         self._sse_response: Optional[requests.Response] = None
         self._stream_active = False
+        self._live_start_pending = False
+        self._live_stop_pending = False
 
         self._ai_sse_running = False
         self._ai_sse_thread: Optional[threading.Thread] = None
@@ -502,6 +505,7 @@ class DiagnosticsWindow:
         self._agent_prompt_label_var = tk.StringVar(value="")
 
         self._live_param_rows: dict[str, str] = {}
+        self._live_status_text = tk.StringVar(value="Ready")
 
         self._status_message = tk.StringVar(value="Ready")
         self._server_state_text = tk.StringVar(value=f"Server: {self._server_display}")
@@ -1095,7 +1099,7 @@ class DiagnosticsWindow:
 
         self._start_stream_button = ttk.Button(
             secondary_controls,
-            text="Start Stream",
+            text="Start Live",
             command=self._on_start_stream_clicked,
             state=tk.DISABLED,
         )
@@ -1104,7 +1108,7 @@ class DiagnosticsWindow:
 
         self._stop_stream_button = ttk.Button(
             secondary_controls,
-            text="Stop",
+            text="Stop Live",
             command=self._on_stop_stream_clicked,
             state=tk.DISABLED,
         )
@@ -1194,6 +1198,34 @@ class DiagnosticsWindow:
         self._ai_result_text.configure(yscrollcommand=ai_scroll.set)
 
         self._ai_result_frame = ai_frame
+
+        live_frame = ttk.Frame(notebook, style="Card.TFrame", padding=8)
+        live_frame.columnconfigure(0, weight=1)
+        live_frame.rowconfigure(1, weight=1)
+        notebook.add(live_frame, text="Live Data")
+
+        live_header = ttk.Frame(live_frame, style="Card.TFrame")
+        live_header.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        live_header.columnconfigure(0, weight=1)
+        ttk.Label(live_header, textvariable=self._live_status_text, style="Status.TLabel").grid(
+            row=0,
+            column=0,
+            sticky="w",
+        )
+
+        live_cols = ("parameter", "value", "unit")
+        self._live_tree = ttk.Treeview(live_frame, columns=live_cols, show="headings", height=10)
+        self._live_tree.grid(row=1, column=0, sticky="nsew")
+        self._live_tree.heading("parameter", text="Parameter")
+        self._live_tree.heading("value", text="Value")
+        self._live_tree.heading("unit", text="Unit")
+        self._live_tree.column("parameter", width=360, anchor=tk.W, stretch=True)
+        self._live_tree.column("value", width=180, anchor=tk.W, stretch=False)
+        self._live_tree.column("unit", width=120, anchor=tk.W, stretch=False)
+
+        live_scroll = ttk.Scrollbar(live_frame, orient=tk.VERTICAL, command=self._live_tree.yview)
+        live_scroll.grid(row=1, column=1, sticky="ns")
+        self._live_tree.configure(yscrollcommand=live_scroll.set)
     # ------------------------------------------------------------------
     # Generic threaded API helpers
     # ------------------------------------------------------------------
@@ -1458,6 +1490,8 @@ class DiagnosticsWindow:
             vehicle_dtc_status_message=str(self._vehicle_dtc_status_message or "").strip(),
             category_confirmed=bool(self._session_category_confirmed),
             stream_active=bool(self._stream_active),
+            live_start_pending=bool(self._live_start_pending),
+            live_stop_pending=bool(self._live_stop_pending),
             ai_sse_running=bool(self._ai_sse_running),
             ai_start_pending=bool(self._ai_start_pending),
             auto_ai_start_scheduled=bool(self._auto_ai_start_scheduled),
@@ -1501,14 +1535,14 @@ class DiagnosticsWindow:
 
     def _set_action_output_mode(self, mode: str) -> None:
         normalized = str(mode or "dtc").strip().lower()
-        if normalized not in {"dtc", "ai"}:
+        if normalized not in {"dtc", "ai", "live"}:
             normalized = "dtc"
         self._action_output_mode = normalized
         notebook = getattr(self, "_action_output_notebook", None)
         if notebook is None:
             return
         try:
-            notebook.select(0 if normalized == "dtc" else 1)
+            notebook.select({"dtc": 0, "ai": 1, "live": 2}[normalized])
         except tk.TclError:
             pass
 
@@ -1541,7 +1575,12 @@ class DiagnosticsWindow:
         self._clear_dtc_button.configure(
             state=tk.NORMAL if view.can_clear_dtcs else tk.DISABLED
         )
-        self._start_stream_button.configure(state=tk.DISABLED)
+        self._start_stream_button.configure(
+            state=tk.NORMAL if view.can_start_live else tk.DISABLED
+        )
+        self._stop_stream_button.configure(
+            state=tk.NORMAL if view.can_stop_live else tk.DISABLED
+        )
 
         if view.show_module_selection:
             self._module_label.grid()
@@ -1576,6 +1615,13 @@ class DiagnosticsWindow:
         else:
             self._read_dtc_button.grid_remove()
             self._clear_dtc_button.grid_remove()
+
+        if view.show_live_actions:
+            self._start_stream_button.grid()
+            self._stop_stream_button.grid()
+        else:
+            self._start_stream_button.grid_remove()
+            self._stop_stream_button.grid_remove()
 
     def _can_auto_start_ai(self) -> bool:
         """Auto-start is intentionally disabled for the redesigned guided workflow."""
@@ -1642,6 +1688,10 @@ class DiagnosticsWindow:
         self._session_live_data_active = False
         self._session_ai_active = False
         self._session_navigation_active = False
+        self._stream_active = False
+        self._live_start_pending = False
+        self._live_stop_pending = False
+        self._clear_live_data_rows()
         self._session_category_confirmed = False
         self._navigate_session_id = None
         self._close_decision_modal()
@@ -1702,6 +1752,9 @@ class DiagnosticsWindow:
         self._session_ai_active = False
         self._session_navigation_active = False
         self._stream_active = False
+        self._live_start_pending = False
+        self._live_stop_pending = False
+        self._clear_live_data_rows()
         self._navigate_session_id = None
         self._vehicle_dtc_ready = False
         self._vehicle_dtc_status_message = ""
@@ -1742,6 +1795,10 @@ class DiagnosticsWindow:
         self._session_live_data_active = False
         self._session_ai_active = False
         self._session_navigation_active = False
+        self._stream_active = False
+        self._live_start_pending = False
+        self._live_stop_pending = False
+        self._clear_live_data_rows()
         self._session_status_refresh_inflight = False
         self._session_category_confirmed = False
         self._session_id = None
@@ -2424,20 +2481,24 @@ class DiagnosticsWindow:
 
         if not self._session_id:
             messagebox.showwarning("Session Required", "Please click Start Session first.")
-            self._set_session_hint("Please click Start Session first, then run Start Stream.")
+            self._set_session_hint("Please click Start Session first, then run Start Live.")
             return
 
         if not self._session_category_confirmed:
             messagebox.showwarning(
                 "Category Not Confirmed",
-                "In Session mode, please click Select next to Data Category before Start Stream.",
+                "In Session mode, please click Select next to Data Category before Start Live.",
             )
-            self._set_session_hint("请先提交 Data Category（点右侧 Select）再执行 Start Stream。")
+            self._set_session_hint("请先提交 Data Category（点右侧 Select）再执行 Start Live。")
             return
 
-        self._start_stream_button.configure(state=tk.DISABLED)
-        self._stop_stream_button.configure(state=tk.DISABLED)
-        self._set_status_text("Starting live stream...")
+        if self._live_start_pending or self._stream_active or self._session_live_data_active:
+            return
+
+        self._live_start_pending = True
+        self._live_status_text.set("Starting Live Data...")
+        self._set_status_text("Starting Live Data...")
+        self._refresh_action_buttons()
 
         self._api_call(
             "POST",
@@ -2446,6 +2507,7 @@ class DiagnosticsWindow:
                 "session_id": self._session_id,
                 "module": module,
                 "data_category": category,
+                "interval_ms": self.LIVE_DATA_INTERVAL_MS,
             },
             callback_event="live_start_result",
         )
@@ -2456,8 +2518,13 @@ class DiagnosticsWindow:
             self._set_session_hint("Please click Start Session first, then stop a live stream.")
             return
 
-        self._stop_stream_button.configure(state=tk.DISABLED)
-        self._set_status_text("Stopping live stream...")
+        if self._live_stop_pending:
+            return
+
+        self._live_stop_pending = True
+        self._live_status_text.set("Stopping Live Data...")
+        self._set_status_text("Stopping Live Data...")
+        self._refresh_action_buttons()
         self._api_call(
             "POST",
             "/api/session/live_data/stop",
@@ -2472,6 +2539,7 @@ class DiagnosticsWindow:
         if session_mode:
             # In session mode, category must be confirmed via /api/session/select_data_category.
             self._session_category_confirmed = False
+        self._clear_live_data_rows()
         self._refresh_action_buttons()
         if session_mode and has_category:
             self._set_session_hint("已选择 Data Category，请点击右侧 Select 提交到 Session。")
@@ -2486,6 +2554,7 @@ class DiagnosticsWindow:
         self._data_combo.configure(values=[])
         self._selected_data_category.set("")
         self._session_category_confirmed = False
+        self._clear_live_data_rows()
         self._set_current_page("module_list")
         self._set_server_connected(True)
         self._set_status_text(f"Module Diagnostics ready - VIN: {vin}. Select a module.")
@@ -2835,6 +2904,7 @@ class DiagnosticsWindow:
             self._data_combo.configure(values=categories)
             self._selected_data_category.set("")
             self._session_category_confirmed = False
+            self._clear_live_data_rows()
             self._stop_stream_button.configure(state=tk.DISABLED)
             self._refresh_action_buttons()
             self._set_server_connected(True)
@@ -2876,6 +2946,7 @@ class DiagnosticsWindow:
         self._data_combo.configure(values=categories)
         self._selected_data_category.set("")
         self._session_category_confirmed = False
+        self._clear_live_data_rows()
         self._select_data_category_button.configure(state=tk.DISABLED)
         self._start_stream_button.configure(state=tk.DISABLED)
         self._read_dtc_button.configure(state=tk.DISABLED)
@@ -2912,41 +2983,48 @@ class DiagnosticsWindow:
         self._set_server_connected(True)
         self._set_status_text("Session data category selected. Data Display ready.")
         self._session_category_confirmed = True
-        has_category = bool(self._selected_data_category.get().strip())
-        self._read_dtc_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
-        self._start_stream_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
-        self._ai_diagnose_button.configure(state=tk.NORMAL if has_category else tk.DISABLED)
+        self._clear_live_data_rows()
         self._refresh_action_buttons()
         self._schedule_auto_ai_start("Data category confirmed. AI Diagnosis is ready when you choose it.")
 
     def _handle_live_start_result(self, payload: dict[str, Any]) -> None:
+        self._live_start_pending = False
         if payload.get("success"):
             self._set_server_connected(True)
             self._stream_active = True
+            self._session_live_data_active = True
+            self._clear_live_data_rows()
+            self._set_action_output_mode("live")
+            self._live_status_text.set("Waiting for first snapshot...")
+            self._set_status_text(payload.get("message") or "Live Data started.")
             self._refresh_action_buttons()
-            self._stop_stream_button.configure(state=tk.NORMAL)
-            self._set_status_text(payload.get("message") or "Live stream started.")
             self._start_sse_thread()
             return
 
         self._stream_active = False
+        self._session_live_data_active = False
         self._set_server_connected(False)
+        self._live_status_text.set(f"Start failed: {self._error_message(payload, 'Request failed.')}")
         self._refresh_action_buttons()
-        self._stop_stream_button.configure(state=tk.DISABLED)
-        self._set_status_text(f"Live stream failed: {self._error_message(payload, 'Request failed.')}")
+        self._set_status_text(f"Live Data failed: {self._error_message(payload, 'Request failed.')}")
 
     def _handle_live_stop_result(self, payload: dict[str, Any]) -> None:
         self._stop_sse_thread()
+        self._live_stop_pending = False
         self._stream_active = False
 
-        self._refresh_action_buttons()
-        self._stop_stream_button.configure(state=tk.DISABLED)
         if payload.get("success"):
+            self._session_live_data_active = False
             self._set_server_connected(True)
-            self._set_status_text(payload.get("message") or "Live stream stopped.")
+            message = payload.get("message") or "Live Data stopped."
+            self._live_status_text.set(message)
+            self._set_status_text(message)
+            self._refresh_action_buttons()
             return
 
         self._set_server_connected(False)
+        self._live_status_text.set(f"Stop failed: {self._error_message(payload, 'Request failed.')}")
+        self._refresh_action_buttons()
         self._set_status_text(f"Stop failed: {self._error_message(payload, 'Request failed.')}")
 
     # ------------------------------------------------------------------
@@ -3017,12 +3095,13 @@ class DiagnosticsWindow:
     def _handle_sse_error(self, payload: dict[str, Any]) -> None:
         self._stop_sse_thread()
         self._stream_active = False
+        self._live_start_pending = False
+        self._live_stop_pending = False
         self._set_server_connected(False)
-        self._start_stream_button.configure(state=tk.NORMAL)
-        self._ai_diagnose_button.configure(state=tk.NORMAL)
-        self._read_dtc_button.configure(state=tk.NORMAL)
-        self._stop_stream_button.configure(state=tk.DISABLED)
-        self._set_status_text(f"Live stream error: {self._error_message(payload, 'Disconnected from server.')}")
+        message = f"Live Data error: {self._error_message(payload, 'Disconnected from server.')}"
+        self._live_status_text.set(message)
+        self._set_status_text(message)
+        self._refresh_action_buttons()
 
     # ------------------------------------------------------------------
     # AI SSE streaming and handlers
@@ -3312,6 +3391,7 @@ class DiagnosticsWindow:
         if event_type == "connected":
             self._set_server_connected(True)
             self._set_status_text("Live stream connected.")
+            self._live_status_text.set("Live stream connected.")
             return
 
         if event_type and event_type != "snapshot":
@@ -3323,6 +3403,12 @@ class DiagnosticsWindow:
             parameters = self._normalize_parameters(payload.get("data"))
 
         if not parameters:
+            if event_type == "snapshot" or "parameters" in payload or "data" in payload:
+                self._set_server_connected(True)
+                message = "Streaming live data - 0 parameter(s)"
+                self._set_status_text(message)
+                self._live_status_text.set(message)
+                self._update_live_data_rows([])
             return
 
         self._set_server_connected(True)
@@ -3339,11 +3425,32 @@ class DiagnosticsWindow:
             )
         else:
             self._set_status_text(f"Streaming live data — {len(parameters)} parameter(s)")
+        if isinstance(extraction_count, int):
+            self._live_status_text.set(
+                f"Streaming #{extraction_count} - {len(parameters)} parameter(s), {changed} changed"
+            )
+        else:
+            self._live_status_text.set(f"Streaming live data - {len(parameters)} parameter(s)")
         self._update_live_data_rows(parameters)
 
     # ------------------------------------------------------------------
     # Live parameter normalization and table update
     # ------------------------------------------------------------------
+
+    def _clear_live_data_rows(self) -> None:
+        tree = getattr(self, "_live_tree", None)
+        if tree is not None:
+            try:
+                for item_id in tree.get_children():
+                    tree.delete(item_id)
+            except Exception:
+                pass
+        live_param_rows = getattr(self, "_live_param_rows", None)
+        if live_param_rows is not None:
+            live_param_rows.clear()
+        status_text = getattr(self, "_live_status_text", None)
+        if status_text is not None:
+            status_text.set("Ready")
 
     def _normalize_parameters(self, raw: Any) -> list[tuple[str, str, str]]:
         """Normalize API/SSE parameter payload into (name, value, unit) rows."""
@@ -3406,13 +3513,28 @@ class DiagnosticsWindow:
 
     def _update_live_data_rows(self, rows: list[tuple[str, str, str]]) -> None:
         """Update tree rows in place to avoid UI flicker."""
+        tree = getattr(self, "_live_tree", None)
+        if tree is None:
+            return
+        live_param_rows = getattr(self, "_live_param_rows", None)
+        if live_param_rows is None:
+            live_param_rows = {}
+            self._live_param_rows = live_param_rows
+        current_names = {name for name, _value, _unit in rows}
         for name, value, unit in rows:
-            existing_id = self._live_param_rows.get(name)
-            if existing_id and self._live_tree.exists(existing_id):
-                self._live_tree.item(existing_id, values=(name, value, unit))
+            existing_id = live_param_rows.get(name)
+            if existing_id and tree.exists(existing_id):
+                tree.item(existing_id, values=(name, value, unit))
             else:
-                item_id = self._live_tree.insert("", tk.END, values=(name, value, unit))
-                self._live_param_rows[name] = item_id
+                item_id = tree.insert("", tk.END, values=(name, value, unit))
+                live_param_rows[name] = item_id
+
+        for stale_name in list(live_param_rows):
+            if stale_name in current_names:
+                continue
+            item_id = live_param_rows.pop(stale_name)
+            if tree.exists(item_id):
+                tree.delete(item_id)
 
     # ------------------------------------------------------------------
     # Session flow: UI callbacks

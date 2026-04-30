@@ -59,7 +59,35 @@ def test_module_branch_waits_for_module_then_data_then_actions() -> None:
     assert ready.can_run_ai is True
     assert ready.can_read_dtcs is True
     assert ready.can_clear_dtcs is True
+    assert ready.show_live_actions is True
+    assert ready.can_start_live is True
+    assert ready.can_stop_live is False
     assert ready.step_title == "Step 4: Run Module Actions"
+    assert "Start Live" in ready.step_hint
+
+
+def test_module_branch_live_active_disables_conflicting_actions_and_enables_stop() -> None:
+    view = build_step_flow_view(
+        DiagnosticsStepFlowState(
+            session_active=True,
+            branch="module",
+            current_page="data_display",
+            selected_module="ECM",
+            selected_data_category="Engine Data",
+            category_confirmed=True,
+            stream_active=True,
+            output_mode="live",
+        )
+    )
+
+    assert view.busy is True
+    assert view.output_mode == "live"
+    assert view.show_live_actions is True
+    assert view.can_start_live is False
+    assert view.can_stop_live is True
+    assert view.can_run_ai is False
+    assert view.can_read_dtcs is False
+    assert view.can_clear_dtcs is False
 
 
 def test_vehicle_branch_only_exposes_vehicle_actions() -> None:
@@ -82,9 +110,12 @@ def test_vehicle_branch_only_exposes_vehicle_actions() -> None:
         )
     )
     assert ready.show_vehicle_actions is True
+    assert ready.show_live_actions is False
     assert ready.can_run_ai is False
     assert ready.can_read_dtcs is True
     assert ready.can_clear_dtcs is True
+    assert ready.can_start_live is False
+    assert ready.can_stop_live is False
 
 
 def test_vehicle_branch_waits_for_vehicle_dtc_table_before_actions() -> None:
@@ -125,3 +156,39 @@ def test_busy_state_disables_affordances_without_changing_branch() -> None:
     assert view.can_run_ai is False
     assert view.can_read_dtcs is False
     assert view.can_clear_dtcs is False
+    assert view.can_start_live is False
+
+
+def test_live_pending_states_disable_start_and_duplicate_stop() -> None:
+    starting = build_step_flow_view(
+        DiagnosticsStepFlowState(
+            session_active=True,
+            branch="module",
+            selected_module="ECM",
+            selected_data_category="Engine Data",
+            current_page="data_display",
+            category_confirmed=True,
+            live_start_pending=True,
+        )
+    )
+
+    assert starting.busy is True
+    assert starting.can_start_live is False
+    assert starting.can_stop_live is False
+
+    stopping = build_step_flow_view(
+        DiagnosticsStepFlowState(
+            session_active=True,
+            branch="module",
+            selected_module="ECM",
+            selected_data_category="Engine Data",
+            current_page="data_display",
+            category_confirmed=True,
+            session_live_data_active=True,
+            live_stop_pending=True,
+        )
+    )
+
+    assert stopping.busy is True
+    assert stopping.can_start_live is False
+    assert stopping.can_stop_live is False
