@@ -4,6 +4,7 @@ import asyncio
 import logging
 import ssl
 import struct
+import time
 import types
 import json
 
@@ -945,6 +946,8 @@ def test_main_disables_windows_quick_edit_before_starting_server(monkeypatch) ->
             read_ahead_read_timeout_ms=0,
             read_ahead_max_messages=16,
             read_ahead_transaction=None,
+            read_ahead_transaction_max_network_ms=None,
+            read_ahead_transaction_cooldown_ms=None,
             no_filter_dedup=False,
             no_vbatt_cache=False,
             vbatt_ttl=5,
@@ -1490,6 +1493,99 @@ def test_build_tunnel_request_wraps_write_when_transaction_enabled_and_supported
     assert request.read_timeout_ms == 5
     assert request.max_messages == 8
     assert request.write_req_body == write_body
+
+
+def test_build_tunnel_request_uses_no_collect_transaction_when_guarded() -> None:
+    server = ReverseProxyServer(
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+            read_ahead_window_ms=180,
+            read_ahead_max_reads=2,
+            read_ahead_read_timeout_ms=5,
+            read_ahead_max_messages=8,
+        )
+    )
+    server._vci_write_collect_supported = True
+    server._read_ahead_transaction_guard_until_mono = time.monotonic() + 5.0
+    server._read_ahead_transaction_guard_reason = "slow_tunnel_response"
+    write_body = ProtocolEncoder.encode_write_msgs_req(
+        44,
+        [{"protocol_id": 6, "data": b"\x22"}],
+        timeout=25,
+    )[HEADER_SIZE:]
+
+    encoded, fwd_type, fwd_body, reason = server._build_tunnel_request(
+        MsgType.WRITE_MSGS_REQ,
+        write_body,
+        sequence=77,
+    )
+    _magic, _length, msg_type, sequence = Message.decode_header(encoded[:HEADER_SIZE])
+    request = ProtocolDecoder.decode_write_and_collect_reads_req(fwd_body)
+
+    assert msg_type == MsgType.WRITE_AND_COLLECT_READS_REQ
+    assert fwd_type == MsgType.WRITE_AND_COLLECT_READS_REQ
+    assert sequence == 77
+    assert reason == "write_collect_guarded_no_collect"
+    assert request.collect_window_ms == 0
+    assert request.max_reads == 0
+    assert request.read_timeout_ms == 0
+    assert request.max_messages == 0
+    assert request.write_req_body == write_body
+
+
+def test_read_ahead_transaction_guard_arms_after_slow_tunnel_response(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+    server = ReverseProxyServer(
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+            read_ahead_transaction_max_network_ms=500,
+            read_ahead_transaction_cooldown_ms=2000,
+        )
+    )
+    events: list[dict[str, object]] = []
+
+    def _capture(event_type: str, **fields: object) -> None:
+        events.append({"event_type": event_type, **fields})
+
+    server._emit_proxy_request_event = _capture  # type: ignore[method-assign]
+
+    server._arm_read_ahead_transaction_guard(
+        network_ms=750.0,
+        duration_ms=760.0,
+        dll_seq=11,
+        proxy_seq=22,
+        msg_name="WRITE_MSGS_REQ",
+        request_fields={"channel_id": 1},
+    )
+
+    assert server._read_ahead_transaction_guard_active()
+    assert events == [
+        {
+            "event_type": "read_ahead.transaction.guard_armed",
+            "dll_seq": 11,
+            "proxy_seq": 22,
+            "msg_name": "WRITE_MSGS_REQ",
+            "reason": "slow_tunnel_response",
+            "duration_ms": 760.0,
+            "network_ms": 750.0,
+            "read_ahead_transaction_guard_trigger_network_ms": 750.0,
+            "channel_id": 1,
+            "read_ahead_transaction_guard_active": True,
+            "read_ahead_transaction_max_network_ms": 500,
+            "read_ahead_transaction_cooldown_ms": 2000,
+            "read_ahead_transaction_guard_reason": "slow_tunnel_response",
+            "read_ahead_transaction_guard_network_ms": 750.0,
+            "read_ahead_transaction_guard_remaining_ms": pytest.approx(
+                2000.0,
+                abs=20.0,
+            ),
+        }
+    ]
 
 
 def test_build_tunnel_request_falls_back_without_client_write_collect_support() -> None:

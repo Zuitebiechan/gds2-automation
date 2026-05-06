@@ -276,6 +276,8 @@ VCI_PROXY_READ_AHEAD_MAX_READS=3
 VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS=0
 VCI_PROXY_READ_AHEAD_MAX_MESSAGES=16
 VCI_PROXY_READ_AHEAD_TRANSACTION=0
+VCI_PROXY_READ_AHEAD_TRANSACTION_MAX_NETWORK_MS=750
+VCI_PROXY_READ_AHEAD_TRANSACTION_COOLDOWN_MS=10000
 ```
 
 Set `VCI_PROXY_READ_AHEAD=1` in both the cloud reverse server environment and
@@ -288,7 +290,9 @@ prevent local read collection. CLI flags still exist for one-off tests:
 `--read-ahead`, `--no-read-ahead`, `--read-ahead-window-ms`,
 `--read-ahead-max-reads`, `--read-ahead-read-timeout-ms`,
 `--read-ahead-max-messages`, `--read-ahead-transaction`, and
-`--no-read-ahead-transaction`.
+`--no-read-ahead-transaction`. The reverse-server-only slow-link guard is
+controlled by `--read-ahead-transaction-max-network-ms` and
+`--read-ahead-transaction-cooldown-ms`.
 
 Important behavior rules:
 
@@ -308,6 +312,10 @@ Important behavior rules:
 - If a `READ_MSGS_REQ` arrives while read-ahead is in progress, a future
   hardening pass may wait for a very small grace window, for example `20-40ms`,
   then fall back to a real tunnel read.
+- If recent tunnel forwarding reaches the transaction guard threshold, the cloud
+  server temporarily sends a zero-budget `WRITE_AND_COLLECT_READS_REQ` instead
+  of a collecting transaction. This preserves the synchronous write path while
+  avoiding extra local read-ahead work during degraded windows.
 
 Expected effect:
 
@@ -365,6 +373,14 @@ Implementation note:
 - The local client still returns a standard `WRITE_MSGS_RSP` plus the same
   internal consume-once `PRF0` prefetch bundle used by Phase 3. The server strips
   the bundle before replying to GDS2 and records the frames in the existing FIFO.
+- The cloud server now has a transaction slow-link guard. When any forwarded
+  request response reaches `VCI_PROXY_READ_AHEAD_TRANSACTION_MAX_NETWORK_MS`
+  (default `750ms`), the server arms a cooldown
+  (`VCI_PROXY_READ_AHEAD_TRANSACTION_COOLDOWN_MS`, default `10000ms`). While the
+  guard is active, transaction-capable clients receive
+  `WRITE_AND_COLLECT_READS_REQ` with `collect_window_ms=0`, `max_reads=0`, and
+  `max_messages=0`; this prevents ordinary local read-ahead collection from
+  adding more synchronous work to a degraded Data Display path.
 
 Expected effect:
 
@@ -385,6 +401,9 @@ Validation:
 - Verify `proxy.request.forwarded_to_tunnel` includes
   `forwarded_msg_name=WRITE_AND_COLLECT_READS_REQ` only when the transaction
   flag and client capability are both present.
+- Verify `read_ahead.transaction.guard_armed` and
+  `write_collect_guarded_no_collect` appear during slow-link tests and disappear
+  when tunnel latency returns below the guard threshold.
 
 ### Phase 5: Local-Side Polling Subscription
 

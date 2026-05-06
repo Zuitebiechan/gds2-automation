@@ -294,6 +294,8 @@ Unified runtime config:
 - `VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS=0`
 - `VCI_PROXY_READ_AHEAD_MAX_MESSAGES=16`
 - `VCI_PROXY_READ_AHEAD_TRANSACTION=0`
+- `VCI_PROXY_READ_AHEAD_TRANSACTION_MAX_NETWORK_MS=750`
+- `VCI_PROXY_READ_AHEAD_TRANSACTION_COOLDOWN_MS=10000`
 
 The reverse server also loads the repo `.env` file when `python-dotenv` is
 installed, so the cloud process can be started with the normal command after the
@@ -315,6 +317,10 @@ Reverse server and reverse client CLI overrides:
   `WRITE_AND_COLLECT_READS_REQ` RPC when both sides advertise support
 - `--no-read-ahead-transaction`; disables that internal transaction path even if
   `VCI_PROXY_READ_AHEAD_TRANSACTION` is set
+- `--read-ahead-transaction-max-network-ms <milliseconds>`; default `750`,
+  `0` disables the slow-link guard
+- `--read-ahead-transaction-cooldown-ms <milliseconds>`; default `10000`,
+  `0` disables the slow-link guard cooldown
 
 ### Internal `WRITE_AND_COLLECT_READS` transaction
 
@@ -334,6 +340,15 @@ Compatibility guardrails:
   request/response frames
 - prefetched data remains consume-once FIFO data and is stripped before the
   write response reaches the DLL
+- if a tunnel response reaches
+  `VCI_PROXY_READ_AHEAD_TRANSACTION_MAX_NETWORK_MS`, the cloud server arms a
+  temporary no-collect guard for
+  `VCI_PROXY_READ_AHEAD_TRANSACTION_COOLDOWN_MS`. During that window it still
+  sends `WRITE_AND_COLLECT_READS_REQ` to transaction-capable clients, but with a
+  zero collection budget so the local client performs only the foreground write.
+  `proxy.request.forwarded_to_tunnel` then records reason
+  `write_collect_guarded_no_collect`, and
+  `read_ahead.transaction.guard_armed` records the triggering slow response.
 
 FIFO cleanup:
 

@@ -217,6 +217,9 @@ class ReverseProxyServer:
         self._process_shutdown_finished_emitted = False
         self._vci_write_collect_supported = False
         self._vci_sweep_shadow_supported = False
+        self._read_ahead_transaction_guard_until_mono = 0.0
+        self._read_ahead_transaction_guard_reason: str | None = None
+        self._read_ahead_transaction_guard_network_ms: float | None = None
 
         # P1-1: ReadMsgs BUFFER_EMPTY cache
         self._read_cache = ReadMsgsCache(self.config.read_msgs_cache)
@@ -1259,12 +1262,14 @@ class ReverseProxyServer:
             )
         if self.config.read_ahead.enabled:
             logger.info(
-                "Read-ahead enabled (window=%sms, max_reads=%s, timeout=%sms, max_messages=%s, transaction=%s)",
+                "Read-ahead enabled (window=%sms, max_reads=%s, timeout=%sms, max_messages=%s, transaction=%s, transaction_guard=%sms/%sms)",
                 self.config.read_ahead.window_ms,
                 self.config.read_ahead.max_reads,
                 self.config.read_ahead.read_timeout_ms,
                 self.config.read_ahead.max_messages,
                 "enabled" if self.config.read_ahead.transaction_enabled else "disabled",
+                self.config.read_ahead.transaction_max_network_ms,
+                self.config.read_ahead.transaction_cooldown_ms,
             )
         if self.config.local_sweep.enabled:
             logger.info(
@@ -1289,6 +1294,14 @@ class ReverseProxyServer:
                 reason="server_started",
                 auth_enabled=self.config.auth.enabled,
                 tls_enabled=self.config.tls.enabled,
+                read_ahead_enabled=self.config.read_ahead.enabled,
+                read_ahead_transaction_enabled=self.config.read_ahead.transaction_enabled,
+                read_ahead_transaction_max_network_ms=(
+                    self.config.read_ahead.transaction_max_network_ms
+                ),
+                read_ahead_transaction_cooldown_ms=(
+                    self.config.read_ahead.transaction_cooldown_ms
+                ),
                 local_sweep_enabled=self.config.local_sweep.enabled,
                 local_sweep_mode=self.config.local_sweep.mode,
                 local_sweep_allow_gm_a9_packet=self.config.local_sweep.allow_gm_a9_packet,
@@ -1957,7 +1970,7 @@ class ReverseProxyServer:
             return
         self._prefetch_read_msgs.clear_channel(channel_id)
 
-    def _should_use_write_collect_transaction(self, msg_type: int, body: bytes) -> bool:
+    def _write_collect_transaction_base_allowed(self, msg_type: int, body: bytes) -> bool:
         if msg_type != MsgType.WRITE_MSGS_REQ:
             return False
         read_ahead = self.config.read_ahead
@@ -1976,14 +1989,124 @@ class ReverseProxyServer:
             return False
         return True
 
+    def _read_ahead_transaction_guard_active(self, now: float | None = None) -> bool:
+        now = time.monotonic() if now is None else now
+        return self._read_ahead_transaction_guard_until_mono > now
+
+    def _read_ahead_transaction_guard_fields(
+        self,
+        now: float | None = None,
+    ) -> dict[str, object]:
+        now = time.monotonic() if now is None else now
+        active = self._read_ahead_transaction_guard_active(now)
+        fields: dict[str, object] = {
+            "read_ahead_transaction_guard_active": active,
+            "read_ahead_transaction_max_network_ms": (
+                self.config.read_ahead.transaction_max_network_ms
+            ),
+            "read_ahead_transaction_cooldown_ms": (
+                self.config.read_ahead.transaction_cooldown_ms
+            ),
+        }
+        if active:
+            fields.update(
+                {
+                    "read_ahead_transaction_guard_reason": (
+                        self._read_ahead_transaction_guard_reason
+                    ),
+                    "read_ahead_transaction_guard_network_ms": (
+                        self._read_ahead_transaction_guard_network_ms
+                    ),
+                    "read_ahead_transaction_guard_remaining_ms": round(
+                        max(
+                            0.0,
+                            (
+                                self._read_ahead_transaction_guard_until_mono - now
+                            )
+                            * 1000.0,
+                        ),
+                        3,
+                    ),
+                }
+            )
+        return fields
+
+    def _arm_read_ahead_transaction_guard(
+        self,
+        *,
+        network_ms: float | None,
+        duration_ms: float | None,
+        dll_seq: int,
+        proxy_seq: int,
+        msg_name: str,
+        request_fields: dict[str, object],
+    ) -> None:
+        read_ahead = self.config.read_ahead
+        threshold_ms = int(read_ahead.transaction_max_network_ms)
+        cooldown_ms = int(read_ahead.transaction_cooldown_ms)
+        if (
+            not read_ahead.enabled
+            or not read_ahead.transaction_enabled
+            or threshold_ms <= 0
+            or cooldown_ms <= 0
+            or network_ms is None
+            or network_ms < threshold_ms
+        ):
+            return
+
+        now = time.monotonic()
+        was_active = self._read_ahead_transaction_guard_active(now)
+        self._read_ahead_transaction_guard_until_mono = max(
+            self._read_ahead_transaction_guard_until_mono,
+            now + cooldown_ms / 1000.0,
+        )
+        self._read_ahead_transaction_guard_reason = "slow_tunnel_response"
+        self._read_ahead_transaction_guard_network_ms = round(float(network_ms), 3)
+        if was_active:
+            return
+
+        self._emit_proxy_request_event(
+            "read_ahead.transaction.guard_armed",
+            dll_seq=dll_seq,
+            proxy_seq=proxy_seq,
+            msg_name=msg_name,
+            reason="slow_tunnel_response",
+            duration_ms=duration_ms,
+            network_ms=network_ms,
+            read_ahead_transaction_guard_trigger_network_ms=round(float(network_ms), 3),
+            **request_fields,
+            **self._read_ahead_transaction_guard_fields(now),
+        )
+
+    def _should_use_write_collect_transaction(self, msg_type: int, body: bytes) -> bool:
+        return self._write_collect_transaction_base_allowed(
+            msg_type,
+            body,
+        ) and not self._read_ahead_transaction_guard_active()
+
     def _build_tunnel_request(
         self,
         msg_type: int,
         body: bytes,
         sequence: int,
     ) -> tuple[bytes, int, bytes, str | None]:
-        if self._should_use_write_collect_transaction(msg_type, body):
+        if self._write_collect_transaction_base_allowed(msg_type, body):
             read_ahead = self.config.read_ahead
+            if self._read_ahead_transaction_guard_active():
+                encoded = ProtocolEncoder.encode_write_and_collect_reads_req(
+                    body,
+                    collect_window_ms=0,
+                    max_reads=0,
+                    read_timeout_ms=0,
+                    max_messages=0,
+                    sequence=sequence,
+                )
+                return (
+                    encoded,
+                    MsgType.WRITE_AND_COLLECT_READS_REQ,
+                    encoded[HEADER_SIZE:],
+                    "write_collect_guarded_no_collect",
+                )
             encoded = ProtocolEncoder.encode_write_and_collect_reads_req(
                 body,
                 collect_window_ms=read_ahead.window_ms,
@@ -2402,6 +2525,7 @@ class ReverseProxyServer:
                         forwarded_msg_type=int(fwd_msg_type),
                         forwarded_msg_name=MSG_NAMES.get(fwd_msg_type, f"0x{int(fwd_msg_type):04x}"),
                         **request_fields,
+                        **self._read_ahead_transaction_guard_fields(),
                     )
                 except Exception as e:
                     logger.error(f"转发请求失败: {e}")
@@ -2425,6 +2549,14 @@ class ReverseProxyServer:
                     resp_type, resp_body, hw_ms = await asyncio.wait_for(future, timeout=30.0)
                     fwd_ms = (time.monotonic() - fwd_start) * 1000
                     network_ms = max(0.0, fwd_ms - float(hw_ms or 0.0))
+                    self._arm_read_ahead_transaction_guard(
+                        network_ms=network_ms,
+                        duration_ms=fwd_ms,
+                        dll_seq=sequence,
+                        proxy_seq=new_seq,
+                        msg_name=msg_name,
+                        request_fields=request_fields,
+                    )
 
                     self._observe_sweep_write_response(
                         msg_type,
@@ -2640,6 +2772,10 @@ def main():
                        help='Enable internal WRITE_AND_COLLECT_READS transaction RPC when the client advertises support (or VCI_PROXY_READ_AHEAD_TRANSACTION=1)')
     parser.add_argument('--no-read-ahead-transaction', dest='read_ahead_transaction', action='store_false',
                        help='Disable internal read-ahead transaction RPC even if VCI_PROXY_READ_AHEAD_TRANSACTION is set')
+    parser.add_argument('--read-ahead-transaction-max-network-ms', type=int, default=None,
+                       help='Arm no-collect transaction guard when a tunnel response reaches this network_ms (default: 750; 0 disables)')
+    parser.add_argument('--read-ahead-transaction-cooldown-ms', type=int, default=None,
+                       help='How long no-collect transaction guard remains active after a slow response (default: 10000; 0 disables)')
     parser.add_argument('--local-sweep', dest='local_sweep', action='store_true', default=None,
                        help='Enable guarded local sweep observe/shadow mode (or VCI_PROXY_LOCAL_SWEEP=1)')
     parser.add_argument('--no-local-sweep', dest='local_sweep', action='store_false',
@@ -2699,6 +2835,8 @@ def main():
         read_ahead_read_timeout_ms=args.read_ahead_read_timeout_ms,
         read_ahead_max_messages=args.read_ahead_max_messages,
         read_ahead_transaction_enabled=args.read_ahead_transaction,
+        read_ahead_transaction_max_network_ms=args.read_ahead_transaction_max_network_ms,
+        read_ahead_transaction_cooldown_ms=args.read_ahead_transaction_cooldown_ms,
         local_sweep_enabled=getattr(args, "local_sweep", None),
         local_sweep_mode=getattr(args, "local_sweep_mode", None),
         local_sweep_min_cycles=getattr(args, "local_sweep_min_cycles", None),
@@ -2744,13 +2882,15 @@ def main():
         config.read_msgs_cache.max_cacheable_timeout_ms,
     )
     logger.info(
-        "Read-ahead: %s (window=%sms, max_reads=%s, timeout=%sms, max_messages=%s, transaction=%s)",
+        "Read-ahead: %s (window=%sms, max_reads=%s, timeout=%sms, max_messages=%s, transaction=%s, transaction_guard=%sms/%sms)",
         "enabled" if config.read_ahead.enabled else "disabled",
         config.read_ahead.window_ms,
         config.read_ahead.max_reads,
         config.read_ahead.read_timeout_ms,
         config.read_ahead.max_messages,
         "enabled" if config.read_ahead.transaction_enabled else "disabled",
+        config.read_ahead.transaction_max_network_ms,
+        config.read_ahead.transaction_cooldown_ms,
     )
     logger.info(
         "Local sweep: %s (mode=%s, min_cycles=%s, max_items=%s, shadow_allow_gm_a9_packet=%s, min_item_interval_ms=%s, shadow_max_seconds=%s, plan_delay_ms=%s)",

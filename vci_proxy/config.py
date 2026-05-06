@@ -15,6 +15,12 @@ READ_AHEAD_MAX_READS_ENV = "VCI_PROXY_READ_AHEAD_MAX_READS"
 READ_AHEAD_READ_TIMEOUT_MS_ENV = "VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS"
 READ_AHEAD_MAX_MESSAGES_ENV = "VCI_PROXY_READ_AHEAD_MAX_MESSAGES"
 READ_AHEAD_TRANSACTION_ENV = "VCI_PROXY_READ_AHEAD_TRANSACTION"
+READ_AHEAD_TRANSACTION_MAX_NETWORK_MS_ENV = (
+    "VCI_PROXY_READ_AHEAD_TRANSACTION_MAX_NETWORK_MS"
+)
+READ_AHEAD_TRANSACTION_COOLDOWN_MS_ENV = (
+    "VCI_PROXY_READ_AHEAD_TRANSACTION_COOLDOWN_MS"
+)
 LOCAL_SWEEP_ENABLED_ENV = "VCI_PROXY_LOCAL_SWEEP"
 LOCAL_SWEEP_MODE_ENV = "VCI_PROXY_LOCAL_SWEEP_MODE"
 LOCAL_SWEEP_MIN_CYCLES_ENV = "VCI_PROXY_LOCAL_SWEEP_MIN_CYCLES"
@@ -40,6 +46,8 @@ READ_AHEAD_ENV_NAMES = (
     READ_AHEAD_READ_TIMEOUT_MS_ENV,
     READ_AHEAD_MAX_MESSAGES_ENV,
     READ_AHEAD_TRANSACTION_ENV,
+    READ_AHEAD_TRANSACTION_MAX_NETWORK_MS_ENV,
+    READ_AHEAD_TRANSACTION_COOLDOWN_MS_ENV,
 )
 
 LOCAL_SWEEP_ENV_NAMES = (
@@ -169,6 +177,8 @@ class ReadAheadConfig:
     read_timeout_ms: int = 0
     max_messages: int = 16
     transaction_enabled: bool = False
+    transaction_max_network_ms: int = 750
+    transaction_cooldown_ms: int = 10000
 
 
 @dataclass(frozen=True)
@@ -232,6 +242,22 @@ def read_ahead_config_from_env(
             READ_AHEAD_TRANSACTION_ENV,
             base.transaction_enabled,
             environ=environ,
+        ),
+        transaction_max_network_ms=max(
+            0,
+            env_int(
+                READ_AHEAD_TRANSACTION_MAX_NETWORK_MS_ENV,
+                base.transaction_max_network_ms,
+                environ=environ,
+            ),
+        ),
+        transaction_cooldown_ms=max(
+            0,
+            env_int(
+                READ_AHEAD_TRANSACTION_COOLDOWN_MS_ENV,
+                base.transaction_cooldown_ms,
+                environ=environ,
+            ),
         ),
     )
 
@@ -414,6 +440,18 @@ class ProxyConfig:
                 read_ahead_defaults.transaction_enabled
                 if kwargs.get("read_ahead_transaction_enabled") is None
                 else bool(kwargs.get("read_ahead_transaction_enabled"))
+            ),
+            transaction_max_network_ms=max(
+                0,
+                read_ahead_defaults.transaction_max_network_ms
+                if kwargs.get("read_ahead_transaction_max_network_ms") is None
+                else int(kwargs.get("read_ahead_transaction_max_network_ms")),
+            ),
+            transaction_cooldown_ms=max(
+                0,
+                read_ahead_defaults.transaction_cooldown_ms
+                if kwargs.get("read_ahead_transaction_cooldown_ms") is None
+                else int(kwargs.get("read_ahead_transaction_cooldown_ms")),
             ),
         )
         local_sweep_defaults = local_sweep_config_from_env(environ=environ)
