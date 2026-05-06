@@ -46,7 +46,11 @@ _AGENT_AVAILABILITY_RETRY_DELAY_SECONDS = 0.05
 _FOCUS_PARAMETER_ALIASES: dict[str, tuple[str, ...]] = {
     "engine_speed": ("engine speed", "rpm"),
     "accelerator_pedal_position": ("accelerator pedal position",),
-    "battery_voltage": ("battery voltage",),
+    "battery_voltage": (
+        "battery voltage",
+        "ignition 1 signal",
+        "engine controls ignition relay feedback 2 signal",
+    ),
 }
 _FOCUS_PARAMETER_KEYS: tuple[str, ...] = (
     "engine_speed",

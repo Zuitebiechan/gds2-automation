@@ -305,7 +305,7 @@ def test_read_and_parse_emits_focus_parameter_samples(tmp_path, monkeypatch) -> 
     assert focus_events[-1]["parameters"][0]["previous_value"] == "900"
 
 
-def test_read_and_parse_emits_battery_voltage_and_same_value_aliases(
+def test_read_and_parse_emits_oem_voltage_aliases_as_battery_voltage(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -341,13 +341,13 @@ def test_read_and_parse_emits_battery_voltage_and_same_value_aliases(
                     "rows": [
                         {
                             "Control Module": " Engine Control Module",
-                            "Parameter Name": " Battery Voltage",
+                            "Parameter Name": " Ignition 1 Signal",
                             "Value": "12.4 ",
                             "Unit": " V",
                         },
                         {
                             "Control Module": " Engine Control Module",
-                            "Parameter Name": " Generator Voltage",
+                            "Parameter Name": " Engine Controls Ignition Relay Feedback 2 Signal",
                             "Value": "12.4 ",
                             "Unit": " V",
                         },
@@ -394,7 +394,7 @@ def test_read_and_parse_emits_battery_voltage_and_same_value_aliases(
         },
         {
             "key": "battery_voltage",
-            "name": "Battery Voltage",
+            "name": "Engine Controls Ignition Relay Feedback 2 Signal",
             "value": "12.4",
             "unit": "V",
             "module": "Engine Control Module",
@@ -402,7 +402,7 @@ def test_read_and_parse_emits_battery_voltage_and_same_value_aliases(
         },
         {
             "key": "battery_voltage",
-            "name": "Generator Voltage",
+            "name": "Ignition 1 Signal",
             "value": "12.4",
             "unit": "V",
             "module": "Engine Control Module",
@@ -424,13 +424,13 @@ def test_read_and_parse_emits_battery_voltage_and_same_value_aliases(
                     "rows": [
                         {
                             "Control Module": " Engine Control Module",
-                            "Parameter Name": " Battery Voltage",
+                            "Parameter Name": " Ignition 1 Signal",
                             "Value": "12.9 ",
                             "Unit": " V",
                         },
                         {
                             "Control Module": " Engine Control Module",
-                            "Parameter Name": " Generator Voltage",
+                            "Parameter Name": " Engine Controls Ignition Relay Feedback 2 Signal",
                             "Value": "12.9 ",
                             "Unit": " V",
                         },

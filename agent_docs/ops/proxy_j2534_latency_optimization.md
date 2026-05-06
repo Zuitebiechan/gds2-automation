@@ -154,7 +154,8 @@ Track these metrics per live-data session:
 Existing focused value observability should be used when analyzing real vehicle runs:
 
 - `agent.collector.focus_parameters_sampled`
-- focused parameters: `Engine Speed`, `Accelerator Pedal Position`, `Battery Voltage`
+- focused parameters: `Engine Speed`, `Accelerator Pedal Position`,
+  `Battery Voltage`, plus known OEM-specific voltage aliases
 - session/page context: `data_display`, selected data category, live-data active state
 
 ## Optimization Roadmap
