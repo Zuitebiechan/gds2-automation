@@ -234,7 +234,7 @@ def test_read_and_parse_emits_focus_parameter_samples(tmp_path, monkeypatch) -> 
     assert focus["extraction_duration_ms"] == 8
     assert focus["agent_timestamp_s"] == 1_710_000_000.123
     assert focus["collector_lag_ms"] == 100.0
-    assert focus["missing_target_keys"] == []
+    assert focus["missing_target_keys"] == ["battery_voltage"]
     assert focus["parameter_values"] == {
         "engine_speed": "900",
         "accelerator_pedal_position": "12",
@@ -303,6 +303,166 @@ def test_read_and_parse_emits_focus_parameter_samples(tmp_path, monkeypatch) -> 
     }
     assert focus_events[-1]["parameters"][0]["changed"] is True
     assert focus_events[-1]["parameters"][0]["previous_value"] == "900"
+
+
+def test_read_and_parse_emits_battery_voltage_and_same_value_aliases(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("PRODUCT_LOG_CLOUD_ROOT", raising=False)
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+    monkeypatch.setattr(collector_module.time, "time", lambda: 1_710_000_100.200)
+    ActiveSessionSnapshotStore().write(
+        {
+            "session_id": "session-collector-voltage",
+            "backend_name": "gds2",
+            "operation_kind": "live_data.start",
+            "selected_module": "Engine Control Module",
+            "selected_data_category": "Engine Data",
+            "current_page": "data_display",
+            "navigation_session_id": None,
+            "ai_session_id": None,
+            "live_data_active": True,
+            "connection_epoch": "epoch-collector-voltage",
+        }
+    )
+    json_path = tmp_path / "latest.json"
+    _write_agent_payload(
+        json_path,
+        {
+            "timestamp": 1_710_000_100_120,
+            "extractionCount": 21,
+            "extractionDurationMs": 6,
+            "pageContext": {"page": "data_display"},
+            "tables": [
+                {
+                    "tableType": "data_display",
+                    "columns": ["Control Module", "Parameter Name", "Value", "Unit"],
+                    "rows": [
+                        {
+                            "Control Module": " Engine Control Module",
+                            "Parameter Name": " Battery Voltage",
+                            "Value": "12.4 ",
+                            "Unit": " V",
+                        },
+                        {
+                            "Control Module": " Engine Control Module",
+                            "Parameter Name": " Generator Voltage",
+                            "Value": "12.4 ",
+                            "Unit": " V",
+                        },
+                        {
+                            "Control Module": " Engine Control Module",
+                            "Parameter Name": " Reference Voltage",
+                            "Value": "5.0 ",
+                            "Unit": " V",
+                        },
+                        {
+                            "Control Module": " Engine Control Module",
+                            "Parameter Name": " Engine Speed",
+                            "Value": "900 ",
+                            "Unit": " RPM",
+                        },
+                    ],
+                }
+            ],
+        },
+    )
+    collector = AgentDataCollector(json_path=json_path)
+
+    snapshot = collector._read_and_parse()
+
+    assert snapshot is not None
+    focus = next(
+        event
+        for event in _read_cloud_events(tmp_path)
+        if event["event_type"] == "agent.collector.focus_parameters_sampled"
+    )
+    assert focus["missing_target_keys"] == ["accelerator_pedal_position"]
+    assert focus["parameter_values"] == {
+        "engine_speed": "900",
+        "battery_voltage": "12.4",
+    }
+    assert focus["parameters"] == [
+        {
+            "key": "engine_speed",
+            "name": "Engine Speed",
+            "value": "900",
+            "unit": "RPM",
+            "module": "Engine Control Module",
+            "changed": False,
+        },
+        {
+            "key": "battery_voltage",
+            "name": "Battery Voltage",
+            "value": "12.4",
+            "unit": "V",
+            "module": "Engine Control Module",
+            "changed": False,
+        },
+        {
+            "key": "battery_voltage",
+            "name": "Generator Voltage",
+            "value": "12.4",
+            "unit": "V",
+            "module": "Engine Control Module",
+            "changed": False,
+        },
+    ]
+
+    _write_agent_payload(
+        json_path,
+        {
+            "timestamp": 1_710_000_100_220,
+            "extractionCount": 22,
+            "extractionDurationMs": 5,
+            "pageContext": {"page": "data_display"},
+            "tables": [
+                {
+                    "tableType": "data_display",
+                    "columns": ["Control Module", "Parameter Name", "Value", "Unit"],
+                    "rows": [
+                        {
+                            "Control Module": " Engine Control Module",
+                            "Parameter Name": " Battery Voltage",
+                            "Value": "12.9 ",
+                            "Unit": " V",
+                        },
+                        {
+                            "Control Module": " Engine Control Module",
+                            "Parameter Name": " Generator Voltage",
+                            "Value": "12.9 ",
+                            "Unit": " V",
+                        },
+                        {
+                            "Control Module": " Engine Control Module",
+                            "Parameter Name": " Engine Speed",
+                            "Value": "950 ",
+                            "Unit": " RPM",
+                        },
+                    ],
+                }
+            ],
+        },
+    )
+    next_mtime = json_path.stat().st_mtime + 1.0
+    os.utime(json_path, (next_mtime, next_mtime))
+
+    collector._read_and_parse()
+
+    focus_events = [
+        event
+        for event in _read_cloud_events(tmp_path)
+        if event["event_type"] == "agent.collector.focus_parameters_sampled"
+    ]
+    assert focus_events[-1]["parameter_values"] == {
+        "engine_speed": "950",
+        "battery_voltage": "12.9",
+    }
+    assert focus_events[-1]["parameters"][1]["changed"] is True
+    assert focus_events[-1]["parameters"][1]["previous_value"] == "12.4"
+    assert focus_events[-1]["parameters"][2]["changed"] is True
+    assert focus_events[-1]["parameters"][2]["previous_value"] == "12.4"
 
 
 def test_guard_event_signature_stringifies_non_json_values() -> None:

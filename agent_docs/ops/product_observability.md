@@ -234,9 +234,10 @@ Latest known interpretation:
 - no `j2534_disconnect`, no `proxy.j2534.cadence_gap`, no
   `proxy.request.timeout`, and no `tunnel.probe.failure` during Data Display is
   evidence that the current guarded stack was stable for that test window;
-- if `Engine Speed` and `Accelerator Pedal Position` samples remain constant
-  at `0`, the logs cannot prove value-level freshness improvement. A
-  changing-value run is required before judging visible lag.
+- if focused `Engine Speed`, `Accelerator Pedal Position`, and
+  `Battery Voltage` samples remain constant, the logs cannot prove
+  value-level freshness improvement. A changing-value run is required
+  before judging visible lag.
 
 ## Current Component Usage
 
@@ -264,7 +265,10 @@ Latest known interpretation:
   - emits recovery attempted / succeeded / failed events
 - `src/streaming/agent_data_collector.py`
   - emits availability, snapshot, guard-failed, started, and stopped collector events
-  - emits focused value-level Data Display samples for `Engine Speed` and `Accelerator Pedal Position` with Java Agent timestamps, collector lag, extraction counters, and active session context
+  - emits focused value-level Data Display samples for `Engine Speed`,
+    `Accelerator Pedal Position`, and `Battery Voltage`; when
+    `Battery Voltage` is present, same-module voltage rows with the same
+    value/unit are emitted under the same focus key for correlation
 - `vci_proxy/reverse_server.py`
   - emits tunnel lifecycle, probe, tunnel-quality, proxy-request staged events, and reverse-server process lifecycle events
   - reverse-server process lifecycle events include local sweep mode, `local_sweep_allow_gm_a9_packet`, `local_sweep_shadow_allow_gm_a9_packet`, and `local_sweep_min_item_interval_ms` when reporting startup configuration

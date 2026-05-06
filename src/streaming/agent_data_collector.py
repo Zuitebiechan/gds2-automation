@@ -46,10 +46,12 @@ _AGENT_AVAILABILITY_RETRY_DELAY_SECONDS = 0.05
 _FOCUS_PARAMETER_ALIASES: dict[str, tuple[str, ...]] = {
     "engine_speed": ("engine speed", "rpm"),
     "accelerator_pedal_position": ("accelerator pedal position",),
+    "battery_voltage": ("battery voltage",),
 }
 _FOCUS_PARAMETER_KEYS: tuple[str, ...] = (
     "engine_speed",
     "accelerator_pedal_position",
+    "battery_voltage",
 )
 
 
@@ -83,6 +85,71 @@ def _focus_parameter_key(parameter_name: Any) -> str | None:
     return None
 
 
+def _focus_parameter_identity(
+    *,
+    key: str,
+    name: str,
+    module: str,
+    unit: str,
+) -> str:
+    return "|".join(
+        (
+            key,
+            _normalize_parameter_name(module),
+            _normalize_parameter_name(name),
+            _normalize_parameter_name(unit),
+        )
+    )
+
+
+def _build_focus_parameter_sample(
+    *,
+    key: str,
+    parameter: dict[str, str],
+    previous_values: dict[str, str],
+) -> tuple[dict[str, Any], str]:
+    name = _clean_text(parameter.get("name"))
+    module = _clean_text(parameter.get("module"))
+    value = _clean_text(parameter.get("value"))
+    unit = _clean_text(parameter.get("unit"))
+    identity = _focus_parameter_identity(
+        key=key,
+        name=name,
+        module=module,
+        unit=unit,
+    )
+    previous_value = previous_values.get(identity)
+
+    sample: dict[str, Any] = {
+        "key": key,
+        "name": name,
+        "value": value,
+        "unit": unit,
+        "module": module,
+        "changed": previous_value is not None and previous_value != value,
+    }
+    if previous_value is not None:
+        sample["previous_value"] = previous_value
+    return sample, identity
+
+
+def _is_same_value_battery_voltage_alias(
+    parameter: dict[str, str],
+    reference_points: set[tuple[str, str, str]],
+) -> bool:
+    if not reference_points:
+        return False
+
+    normalized_name = _normalize_parameter_name(parameter.get("name"))
+    if "voltage" not in normalized_name.split():
+        return False
+
+    module = _clean_text(parameter.get("module"))
+    unit = _clean_text(parameter.get("unit"))
+    value = _clean_text(parameter.get("value"))
+    return (module, unit, value) in reference_points
+
+
 def _extract_focus_parameter_samples(
     parameters: list[dict[str, str]],
     previous_values: dict[str, str],
@@ -91,31 +158,48 @@ def _extract_focus_parameter_samples(
     samples: list[dict[str, Any]] = []
     current_values: dict[str, str] = {}
     seen_keys: set[str] = set()
+    matched_indexes: set[int] = set()
+    battery_voltage_reference_points: set[tuple[str, str, str]] = set()
 
-    for parameter in parameters:
+    for index, parameter in enumerate(parameters):
         key = _focus_parameter_key(parameter.get("name"))
         if key is None:
             continue
 
-        name = _clean_text(parameter.get("name"))
-        module = _clean_text(parameter.get("module"))
-        value = _clean_text(parameter.get("value"))
-        unit = _clean_text(parameter.get("unit"))
-        identity = f"{key}|{module}|{unit}"
-        previous_value = previous_values.get(identity)
-        current_values[identity] = value
+        sample, identity = _build_focus_parameter_sample(
+            key=key,
+            parameter=parameter,
+            previous_values=previous_values,
+        )
+        current_values[identity] = sample["value"]
         seen_keys.add(key)
+        samples.append(sample)
+        matched_indexes.add(index)
+        if key == "battery_voltage":
+            battery_voltage_reference_points.add(
+                (
+                    _clean_text(parameter.get("module")),
+                    _clean_text(parameter.get("unit")),
+                    _clean_text(parameter.get("value")),
+                )
+            )
 
-        sample: dict[str, Any] = {
-            "key": key,
-            "name": name,
-            "value": value,
-            "unit": unit,
-            "module": module,
-            "changed": previous_value is not None and previous_value != value,
-        }
-        if previous_value is not None:
-            sample["previous_value"] = previous_value
+    for index, parameter in enumerate(parameters):
+        if index in matched_indexes:
+            continue
+        if not _is_same_value_battery_voltage_alias(
+            parameter,
+            battery_voltage_reference_points,
+        ):
+            continue
+
+        sample, identity = _build_focus_parameter_sample(
+            key="battery_voltage",
+            parameter=parameter,
+            previous_values=previous_values,
+        )
+        current_values[identity] = sample["value"]
+        seen_keys.add("battery_voltage")
         samples.append(sample)
 
     order = {key: index for index, key in enumerate(_FOCUS_PARAMETER_KEYS)}
@@ -773,8 +857,16 @@ class AgentDataCollector:
             target_keys=list(_FOCUS_PARAMETER_KEYS),
             missing_target_keys=missing_keys,
             parameters=samples,
-            parameter_values={str(sample["key"]): sample["value"] for sample in samples},
+            parameter_values=self._parameter_values_by_key(samples),
         )
+
+    @staticmethod
+    def _parameter_values_by_key(samples: list[dict[str, Any]]) -> dict[str, str]:
+        values: dict[str, str] = {}
+        for sample in samples:
+            key = str(sample["key"])
+            values.setdefault(key, str(sample["value"]))
+        return values
 
     def _detect_param_changes(self, new_params: List[dict]) -> List[dict]:
         """Detect parameter value changes."""

@@ -47,7 +47,8 @@ Validated active configuration in raw observability:
   `A9 81 xx` signature. The plan was skipped with
   `reason=gm_a9_packet_shadow_disabled`, so no local shadow executor plan
   contributed data in this run.
-- focused value samples for `Engine Speed` and `Accelerator Pedal Position`
+- focused value samples for `Engine Speed`, `Accelerator Pedal Position`,
+  and `Battery Voltage`
   were present, but both values remained `0` for all samples. This run cannot
   prove whether visible Engine Speed lag improved; a changing-value run is still
   required.
@@ -141,6 +142,7 @@ Track these metrics per live-data session:
 | --- | --- |
 | `Engine Speed` value age / collector lag | User-visible freshness |
 | `Accelerator Pedal Position` value age / collector lag | Compare input event to engine response freshness |
+| `Battery Voltage` value age / collector lag | Use a controllable changing parameter when Engine Speed is not practical |
 | `READ_MSGS_REQ(data)` count and p95 `network_ms` | Real data delivery cost |
 | `READ_MSGS_REQ(empty)` count and p95 `network_ms` | Polling noise cost |
 | `READ_MSGS_REQ` cache hit rate | Empty-poll suppression effectiveness |
@@ -152,7 +154,7 @@ Track these metrics per live-data session:
 Existing focused value observability should be used when analyzing real vehicle runs:
 
 - `agent.collector.focus_parameters_sampled`
-- focused parameters: `Engine Speed`, `Accelerator Pedal Position`
+- focused parameters: `Engine Speed`, `Accelerator Pedal Position`, `Battery Voltage`
 - session/page context: `data_display`, selected data category, live-data active state
 
 ## Optimization Roadmap
