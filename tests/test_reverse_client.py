@@ -12,7 +12,7 @@ import pytest
 
 from diagnostic_platform.observability import flush_product_log_writers
 from vci_proxy.cache_read_msgs import BUFFER_EMPTY
-from vci_proxy.config import ProxyConfig
+from vci_proxy.config import LOCAL_SWEEP_MIN_ITEM_INTERVAL_FLOOR_MS, ProxyConfig
 from vci_proxy.protocol import (
     HEADER_SIZE,
     Message,
@@ -813,6 +813,31 @@ def test_handle_sweep_plan_runs_shadow_executor_without_overlapping_foreground_c
         assert "read_msgs" in observed
 
     asyncio.run(_run())
+
+
+def test_shadow_executor_enforces_local_interval_floor_for_old_plans() -> None:
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(
+            local_sweep_enabled=True,
+            local_sweep_mode="shadow_local",
+            local_sweep_min_item_interval_ms=1,
+        ),
+    )
+    plan = SweepPlanStartRequest(
+        plan_id="plan-1",
+        connection_epoch="epoch-1",
+        channel_id=44,
+        max_result_age_ms=1000,
+        min_item_interval_ms=1,
+        shadow_max_seconds=1,
+        requests=(SweepRequestSpec("sig", b"", 1, 0),),
+    )
+
+    assert client._sweep_executor._effective_min_item_interval_ms(plan) == (
+        LOCAL_SWEEP_MIN_ITEM_INTERVAL_FLOOR_MS
+    )
 
 
 def test_foreground_invalidation_does_not_overlap_cancelled_shadow_driver_call() -> None:

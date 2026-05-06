@@ -1632,6 +1632,25 @@ def main() -> None:
         help="Maximum learned signatures in one shadow plan",
     )
     parser.add_argument(
+        "--local-sweep-min-item-interval-ms",
+        type=int,
+        default=None,
+        help="Minimum delay between local shadow sweep items in ms",
+    )
+    parser.add_argument(
+        "--local-sweep-shadow-allow-gm-a9-packet",
+        dest="local_sweep_shadow_allow_gm_a9_packet",
+        action="store_true",
+        default=None,
+        help="Allow GM A9 packet signatures to run in shadow_local plans",
+    )
+    parser.add_argument(
+        "--no-local-sweep-shadow-allow-gm-a9-packet",
+        dest="local_sweep_shadow_allow_gm_a9_packet",
+        action="store_false",
+        help="Keep GM A9 packet signatures observe-only even in shadow_local mode",
+    )
+    parser.add_argument(
         "--local-sweep-shadow-max-seconds",
         type=int,
         default=None,
@@ -1664,6 +1683,12 @@ def main() -> None:
         local_sweep_mode=getattr(args, "local_sweep_mode", None),
         local_sweep_min_cycles=getattr(args, "local_sweep_min_cycles", None),
         local_sweep_max_items=getattr(args, "local_sweep_max_items", None),
+        local_sweep_min_item_interval_ms=getattr(args, "local_sweep_min_item_interval_ms", None),
+        local_sweep_shadow_allow_gm_a9_packet=getattr(
+            args,
+            "local_sweep_shadow_allow_gm_a9_packet",
+            None,
+        ),
         local_sweep_shadow_max_seconds=getattr(args, "local_sweep_shadow_max_seconds", None),
         local_sweep_plan_delay_ms=getattr(args, "local_sweep_plan_delay_ms", None),
     )
@@ -1689,7 +1714,9 @@ def main() -> None:
         f"(mode={config.local_sweep.mode}, min_cycles={config.local_sweep.min_cycles}, "
         f"max_items={config.local_sweep.max_items}, shadow_max_seconds={config.local_sweep.shadow_max_seconds}, "
         f"plan_delay_ms={config.local_sweep.plan_delay_ms}, "
-        f"allow_gm_a9_packet={config.local_sweep.allow_gm_a9_packet})"
+        f"allow_gm_a9_packet={config.local_sweep.allow_gm_a9_packet}, "
+        f"shadow_allow_gm_a9_packet={config.local_sweep.shadow_allow_gm_a9_packet}, "
+        f"min_item_interval_ms={config.local_sweep.min_item_interval_ms})"
     )
     print("Press Ctrl+C to stop")
     print("=" * 50)

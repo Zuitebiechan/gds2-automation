@@ -360,8 +360,9 @@ and reverse client:
 - `VCI_PROXY_LOCAL_SWEEP_ALLOW_UDS_RDBI=1`
 - `VCI_PROXY_LOCAL_SWEEP_ALLOW_OBD_MODE01=1`
 - `VCI_PROXY_LOCAL_SWEEP_ALLOW_GM_A9_PACKET=1`
+- `VCI_PROXY_LOCAL_SWEEP_SHADOW_ALLOW_GM_A9_PACKET=0`
 - `VCI_PROXY_LOCAL_SWEEP_MAX_RESULT_AGE_MS=1000`
-- `VCI_PROXY_LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS=5`
+- `VCI_PROXY_LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS=250`
 - `VCI_PROXY_LOCAL_SWEEP_READ_TIMEOUT_MS=0`
 - `VCI_PROXY_LOCAL_SWEEP_SHADOW_MAX_SECONDS=120`
 - `VCI_PROXY_LOCAL_SWEEP_PLAN_DELAY_MS=300`
@@ -387,6 +388,13 @@ sends internal `SWEEP_PLAN_START_REQ/RSP`, `SWEEP_PLAN_STOP_REQ/RSP`,
 internal server-to-client control frames; the virtual DLL and GDS2 never see
 them.
 
+GM `A9 81 xx` signatures remain observable in `shadow_local`, but they are not
+included in local shadow execution by default. The cloud emits
+`sweep.plan.skipped` with reason `gm_a9_packet_shadow_disabled` when the learned
+plan contains only these guarded signatures. Set
+`VCI_PROXY_LOCAL_SWEEP_SHADOW_ALLOW_GM_A9_PACKET=1` only for a tightly bounded
+experiment after an `observe_only` baseline proves Data Display stability.
+
 The v1 transport uses server-driven non-blocking `STATUS` plus immediate
 `DRAIN`. Drain returns queued shadow results or an empty result set without
 waiting. Unsolicited result push and blocking long-poll drain are not part of
@@ -398,7 +406,10 @@ next local shadow driver call, and a shared driver-call lock prevents overlappin
 foreground/shadow J2534 calls. Cacheable/read-only foreground IOCTLs such as
 `READ_VBATT`, `READ_PROG_VOLTAGE`, and `GET_CONFIG` pause through the shared
 lock but do not cancel the local shadow plan. Non-cacheable or mutating IOCTLs
-still stop shadow work.
+still stop shadow work. `VCI_PROXY_LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS` has a
+runtime floor of `250ms`; lower configured values are raised to that floor to
+avoid high-rate shadow loops competing with GDS2's foreground Data Display
+traffic.
 
 Shadow data is comparison-only:
 
@@ -430,6 +441,7 @@ Not implemented in this stage:
 - allowlist expansion beyond exact UDS `0x22`, OBD Mode 01, and strict observed
   GM `A9 81 xx` request shapes
 - adaptive sweep-rate tuning
+- safe GM `A9 81 xx` shadow execution by default
 
 ### Manual GDS2 latency observability
 

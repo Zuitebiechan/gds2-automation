@@ -406,7 +406,9 @@ Implemented first-stage behavior:
   would-have-shadow-hit observability.
 - `shadow_local` installs a learned plan on the local reverse client only after
   mode/capability gates pass and a short configurable plan delay lets same-burst
-  learned signatures join the first plan.
+  learned signatures join the first plan. GM `A9 81 xx` signatures are skipped
+  from shadow execution by default and logged as `sweep.plan.skipped` unless
+  `VCI_PROXY_LOCAL_SWEEP_SHADOW_ALLOW_GM_A9_PACKET=1` is explicitly set.
 - v1 shadow transport uses server-driven non-blocking `SWEEP_STATUS_REQ/RSP`
   plus immediate `SWEEP_DRAIN_RESULTS_REQ/RSP`.
 - Shadow results are stored only for comparison and are never served to GDS2.
@@ -477,7 +479,8 @@ Recommended order:
 7. Use `VCI_PROXY_LOCAL_SWEEP=1` with `VCI_PROXY_LOCAL_SWEEP_MODE=observe_only`
    to collect sweep evidence when read-ahead/transaction are still insufficient.
 8. After observe sign-off, use `VCI_PROXY_LOCAL_SWEEP_MODE=shadow_local` only
-   for short comparison windows.
+   for short comparison windows; keep GM A9 shadow disabled unless a separate
+   baseline proves Data Display remains stable.
 9. Write a separate ADR/spec before any `active_replay` implementation.
 
 ## Suggested Code Touch Points

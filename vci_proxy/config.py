@@ -22,6 +22,9 @@ LOCAL_SWEEP_MAX_ITEMS_ENV = "VCI_PROXY_LOCAL_SWEEP_MAX_ITEMS"
 LOCAL_SWEEP_ALLOW_UDS_RDBI_ENV = "VCI_PROXY_LOCAL_SWEEP_ALLOW_UDS_RDBI"
 LOCAL_SWEEP_ALLOW_OBD_MODE01_ENV = "VCI_PROXY_LOCAL_SWEEP_ALLOW_OBD_MODE01"
 LOCAL_SWEEP_ALLOW_GM_A9_PACKET_ENV = "VCI_PROXY_LOCAL_SWEEP_ALLOW_GM_A9_PACKET"
+LOCAL_SWEEP_SHADOW_ALLOW_GM_A9_PACKET_ENV = (
+    "VCI_PROXY_LOCAL_SWEEP_SHADOW_ALLOW_GM_A9_PACKET"
+)
 LOCAL_SWEEP_MAX_RESULT_AGE_MS_ENV = "VCI_PROXY_LOCAL_SWEEP_MAX_RESULT_AGE_MS"
 LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS_ENV = "VCI_PROXY_LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS"
 LOCAL_SWEEP_READ_TIMEOUT_MS_ENV = "VCI_PROXY_LOCAL_SWEEP_READ_TIMEOUT_MS"
@@ -47,6 +50,7 @@ LOCAL_SWEEP_ENV_NAMES = (
     LOCAL_SWEEP_ALLOW_UDS_RDBI_ENV,
     LOCAL_SWEEP_ALLOW_OBD_MODE01_ENV,
     LOCAL_SWEEP_ALLOW_GM_A9_PACKET_ENV,
+    LOCAL_SWEEP_SHADOW_ALLOW_GM_A9_PACKET_ENV,
     LOCAL_SWEEP_MAX_RESULT_AGE_MS_ENV,
     LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS_ENV,
     LOCAL_SWEEP_READ_TIMEOUT_MS_ENV,
@@ -58,6 +62,7 @@ LOCAL_SWEEP_ENV_NAMES = (
 
 _TRUE_VALUES = {"1", "true", "yes", "on", "enabled"}
 _FALSE_VALUES = {"0", "false", "no", "off", "disabled", ""}
+LOCAL_SWEEP_MIN_ITEM_INTERVAL_FLOOR_MS = 250
 
 
 def _resolve_environ(environ: Mapping[str, str] | None = None) -> Mapping[str, str]:
@@ -176,8 +181,9 @@ class LocalSweepConfig:
     allow_uds_rdbi: bool = True
     allow_obd_mode01: bool = True
     allow_gm_a9_packet: bool = True
+    shadow_allow_gm_a9_packet: bool = False
     max_result_age_ms: int = 1000
-    min_item_interval_ms: int = 5
+    min_item_interval_ms: int = LOCAL_SWEEP_MIN_ITEM_INTERVAL_FLOOR_MS
     read_timeout_ms: int = 0
     shadow_max_seconds: int = 120
     plan_delay_ms: int = 300
@@ -261,6 +267,11 @@ def local_sweep_config_from_env(
             base.allow_gm_a9_packet,
             environ=env,
         ),
+        shadow_allow_gm_a9_packet=env_bool(
+            LOCAL_SWEEP_SHADOW_ALLOW_GM_A9_PACKET_ENV,
+            base.shadow_allow_gm_a9_packet,
+            environ=env,
+        ),
         max_result_age_ms=max(
             1,
             env_int(
@@ -270,7 +281,7 @@ def local_sweep_config_from_env(
             ),
         ),
         min_item_interval_ms=max(
-            0,
+            LOCAL_SWEEP_MIN_ITEM_INTERVAL_FLOOR_MS,
             env_int(
                 LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS_ENV,
                 base.min_item_interval_ms,
@@ -443,6 +454,11 @@ class ProxyConfig:
                 if kwargs.get("local_sweep_allow_gm_a9_packet") is None
                 else bool(kwargs.get("local_sweep_allow_gm_a9_packet"))
             ),
+            shadow_allow_gm_a9_packet=(
+                local_sweep_defaults.shadow_allow_gm_a9_packet
+                if kwargs.get("local_sweep_shadow_allow_gm_a9_packet") is None
+                else bool(kwargs.get("local_sweep_shadow_allow_gm_a9_packet"))
+            ),
             max_result_age_ms=max(
                 1,
                 local_sweep_defaults.max_result_age_ms
@@ -450,7 +466,7 @@ class ProxyConfig:
                 else int(kwargs.get("local_sweep_max_result_age_ms")),
             ),
             min_item_interval_ms=max(
-                0,
+                LOCAL_SWEEP_MIN_ITEM_INTERVAL_FLOOR_MS,
                 local_sweep_defaults.min_item_interval_ms
                 if kwargs.get("local_sweep_min_item_interval_ms") is None
                 else int(kwargs.get("local_sweep_min_item_interval_ms")),

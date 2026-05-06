@@ -455,7 +455,7 @@ Responsibilities:
 Initial safety defaults:
 
 ```text
-VCI_PROXY_LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS=5
+VCI_PROXY_LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS=250
 VCI_PROXY_LOCAL_SWEEP_MAX_CYCLE_HZ=2
 VCI_PROXY_LOCAL_SWEEP_MAX_CONSECUTIVE_ERRORS=3
 VCI_PROXY_LOCAL_SWEEP_MAX_RESULT_AGE_MS=1000
@@ -573,12 +573,13 @@ VCI_PROXY_LOCAL_SWEEP=0
 VCI_PROXY_LOCAL_SWEEP_MODE=observe_only
 VCI_PROXY_LOCAL_SWEEP_MIN_CYCLES=2
 VCI_PROXY_LOCAL_SWEEP_MAX_RESULT_AGE_MS=1000
-VCI_PROXY_LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS=5
+VCI_PROXY_LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS=250
 VCI_PROXY_LOCAL_SWEEP_READ_TIMEOUT_MS=0
 VCI_PROXY_LOCAL_SWEEP_MAX_ITEMS=128
 VCI_PROXY_LOCAL_SWEEP_ALLOW_UDS_RDBI=1
 VCI_PROXY_LOCAL_SWEEP_ALLOW_OBD_MODE01=1
 VCI_PROXY_LOCAL_SWEEP_ALLOW_GM_A9_PACKET=1
+VCI_PROXY_LOCAL_SWEEP_SHADOW_ALLOW_GM_A9_PACKET=0
 VCI_PROXY_LOCAL_SWEEP_SHADOW_MAX_SECONDS=120
 VCI_PROXY_LOCAL_SWEEP_PLAN_DELAY_MS=300
 VCI_PROXY_LOCAL_SWEEP_MISMATCH_THRESHOLD=3
@@ -594,7 +595,13 @@ Modes:
 
 `active_replay` is documented as a future mode but is not accepted by runtime configuration in this stage.
 
-Default remains disabled until real-vehicle validation is complete.
+Default remains disabled until real-vehicle validation is complete. GM `A9 81 xx`
+signatures are learned and logged when
+`VCI_PROXY_LOCAL_SWEEP_ALLOW_GM_A9_PACKET=1`, but they stay out of
+`shadow_local` plans unless
+`VCI_PROXY_LOCAL_SWEEP_SHADOW_ALLOW_GM_A9_PACKET=1` is explicitly set. The
+runtime also floors `VCI_PROXY_LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS` to `250ms` to
+avoid high-rate shadow loops competing with the Data Display foreground stream.
 
 ## Implementation Phases
 
@@ -631,10 +638,12 @@ Implemented scope:
 - use server-driven non-blocking `STATUS` and immediate `DRAIN`
 - defer plan start for the configured delay window so first plans can include multiple same-burst learned signatures
 - keep read-only/cacheable IOCTL foreground calls from cancelling local shadow execution; they still serialize through the shared driver lock
+- skip GM `A9 81 xx` signatures from local shadow execution by default and emit `sweep.plan.skipped` when that guard prevents a plan
 
 Risk:
 
 - this can add extra ECU traffic, so it must be short-duration and feature-flagged.
+- observed ECU tests showed unthrottled GM A9 shadow loops can correlate with frozen or disconnected Data Display windows; keep GM A9 in `observe_only` unless a new baseline proves stability.
 - shadow fidelity is not proven until real-vehicle logs show `sweep.shadow.match` or actionable `stale`/`mismatch` outcomes after results have drained.
 
 Acceptance criteria:
@@ -754,6 +763,7 @@ These remain undone and disabled:
 - allowlist expansion beyond exact UDS `0x22`, OBD Mode 01 one-identifier,
   and strict observed GM `A9 81 xx` request shapes
 - adaptive sweep-rate tuning and priority scheduling
+- default GM `A9 81 xx` shadow execution; it is observe-only unless explicitly opted in
 - proof that shadow results match real GDS2-visible responses on Engine Control
   Module / Engine Data after the delayed-plan, read-only-IOCTL, and GM
   `A9 81 xx` allowlist changes
@@ -765,11 +775,12 @@ Any future replay implementation needs a separate ADR/spec and real-vehicle evid
 Rollout order:
 
 1. merge observability only
-2. run at least one real-vehicle Data Display test
-3. enable `shadow_local` for a short test window
+2. run at least one `observe_only` Engine Control Module / Engine Data Data Display baseline
+3. enable `shadow_local` without GM A9 shadow execution for a short test window
 4. compare shadow results with normal responses
-5. write a separate ADR/spec before enabling `active_replay`
-6. expand cautiously after repeated successful tests
+5. enable GM A9 shadow only with `VCI_PROXY_LOCAL_SWEEP_SHADOW_ALLOW_GM_A9_PACKET=1` after the baseline remains stable
+6. write a separate ADR/spec before enabling `active_replay`
+7. expand cautiously after repeated successful tests
 
 Rollback triggers:
 

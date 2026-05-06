@@ -8,6 +8,7 @@ from vci_proxy.auth import compute_signature, verify_signature
 from vci_proxy.config import (
     AuthConfig,
     IoctlCacheConfig,
+    LOCAL_SWEEP_MIN_ITEM_INTERVAL_FLOOR_MS,
     LocalSweepConfig,
     ProxyConfig,
     ReadAheadConfig,
@@ -73,6 +74,8 @@ def test_proxy_config_from_args_maps_flat_cli_flags_to_nested_configs() -> None:
         local_sweep_min_cycles=3,
         local_sweep_max_items=12,
         local_sweep_allow_gm_a9_packet=False,
+        local_sweep_shadow_allow_gm_a9_packet=True,
+        local_sweep_min_item_interval_ms=500,
         local_sweep_shadow_max_seconds=30,
         local_sweep_plan_delay_ms=250,
     )
@@ -104,6 +107,8 @@ def test_proxy_config_from_args_maps_flat_cli_flags_to_nested_configs() -> None:
             min_cycles=3,
             max_items=12,
             allow_gm_a9_packet=False,
+            shadow_allow_gm_a9_packet=True,
+            min_item_interval_ms=500,
             shadow_max_seconds=30,
             plan_delay_ms=250,
         ),
@@ -188,8 +193,9 @@ def test_proxy_config_uses_shared_local_sweep_env_defaults() -> None:
             "VCI_PROXY_LOCAL_SWEEP_ALLOW_UDS_RDBI": "0",
             "VCI_PROXY_LOCAL_SWEEP_ALLOW_OBD_MODE01": "1",
             "VCI_PROXY_LOCAL_SWEEP_ALLOW_GM_A9_PACKET": "0",
+            "VCI_PROXY_LOCAL_SWEEP_SHADOW_ALLOW_GM_A9_PACKET": "1",
             "VCI_PROXY_LOCAL_SWEEP_MAX_RESULT_AGE_MS": "750",
-            "VCI_PROXY_LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS": "8",
+            "VCI_PROXY_LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS": "500",
             "VCI_PROXY_LOCAL_SWEEP_READ_TIMEOUT_MS": "1",
             "VCI_PROXY_LOCAL_SWEEP_SHADOW_MAX_SECONDS": "60",
             "VCI_PROXY_LOCAL_SWEEP_PLAN_DELAY_MS": "450",
@@ -206,13 +212,28 @@ def test_proxy_config_uses_shared_local_sweep_env_defaults() -> None:
         allow_uds_rdbi=False,
         allow_obd_mode01=True,
         allow_gm_a9_packet=False,
+        shadow_allow_gm_a9_packet=True,
         max_result_age_ms=750,
-        min_item_interval_ms=8,
+        min_item_interval_ms=500,
         read_timeout_ms=1,
         shadow_max_seconds=60,
         plan_delay_ms=450,
         mismatch_threshold=2,
         error_threshold=5,
+    )
+
+
+def test_proxy_config_enforces_local_sweep_shadow_interval_floor() -> None:
+    config = ProxyConfig.from_args(
+        environ={
+            "VCI_PROXY_LOCAL_SWEEP": "1",
+            "VCI_PROXY_LOCAL_SWEEP_MODE": "shadow_local",
+            "VCI_PROXY_LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS": "5",
+        }
+    )
+
+    assert config.local_sweep.min_item_interval_ms == (
+        LOCAL_SWEEP_MIN_ITEM_INTERVAL_FLOOR_MS
     )
 
 

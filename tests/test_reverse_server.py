@@ -1676,6 +1676,76 @@ def test_shadow_plan_start_waits_for_delay_window_to_include_more_learned_items(
     asyncio.run(_run())
 
 
+def test_shadow_plan_skips_gm_a9_by_default_but_keeps_observing(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+    server = ReverseProxyServer(
+        config=ProxyConfig.from_args(
+            local_sweep_enabled=True,
+            local_sweep_mode="shadow_local",
+            local_sweep_min_cycles=1,
+            local_sweep_plan_delay_ms=0,
+        )
+    )
+    server._connection_epoch = "epoch-gm-a9"
+    server._vci_sweep_shadow_supported = True
+
+    write_body = ProtocolEncoder.encode_write_msgs_req(
+        44,
+        [
+            {
+                "protocol_id": 6,
+                "rx_status": 0,
+                "tx_flags": 0,
+                "timestamp": 1,
+                "data": b"\x00\x00\x07\xe0\xa9\x81\x1a",
+            }
+        ],
+        timeout=25,
+    )[HEADER_SIZE:]
+    read_body = ProtocolEncoder.encode_read_msgs_req(44, num_msgs=1, timeout=0)[
+        HEADER_SIZE:
+    ]
+    read_rsp_body = ProtocolEncoder.encode_read_msgs_rsp(
+        0,
+        [
+            {
+                "protocol_id": 6,
+                "rx_status": 0,
+                "tx_flags": 0,
+                "timestamp": 2,
+                "data": b"\x00\x00\x05\xe8\xa9\x81\x1a\x00",
+            }
+        ],
+    )[HEADER_SIZE:]
+
+    server._observe_sweep_write(
+        MsgType.WRITE_MSGS_REQ,
+        write_body,
+        dll_seq=51,
+        msg_name="WRITE_MSGS_REQ",
+    )
+    server._observe_sweep_read_response(
+        MsgType.READ_MSGS_REQ,
+        read_body,
+        MsgType.READ_MSGS_RSP,
+        read_rsp_body,
+        dll_seq=52,
+        msg_name="READ_MSGS_REQ",
+    )
+
+    assert server._sweep_active_plan is None
+
+    records = _read_product_log_events(tmp_path)
+    event_types = [record["event_type"] for record in records]
+    assert "sweep.pattern.learned" in event_types
+    assert "sweep.plan.started" not in event_types
+    skipped = [record for record in records if record["event_type"] == "sweep.plan.skipped"]
+    assert skipped
+    assert skipped[-1]["reason"] == "gm_a9_packet_shadow_disabled"
+    assert skipped[-1]["sweep_identifier_kind"] == "gm_a9_packet"
+    assert skipped[-1]["sweep_shadow_allow_gm_a9_packet"] is False
+
+
 def test_shadow_missing_before_plan_is_logged_as_not_ready(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
     server = ReverseProxyServer(

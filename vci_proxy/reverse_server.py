@@ -244,6 +244,7 @@ class ReverseProxyServer:
         self._sweep_poll_task: asyncio.Task | None = None
         self._sweep_mismatch_count = 0
         self._sweep_error_count = 0
+        self._sweep_plan_skip_logged: set[tuple[str | None, int, str]] = set()
 
     def _current_observability_context(
         self,
@@ -411,13 +412,71 @@ class ReverseProxyServer:
             self._compare_shadow_result(observed, resp_body, dll_seq=dll_seq, msg_name=msg_name)
             self._maybe_start_shadow_plan(observed)
 
-    def _build_sweep_plan_for_channel(self, channel_id: int) -> SweepPlanStartRequest | None:
+    def _shadow_plan_request_allowed(self, observed: SweepObservedRequest) -> bool:
+        signature = observed.signature
+        if (
+            signature.identifier_kind == "gm_a9_packet"
+            and not self.config.local_sweep.shadow_allow_gm_a9_packet
+        ):
+            return False
+        return True
+
+    def _learned_for_shadow_plan(
+        self,
+        channel_id: int,
+    ) -> tuple[list[SweepObservedRequest], int, int]:
         if self._connection_epoch is None:
-            return None
+            return [], 0, 0
         learned = self._sweep_learner.learned_for_channel(
             channel_id,
             connection_epoch=self._connection_epoch,
-            limit=self.config.local_sweep.max_items,
+        )
+        allowed: list[SweepObservedRequest] = []
+        skipped_gm_a9 = 0
+        for item in learned:
+            if self._shadow_plan_request_allowed(item):
+                allowed.append(item)
+            elif item.signature.identifier_kind == "gm_a9_packet":
+                skipped_gm_a9 += 1
+        return (
+            allowed[: self.config.local_sweep.max_items],
+            max(0, len(learned) - len(allowed)),
+            skipped_gm_a9,
+        )
+
+    def _emit_shadow_plan_skipped_once(
+        self,
+        *,
+        channel_id: int,
+        reason: str,
+        skipped_count: int,
+        skipped_gm_a9_count: int,
+        observed: SweepObservedRequest | None = None,
+    ) -> None:
+        key = (self._connection_epoch, channel_id, reason)
+        if key in self._sweep_plan_skip_logged:
+            return
+        self._sweep_plan_skip_logged.add(key)
+        fields: dict[str, object] = {}
+        if observed is not None:
+            fields.update(observed.signature.to_observability())
+        self._emit_tunnel_event(
+            "sweep.plan.skipped",
+            reason=reason,
+            channel_id=channel_id,
+            sweep_skipped_item_count=skipped_count,
+            sweep_skipped_gm_a9_count=skipped_gm_a9_count,
+            sweep_shadow_allow_gm_a9_packet=(
+                self.config.local_sweep.shadow_allow_gm_a9_packet
+            ),
+            **fields,
+        )
+
+    def _build_sweep_plan_for_channel(self, channel_id: int) -> SweepPlanStartRequest | None:
+        if self._connection_epoch is None:
+            return None
+        learned, _skipped_count, _skipped_gm_a9_count = self._learned_for_shadow_plan(
+            channel_id
         )
         if not learned:
             return None
@@ -450,12 +509,21 @@ class ReverseProxyServer:
         self._sweep_pending_plan_channel = None
         self._sweep_mismatch_count = 0
         self._sweep_error_count = 0
+        _learned, skipped_count, skipped_gm_a9_count = self._learned_for_shadow_plan(
+            plan.channel_id
+        )
         self._emit_tunnel_event(
             "sweep.plan.started",
             reason=reason,
             sweep_plan_id=plan.plan_id,
             channel_id=plan.channel_id,
             sweep_item_count=len(plan.requests),
+            sweep_skipped_item_count=skipped_count,
+            sweep_skipped_gm_a9_count=skipped_gm_a9_count,
+            sweep_shadow_allow_gm_a9_packet=(
+                self.config.local_sweep.shadow_allow_gm_a9_packet
+            ),
+            sweep_min_item_interval_ms=plan.min_item_interval_ms,
             sweep_plan_delay_ms=self.config.local_sweep.plan_delay_ms,
         )
         self._schedule_sweep_task(self._send_sweep_plan_start(plan))
@@ -472,17 +540,37 @@ class ReverseProxyServer:
         channel_id = observed.signature.channel_id
         plan = self._build_sweep_plan_for_channel(channel_id)
         if plan is None:
+            _learned, skipped_count, skipped_gm_a9_count = self._learned_for_shadow_plan(
+                channel_id
+            )
+            if skipped_gm_a9_count:
+                self._emit_shadow_plan_skipped_once(
+                    channel_id=channel_id,
+                    reason="gm_a9_packet_shadow_disabled",
+                    skipped_count=skipped_count,
+                    skipped_gm_a9_count=skipped_gm_a9_count,
+                    observed=observed,
+                )
             return
         delay_ms = max(0, int(self.config.local_sweep.plan_delay_ms))
         if delay_ms <= 0:
             self._start_shadow_plan(plan, reason="shadow_plan_requested")
             return
         self._sweep_pending_plan_channel = channel_id
+        _learned, skipped_count, skipped_gm_a9_count = self._learned_for_shadow_plan(
+            channel_id
+        )
         self._emit_tunnel_event(
             "sweep.plan.deferred",
             reason="shadow_plan_delay_window",
             channel_id=channel_id,
             sweep_item_count=len(plan.requests),
+            sweep_skipped_item_count=skipped_count,
+            sweep_skipped_gm_a9_count=skipped_gm_a9_count,
+            sweep_shadow_allow_gm_a9_packet=(
+                self.config.local_sweep.shadow_allow_gm_a9_packet
+            ),
+            sweep_min_item_interval_ms=plan.min_item_interval_ms,
             sweep_plan_delay_ms=delay_ms,
         )
         try:
@@ -1150,11 +1238,13 @@ class ReverseProxyServer:
             )
         if self.config.local_sweep.enabled:
             logger.info(
-                "Local sweep enabled (mode=%s, min_cycles=%s, max_items=%s, allow_gm_a9_packet=%s, shadow_max_seconds=%s, plan_delay_ms=%s)",
+                "Local sweep enabled (mode=%s, min_cycles=%s, max_items=%s, allow_gm_a9_packet=%s, shadow_allow_gm_a9_packet=%s, min_item_interval_ms=%s, shadow_max_seconds=%s, plan_delay_ms=%s)",
                 self.config.local_sweep.mode,
                 self.config.local_sweep.min_cycles,
                 self.config.local_sweep.max_items,
                 self.config.local_sweep.allow_gm_a9_packet,
+                self.config.local_sweep.shadow_allow_gm_a9_packet,
+                self.config.local_sweep.min_item_interval_ms,
                 self.config.local_sweep.shadow_max_seconds,
                 self.config.local_sweep.plan_delay_ms,
             )
@@ -1172,6 +1262,10 @@ class ReverseProxyServer:
                 local_sweep_enabled=self.config.local_sweep.enabled,
                 local_sweep_mode=self.config.local_sweep.mode,
                 local_sweep_allow_gm_a9_packet=self.config.local_sweep.allow_gm_a9_packet,
+                local_sweep_shadow_allow_gm_a9_packet=(
+                    self.config.local_sweep.shadow_allow_gm_a9_packet
+                ),
+                local_sweep_min_item_interval_ms=self.config.local_sweep.min_item_interval_ms,
                 local_sweep_plan_delay_ms=self.config.local_sweep.plan_delay_ms,
             )
 
@@ -2510,6 +2604,16 @@ def main():
                        help='Minimum complete observed cycles before sweep candidacy')
     parser.add_argument('--local-sweep-max-items', type=int, default=None,
                        help='Maximum learned signatures in one shadow plan')
+    parser.add_argument('--local-sweep-min-item-interval-ms', type=int, default=None,
+                       help='Minimum delay between local shadow sweep items in ms')
+    parser.add_argument('--local-sweep-shadow-allow-gm-a9-packet',
+                       dest='local_sweep_shadow_allow_gm_a9_packet',
+                       action='store_true', default=None,
+                       help='Allow GM A9 packet signatures to run in shadow_local plans')
+    parser.add_argument('--no-local-sweep-shadow-allow-gm-a9-packet',
+                       dest='local_sweep_shadow_allow_gm_a9_packet',
+                       action='store_false',
+                       help='Keep GM A9 packet signatures observe-only even in shadow_local mode')
     parser.add_argument('--local-sweep-shadow-max-seconds', type=int, default=None,
                        help='Maximum duration for one shadow plan')
     parser.add_argument('--local-sweep-plan-delay-ms', type=int, default=None,
@@ -2553,6 +2657,12 @@ def main():
         local_sweep_mode=getattr(args, "local_sweep_mode", None),
         local_sweep_min_cycles=getattr(args, "local_sweep_min_cycles", None),
         local_sweep_max_items=getattr(args, "local_sweep_max_items", None),
+        local_sweep_min_item_interval_ms=getattr(args, "local_sweep_min_item_interval_ms", None),
+        local_sweep_shadow_allow_gm_a9_packet=getattr(
+            args,
+            "local_sweep_shadow_allow_gm_a9_packet",
+            None,
+        ),
         local_sweep_shadow_max_seconds=getattr(args, "local_sweep_shadow_max_seconds", None),
         local_sweep_plan_delay_ms=getattr(args, "local_sweep_plan_delay_ms", None),
         no_filter_dedup=args.no_filter_dedup,
@@ -2597,11 +2707,13 @@ def main():
         "enabled" if config.read_ahead.transaction_enabled else "disabled",
     )
     logger.info(
-        "Local sweep: %s (mode=%s, min_cycles=%s, max_items=%s, shadow_max_seconds=%s, plan_delay_ms=%s)",
+        "Local sweep: %s (mode=%s, min_cycles=%s, max_items=%s, shadow_allow_gm_a9_packet=%s, min_item_interval_ms=%s, shadow_max_seconds=%s, plan_delay_ms=%s)",
         "enabled" if config.local_sweep.enabled else "disabled",
         config.local_sweep.mode,
         config.local_sweep.min_cycles,
         config.local_sweep.max_items,
+        config.local_sweep.shadow_allow_gm_a9_packet,
+        config.local_sweep.min_item_interval_ms,
         config.local_sweep.shadow_max_seconds,
         config.local_sweep.plan_delay_ms,
     )

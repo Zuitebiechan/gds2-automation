@@ -75,6 +75,8 @@ class LocalSweepExecutor:
             sweep_plan_id=plan.plan_id,
             channel_id=plan.channel_id,
             sweep_item_count=len(plan.requests),
+            sweep_plan_min_item_interval_ms=plan.min_item_interval_ms,
+            sweep_effective_min_item_interval_ms=self._effective_min_item_interval_ms(plan),
         )
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._run_loop())
@@ -91,6 +93,7 @@ class LocalSweepExecutor:
                 "sweep.executor.stopped",
                 reason=reason,
                 sweep_plan_id=plan_id,
+                sweep_error_count=self._error_count,
             )
 
     def status(self) -> SweepStatus:
@@ -108,6 +111,13 @@ class LocalSweepExecutor:
             drained.append(self._queue.popleft())
         return tuple(drained)
 
+    def _effective_min_item_interval_ms(self, plan: SweepPlanStartRequest) -> int:
+        return max(
+            0,
+            int(self._config.min_item_interval_ms),
+            int(plan.min_item_interval_ms),
+        )
+
     async def _wait_for_foreground_idle(self, plan: SweepPlanStartRequest) -> bool:
         while self._active_plan is plan and not self._stop_requested:
             if self._foreground_idle():
@@ -123,6 +133,7 @@ class LocalSweepExecutor:
         if plan is None:
             return
         deadline = time.monotonic() + max(1, plan.shadow_max_seconds)
+        min_item_interval_ms = self._effective_min_item_interval_ms(plan)
         try:
             while (
                 self._active_plan is plan
@@ -137,8 +148,8 @@ class LocalSweepExecutor:
                     ):
                         break
                     await self._execute_item(plan, index, request)
-                    if plan.min_item_interval_ms > 0:
-                        await asyncio.sleep(plan.min_item_interval_ms / 1000.0)
+                    if min_item_interval_ms > 0:
+                        await asyncio.sleep(min_item_interval_ms / 1000.0)
                 await asyncio.sleep(0)
         except asyncio.CancelledError:
             pass
@@ -150,6 +161,8 @@ class LocalSweepExecutor:
                     "sweep.executor.stopped",
                     reason=self._state,
                     sweep_plan_id=plan.plan_id,
+                    sweep_error_count=self._error_count,
+                    sweep_effective_min_item_interval_ms=min_item_interval_ms,
                 )
 
     async def _execute_item(self, plan: SweepPlanStartRequest, index: int, request) -> None:
