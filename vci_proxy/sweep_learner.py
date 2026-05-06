@@ -6,9 +6,10 @@ import time
 from dataclasses import dataclass, field
 
 from .config import LocalSweepConfig
-from .protocol import ProtocolDecoder
+from .protocol import MsgType, ProtocolDecoder
 from .sweep_classifier import SweepReadOnlyClassifier
-from .sweep_signatures import SweepObservedRequest, SweepRequestSignature
+from .sweep_inventory import SweepInventorySignatureState, SweepInventoryTracker
+from .sweep_signatures import SweepObservedRequest
 
 
 @dataclass(frozen=True)
@@ -47,12 +48,41 @@ class SweepPatternLearner:
         self._classifier = SweepReadOnlyClassifier(config)
         self._pending_by_channel: dict[int, SweepObservedRequest] = {}
         self._candidates: dict[str, SweepCandidateState] = {}
+        self._inventory = SweepInventoryTracker(config)
         self._read_data_observations = 0
         self._rejections: dict[str, int] = {}
 
     @property
     def candidate_count(self) -> int:
         return len([state for state in self._candidates.values() if state.learned])
+
+    def _learned_digests(self) -> set[str]:
+        return {
+            digest
+            for digest, state in self._candidates.items()
+            if state.learned
+        }
+
+    def _inventory_events(
+        self,
+        state: SweepInventorySignatureState | None = None,
+    ) -> list[SweepLearnerEvent]:
+        summary = self._inventory.summary_fields(learned_digests=self._learned_digests())
+        events: list[SweepLearnerEvent] = []
+        if state is not None:
+            learned = state.signature.signature_digest in self._learned_digests()
+            events.append(
+                SweepLearnerEvent(
+                    "sweep.inventory.signature",
+                    state.fields(
+                        config=self._config,
+                        learned=learned,
+                        summary_sequence=int(summary["sweep_inventory_sequence"]),
+                    ),
+                )
+            )
+        events.append(SweepLearnerEvent("sweep.inventory.summary", summary))
+        return events
 
     def observe_write(
         self,
@@ -75,6 +105,14 @@ class SweepPatternLearner:
             self._rejections[classification.reason] = (
                 self._rejections.get(classification.reason, 0) + 1
             )
+            self._inventory.record_rejection(classification.reason)
+            try:
+                channel_id, _messages, _timeout = ProtocolDecoder.decode_write_msgs_req(
+                    body
+                )
+                self._pending_by_channel.pop(channel_id, None)
+            except Exception:
+                pass
             return [
                 SweepLearnerEvent(
                     "sweep.pattern.rejected",
@@ -83,11 +121,12 @@ class SweepPatternLearner:
                         "sweep_rejection_count": self._rejections[classification.reason],
                     },
                 )
-            ]
+            ] + self._inventory_events()
 
         observed = classification.observed
         signature = observed.signature
         self._pending_by_channel[signature.channel_id] = observed
+        self._inventory.record_write_observed(signature)
         return [
             SweepLearnerEvent(
                 "sweep.pattern.observed",
@@ -98,12 +137,59 @@ class SweepPatternLearner:
             )
         ]
 
+    def observe_write_response(
+        self,
+        request_body: bytes,
+        resp_type: int,
+        response_body: bytes,
+        *,
+        connection_epoch: str | None,
+        duration_ms: float | None = None,
+        network_ms: float | None = None,
+    ) -> list[SweepLearnerEvent]:
+        if not self._config.enabled:
+            return []
+
+        try:
+            channel_id, _messages, _timeout = ProtocolDecoder.decode_write_msgs_req(
+                request_body
+            )
+        except Exception:
+            return []
+
+        observed = self._pending_by_channel.get(channel_id)
+        if observed is None or observed.signature.connection_epoch != connection_epoch:
+            return []
+
+        return_code: int | None = None
+        if resp_type == MsgType.WRITE_MSGS_RSP:
+            try:
+                return_code, _num_written = ProtocolDecoder.decode_write_msgs_rsp(
+                    response_body
+                )
+            except Exception:
+                return_code = None
+        self._inventory.record_write_response(
+            observed.signature,
+            return_code=return_code,
+            duration_ms=duration_ms,
+            network_ms=network_ms,
+        )
+        if return_code == 0:
+            return []
+        return self._inventory_events(
+            self._inventory.state_for(observed.signature)
+        )
+
     def observe_read_response(
         self,
         request_body: bytes,
         response_body: bytes,
         *,
         connection_epoch: str | None,
+        duration_ms: float | None = None,
+        network_ms: float | None = None,
+        cache_hit: bool = False,
     ) -> tuple[SweepObservedRequest | None, list[SweepLearnerEvent]]:
         if not self._config.enabled:
             return None, []
@@ -130,6 +216,14 @@ class SweepPatternLearner:
                 )
             ]
         if return_code != 0 or not messages:
+            inventory_state = self._inventory.record_read_response(
+                observed.signature,
+                return_code=return_code,
+                message_count=len(messages),
+                duration_ms=duration_ms,
+                network_ms=network_ms,
+                cache_hit=cache_hit,
+            )
             return observed, [
                 SweepLearnerEvent(
                     "sweep.pattern.rejected",
@@ -140,7 +234,7 @@ class SweepPatternLearner:
                         "sweep_read_message_count": len(messages),
                     },
                 )
-            ]
+            ] + self._inventory_events(inventory_state)
 
         self._read_data_observations += 1
         digest = observed.signature.signature_digest
@@ -192,6 +286,15 @@ class SweepPatternLearner:
         ]
         if learned_now:
             events.append(SweepLearnerEvent("sweep.pattern.learned", common))
+        inventory_state = self._inventory.record_read_response(
+            observed.signature,
+            return_code=return_code,
+            message_count=len(messages),
+            duration_ms=duration_ms,
+            network_ms=network_ms,
+            cache_hit=cache_hit,
+        )
+        events.extend(self._inventory_events(inventory_state))
         return observed, events
 
     def learned_for_channel(
@@ -220,7 +323,9 @@ class SweepPatternLearner:
             for digest, state in self._candidates.items()
             if state.observed.signature.channel_id != channel_id
         }
+        self._inventory.reset_channel(channel_id)
 
     def reset_all(self) -> None:
         self._pending_by_channel.clear()
         self._candidates.clear()
+        self._inventory.reset_all()

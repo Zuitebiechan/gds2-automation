@@ -18,7 +18,7 @@ The implemented first stage learns repeated read-only Data Display sweeps and ca
 
 The current code implements two disabled-by-default modes:
 
-- `observe_only`: cloud-side `reverse_server` classifies exact allowlisted UDS `0x22` ReadDataByIdentifier, OBD Mode 01 PID, and strict CAN-ID-prefixed GM `A9 81 xx` packet write requests, correlates them with later `READ_MSGS_RSP(data)`, and emits candidate count, confidence, cadence, rejection, and estimated would-have-shadow-hit observability. It does not change protocol, reverse-client behavior, local runtime behavior, or local J2534 call counts.
+- `observe_only`: cloud-side `reverse_server` classifies exact allowlisted UDS `0x22` ReadDataByIdentifier, OBD Mode 01 PID, and strict CAN-ID-prefixed GM `A9 81 xx` packet write requests, correlates them with later `READ_MSGS_RSP(data)`, and emits candidate count, confidence, cadence, rejection, request-inventory, coverage, and projected RTT-cost observability. It does not change protocol, reverse-client behavior, local runtime behavior, or local J2534 call counts.
 - `shadow_local`: after observe learning and capability negotiation, the cloud waits a short configurable delay window (`VCI_PROXY_LOCAL_SWEEP_PLAN_DELAY_MS`, default `300ms`) before sending an internal sweep plan to the local reverse client. The delay lets signatures learned milliseconds apart join the first plan instead of starting from a one-item plan. The local client executes the plan serially through the same J2534 driver-call path used by foreground requests, queues shadow read results, and returns them only through server-driven status/drain control frames. Real `WRITE_MSGS_REQ` and `READ_MSGS_REQ` from GDS2 continue through the existing normal proxy path; local sweep does not synthesize replies or skip forwarding.
 
 The v1 shadow transport is server-driven and request/response shaped:
@@ -28,6 +28,13 @@ The v1 shadow transport is server-driven and request/response shaped:
 - Unsolicited client-to-server result push and blocking long-poll drain are not implemented.
 
 Shadow data is comparison-only. It is stored in `SweepShadowStore`, compared against normal GDS2-visible `READ_MSGS_RSP` bodies produced by the existing proxy path, and never consulted by `_try_serve_cached()`, never written to `PrefetchReadMsgsBuffer`, and never used to fulfill normal `READ_MSGS_REQ`.
+
+Inventory data is also observability-only. `SweepInventoryTracker` records the
+allowlisted request signatures seen during the foreground GDS2 stream, their
+learned/replay-candidate status, counts by request kind, rejection reasons,
+write/read network p50/p95/max, and the observed write/pair RTT cost that could
+be removed by a future replay stage. It does not decode the meaning of GM data
+packets, does not serve responses, and does not enable `active_replay`.
 
 The observe gate artifact for this stage is `.omx/plans/local-sweep-scheduler-observe-gate-signoff.md`.
 
@@ -529,6 +536,8 @@ sweep.shadow.stale
 sweep.shadow.not_ready
 sweep.shadow.missing
 sweep.did.cadence
+sweep.inventory.signature
+sweep.inventory.summary
 ```
 
 Local events:
@@ -546,6 +555,9 @@ Important metrics:
 | Metric | Purpose |
 | --- | --- |
 | per-DID observed cadence | prove whether Engine Speed refresh cycle changed |
+| sweep inventory signature/request counts by kind | prove whether the Data Display page is mostly learnable without decoding every payload field |
+| replay-candidate coverage percentage | estimate how much of the foreground GDS2 write stream a future replay stage could cover |
+| projected write/pair RTT savings | estimate whether `J2534 serial request count x tunnel RTT` is still the dominant delay source |
 | shadow match rate | prove local sweep fidelity before replay |
 | shadow not-ready/missing/stale/mismatch counts | separate startup timing gaps from true freshness or correctness gaps |
 | result age at serve time | prove data is fresh enough |
@@ -617,6 +629,9 @@ Scope:
 - include strict observed GM `A9 81 xx` packet request signatures when the
   CAN-ID prefix targets `0x7E0..0x7EF`
 - learn stable loops in `observe_only`
+- emit `sweep.inventory.signature` and `sweep.inventory.summary` with learned
+  coverage, replay-candidate coverage, rejected write counts, per-kind counts,
+  and projected write/pair RTT savings
 
 No behavior change.
 
@@ -625,6 +640,8 @@ Acceptance criteria:
 - logs can prove how often `DID 0x000C` is sampled
 - logs can list the stable Data Display sweep order
 - logs can estimate potential synthetic hit rate
+- logs can show whether GM `A9 81 xx` traffic is learned but excluded from replay
+  candidacy by the default guard
 
 ### Phase B: Protocol And Local Shadow Executor
 
@@ -658,6 +675,8 @@ Not implemented in this stage.
 
 Scope:
 
+- use inventory coverage and shadow-fidelity evidence to decide whether replay
+  is worth implementing for the observed Data Display page
 - enable synthetic write success and synthetic read response for allowlisted signatures
 - start with one channel and one learned plan
 - use strict result freshness and exact signature matching

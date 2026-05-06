@@ -399,6 +399,9 @@ class ReverseProxyServer:
         *,
         dll_seq: int,
         msg_name: str,
+        duration_ms: float | None = None,
+        network_ms: float | None = None,
+        cache_hit: bool = False,
     ) -> None:
         if msg_type != MsgType.READ_MSGS_REQ or resp_type != MsgType.READ_MSGS_RSP:
             return
@@ -406,11 +409,38 @@ class ReverseProxyServer:
             body,
             resp_body,
             connection_epoch=self._connection_epoch,
+            duration_ms=duration_ms,
+            network_ms=network_ms,
+            cache_hit=cache_hit,
         )
         self._emit_sweep_learner_events(events, dll_seq=dll_seq, msg_name=msg_name)
         if observed is not None:
             self._compare_shadow_result(observed, resp_body, dll_seq=dll_seq, msg_name=msg_name)
             self._maybe_start_shadow_plan(observed)
+
+    def _observe_sweep_write_response(
+        self,
+        msg_type: int,
+        body: bytes,
+        resp_type: int,
+        resp_body: bytes,
+        *,
+        dll_seq: int,
+        msg_name: str,
+        duration_ms: float | None = None,
+        network_ms: float | None = None,
+    ) -> None:
+        if msg_type != MsgType.WRITE_MSGS_REQ or not self.config.local_sweep.enabled:
+            return
+        events = self._sweep_learner.observe_write_response(
+            body,
+            resp_type,
+            resp_body,
+            connection_epoch=self._connection_epoch,
+            duration_ms=duration_ms,
+            network_ms=network_ms,
+        )
+        self._emit_sweep_learner_events(events, dll_seq=dll_seq, msg_name=msg_name)
 
     def _shadow_plan_request_allowed(self, observed: SweepObservedRequest) -> bool:
         signature = observed.signature
@@ -2306,6 +2336,9 @@ class ReverseProxyServer:
                         resp_body,
                         dll_seq=sequence,
                         msg_name=msg_name,
+                        duration_ms=0.0,
+                        network_ms=0.0,
+                        cache_hit=True,
                     )
                     self._record_benchmark_event(
                         started_at_s=started_at_s,
@@ -2393,6 +2426,16 @@ class ReverseProxyServer:
                     fwd_ms = (time.monotonic() - fwd_start) * 1000
                     network_ms = max(0.0, fwd_ms - float(hw_ms or 0.0))
 
+                    self._observe_sweep_write_response(
+                        msg_type,
+                        body,
+                        resp_type,
+                        resp_body,
+                        dll_seq=sequence,
+                        msg_name=msg_name,
+                        duration_ms=fwd_ms,
+                        network_ms=network_ms,
+                    )
                     self._record_in_caches(msg_type, body, resp_type, resp_body, ioctl_id)
                     response_fields = self._response_observability_fields(resp_type, resp_body)
                     self._augment_read_payload_delta_fields(request_fields, response_fields)
@@ -2403,6 +2446,9 @@ class ReverseProxyServer:
                         resp_body,
                         dll_seq=sequence,
                         msg_name=msg_name,
+                        duration_ms=fwd_ms,
+                        network_ms=network_ms,
+                        cache_hit=False,
                     )
                     self._record_benchmark_event(
                         started_at_s=started_at_s,

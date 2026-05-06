@@ -37,6 +37,7 @@ The core data path is:
 | `vci_proxy/cache_filter_dedup.py` | StartFilter request deduplication |
 | `vci_proxy/cache_ioctl.py` | read-only IOCTL caching |
 | `vci_proxy/sweep_classifier.py` | allowlist classifier for local sweep observe/shadow |
+| `vci_proxy/sweep_inventory.py` | observability-only request inventory, coverage, and RTT-cost estimator for learned sweep signatures |
 | `vci_proxy/sweep_learner.py` | cloud-side stable-loop learner for Data Display sweeps |
 | `vci_proxy/sweep_executor.py` | local serial shadow executor |
 | `vci_proxy/sweep_shadow_store.py` | comparison-only shadow result store |

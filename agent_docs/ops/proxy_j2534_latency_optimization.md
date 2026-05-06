@@ -402,8 +402,13 @@ Implemented first-stage behavior:
 
 - `observe_only` learns exact allowlisted UDS `0x22`, OBD Mode 01 one-PID,
   and strict observed GM `A9 81 xx` request signatures from normal GDS2
-  traffic and emits candidate/confidence, cadence, rejection, and estimated
-  would-have-shadow-hit observability.
+  traffic and emits candidate/confidence, cadence, rejection, request-inventory,
+  coverage, and projected RTT-cost observability.
+- `sweep.inventory.signature` and `sweep.inventory.summary` record unique
+  request signatures, counts by kind, learned/replay-candidate coverage,
+  rejection reasons, per-signature write/read/pair network p50/p95/max, and
+  projected RTT savings. They are observability-only and do not change J2534
+  behavior.
 - `shadow_local` installs a learned plan on the local reverse client only after
   mode/capability gates pass and a short configurable plan delay lets same-burst
   learned signatures join the first plan. GM `A9 81 xx` signatures are skipped
@@ -455,6 +460,8 @@ The following remain undone and disabled:
 - allowlist expansion beyond exact UDS `0x22`, OBD Mode 01, and strict
   observed GM `A9 81 xx` request shapes
 - adaptive scheduler tuning
+- replay decision logic that consumes inventory coverage and shadow-fidelity
+  evidence
 
 ## Optimizations Not Recommended
 
