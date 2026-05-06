@@ -404,10 +404,14 @@ Implemented first-stage behavior:
   request signatures from normal GDS2 traffic and emits candidate/confidence,
   cadence, rejection, and estimated would-have-shadow-hit observability.
 - `shadow_local` installs a learned plan on the local reverse client only after
-  mode/capability gates pass.
+  mode/capability gates pass and a short configurable plan delay lets same-burst
+  learned signatures join the first plan.
 - v1 shadow transport uses server-driven non-blocking `SWEEP_STATUS_REQ/RSP`
   plus immediate `SWEEP_DRAIN_RESULTS_REQ/RSP`.
 - Shadow results are stored only for comparison and are never served to GDS2.
+- Shadow comparison logs distinguish startup/not-drained windows
+  (`sweep.shadow.not_ready`) from true missing shadow records
+  (`sweep.shadow.missing`).
 - Real `WRITE_MSGS_REQ` and `READ_MSGS_REQ` continue through the existing
   normal proxy path; local sweep does not synthesize replies or skip forwarding.
 

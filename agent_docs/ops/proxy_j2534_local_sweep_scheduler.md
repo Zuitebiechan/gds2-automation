@@ -19,7 +19,7 @@ The implemented first stage learns repeated read-only Data Display sweeps and ca
 The current code implements two disabled-by-default modes:
 
 - `observe_only`: cloud-side `reverse_server` classifies exact allowlisted UDS `0x22` ReadDataByIdentifier and OBD Mode 01 PID write requests, correlates them with later `READ_MSGS_RSP(data)`, and emits candidate count, confidence, cadence, rejection, and estimated would-have-shadow-hit observability. It does not change protocol, reverse-client behavior, local runtime behavior, or local J2534 call counts.
-- `shadow_local`: after observe learning and capability negotiation, the cloud sends an internal sweep plan to the local reverse client. The local client executes the plan serially through the same J2534 driver-call path used by foreground requests, queues shadow read results, and returns them only through server-driven status/drain control frames. Real `WRITE_MSGS_REQ` and `READ_MSGS_REQ` from GDS2 continue through the existing normal proxy path; local sweep does not synthesize replies or skip forwarding.
+- `shadow_local`: after observe learning and capability negotiation, the cloud waits a short configurable delay window (`VCI_PROXY_LOCAL_SWEEP_PLAN_DELAY_MS`, default `300ms`) before sending an internal sweep plan to the local reverse client. The delay lets signatures learned milliseconds apart join the first plan instead of starting from a one-item plan. The local client executes the plan serially through the same J2534 driver-call path used by foreground requests, queues shadow read results, and returns them only through server-driven status/drain control frames. Real `WRITE_MSGS_REQ` and `READ_MSGS_REQ` from GDS2 continue through the existing normal proxy path; local sweep does not synthesize replies or skip forwarding.
 
 The v1 shadow transport is server-driven and request/response shaped:
 
@@ -280,6 +280,7 @@ Current behavior:
 - enforce freshness during shadow-vs-real comparison
 - never return a `READ_MSGS_RSP` for normal serving
 - flush on disconnect, close, filter mutation, non-cacheable/mutating IOCTL, failed write, connection epoch change, mismatch threshold, error threshold, max-seconds expiry, and communication-error escalation
+- distinguish `sweep.shadow.not_ready` (plan pending/not started/no drained results yet) from true `sweep.shadow.missing` (comparison window exists but no matching result is available)
 
 ## Protocol Extension
 
@@ -358,6 +359,7 @@ Responsibilities:
 
 - own active plan lifecycle
 - send start/stop messages to the local side
+- defer first plan start briefly after the first learned item so newly learned same-burst signatures can join
 - cancel plans on state mutation
 - expose feature flags and runtime config
 - keep one active plan per channel at first
@@ -369,6 +371,7 @@ Initial cancellation triggers:
 - `START_FILTER_REQ`
 - `STOP_FILTER_REQ`
 - mutating or non-cacheable `IOCTL_REQ`
+- pending plan start invalidation before the delay elapses
 - unknown `WRITE_MSGS_REQ` inside an active replay window
 - repeated signature mismatch
 - result batch timeout
@@ -430,7 +433,8 @@ Responsibilities:
 
 - execute one plan sequentially through the existing J2534 worker
 - use the same J2534 serialization lock as normal requests
-- pause or cancel when a normal non-synthetic request must be executed
+- pause when normal foreground requests must be executed
+- cancel on state-changing foreground requests; cacheable/read-only IOCTLs pause but do not cancel
 - enforce rate limits
 - collect result batches
 
@@ -513,11 +517,13 @@ Cloud events:
 sweep.pattern.observed
 sweep.pattern.learned
 sweep.plan.started
+sweep.plan.deferred
 sweep.plan.cancelled
 sweep.batch.drained
 sweep.shadow.match
 sweep.shadow.mismatch
 sweep.shadow.stale
+sweep.shadow.not_ready
 sweep.shadow.missing
 sweep.did.cadence
 ```
@@ -538,7 +544,7 @@ Important metrics:
 | --- | --- |
 | per-DID observed cadence | prove whether Engine Speed refresh cycle changed |
 | shadow match rate | prove local sweep fidelity before replay |
-| shadow missing/stale/mismatch counts | identify freshness or correctness gaps |
+| shadow not-ready/missing/stale/mismatch counts | separate startup timing gaps from true freshness or correctness gaps |
 | result age at serve time | prove data is fresh enough |
 | fallback reason counts | identify unsafe or ineffective cases |
 | local sweep cycle duration | compare to cloud GDS2 page cycle |
@@ -570,6 +576,7 @@ VCI_PROXY_LOCAL_SWEEP_MAX_ITEMS=128
 VCI_PROXY_LOCAL_SWEEP_ALLOW_UDS_RDBI=1
 VCI_PROXY_LOCAL_SWEEP_ALLOW_OBD_MODE01=1
 VCI_PROXY_LOCAL_SWEEP_SHADOW_MAX_SECONDS=120
+VCI_PROXY_LOCAL_SWEEP_PLAN_DELAY_MS=300
 VCI_PROXY_LOCAL_SWEEP_MISMATCH_THRESHOLD=3
 VCI_PROXY_LOCAL_SWEEP_ERROR_THRESHOLD=3
 ```
@@ -616,10 +623,13 @@ Implemented scope:
 - keep forwarding all GDS2 calls normally
 - compare shadow results against normal GDS2-visible responses
 - use server-driven non-blocking `STATUS` and immediate `DRAIN`
+- defer plan start for the configured delay window so first plans can include multiple same-burst learned signatures
+- keep read-only/cacheable IOCTL foreground calls from cancelling local shadow execution; they still serialize through the shared driver lock
 
 Risk:
 
 - this can add extra ECU traffic, so it must be short-duration and feature-flagged.
+- shadow fidelity is not proven until real-vehicle logs show `sweep.shadow.match` or actionable `stale`/`mismatch` outcomes after results have drained.
 
 Acceptance criteria:
 
@@ -698,9 +708,11 @@ Integration tests:
 
 - learned loop enters `observe_only`
 - shadow executor runs without changing GDS2 responses
-- active replay serves a matching write/read pair
-- mismatch falls back to normal tunnel path
-- stale result falls back
+- delayed plan start includes signatures learned during the short delay window
+- cacheable foreground IOCTL pauses shadow without cancelling the plan
+- future active replay serves a matching write/read pair
+- future active replay mismatch falls back to normal tunnel path
+- future active replay stale result falls back
 - plan cancellation clears pending synthetic context
 
 Real-vehicle validation:
@@ -735,6 +747,7 @@ These remain undone and disabled:
 - production rollout controls and tray UI controls
 - allowlist expansion beyond exact UDS `0x22` and OBD Mode 01 one-identifier request shapes
 - adaptive sweep-rate tuning and priority scheduling
+- proof that shadow results match real GDS2-visible responses on Engine Control Module / Engine Data after the delayed-plan and read-only-IOCTL changes
 
 Any future replay implementation needs a separate ADR/spec and real-vehicle evidence from `observe_only` and `shadow_local`.
 

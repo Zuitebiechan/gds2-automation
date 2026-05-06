@@ -73,6 +73,7 @@ def test_proxy_config_from_args_maps_flat_cli_flags_to_nested_configs() -> None:
         local_sweep_min_cycles=3,
         local_sweep_max_items=12,
         local_sweep_shadow_max_seconds=30,
+        local_sweep_plan_delay_ms=250,
     )
 
     assert config == ProxyConfig(
@@ -102,6 +103,7 @@ def test_proxy_config_from_args_maps_flat_cli_flags_to_nested_configs() -> None:
             min_cycles=3,
             max_items=12,
             shadow_max_seconds=30,
+            plan_delay_ms=250,
         ),
     )
 
@@ -187,6 +189,7 @@ def test_proxy_config_uses_shared_local_sweep_env_defaults() -> None:
             "VCI_PROXY_LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS": "8",
             "VCI_PROXY_LOCAL_SWEEP_READ_TIMEOUT_MS": "1",
             "VCI_PROXY_LOCAL_SWEEP_SHADOW_MAX_SECONDS": "60",
+            "VCI_PROXY_LOCAL_SWEEP_PLAN_DELAY_MS": "450",
             "VCI_PROXY_LOCAL_SWEEP_MISMATCH_THRESHOLD": "2",
             "VCI_PROXY_LOCAL_SWEEP_ERROR_THRESHOLD": "5",
         }
@@ -203,6 +206,7 @@ def test_proxy_config_uses_shared_local_sweep_env_defaults() -> None:
         min_item_interval_ms=8,
         read_timeout_ms=1,
         shadow_max_seconds=60,
+        plan_delay_ms=450,
         mismatch_threshold=2,
         error_threshold=5,
     )

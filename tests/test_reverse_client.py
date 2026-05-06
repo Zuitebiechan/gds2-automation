@@ -899,6 +899,107 @@ def test_foreground_invalidation_does_not_overlap_cancelled_shadow_driver_call()
     asyncio.run(_run())
 
 
+def test_cacheable_foreground_ioctl_pauses_shadow_without_cancelling_plan() -> None:
+    async def _run() -> None:
+        active = 0
+        max_active = 0
+        guard = threading.Lock()
+        shadow_write_entered = threading.Event()
+        release_shadow_write = threading.Event()
+        foreground_entered = threading.Event()
+        shadow_read_entered = threading.Event()
+
+        def _enter(name: str) -> None:
+            nonlocal active, max_active
+            with guard:
+                active += 1
+                max_active = max(max_active, active)
+            if name == "shadow_write":
+                shadow_write_entered.set()
+                release_shadow_write.wait(timeout=1.0)
+            if name == "foreground_ioctl":
+                foreground_entered.set()
+            if name == "shadow_read":
+                shadow_read_entered.set()
+            with guard:
+                active -= 1
+
+        client = ReverseProxyClient(
+            "example.com",
+            9000,
+            config=ProxyConfig.from_args(
+                local_sweep_enabled=True,
+                local_sweep_mode="shadow_local",
+                local_sweep_shadow_max_seconds=1,
+                local_sweep_min_item_interval_ms=1,
+            ),
+        )
+        client._server_sweep_shadow_enabled = True
+        client.driver = types.SimpleNamespace(
+            write_msgs=lambda channel_id, messages, timeout: (
+                _enter("shadow_write") or (0, len(messages))
+            ),
+            read_msgs=lambda channel_id, num_msgs, timeout: (
+                _enter("shadow_read") or (
+                    0,
+                    [{"protocol_id": 6, "data": b"\x62\xf4\x0c"}],
+                )
+            ),
+            ioctl=lambda channel_id, ioctl_id, input_data: (
+                _enter("foreground_ioctl") or (0, b"\x12\x34")
+            ),
+        )
+        write_body = ProtocolEncoder.encode_write_msgs_req(
+            44,
+            [{"protocol_id": 6, "data": b"\x22\xf4\x0c"}],
+            timeout=25,
+        )[HEADER_SIZE:]
+        plan = SweepPlanStartRequest(
+            plan_id="plan-1",
+            connection_epoch="epoch-1",
+            channel_id=44,
+            max_result_age_ms=1000,
+            min_item_interval_ms=1,
+            shadow_max_seconds=1,
+            requests=(SweepRequestSpec("sig", write_body, 1, 0),),
+        )
+
+        start_response = await client._handle_message(
+            MsgType.SWEEP_PLAN_START_REQ,
+            encode_sweep_plan_start_req(plan, sequence=31)[HEADER_SIZE:],
+            sequence=31,
+        )
+        assert decode_sweep_plan_start_rsp(start_response[HEADER_SIZE:]).success is True
+        assert await asyncio.to_thread(shadow_write_entered.wait, 1.0)
+
+        foreground_task = asyncio.create_task(
+            client._handle_message(
+                MsgType.IOCTL_REQ,
+                ProtocolEncoder.encode_ioctl_req(44, 0x03, b"", sequence=32)[HEADER_SIZE:],
+                sequence=32,
+            )
+        )
+        await asyncio.sleep(0)
+        assert not await asyncio.to_thread(foreground_entered.wait, 0.03)
+
+        release_shadow_write.set()
+        foreground_response = await asyncio.wait_for(foreground_task, timeout=1.0)
+        assert Message.decode_header(foreground_response[:HEADER_SIZE])[2] == MsgType.IOCTL_RSP
+        assert await asyncio.to_thread(shadow_read_entered.wait, 1.0)
+
+        drain_response = await client._handle_message(
+            MsgType.SWEEP_DRAIN_RESULTS_REQ,
+            encode_sweep_drain_results_req(sequence=33)[HEADER_SIZE:],
+            sequence=33,
+        )
+        client._sweep_executor.stop("test_finished")
+
+        assert decode_sweep_drain_results_rsp(drain_response[HEADER_SIZE:])
+        assert max_active == 1
+
+    asyncio.run(_run())
+
+
 def test_handle_requests_emits_proxy_and_j2534_events(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("APPDATA", str(tmp_path))
     client = ReverseProxyClient("example.com", 9000, config=ProxyConfig.from_args(auth_token="secret"))

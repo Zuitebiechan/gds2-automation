@@ -225,8 +225,11 @@ Current runtime behavior:
   - `WRITE_MSGS_REQ` request events include `channel_id`, `write_message_count`, `timeout`, `write_payload_bytes`, and redacted payload digest/prefix samples without logging full raw payload data
   - manual GDS2 proxy events for `READ_MSGS_REQ` and `WRITE_MSGS_REQ` include per-channel `live_inter_request_gap_ms` / `live_inter_request_gap_bucket`; gaps at or above `1000ms` also emit `proxy.j2534.cadence_gap`
   - payload samples include a best-effort `*_engine_speed_candidate_rpm` only when standard `41 0C` or `62 F4 0C` Engine Speed response patterns are visible; treat this as a correlation hint, not a protocol guarantee
+  - local sweep observe/shadow events include `sweep.pattern.*`, `sweep.plan.deferred`, `sweep.plan.started`, `sweep.batch.drained`, and `sweep.shadow.*`; `sweep.shadow.not_ready` marks plan-pending/startup/no-drained-result windows, while `sweep.shadow.missing` is reserved for comparable windows where a matching shadow result is absent
+  - shadow comparison events include plan state fields such as `sweep_plan_active`, `sweep_plan_pending`, `sweep_store_pending_count`, `sweep_signature_in_active_plan`, and `sweep_shadow_missing_reason` / `sweep_shadow_not_ready_reason` when applicable
 - `vci_proxy/reverse_client.py`
   - emits reverse tunnel connection lifecycle, request receipt, and J2534 call events
+  - local sweep executor logs distinguish plan start/stop, shadow item execution, and foreground invalidation; cacheable/read-only IOCTL foreground calls pause through the shared driver lock without emitting a shadow stop
 - `vci_proxy/j2534_worker.py`
   - emits worker lifecycle, spawn status, RPC receipt/return/failure, and propagates `worker_request_id`
 - `vci_proxy/tunnel_quality.py`

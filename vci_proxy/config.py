@@ -25,6 +25,7 @@ LOCAL_SWEEP_MAX_RESULT_AGE_MS_ENV = "VCI_PROXY_LOCAL_SWEEP_MAX_RESULT_AGE_MS"
 LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS_ENV = "VCI_PROXY_LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS"
 LOCAL_SWEEP_READ_TIMEOUT_MS_ENV = "VCI_PROXY_LOCAL_SWEEP_READ_TIMEOUT_MS"
 LOCAL_SWEEP_SHADOW_MAX_SECONDS_ENV = "VCI_PROXY_LOCAL_SWEEP_SHADOW_MAX_SECONDS"
+LOCAL_SWEEP_PLAN_DELAY_MS_ENV = "VCI_PROXY_LOCAL_SWEEP_PLAN_DELAY_MS"
 LOCAL_SWEEP_MISMATCH_THRESHOLD_ENV = "VCI_PROXY_LOCAL_SWEEP_MISMATCH_THRESHOLD"
 LOCAL_SWEEP_ERROR_THRESHOLD_ENV = "VCI_PROXY_LOCAL_SWEEP_ERROR_THRESHOLD"
 
@@ -48,6 +49,7 @@ LOCAL_SWEEP_ENV_NAMES = (
     LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS_ENV,
     LOCAL_SWEEP_READ_TIMEOUT_MS_ENV,
     LOCAL_SWEEP_SHADOW_MAX_SECONDS_ENV,
+    LOCAL_SWEEP_PLAN_DELAY_MS_ENV,
     LOCAL_SWEEP_MISMATCH_THRESHOLD_ENV,
     LOCAL_SWEEP_ERROR_THRESHOLD_ENV,
 )
@@ -175,6 +177,7 @@ class LocalSweepConfig:
     min_item_interval_ms: int = 5
     read_timeout_ms: int = 0
     shadow_max_seconds: int = 120
+    plan_delay_ms: int = 300
     mismatch_threshold: int = 3
     error_threshold: int = 3
 
@@ -275,6 +278,14 @@ def local_sweep_config_from_env(
             env_int(
                 LOCAL_SWEEP_SHADOW_MAX_SECONDS_ENV,
                 base.shadow_max_seconds,
+                environ=env,
+            ),
+        ),
+        plan_delay_ms=max(
+            0,
+            env_int(
+                LOCAL_SWEEP_PLAN_DELAY_MS_ENV,
+                base.plan_delay_ms,
                 environ=env,
             ),
         ),
@@ -442,6 +453,12 @@ class ProxyConfig:
                 local_sweep_defaults.shadow_max_seconds
                 if kwargs.get("local_sweep_shadow_max_seconds") is None
                 else int(kwargs.get("local_sweep_shadow_max_seconds")),
+            ),
+            plan_delay_ms=max(
+                0,
+                local_sweep_defaults.plan_delay_ms
+                if kwargs.get("local_sweep_plan_delay_ms") is None
+                else int(kwargs.get("local_sweep_plan_delay_ms")),
             ),
             mismatch_threshold=max(
                 1,

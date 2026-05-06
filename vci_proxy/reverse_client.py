@@ -210,15 +210,24 @@ class ReverseProxyClient:
     def _foreground_idle(self) -> bool:
         return self._foreground_request_depth <= 0 and not self._driver_call_lock.locked()
 
-    def _cancel_shadow_for_foreground_if_needed(self, msg_type: int) -> None:
+    def _cancel_shadow_for_foreground_if_needed(self, msg_type: int, body: bytes) -> None:
         if msg_type in {
             MsgType.DISCONNECT_REQ,
             MsgType.CLOSE_REQ,
             MsgType.START_FILTER_REQ,
             MsgType.STOP_FILTER_REQ,
-            MsgType.IOCTL_REQ,
         }:
             self._sweep_executor.stop("foreground_invalidation")
+            return
+        if msg_type != MsgType.IOCTL_REQ:
+            return
+        try:
+            _channel_id, ioctl_id, _input_data = ProtocolDecoder.decode_ioctl_req(body)
+        except Exception:
+            self._sweep_executor.stop("foreground_ioctl_decode_failed")
+            return
+        if not self._ioctl_cache.is_cacheable(ioctl_id):
+            self._sweep_executor.stop("foreground_mutating_or_non_cacheable_ioctl")
 
     def _ensure_request_context(
         self,
@@ -1459,7 +1468,7 @@ class ReverseProxyClient:
         foreground_request = not is_sweep_message_type(msg_type)
         if foreground_request:
             self._foreground_request_depth += 1
-            self._cancel_shadow_for_foreground_if_needed(msg_type)
+            self._cancel_shadow_for_foreground_if_needed(msg_type, body)
         try:
             return await handler(self, body, sequence, request_context=request_context)
         finally:
@@ -1628,6 +1637,12 @@ def main() -> None:
         default=None,
         help="Maximum duration for one shadow plan",
     )
+    parser.add_argument(
+        "--local-sweep-plan-delay-ms",
+        type=int,
+        default=None,
+        help="Delay before cloud starts a shadow plan; accepted for shared env/CLI symmetry",
+    )
     args = parser.parse_args()
 
     config = ProxyConfig.from_args(
@@ -1650,6 +1665,7 @@ def main() -> None:
         local_sweep_min_cycles=getattr(args, "local_sweep_min_cycles", None),
         local_sweep_max_items=getattr(args, "local_sweep_max_items", None),
         local_sweep_shadow_max_seconds=getattr(args, "local_sweep_shadow_max_seconds", None),
+        local_sweep_plan_delay_ms=getattr(args, "local_sweep_plan_delay_ms", None),
     )
 
     print("=" * 50)
@@ -1671,7 +1687,8 @@ def main() -> None:
     print(
         f"Local sweep: {'enabled' if config.local_sweep.enabled else 'disabled'} "
         f"(mode={config.local_sweep.mode}, min_cycles={config.local_sweep.min_cycles}, "
-        f"max_items={config.local_sweep.max_items}, shadow_max_seconds={config.local_sweep.shadow_max_seconds})"
+        f"max_items={config.local_sweep.max_items}, shadow_max_seconds={config.local_sweep.shadow_max_seconds}, "
+        f"plan_delay_ms={config.local_sweep.plan_delay_ms})"
     )
     print("Press Ctrl+C to stop")
     print("=" * 50)

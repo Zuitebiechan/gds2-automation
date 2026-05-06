@@ -1555,6 +1555,118 @@ def test_handle_proxy_connection_observe_only_learns_without_sweep_protocol(monk
     assert "sweep.plan.started" not in event_types
 
 
+def test_shadow_plan_start_waits_for_delay_window_to_include_more_learned_items(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+
+    async def _run() -> None:
+        server = ReverseProxyServer(
+            config=ProxyConfig.from_args(
+                local_sweep_enabled=True,
+                local_sweep_mode="shadow_local",
+                local_sweep_min_cycles=1,
+                local_sweep_plan_delay_ms=40,
+            )
+        )
+        server._connection_epoch = "epoch-delay"
+        server._vci_sweep_shadow_supported = True
+        sent_plans: list[SweepPlanStartRequest] = []
+
+        async def _record_plan_start(plan: SweepPlanStartRequest) -> None:
+            sent_plans.append(plan)
+
+        server._send_sweep_plan_start = _record_plan_start
+
+        def _observe_pair(payload: bytes, response: bytes, dll_seq: int) -> None:
+            write_body = ProtocolEncoder.encode_write_msgs_req(
+                44,
+                [{"protocol_id": 6, "rx_status": 0, "tx_flags": 0, "timestamp": 1, "data": payload}],
+                timeout=25,
+            )[HEADER_SIZE:]
+            read_body = ProtocolEncoder.encode_read_msgs_req(
+                44,
+                num_msgs=1,
+                timeout=0,
+            )[HEADER_SIZE:]
+            read_rsp_body = ProtocolEncoder.encode_read_msgs_rsp(
+                0,
+                [{"protocol_id": 6, "rx_status": 0, "tx_flags": 0, "timestamp": 2, "data": response}],
+            )[HEADER_SIZE:]
+            server._observe_sweep_write(
+                MsgType.WRITE_MSGS_REQ,
+                write_body,
+                dll_seq=dll_seq,
+                msg_name="WRITE_MSGS_REQ",
+            )
+            server._observe_sweep_read_response(
+                MsgType.READ_MSGS_REQ,
+                read_body,
+                MsgType.READ_MSGS_RSP,
+                read_rsp_body,
+                dll_seq=dll_seq + 1,
+                msg_name="READ_MSGS_REQ",
+            )
+
+        _observe_pair(b"\x22\xf4\x0c", b"\x62\xf4\x0c\x12\x34", 31)
+        assert server._sweep_active_plan is None
+        assert server._sweep_plan_start_pending() is True
+
+        _observe_pair(b"\x22\x13\x08", b"\x62\x13\x08\x56\x78", 33)
+        await asyncio.sleep(0.08)
+
+        assert sent_plans
+        assert server._sweep_active_plan is sent_plans[0]
+        assert len(sent_plans[0].requests) == 2
+
+    asyncio.run(_run())
+
+
+def test_shadow_missing_before_plan_is_logged_as_not_ready(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+    server = ReverseProxyServer(
+        config=ProxyConfig.from_args(
+            local_sweep_enabled=True,
+            local_sweep_mode="shadow_local",
+            local_sweep_min_cycles=1,
+        )
+    )
+    server._connection_epoch = "epoch-not-ready"
+
+    write_body = ProtocolEncoder.encode_write_msgs_req(
+        44,
+        [{"protocol_id": 6, "rx_status": 0, "tx_flags": 0, "timestamp": 1, "data": b"\x22\xf4\x0c"}],
+        timeout=25,
+    )[HEADER_SIZE:]
+    read_body = ProtocolEncoder.encode_read_msgs_req(44, num_msgs=1, timeout=0)[HEADER_SIZE:]
+    read_rsp_body = ProtocolEncoder.encode_read_msgs_rsp(
+        0,
+        [{"protocol_id": 6, "rx_status": 0, "tx_flags": 0, "timestamp": 2, "data": b"\x62\xf4\x0c\x12\x34"}],
+    )[HEADER_SIZE:]
+
+    server._observe_sweep_write(
+        MsgType.WRITE_MSGS_REQ,
+        write_body,
+        dll_seq=41,
+        msg_name="WRITE_MSGS_REQ",
+    )
+    server._observe_sweep_read_response(
+        MsgType.READ_MSGS_REQ,
+        read_body,
+        MsgType.READ_MSGS_RSP,
+        read_rsp_body,
+        dll_seq=42,
+        msg_name="READ_MSGS_REQ",
+    )
+
+    records = _read_product_log_events(tmp_path)
+    event_types = [record["event_type"] for record in records]
+    assert "sweep.shadow.not_ready" in event_types
+    assert "sweep.shadow.missing" not in event_types
+    not_ready = [record for record in records if record["event_type"] == "sweep.shadow.not_ready"][-1]
+    assert not_ready["sweep_shadow_not_ready_reason"] == "no_active_plan"
+    assert not_ready["sweep_plan_active"] is False
+    assert not_ready["sweep_store_pending_count"] == 0
+
+
 def test_try_serve_cached_never_uses_shadow_store() -> None:
     server = ReverseProxyServer(
         config=ProxyConfig.from_args(

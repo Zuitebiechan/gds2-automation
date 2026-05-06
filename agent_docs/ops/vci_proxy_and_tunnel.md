@@ -363,6 +363,7 @@ and reverse client:
 - `VCI_PROXY_LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS=5`
 - `VCI_PROXY_LOCAL_SWEEP_READ_TIMEOUT_MS=0`
 - `VCI_PROXY_LOCAL_SWEEP_SHADOW_MAX_SECONDS=120`
+- `VCI_PROXY_LOCAL_SWEEP_PLAN_DELAY_MS=300`
 - `VCI_PROXY_LOCAL_SWEEP_MISMATCH_THRESHOLD=3`
 - `VCI_PROXY_LOCAL_SWEEP_ERROR_THRESHOLD=3`
 
@@ -373,8 +374,11 @@ does not require protocol, reverse-client, local runtime, or local J2534 call
 changes.
 
 `shadow_local` starts only when both sides are configured for the mode and the
-local client advertises `sweep_shadow=1` during tunnel authentication. The cloud
-server sends internal `SWEEP_PLAN_START_REQ/RSP`, `SWEEP_PLAN_STOP_REQ/RSP`,
+local client advertises `sweep_shadow=1` during tunnel authentication. After the
+first learned candidate, the cloud waits `VCI_PROXY_LOCAL_SWEEP_PLAN_DELAY_MS`
+(default `300ms`) before starting the plan so other signatures learned in the
+same short Data Display burst can join the first plan. The cloud server then
+sends internal `SWEEP_PLAN_START_REQ/RSP`, `SWEEP_PLAN_STOP_REQ/RSP`,
 `SWEEP_STATUS_REQ/RSP`, and `SWEEP_DRAIN_RESULTS_REQ/RSP` frames. These are
 internal server-to-client control frames; the virtual DLL and GDS2 never see
 them.
@@ -387,7 +391,10 @@ this stage.
 The local shadow executor is serial and uses the same J2534 driver-call path as
 foreground requests. Foreground traffic cancels or pauses shadow work before the
 next local shadow driver call, and a shared driver-call lock prevents overlapping
-foreground/shadow J2534 calls.
+foreground/shadow J2534 calls. Cacheable/read-only foreground IOCTLs such as
+`READ_VBATT`, `READ_PROG_VOLTAGE`, and `GET_CONFIG` pause through the shared
+lock but do not cancel the local shadow plan. Non-cacheable or mutating IOCTLs
+still stop shadow work.
 
 Shadow data is comparison-only:
 
@@ -401,6 +408,12 @@ The stage cancels active shadow plans on disconnect, close, filter mutation,
 non-cacheable or mutating IOCTL, failed writes, connection epoch changes,
 max-seconds expiry, repeated mismatch/error thresholds, and communication-error
 escalation.
+
+Shadow comparison logs distinguish not-yet-comparable reads from true missing
+shadow data. `sweep.shadow.not_ready` means the cloud has no active plan yet, a
+plan is still in the delay window, or an active plan has not drained any results.
+`sweep.shadow.missing` is reserved for later reads where comparison should have
+been possible but no matching shadow result was available.
 
 Not implemented in this stage:
 

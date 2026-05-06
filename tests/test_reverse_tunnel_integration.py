@@ -683,6 +683,7 @@ def test_reverse_tunnel_shadow_local_keeps_dll_facing_flow_unchanged(monkeypatch
             local_sweep_mode="shadow_local",
             local_sweep_min_cycles=1,
             local_sweep_shadow_max_seconds=1,
+            local_sweep_plan_delay_ms=0,
         )
         bundle = await _start_reverse_tunnel(monkeypatch, fake_driver, config=config)
         try:

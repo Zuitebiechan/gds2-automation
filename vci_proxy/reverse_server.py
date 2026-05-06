@@ -239,6 +239,8 @@ class ReverseProxyServer:
         self._sweep_shadow_store = SweepShadowStore()
         self._sweep_active_plan: SweepPlanStartRequest | None = None
         self._sweep_active_plan_started_mono: float | None = None
+        self._sweep_plan_start_task: asyncio.Task | None = None
+        self._sweep_pending_plan_channel: int | None = None
         self._sweep_poll_task: asyncio.Task | None = None
         self._sweep_mismatch_count = 0
         self._sweep_error_count = 0
@@ -409,13 +411,9 @@ class ReverseProxyServer:
             self._compare_shadow_result(observed, resp_body, dll_seq=dll_seq, msg_name=msg_name)
             self._maybe_start_shadow_plan(observed)
 
-    def _build_sweep_plan(
-        self,
-        observed: SweepObservedRequest,
-    ) -> SweepPlanStartRequest | None:
+    def _build_sweep_plan_for_channel(self, channel_id: int) -> SweepPlanStartRequest | None:
         if self._connection_epoch is None:
             return None
-        channel_id = observed.signature.channel_id
         learned = self._sweep_learner.learned_for_channel(
             channel_id,
             connection_epoch=self._connection_epoch,
@@ -442,6 +440,26 @@ class ReverseProxyServer:
             ),
         )
 
+    def _sweep_plan_start_pending(self) -> bool:
+        task = self._sweep_plan_start_task
+        return task is not None and not task.done()
+
+    def _start_shadow_plan(self, plan: SweepPlanStartRequest, *, reason: str) -> None:
+        self._sweep_active_plan = plan
+        self._sweep_active_plan_started_mono = time.monotonic()
+        self._sweep_pending_plan_channel = None
+        self._sweep_mismatch_count = 0
+        self._sweep_error_count = 0
+        self._emit_tunnel_event(
+            "sweep.plan.started",
+            reason=reason,
+            sweep_plan_id=plan.plan_id,
+            channel_id=plan.channel_id,
+            sweep_item_count=len(plan.requests),
+            sweep_plan_delay_ms=self.config.local_sweep.plan_delay_ms,
+        )
+        self._schedule_sweep_task(self._send_sweep_plan_start(plan))
+
     def _maybe_start_shadow_plan(self, observed: SweepObservedRequest) -> None:
         if not self.config.local_sweep.shadow_local:
             return
@@ -449,21 +467,55 @@ class ReverseProxyServer:
             return
         if self._sweep_active_plan is not None:
             return
-        plan = self._build_sweep_plan(observed)
+        if self._sweep_plan_start_pending():
+            return
+        channel_id = observed.signature.channel_id
+        plan = self._build_sweep_plan_for_channel(channel_id)
         if plan is None:
             return
-        self._sweep_active_plan = plan
-        self._sweep_active_plan_started_mono = time.monotonic()
-        self._sweep_mismatch_count = 0
-        self._sweep_error_count = 0
+        delay_ms = max(0, int(self.config.local_sweep.plan_delay_ms))
+        if delay_ms <= 0:
+            self._start_shadow_plan(plan, reason="shadow_plan_requested")
+            return
+        self._sweep_pending_plan_channel = channel_id
         self._emit_tunnel_event(
-            "sweep.plan.started",
-            reason="shadow_plan_requested",
-            sweep_plan_id=plan.plan_id,
-            channel_id=plan.channel_id,
+            "sweep.plan.deferred",
+            reason="shadow_plan_delay_window",
+            channel_id=channel_id,
             sweep_item_count=len(plan.requests),
+            sweep_plan_delay_ms=delay_ms,
         )
-        self._schedule_sweep_task(self._send_sweep_plan_start(plan))
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._sweep_plan_start_task = loop.create_task(
+            self._delayed_start_shadow_plan(channel_id, delay_ms)
+        )
+
+    async def _delayed_start_shadow_plan(self, channel_id: int, delay_ms: int) -> None:
+        try:
+            await asyncio.sleep(delay_ms / 1000.0)
+            if self._sweep_active_plan is not None:
+                return
+            if not (self.config.local_sweep.shadow_local and self._vci_sweep_shadow_supported):
+                return
+            if self._sweep_pending_plan_channel != channel_id:
+                return
+            plan = self._build_sweep_plan_for_channel(channel_id)
+            if plan is None:
+                self._emit_tunnel_event(
+                    "sweep.plan.cancelled",
+                    reason="no_learned_items_after_delay",
+                    channel_id=channel_id,
+                    sweep_plan_delay_ms=delay_ms,
+                )
+                return
+            self._start_shadow_plan(plan, reason="shadow_plan_delay_elapsed")
+        except asyncio.CancelledError:
+            raise
+        finally:
+            self._sweep_pending_plan_channel = None
 
     def _expire_sweep_plan_if_needed(self) -> None:
         plan = self._sweep_active_plan
@@ -585,6 +637,41 @@ class ReverseProxyServer:
         except Exception:
             logger.debug("Sweep status/drain poll failed", exc_info=True)
 
+    def _shadow_comparison_state_fields(
+        self,
+        signature_digest: str,
+        channel_id: int,
+    ) -> dict[str, object]:
+        active_plan = self._sweep_active_plan
+        signature_in_active_plan = False
+        if active_plan is not None:
+            signature_in_active_plan = any(
+                request.signature_digest == signature_digest
+                for request in active_plan.requests
+            )
+        return {
+            "sweep_plan_active": active_plan is not None,
+            "sweep_plan_pending": self._sweep_plan_start_pending(),
+            "sweep_active_plan_id": active_plan.plan_id if active_plan is not None else None,
+            "sweep_pending_plan_channel": self._sweep_pending_plan_channel,
+            "sweep_store_pending_count": self._sweep_shadow_store.pending_count(),
+            "sweep_signature_in_active_plan": signature_in_active_plan,
+            "channel_id": channel_id,
+        }
+
+    @staticmethod
+    def _shadow_not_ready_reason(state_fields: dict[str, object]) -> str | None:
+        if bool(state_fields.get("sweep_plan_pending")):
+            return "plan_pending"
+        if not bool(state_fields.get("sweep_plan_active")):
+            return "no_active_plan"
+        if (
+            bool(state_fields.get("sweep_signature_in_active_plan"))
+            and int(state_fields.get("sweep_store_pending_count") or 0) <= 0
+        ):
+            return "active_plan_no_drained_results"
+        return None
+
     def _compare_shadow_result(
         self,
         observed: SweepObservedRequest,
@@ -596,18 +683,48 @@ class ReverseProxyServer:
         if not self.config.local_sweep.shadow_local:
             return
         signature_digest = observed.signature.signature_digest
+        shadow_result = self._sweep_shadow_store.latest_for(signature_digest)
         result = compare_shadow_to_real(
             signature_digest=signature_digest,
             real_read_rsp_body=real_read_rsp_body,
-            shadow_result=self._sweep_shadow_store.latest_for(signature_digest),
+            shadow_result=shadow_result,
             max_result_age_ms=self.config.local_sweep.max_result_age_ms,
         )
+        state_fields = self._shadow_comparison_state_fields(
+            signature_digest,
+            observed.signature.channel_id,
+        )
+        if result.outcome == "missing":
+            not_ready_reason = self._shadow_not_ready_reason(state_fields)
+            if not_ready_reason is not None:
+                self._emit_proxy_request_event(
+                    "sweep.shadow.not_ready",
+                    dll_seq=dll_seq,
+                    msg_name=msg_name,
+                    reason=f"shadow_{not_ready_reason}",
+                    **result.fields,
+                    **state_fields,
+                    sweep_shadow_not_ready_reason=not_ready_reason,
+                )
+                return
+            missing_reason = (
+                "signature_not_in_active_plan"
+                if not bool(state_fields.get("sweep_signature_in_active_plan"))
+                else "signature_not_drained"
+            )
+            result_fields = {
+                **result.fields,
+                "sweep_shadow_missing_reason": missing_reason,
+            }
+        else:
+            result_fields = result.fields
         self._emit_proxy_request_event(
             f"sweep.shadow.{result.outcome}",
             dll_seq=dll_seq,
             msg_name=msg_name,
             reason=f"shadow_{result.outcome}",
-            **result.fields,
+            **result_fields,
+            **state_fields,
         )
         if result.outcome == "mismatch":
             self._sweep_mismatch_count += 1
@@ -624,8 +741,29 @@ class ReverseProxyServer:
                     channel_id=observed.signature.channel_id,
                 )
 
+    def _cancel_pending_sweep_plan_start(
+        self,
+        reason: str,
+        *,
+        channel_id: int | None = None,
+    ) -> None:
+        task = self._sweep_plan_start_task
+        if task is None or task.done():
+            return
+        pending_channel = self._sweep_pending_plan_channel
+        if channel_id is not None and pending_channel not in {None, channel_id}:
+            return
+        task.cancel()
+        self._sweep_pending_plan_channel = None
+        self._emit_tunnel_event(
+            "sweep.plan.cancelled",
+            reason=f"pending_start_{reason}",
+            channel_id=pending_channel if pending_channel is not None else channel_id,
+        )
+
     def _cancel_sweep_plan(self, reason: str, *, channel_id: int | None = None) -> None:
         plan = self._sweep_active_plan
+        self._cancel_pending_sweep_plan_start(reason, channel_id=channel_id)
         if channel_id is not None:
             self._sweep_shadow_store.clear_channel(channel_id)
             self._sweep_learner.reset_channel(channel_id)
@@ -987,11 +1125,12 @@ class ReverseProxyServer:
             )
         if self.config.local_sweep.enabled:
             logger.info(
-                "Local sweep enabled (mode=%s, min_cycles=%s, max_items=%s, shadow_max_seconds=%s)",
+                "Local sweep enabled (mode=%s, min_cycles=%s, max_items=%s, shadow_max_seconds=%s, plan_delay_ms=%s)",
                 self.config.local_sweep.mode,
                 self.config.local_sweep.min_cycles,
                 self.config.local_sweep.max_items,
                 self.config.local_sweep.shadow_max_seconds,
+                self.config.local_sweep.plan_delay_ms,
             )
         if self.benchmark_writer is not None:
             logger.info("Proxy benchmark logging enabled: %s", self.benchmark_writer.path)
@@ -1006,6 +1145,7 @@ class ReverseProxyServer:
                 tls_enabled=self.config.tls.enabled,
                 local_sweep_enabled=self.config.local_sweep.enabled,
                 local_sweep_mode=self.config.local_sweep.mode,
+                local_sweep_plan_delay_ms=self.config.local_sweep.plan_delay_ms,
             )
 
         try:
@@ -1076,6 +1216,7 @@ class ReverseProxyServer:
         self._prefetch_read_msgs.clear()
         self._sweep_shadow_store.clear()
         self._sweep_learner.reset_all()
+        self._cancel_pending_sweep_plan_start("connection_cancel_pending_futures")
         self._sweep_active_plan = None
         self._sweep_active_plan_started_mono = None
         for seq, future in pending:
@@ -2344,6 +2485,8 @@ def main():
                        help='Maximum learned signatures in one shadow plan')
     parser.add_argument('--local-sweep-shadow-max-seconds', type=int, default=None,
                        help='Maximum duration for one shadow plan')
+    parser.add_argument('--local-sweep-plan-delay-ms', type=int, default=None,
+                       help='Delay before starting a shadow plan so newly learned signatures can join it')
     parser.add_argument('--no-filter-dedup', action='store_true',
                        help='Disable StartFilter deduplication')
     parser.add_argument('--no-vbatt-cache', action='store_true',
@@ -2384,6 +2527,7 @@ def main():
         local_sweep_min_cycles=getattr(args, "local_sweep_min_cycles", None),
         local_sweep_max_items=getattr(args, "local_sweep_max_items", None),
         local_sweep_shadow_max_seconds=getattr(args, "local_sweep_shadow_max_seconds", None),
+        local_sweep_plan_delay_ms=getattr(args, "local_sweep_plan_delay_ms", None),
         no_filter_dedup=args.no_filter_dedup,
         no_vbatt_cache=args.no_vbatt_cache,
         vbatt_ttl=args.vbatt_ttl,
@@ -2426,12 +2570,13 @@ def main():
         "enabled" if config.read_ahead.transaction_enabled else "disabled",
     )
     logger.info(
-        "Local sweep: %s (mode=%s, min_cycles=%s, max_items=%s, shadow_max_seconds=%s)",
+        "Local sweep: %s (mode=%s, min_cycles=%s, max_items=%s, shadow_max_seconds=%s, plan_delay_ms=%s)",
         "enabled" if config.local_sweep.enabled else "disabled",
         config.local_sweep.mode,
         config.local_sweep.min_cycles,
         config.local_sweep.max_items,
         config.local_sweep.shadow_max_seconds,
+        config.local_sweep.plan_delay_ms,
     )
     logger.info(
         "Filter dedup: %s",
