@@ -18,7 +18,7 @@ The implemented first stage learns repeated read-only Data Display sweeps and ca
 
 The current code implements two disabled-by-default modes:
 
-- `observe_only`: cloud-side `reverse_server` classifies exact allowlisted UDS `0x22` ReadDataByIdentifier and OBD Mode 01 PID write requests, correlates them with later `READ_MSGS_RSP(data)`, and emits candidate count, confidence, cadence, rejection, and estimated would-have-shadow-hit observability. It does not change protocol, reverse-client behavior, local runtime behavior, or local J2534 call counts.
+- `observe_only`: cloud-side `reverse_server` classifies exact allowlisted UDS `0x22` ReadDataByIdentifier, OBD Mode 01 PID, and strict CAN-ID-prefixed GM `A9 81 xx` packet write requests, correlates them with later `READ_MSGS_RSP(data)`, and emits candidate count, confidence, cadence, rejection, and estimated would-have-shadow-hit observability. It does not change protocol, reverse-client behavior, local runtime behavior, or local J2534 call counts.
 - `shadow_local`: after observe learning and capability negotiation, the cloud waits a short configurable delay window (`VCI_PROXY_LOCAL_SWEEP_PLAN_DELAY_MS`, default `300ms`) before sending an internal sweep plan to the local reverse client. The delay lets signatures learned milliseconds apart join the first plan instead of starting from a one-item plan. The local client executes the plan serially through the same J2534 driver-call path used by foreground requests, queues shadow read results, and returns them only through server-driven status/drain control frames. Real `WRITE_MSGS_REQ` and `READ_MSGS_REQ` from GDS2 continue through the existing normal proxy path; local sweep does not synthesize replies or skip forwarding.
 
 The v1 shadow transport is server-driven and request/response shaped:
@@ -144,6 +144,9 @@ Initial allowlist candidates:
 
 - UDS `ReadDataByIdentifier` request: service `0x22`, for example `22 00 0C`
 - OBD Mode 01 current-data PID request, for example `01 0C`
+- Strict observed GM packet request: CAN ID prefix `0x7E0..0x7EF` plus
+  `A9 81 xx`, for example `00 00 07 E0 A9 81 1A`. This is comparison-only
+  until shadow logs prove response fidelity on the target vehicle/module.
 - read-only equivalents that are proven by logs and protocol review
 
 Initial denylist examples:
@@ -202,7 +205,7 @@ tx_flags
 payload bytes after normalizing J2534 wrapper fields
 logical ECU target when visible in the payload
 diagnostic service id
-DID or PID
+DID, PID, or GM packet id
 filter_generation
 connection_epoch
 ```
@@ -571,10 +574,11 @@ VCI_PROXY_LOCAL_SWEEP_MODE=observe_only
 VCI_PROXY_LOCAL_SWEEP_MIN_CYCLES=2
 VCI_PROXY_LOCAL_SWEEP_MAX_RESULT_AGE_MS=1000
 VCI_PROXY_LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS=5
-VCI_PROXY_LOCAL_SWEEP_MAX_CYCLE_HZ=2
+VCI_PROXY_LOCAL_SWEEP_READ_TIMEOUT_MS=0
 VCI_PROXY_LOCAL_SWEEP_MAX_ITEMS=128
 VCI_PROXY_LOCAL_SWEEP_ALLOW_UDS_RDBI=1
 VCI_PROXY_LOCAL_SWEEP_ALLOW_OBD_MODE01=1
+VCI_PROXY_LOCAL_SWEEP_ALLOW_GM_A9_PACKET=1
 VCI_PROXY_LOCAL_SWEEP_SHADOW_MAX_SECONDS=120
 VCI_PROXY_LOCAL_SWEEP_PLAN_DELAY_MS=300
 VCI_PROXY_LOCAL_SWEEP_MISMATCH_THRESHOLD=3
@@ -603,6 +607,8 @@ Scope:
 - parse CAN-ID-prefixed UDS positive responses
 - emit per-DID cadence summaries
 - identify candidate read-only request signatures from `WRITE_MSGS_REQ`
+- include strict observed GM `A9 81 xx` packet request signatures when the
+  CAN-ID prefix targets `0x7E0..0x7EF`
 - learn stable loops in `observe_only`
 
 No behavior change.
@@ -745,9 +751,12 @@ These remain undone and disabled:
 - unsolicited client-to-server sweep result push
 - blocking long-poll drain
 - production rollout controls and tray UI controls
-- allowlist expansion beyond exact UDS `0x22` and OBD Mode 01 one-identifier request shapes
+- allowlist expansion beyond exact UDS `0x22`, OBD Mode 01 one-identifier,
+  and strict observed GM `A9 81 xx` request shapes
 - adaptive sweep-rate tuning and priority scheduling
-- proof that shadow results match real GDS2-visible responses on Engine Control Module / Engine Data after the delayed-plan and read-only-IOCTL changes
+- proof that shadow results match real GDS2-visible responses on Engine Control
+  Module / Engine Data after the delayed-plan, read-only-IOCTL, and GM
+  `A9 81 xx` allowlist changes
 
 Any future replay implementation needs a separate ADR/spec and real-vehicle evidence from `observe_only` and `shadow_local`.
 

@@ -37,6 +37,22 @@ def test_classifier_accepts_exact_uds_rdbi_and_obd_mode01_shapes() -> None:
     assert obd.observed.signature.identifier == 0x0C
 
 
+def test_classifier_accepts_strict_gm_a9_packet_request_shape() -> None:
+    classifier = SweepReadOnlyClassifier(LocalSweepConfig(enabled=True))
+
+    classification = classifier.classify_write_request_body(
+        _write_body(b"\x00\x00\x07\xe0\xa9\x81\x1a"),
+        connection_epoch="epoch-1",
+    )
+
+    assert classification.accepted is True
+    assert classification.reason == "allowlisted_read_only"
+    assert classification.observed is not None
+    assert classification.observed.signature.identifier_kind == "gm_a9_packet"
+    assert classification.observed.signature.identifier == 0x811A
+    assert classification.observed.signature.logical_ecu_target == 0x7E0
+
+
 def test_classifier_rejects_disabled_mutating_unknown_and_multi_message_writes() -> None:
     disabled = SweepReadOnlyClassifier(LocalSweepConfig(enabled=False))
     enabled = SweepReadOnlyClassifier(LocalSweepConfig(enabled=True))
@@ -51,6 +67,10 @@ def test_classifier_rejects_disabled_mutating_unknown_and_multi_message_writes()
     ).reason == "not_allowlisted_read_only_shape"
     assert enabled.classify_write_request_body(
         _write_body(b"\x27\x01"),
+        connection_epoch="epoch-1",
+    ).reason == "not_allowlisted_read_only_shape"
+    assert enabled.classify_write_request_body(
+        _write_body(b"\x00\x00\x07\xe0\x3e"),
         connection_epoch="epoch-1",
     ).reason == "not_allowlisted_read_only_shape"
     assert enabled.classify_write_request_body(
@@ -76,3 +96,11 @@ def test_classifier_respects_service_allowlist_flags() -> None:
         _write_body(b"\x01\x0c"),
         connection_epoch="epoch-1",
     ).reason == "obd_mode01_disabled"
+
+    gm_disabled = SweepReadOnlyClassifier(
+        LocalSweepConfig(enabled=True, allow_gm_a9_packet=False)
+    )
+    assert gm_disabled.classify_write_request_body(
+        _write_body(b"\x00\x00\x07\xe0\xa9\x81\x1a"),
+        connection_epoch="epoch-1",
+    ).reason == "gm_a9_packet_disabled"

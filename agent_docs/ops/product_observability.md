@@ -220,10 +220,12 @@ Current runtime behavior:
   - emits focused value-level Data Display samples for `Engine Speed` and `Accelerator Pedal Position` with Java Agent timestamps, collector lag, extraction counters, and active session context
 - `vci_proxy/reverse_server.py`
   - emits tunnel lifecycle, probe, tunnel-quality, proxy-request staged events, and reverse-server process lifecycle events
+  - reverse-server process lifecycle events include local sweep mode and `local_sweep_allow_gm_a9_packet` when reporting startup configuration
   - proxy-request events for `READ_MSGS_REQ` include decoded request metadata (`channel_id`, `num_msgs`, `timeout`) and, when applicable, `last_write_seq` plus `post_write_age_ms`
   - proxy-request response events for `READ_MSGS_RSP` include `return_code`, `message_count`, `payload_bytes`, `read_result` (`empty` or `data`), redacted payload digest/prefix samples, and read-payload change markers
   - `WRITE_MSGS_REQ` request events include `channel_id`, `write_message_count`, `timeout`, `write_payload_bytes`, and redacted payload digest/prefix samples without logging full raw payload data
   - manual GDS2 proxy events for `READ_MSGS_REQ` and `WRITE_MSGS_REQ` include per-channel `live_inter_request_gap_ms` / `live_inter_request_gap_bucket`; gaps at or above `1000ms` also emit `proxy.j2534.cadence_gap`
+  - observed 11-bit GM CAN-ID-prefixed payload samples in the `0x500..0x7FF` range add `can_id`, `can_id_hex`, `can_payload_length`, and `can_payload_prefix_hex`; strict GM `A9 81 xx` request samples also add `gm_request_service_id`, `gm_request_subfunction`, `gm_request_packet_id`, and `gm_request_packet_id_hex`, while `0x500..0x5FF` response samples add `gm_data_packet_id` and `gm_data_packet_id_hex`
   - payload samples include a best-effort `*_engine_speed_candidate_rpm` only when standard `41 0C` or `62 F4 0C` Engine Speed response patterns are visible; treat this as a correlation hint, not a protocol guarantee
   - local sweep observe/shadow events include `sweep.pattern.*`, `sweep.plan.deferred`, `sweep.plan.started`, `sweep.batch.drained`, and `sweep.shadow.*`; `sweep.shadow.not_ready` marks plan-pending/startup/no-drained-result windows, while `sweep.shadow.missing` is reserved for comparable windows where a matching shadow result is absent
   - shadow comparison events include plan state fields such as `sweep_plan_active`, `sweep_plan_pending`, `sweep_store_pending_count`, `sweep_signature_in_active_plan`, and `sweep_shadow_missing_reason` / `sweep_shadow_not_ready_reason` when applicable

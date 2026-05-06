@@ -1688,7 +1688,8 @@ def main() -> None:
         f"Local sweep: {'enabled' if config.local_sweep.enabled else 'disabled'} "
         f"(mode={config.local_sweep.mode}, min_cycles={config.local_sweep.min_cycles}, "
         f"max_items={config.local_sweep.max_items}, shadow_max_seconds={config.local_sweep.shadow_max_seconds}, "
-        f"plan_delay_ms={config.local_sweep.plan_delay_ms})"
+        f"plan_delay_ms={config.local_sweep.plan_delay_ms}, "
+        f"allow_gm_a9_packet={config.local_sweep.allow_gm_a9_packet})"
     )
     print("Press Ctrl+C to stop")
     print("=" * 50)

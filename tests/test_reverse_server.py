@@ -1139,6 +1139,7 @@ def test_proxy_observability_summarizes_payloads_and_engine_speed_candidate() ->
     assert request_fields["write_payload_digest"]
     assert request_fields["write_payload_sample_count"] == 1
     assert request_fields["write_payload_samples"][0]["data_prefix_hex"] == "0562f40c1f40"
+    assert "can_id" not in request_fields["write_payload_samples"][0]
     assert request_fields["write_engine_speed_candidate_rpm"] == 2000.0
     assert request_fields["write_engine_speed_candidate_source"] == "uds_did_f40c"
 
@@ -1159,6 +1160,61 @@ def test_proxy_observability_summarizes_payloads_and_engine_speed_candidate() ->
     assert response_fields["read_payload_digest"]
     assert response_fields["read_payload_samples"][0]["data_digest"]
     assert response_fields["read_engine_speed_candidate_rpm"] == 2000.0
+
+    gm_write_body = ProtocolEncoder.encode_write_msgs_req(
+        77,
+        [
+            {
+                "protocol_id": 6,
+                "rx_status": 0,
+                "tx_flags": 64,
+                "timestamp": 124,
+                "data": b"\x00\x00\x07\xe0\xa9\x81\x1a",
+            }
+        ],
+        timeout=25,
+        sequence=12,
+    )[HEADER_SIZE:]
+    gm_request_fields = server._request_observability_fields(
+        MsgType.WRITE_MSGS_REQ,
+        gm_write_body,
+    )
+    gm_request_sample = gm_request_fields["write_payload_samples"][0]
+
+    assert gm_request_sample["can_id"] == 0x7E0
+    assert gm_request_sample["can_id_hex"] == "000007e0"
+    assert gm_request_sample["can_payload_length"] == 3
+    assert gm_request_sample["can_payload_prefix_hex"] == "a9811a"
+    assert gm_request_sample["gm_request_service_id"] == 0xA9
+    assert gm_request_sample["gm_request_subfunction"] == 0x81
+    assert gm_request_sample["gm_request_packet_id"] == 0x1A
+    assert gm_request_sample["gm_request_packet_id_hex"] == "1a"
+
+    gm_read_body = ProtocolEncoder.encode_read_msgs_rsp(
+        0,
+        [
+            {
+                "protocol_id": 6,
+                "rx_status": 0,
+                "tx_flags": 0,
+                "timestamp": 125,
+                "data": b"\x00\x00\x05\xe8\xf9\x00\x28\x21\x0c\x00\x00\x4c",
+            }
+        ],
+        sequence=13,
+    )[HEADER_SIZE:]
+    gm_response_fields = server._response_observability_fields(
+        MsgType.READ_MSGS_RSP,
+        gm_read_body,
+    )
+    gm_response_sample = gm_response_fields["read_payload_samples"][0]
+
+    assert gm_response_sample["can_id"] == 0x5E8
+    assert gm_response_sample["can_id_hex"] == "000005e8"
+    assert gm_response_sample["can_payload_length"] == 8
+    assert gm_response_sample["can_payload_prefix_hex"] == "f90028210c00004c"
+    assert gm_response_sample["gm_data_packet_id"] == 0xF9
+    assert gm_response_sample["gm_data_packet_id_hex"] == "f9"
 
 
 def test_proxy_observability_tracks_read_payload_changes(monkeypatch) -> None:

@@ -21,6 +21,7 @@ LOCAL_SWEEP_MIN_CYCLES_ENV = "VCI_PROXY_LOCAL_SWEEP_MIN_CYCLES"
 LOCAL_SWEEP_MAX_ITEMS_ENV = "VCI_PROXY_LOCAL_SWEEP_MAX_ITEMS"
 LOCAL_SWEEP_ALLOW_UDS_RDBI_ENV = "VCI_PROXY_LOCAL_SWEEP_ALLOW_UDS_RDBI"
 LOCAL_SWEEP_ALLOW_OBD_MODE01_ENV = "VCI_PROXY_LOCAL_SWEEP_ALLOW_OBD_MODE01"
+LOCAL_SWEEP_ALLOW_GM_A9_PACKET_ENV = "VCI_PROXY_LOCAL_SWEEP_ALLOW_GM_A9_PACKET"
 LOCAL_SWEEP_MAX_RESULT_AGE_MS_ENV = "VCI_PROXY_LOCAL_SWEEP_MAX_RESULT_AGE_MS"
 LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS_ENV = "VCI_PROXY_LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS"
 LOCAL_SWEEP_READ_TIMEOUT_MS_ENV = "VCI_PROXY_LOCAL_SWEEP_READ_TIMEOUT_MS"
@@ -45,6 +46,7 @@ LOCAL_SWEEP_ENV_NAMES = (
     LOCAL_SWEEP_MAX_ITEMS_ENV,
     LOCAL_SWEEP_ALLOW_UDS_RDBI_ENV,
     LOCAL_SWEEP_ALLOW_OBD_MODE01_ENV,
+    LOCAL_SWEEP_ALLOW_GM_A9_PACKET_ENV,
     LOCAL_SWEEP_MAX_RESULT_AGE_MS_ENV,
     LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS_ENV,
     LOCAL_SWEEP_READ_TIMEOUT_MS_ENV,
@@ -173,6 +175,7 @@ class LocalSweepConfig:
     max_items: int = 128
     allow_uds_rdbi: bool = True
     allow_obd_mode01: bool = True
+    allow_gm_a9_packet: bool = True
     max_result_age_ms: int = 1000
     min_item_interval_ms: int = 5
     read_timeout_ms: int = 0
@@ -251,6 +254,11 @@ def local_sweep_config_from_env(
         allow_obd_mode01=env_bool(
             LOCAL_SWEEP_ALLOW_OBD_MODE01_ENV,
             base.allow_obd_mode01,
+            environ=env,
+        ),
+        allow_gm_a9_packet=env_bool(
+            LOCAL_SWEEP_ALLOW_GM_A9_PACKET_ENV,
+            base.allow_gm_a9_packet,
             environ=env,
         ),
         max_result_age_ms=max(
@@ -429,6 +437,11 @@ class ProxyConfig:
                 local_sweep_defaults.allow_obd_mode01
                 if kwargs.get("local_sweep_allow_obd_mode01") is None
                 else bool(kwargs.get("local_sweep_allow_obd_mode01"))
+            ),
+            allow_gm_a9_packet=(
+                local_sweep_defaults.allow_gm_a9_packet
+                if kwargs.get("local_sweep_allow_gm_a9_packet") is None
+                else bool(kwargs.get("local_sweep_allow_gm_a9_packet"))
             ),
             max_result_age_ms=max(
                 1,

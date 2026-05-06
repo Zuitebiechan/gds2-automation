@@ -359,6 +359,7 @@ and reverse client:
 - `VCI_PROXY_LOCAL_SWEEP_MAX_ITEMS=128`
 - `VCI_PROXY_LOCAL_SWEEP_ALLOW_UDS_RDBI=1`
 - `VCI_PROXY_LOCAL_SWEEP_ALLOW_OBD_MODE01=1`
+- `VCI_PROXY_LOCAL_SWEEP_ALLOW_GM_A9_PACKET=1`
 - `VCI_PROXY_LOCAL_SWEEP_MAX_RESULT_AGE_MS=1000`
 - `VCI_PROXY_LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS=5`
 - `VCI_PROXY_LOCAL_SWEEP_READ_TIMEOUT_MS=0`
@@ -368,10 +369,13 @@ and reverse client:
 - `VCI_PROXY_LOCAL_SWEEP_ERROR_THRESHOLD=3`
 
 `observe_only` is cloud-side only. It observes normal `WRITE_MSGS_REQ` and later
-`READ_MSGS_RSP(data)` pairs, learns stable allowlisted UDS `0x22` and OBD Mode
-01 one-identifier request signatures, and emits redacted sweep observability. It
-does not require protocol, reverse-client, local runtime, or local J2534 call
-changes.
+`READ_MSGS_RSP(data)` pairs, learns stable allowlisted UDS `0x22`, OBD Mode 01
+one-identifier, and strict CAN-ID-prefixed GM `A9 81 xx` packet request
+signatures, and emits redacted sweep observability. The GM `A9 81 xx` shape is
+enabled by `VCI_PROXY_LOCAL_SWEEP_ALLOW_GM_A9_PACKET` and is limited to
+`0x7E0..0x7EF` logical ECU targets because it was added from observed Engine
+Control Module / Engine Data traffic. It does not require protocol,
+reverse-client, local runtime, or local J2534 call changes.
 
 `shadow_local` starts only when both sides are configured for the mode and the
 local client advertises `sweep_shadow=1` during tunnel authentication. After the
@@ -423,7 +427,8 @@ Not implemented in this stage:
 - skipped real forwarding
 - serving shadow data to GDS2
 - production rollout controls
-- allowlist expansion beyond exact UDS `0x22` and OBD Mode 01 request shapes
+- allowlist expansion beyond exact UDS `0x22`, OBD Mode 01, and strict observed
+  GM `A9 81 xx` request shapes
 - adaptive sweep-rate tuning
 
 ### Manual GDS2 latency observability
@@ -440,6 +445,12 @@ manual tests:
   lag.
 - Read/write payload evidence is redacted to length, SHA-256 digest, and a
   16-byte hex prefix sample. Full CAN/J2534 payloads are not written.
+- For observed 11-bit GM CAN-ID-prefixed payload samples in the
+  `0x500..0x7FF` range, observability also includes `can_id`, `can_id_hex`,
+  `can_payload_length`, and `can_payload_prefix_hex`. Strict GM `A9 81 xx`
+  request samples add `gm_request_service_id`, `gm_request_subfunction`,
+  `gm_request_packet_id`, and `gm_request_packet_id_hex`; `0x500..0x5FF`
+  response samples add `gm_data_packet_id` and `gm_data_packet_id_hex`.
 - If a payload visibly matches standard `41 0C` or `62 F4 0C` Engine Speed
   response patterns, the event includes a best-effort
   `*_engine_speed_candidate_rpm` field for correlation only.

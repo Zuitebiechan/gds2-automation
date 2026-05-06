@@ -10,7 +10,7 @@ from typing import Literal
 PAYLOAD_PREFIX_BYTES = 16
 
 
-IdentifierKind = Literal["uds_did", "obd_pid"]
+IdentifierKind = Literal["uds_did", "obd_pid", "gm_a9_packet"]
 
 
 @dataclass(frozen=True)
@@ -91,19 +91,23 @@ def payload_digest(data: bytes) -> str:
 
 
 def parse_diagnostic_request_payload(data: bytes) -> DiagnosticRequestShape | None:
-    """Parse exact UDS RDBI or OBD Mode 01 one-identifier request shapes.
+    """Parse exact read-only diagnostic request shapes.
 
     Accepted forms are either a raw diagnostic payload or a four-byte CAN ID
-    prefix followed by the same payload:
+    prefix followed by the same payload, except GM A9 packet reads require the
+    CAN ID prefix because that support is based on observed GDS2 Engine Data
+    traffic:
     - 22 xx yy
     - can_id(4) 22 xx yy
     - 01 xx
     - can_id(4) 01 xx
+    - can_id(4) a9 81 xx
     """
     raw = bytes(data or b"")
     logical_target = None
     payload = raw
-    if len(raw) in (6, 7):
+    has_can_id_prefix = len(raw) in (6, 7)
+    if has_can_id_prefix:
         logical_target = int.from_bytes(raw[:4], "big", signed=False)
         payload = raw[4:]
 
@@ -121,6 +125,22 @@ def parse_diagnostic_request_payload(data: bytes) -> DiagnosticRequestShape | No
             service_id=0x01,
             identifier_kind="obd_pid",
             identifier=payload[1],
+            normalized_payload=raw,
+            logical_ecu_target=logical_target,
+        )
+
+    if (
+        has_can_id_prefix
+        and logical_target is not None
+        and 0x7E0 <= logical_target <= 0x7EF
+        and len(payload) == 3
+        and payload[0] == 0xA9
+        and payload[1] == 0x81
+    ):
+        return DiagnosticRequestShape(
+            service_id=0xA9,
+            identifier_kind="gm_a9_packet",
+            identifier=int.from_bytes(payload[1:3], "big", signed=False),
             normalized_payload=raw,
             logical_ecu_target=logical_target,
         )

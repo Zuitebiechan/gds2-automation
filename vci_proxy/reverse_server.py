@@ -823,6 +823,30 @@ class ReverseProxyServer:
             }
         return {}
 
+    @staticmethod
+    def _can_id_prefixed_payload_fields(data: bytes) -> dict[str, object]:
+        if len(data) < 5:
+            return {}
+        can_id = int.from_bytes(data[:4], "big", signed=False)
+        if not (0x500 <= can_id <= 0x7FF):
+            return {}
+        payload = data[4:]
+        fields: dict[str, object] = {
+            "can_id": can_id,
+            "can_id_hex": f"{can_id:08x}",
+            "can_payload_length": len(payload),
+            "can_payload_prefix_hex": payload[:PAYLOAD_PREFIX_BYTES].hex(),
+        }
+        if len(payload) >= 3 and payload[0] == 0xA9:
+            fields["gm_request_service_id"] = payload[0]
+            fields["gm_request_subfunction"] = payload[1]
+            fields["gm_request_packet_id"] = payload[2]
+            fields["gm_request_packet_id_hex"] = f"{payload[2]:02x}"
+        elif 0x500 <= can_id <= 0x5FF and payload:
+            fields["gm_data_packet_id"] = payload[0]
+            fields["gm_data_packet_id_hex"] = f"{payload[0]:02x}"
+        return fields
+
     @classmethod
     def _message_payload_summary(
         cls,
@@ -847,6 +871,7 @@ class ReverseProxyServer:
                 "data_digest": cls._payload_digest(data),
                 "data_prefix_hex": data[:PAYLOAD_PREFIX_BYTES].hex(),
             }
+            sample.update(cls._can_id_prefixed_payload_fields(data))
             candidate = cls._engine_speed_candidate(data)
             if candidate:
                 sample.update(candidate)
@@ -1125,10 +1150,11 @@ class ReverseProxyServer:
             )
         if self.config.local_sweep.enabled:
             logger.info(
-                "Local sweep enabled (mode=%s, min_cycles=%s, max_items=%s, shadow_max_seconds=%s, plan_delay_ms=%s)",
+                "Local sweep enabled (mode=%s, min_cycles=%s, max_items=%s, allow_gm_a9_packet=%s, shadow_max_seconds=%s, plan_delay_ms=%s)",
                 self.config.local_sweep.mode,
                 self.config.local_sweep.min_cycles,
                 self.config.local_sweep.max_items,
+                self.config.local_sweep.allow_gm_a9_packet,
                 self.config.local_sweep.shadow_max_seconds,
                 self.config.local_sweep.plan_delay_ms,
             )
@@ -1145,6 +1171,7 @@ class ReverseProxyServer:
                 tls_enabled=self.config.tls.enabled,
                 local_sweep_enabled=self.config.local_sweep.enabled,
                 local_sweep_mode=self.config.local_sweep.mode,
+                local_sweep_allow_gm_a9_packet=self.config.local_sweep.allow_gm_a9_packet,
                 local_sweep_plan_delay_ms=self.config.local_sweep.plan_delay_ms,
             )
 

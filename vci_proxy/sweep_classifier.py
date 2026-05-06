@@ -57,6 +57,8 @@ class SweepReadOnlyClassifier:
             return SweepClassification(False, "uds_rdbi_disabled")
         if shape.identifier_kind == "obd_pid" and not self._config.allow_obd_mode01:
             return SweepClassification(False, "obd_mode01_disabled")
+        if shape.identifier_kind == "gm_a9_packet" and not self._config.allow_gm_a9_packet:
+            return SweepClassification(False, "gm_a9_packet_disabled")
 
         signature = make_signature(
             channel_id=channel_id,

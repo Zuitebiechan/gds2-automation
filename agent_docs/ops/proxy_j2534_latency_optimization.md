@@ -400,9 +400,10 @@ this short roadmap section when implementing Phase 5.
 
 Implemented first-stage behavior:
 
-- `observe_only` learns exact allowlisted UDS `0x22` and OBD Mode 01 one-PID
-  request signatures from normal GDS2 traffic and emits candidate/confidence,
-  cadence, rejection, and estimated would-have-shadow-hit observability.
+- `observe_only` learns exact allowlisted UDS `0x22`, OBD Mode 01 one-PID,
+  and strict observed GM `A9 81 xx` request signatures from normal GDS2
+  traffic and emits candidate/confidence, cadence, rejection, and estimated
+  would-have-shadow-hit observability.
 - `shadow_local` installs a learned plan on the local reverse client only after
   mode/capability gates pass and a short configurable plan delay lets same-burst
   learned signatures join the first plan.
@@ -449,7 +450,9 @@ The following remain undone and disabled:
 - unsolicited result push
 - blocking long-poll drain
 - production rollout controls
-- allowlist expansion and adaptive scheduler tuning
+- allowlist expansion beyond exact UDS `0x22`, OBD Mode 01, and strict
+  observed GM `A9 81 xx` request shapes
+- adaptive scheduler tuning
 
 ## Optimizations Not Recommended
 
@@ -559,7 +562,9 @@ A successful optimization should meet all of these:
 
 ## Open Questions
 
-- What exact `WRITE_MSGS_REQ` and `READ_MSGS_REQ` pattern does GDS2 use for each Engine Data PID group?
+- Which Engine Data groups use the observed strict GM `A9 81 xx` packet
+  request shape, and do their shadow responses match the normal GDS2-visible
+  responses across ECU/vehicle variants?
 - Are there protocol-specific differences between CAN, ISO15765, and other J2534 protocols that require separate read-ahead tuning?
 - Should read-ahead be allowed globally, or only for allowlisted modules/data categories after validation?
 - What is the best freshness target for cloud GDS2: match local `1-2s`, or accept a defined cloud threshold such as `<3s`?

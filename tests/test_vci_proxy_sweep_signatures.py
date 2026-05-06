@@ -11,6 +11,7 @@ from vci_proxy.sweep_signatures import (
 def test_parse_read_only_request_shapes_with_optional_can_id_prefix() -> None:
     uds = parse_diagnostic_request_payload(b"\x22\xf4\x0c")
     obd = parse_diagnostic_request_payload(b"\x00\x00\x07\xe0\x01\x0c")
+    gm_packet = parse_diagnostic_request_payload(b"\x00\x00\x07\xe0\xa9\x81\x1a")
 
     assert uds is not None
     assert uds.service_id == 0x22
@@ -23,11 +24,20 @@ def test_parse_read_only_request_shapes_with_optional_can_id_prefix() -> None:
     assert obd.identifier == 0x0C
     assert obd.logical_ecu_target == 0x7E0
 
+    assert gm_packet is not None
+    assert gm_packet.service_id == 0xA9
+    assert gm_packet.identifier_kind == "gm_a9_packet"
+    assert gm_packet.identifier == 0x811A
+    assert gm_packet.logical_ecu_target == 0x7E0
+
 
 def test_parse_request_shape_rejects_unknown_or_mutating_payloads() -> None:
     assert parse_diagnostic_request_payload(b"\x2e\xf4\x0c\x00") is None
     assert parse_diagnostic_request_payload(b"\x10\x03") is None
     assert parse_diagnostic_request_payload(b"\x22\xf4") is None
+    assert parse_diagnostic_request_payload(b"\xa9\x81\x1a") is None
+    assert parse_diagnostic_request_payload(b"\x00\x00\x06\xe0\xa9\x81\x1a") is None
+    assert parse_diagnostic_request_payload(b"\x00\x00\x07\xe0\xa9\x82\x1a") is None
 
 
 def test_signature_is_stable_and_redacted_for_observability() -> None:
