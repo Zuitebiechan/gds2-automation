@@ -5,14 +5,14 @@
 | Field | Content |
 | --- | --- |
 | Type | Long-term optimization design |
-| Status | Guarded `observe_only` and `shadow_local` implemented; `active_replay` remains disabled |
+| Status | Guarded `observe_only` implemented; `shadow_local` transport is available but GM `A9 81 xx` shadow execution remains disabled by default; `active_replay` remains disabled |
 | Owner scope | Cloud GDS2 Data Display freshness over the Proxy J2534 tunnel |
 | Primary code paths | `vci_proxy/reverse_server.py`, `vci_proxy/reverse_client.py`, `vci_proxy/protocol.py`, `vci_proxy/j2534_worker.py` |
 | Related docs | `agent_docs/ops/proxy_j2534_latency_optimization.md`, `agent_docs/ops/vci_proxy_and_tunnel.md`, `agent_docs/ops/product_observability.md` |
 
 ## One-Line Conclusion
 
-The implemented first stage learns repeated read-only Data Display sweeps and can run a local shadow executor for comparison, while real GDS2 requests continue through the existing proxy/tunnel behavior. The long-term replay goal remains future work.
+The implemented first stage learns repeated read-only Data Display sweeps and can run a local shadow executor for comparison, while real GDS2 requests continue through the existing proxy/tunnel behavior. Current Engine Control Module / Engine Data evidence keeps strict GM `A9 81 xx` signatures in observe-only handling unless an explicit bounded experiment enables them. The long-term replay goal remains future work.
 
 ## Current Implementation Stage
 
@@ -37,6 +37,43 @@ be removed by a future replay stage. It does not decode the meaning of GM data
 packets, does not serve responses, and does not enable `active_replay`.
 
 The observe gate artifact for this stage is `.omx/plans/local-sweep-scheduler-observe-gate-signoff.md`.
+
+## Validation Status - 2026-05-06
+
+Latest ECU Data Display logs confirm that the observe/inventory path is active
+and visible in observability, but the local shadow executor did not run because
+the only learned signature in that run was a guarded GM `A9 81 xx` packet.
+
+Observed evidence:
+
+- cloud startup configuration: `local_sweep_enabled=true`,
+  `local_sweep_mode=shadow_local`,
+  `local_sweep_shadow_allow_gm_a9_packet=false`;
+- local client auth capability: `sweep_shadow=1`;
+- Data Display stayed connected for the tested window, with no
+  `j2534_disconnect`, no `proxy.request.timeout`, no `proxy.j2534.cadence_gap`,
+  and no `tunnel.probe.failure`;
+- `sweep.pattern.observed=90`, `sweep.pattern.learned=1`,
+  `sweep.inventory.signature=90`, and `sweep.inventory.summary=262`;
+- the learned candidate was a strict GM `A9 81 xx` packet and emitted
+  `sweep.plan.skipped` with `reason=gm_a9_packet_shadow_disabled`;
+- `sweep.plan.started=0` and `sweep.batch.drained=0`, so no shadow result
+  fidelity conclusions can be drawn from this run.
+
+Current interpretation:
+
+- `shadow_local` mode is safe to leave configured only because GM A9 shadow
+  execution is still blocked by default; in this state it behaves like
+  observe/inventory for GM A9-only plans.
+- The latest stable run should not be treated as proof that high-rate GM A9
+  local shadow execution is safe. Earlier ECU runs correlated unguarded or
+  aggressive GM A9 shadow behavior with frozen or disconnected Data Display
+  windows.
+- The next useful evidence is either a non-GM-A9 allowlisted signature that can
+  run in `shadow_local`, or a deliberately bounded GM A9 shadow experiment after
+  another stable observe-only baseline.
+
+Do not implement or enable `active_replay` from this evidence alone.
 
 ## Background
 
@@ -795,15 +832,23 @@ Rollout order:
 
 1. merge observability only
 2. run at least one `observe_only` Engine Control Module / Engine Data Data Display baseline
-3. enable `shadow_local` without GM A9 shadow execution for a short test window
-4. compare shadow results with normal responses
-5. enable GM A9 shadow only with `VCI_PROXY_LOCAL_SWEEP_SHADOW_ALLOW_GM_A9_PACKET=1` after the baseline remains stable
-6. write a separate ADR/spec before enabling `active_replay`
-7. expand cautiously after repeated successful tests
+3. enable `shadow_local` without GM A9 shadow execution for a short test window;
+   GM A9-only plans should produce `sweep.plan.skipped`, not local ECU polling
+4. compare shadow results with normal responses only when a non-skipped plan
+   actually starts and drains results
+5. collect a changing-value run, preferably Engine Speed on real vehicle or a
+   controllable ECU parameter, before judging user-visible freshness
+6. enable GM A9 shadow only with
+   `VCI_PROXY_LOCAL_SWEEP_SHADOW_ALLOW_GM_A9_PACKET=1` after the baseline remains
+   stable and only for a bounded experiment with immediate rollback available
+7. write a separate ADR/spec before enabling `active_replay`
+8. expand cautiously after repeated successful tests
 
 Rollback triggers:
 
 - GDS2 communication error appears
+- Data Display disconnect frequency increases
+- Data Display values freeze while foreground J2534 traffic continues
 - DTC/session/security traffic is detected inside an active plan
 - synthetic mismatch count exceeds threshold
 - result age exceeds threshold repeatedly
@@ -818,6 +863,9 @@ VCI_PROXY_LOCAL_SWEEP=0
 ```
 
 Then restart both cloud reverse server and local reverse client/tray process.
+
+For the current Engine Control Module / Engine Data workstream, rollback also
+means keeping `VCI_PROXY_LOCAL_SWEEP_SHADOW_ALLOW_GM_A9_PACKET=0` after restart.
 
 ## Why This Addresses The Current Problem
 
@@ -853,6 +901,11 @@ local sweep cycle time + batched result streaming
 - Does the current tunnel reader support unsolicited client-to-server result frames cleanly, or should the first version use server long-poll drain requests?
 - How much extra ECU traffic is acceptable during `shadow_local` validation?
 - Are there vehicle-specific DIDs that look read-only but have hidden side effects?
+- Will a run with changing Engine Speed show that read-ahead/transaction already
+  improves visible freshness enough, or is `active_replay` required to remove
+  the remaining page-wide serial tunnel cost?
+- Can the transaction slow-link guard be validated under a degraded tunnel
+  without introducing Data Display disconnects?
 
 ## Decision Guidance
 

@@ -191,6 +191,53 @@ Current runtime behavior:
 - runtime-triggered trace/incident materialization runs on a background queue; terminal session events and uploaded local artifacts must not block the API request path while large traces are assembled
 - transient upload/API failures leave pending manifests in place for the next uploader pass instead of crashing the tray background loop
 
+## Current VCI Latency Analysis Handoff - 2026-05-06
+
+For the current Proxy J2534 Data Display latency workstream, raw observability is
+the authoritative evidence. The latest inspected ECU run had cloud raw logs and
+local raw logs, but no materialized `session_traces`, `incidents`, `uploads`, or
+local outbox artifacts in the inspected mirror. That is an artifact-health note,
+not by itself a Data Display failure.
+
+Use these event checks to decide whether the latest optimization build was
+actually active:
+
+- cloud `reverse_server` `process.lifecycle.started`:
+  `read_ahead_enabled`, `read_ahead_transaction_enabled`,
+  `read_ahead_transaction_max_network_ms`,
+  `read_ahead_transaction_cooldown_ms`, `local_sweep_enabled`,
+  `local_sweep_mode`, and `local_sweep_shadow_allow_gm_a9_packet`;
+- local `reverse_client.lifecycle.auth_succeeded` reason:
+  `read_ahead=1`, `write_collect=1`, and `sweep_shadow=1`;
+- transaction activity:
+  `proxy.request.forwarded_to_tunnel` with
+  `reason=write_collect_transaction`;
+- slow-link guard activity:
+  `read_ahead.transaction.guard_armed` plus forwarded writes with
+  `reason=write_collect_guarded_no_collect`;
+- local sweep observe/inventory:
+  `sweep.pattern.observed`, `sweep.pattern.learned`,
+  `sweep.inventory.signature`, and `sweep.inventory.summary`;
+- skipped GM A9 shadow plans:
+  `sweep.plan.skipped` with `reason=gm_a9_packet_shadow_disabled`;
+- actual local shadow execution:
+  `sweep.plan.started`, `sweep.batch.drained`, and `sweep.shadow.*`.
+
+Latest known interpretation:
+
+- absence of `read_ahead.transaction.guard_armed` is expected when no
+  non-cache-hit tunnel response reaches the configured threshold, currently
+  `750ms`; it does not mean the feature was missing;
+- a GM A9-only plan skipped by `gm_a9_packet_shadow_disabled` means local shadow
+  execution did not run and therefore could not improve or harm the run through
+  extra local polling;
+- no `j2534_disconnect`, no `proxy.j2534.cadence_gap`, no
+  `proxy.request.timeout`, and no `tunnel.probe.failure` during Data Display is
+  evidence that the current guarded stack was stable for that test window;
+- if `Engine Speed` and `Accelerator Pedal Position` samples remain constant
+  at `0`, the logs cannot prove value-level freshness improvement. A
+  changing-value run is required before judging visible lag.
+
 ## Current Component Usage
 
 - `server/app.py`

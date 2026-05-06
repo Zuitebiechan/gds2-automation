@@ -5,14 +5,62 @@
 | Field | Content |
 | --- | --- |
 | Type | Optimization plan / implementation guide |
-| Status | Phases 1-4 plus first Phase 5 observe/shadow stage implemented behind disabled-by-default flags |
+| Status | Phases 1-4 plus first Phase 5 observe/inventory implemented; guarded `shadow_local` transport exists but active replay remains disabled |
 | Owner scope | Proxy J2534 reverse tunnel latency, especially cloud GDS2 live data freshness |
 | Primary code paths | `vci_proxy/reverse_server.py`, `vci_proxy/reverse_client.py`, `vci_proxy/protocol.py`, `vci_proxy/cache_read_msgs.py` |
 | Related docs | `agent_docs/ops/vci_proxy_and_tunnel.md`, `agent_docs/reports/network_ms.md`, `agent_docs/ops/product_observability.md`, `agent_docs/ops/proxy_j2534_local_sweep_scheduler.md` |
 
 ## One-Line Conclusion
 
-Cloud GDS2 live data lag is mainly amplified by `J2534 serial request count x tunnel round-trip cost`. The current optimization stack preserves the synchronous J2534 behavior visible to GDS2 while adding safer cache invalidation, adaptive empty-read handling, local-side read-ahead, transaction RPCs, and a first local sweep observe/shadow stage. The sweep stage does not yet reduce DLL-visible round trips because replay remains disabled.
+Cloud GDS2 live data lag is mainly amplified by `J2534 serial request count x tunnel round-trip cost`. The current optimization stack preserves the synchronous J2534 behavior visible to GDS2 while adding safer cache invalidation, adaptive empty-read handling, local-side read-ahead, transaction RPCs, and a first local sweep observe/inventory stage. The sweep stage does not yet reduce DLL-visible round trips because replay remains disabled, and GM `A9 81 xx` shadow execution is disabled by default after ECU stability testing.
+
+## Current Progress Snapshot - 2026-05-06
+
+Latest ECU Data Display validation showed the current guarded stack can run
+without increasing disconnects when the tunnel is healthy, but it did not prove
+the slow-link guard or value-level freshness improvement.
+
+Validated active configuration in raw observability:
+
+- cloud reverse server startup logged `read_ahead_enabled=true`,
+  `read_ahead_transaction_enabled=true`,
+  `read_ahead_transaction_max_network_ms=750`,
+  `read_ahead_transaction_cooldown_ms=10000`,
+  `local_sweep_enabled=true`, `local_sweep_mode=shadow_local`, and
+  `local_sweep_shadow_allow_gm_a9_packet=false`.
+- local reverse client authentication succeeded with
+  `ok;read_ahead=1;write_collect=1;sweep_shadow=1`.
+- session `1edb8e1caf7f4def`, connection epoch
+  `epoch-1778052452268-001`, Data Display window
+  `2026-05-06T07:28:23Z` to `2026-05-06T07:36:23Z`.
+- no Data Display `j2534_disconnect`, no `proxy.j2534.cadence_gap`, no
+  `proxy.request.timeout`, and no `tunnel.probe.failure`.
+- Data Display tunnel RTT stayed low: `READ_MSGS_REQ` p95 about `29.6ms`,
+  p99 about `45.4ms`, max about `248.3ms`; `WRITE_MSGS_REQ` p95 about
+  `41.1ms`, max about `119.7ms`; no sample reached the `750ms` transaction
+  guard threshold.
+- transaction wrapping was active (`write_collect_transaction` observed), but
+  `read_ahead.transaction.guard_armed=0` and
+  `write_collect_guarded_no_collect=0` because the tunnel never became slow
+  enough to exercise the guard.
+- local sweep observe/inventory was active and learned one strict GM
+  `A9 81 xx` signature. The plan was skipped with
+  `reason=gm_a9_packet_shadow_disabled`, so no local shadow executor plan
+  contributed data in this run.
+- focused value samples for `Engine Speed` and `Accelerator Pedal Position`
+  were present, but both values remained `0` for all samples. This run cannot
+  prove whether visible Engine Speed lag improved; a changing-value run is still
+  required.
+
+Interpretation:
+
+- the latest fix reduced the observed disconnect risk compared with the earlier
+  unstable GM A9 shadow experiments by keeping GM A9 in observe-only handling;
+- the transaction/read-ahead path appears stable under a healthy tunnel;
+- the current implementation still cannot remove the remaining
+  `N requests x tunnel RTT` cost for a full Data Display page because
+  `active_replay` is not implemented and shadow results are never served to
+  GDS2.
 
 ## Background
 
@@ -504,10 +552,17 @@ Recommended order:
 6. Promote Phase 3 only after logs prove consume-once FIFO correctness.
 7. Use `VCI_PROXY_LOCAL_SWEEP=1` with `VCI_PROXY_LOCAL_SWEEP_MODE=observe_only`
    to collect sweep evidence when read-ahead/transaction are still insufficient.
-8. After observe sign-off, use `VCI_PROXY_LOCAL_SWEEP_MODE=shadow_local` only
-   for short comparison windows; keep GM A9 shadow disabled unless a separate
-   baseline proves Data Display remains stable.
-9. Write a separate ADR/spec before any `active_replay` implementation.
+8. Keep `VCI_PROXY_LOCAL_SWEEP_MODE=shadow_local` in comparison-only mode for
+   short windows. With the current Engine Control Module / Engine Data evidence,
+   keep `VCI_PROXY_LOCAL_SWEEP_SHADOW_ALLOW_GM_A9_PACKET=0`; the learned GM A9
+   signatures should log `sweep.plan.skipped` rather than starting a high-rate
+   local shadow loop.
+9. Before changing shadow policy, collect a run with changing Engine Speed or
+   another changing Data Display value and confirm no disconnects, no cadence
+   gaps, and acceptable tunnel RTT. If the tunnel becomes slow, verify
+   `read_ahead.transaction.guard_armed` and
+   `write_collect_guarded_no_collect` appear.
+10. Write a separate ADR/spec before any `active_replay` implementation.
 
 ## Suggested Code Touch Points
 
@@ -589,11 +644,27 @@ A successful optimization should meet all of these:
 - Real tunnel round trips per live-data refresh window decrease or post-write freshness improves enough to justify any added traffic.
 - Feature flags allow immediate rollback without code changes.
 
+Current status against these criteria:
+
+- stability criterion is partially met for the latest ECU run: no Data Display
+  disconnect and no structured cadence/timeout/probe failures were observed;
+- slow-link guard behavior remains unproven because no request reached the
+  `750ms` guard threshold in the latest run;
+- user-visible freshness remains unproven because the focused `Engine Speed`
+  and `Accelerator Pedal Position` values did not change during the latest run;
+- RTT-count reduction for the full page is not solved until a future
+  `active_replay` design safely serves fresh local sweep results to GDS2.
+
 ## Open Questions
 
 - Which Engine Data groups use the observed strict GM `A9 81 xx` packet
   request shape, and do their shadow responses match the normal GDS2-visible
   responses across ECU/vehicle variants?
+- Can a changing-value Engine Data run show value-level improvement, or does the
+  remaining page-wide serial request count still dominate despite
+  read-ahead/transaction?
+- Under an intentionally slow tunnel or a naturally degraded WAN, does the
+  transaction guard arm and suppress collection without causing disconnects?
 - Are there protocol-specific differences between CAN, ISO15765, and other J2534 protocols that require separate read-ahead tuning?
 - Should read-ahead be allowed globally, or only for allowlisted modules/data categories after validation?
 - What is the best freshness target for cloud GDS2: match local `1-2s`, or accept a defined cloud threshold such as `<3s`?

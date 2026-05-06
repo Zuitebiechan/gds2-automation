@@ -304,6 +304,21 @@ applies the same environment names as runtime overrides on top of its
 `%APPDATA%/VCI_Proxy/config.json` values. If an env value is present, it wins
 over the saved tray value; unset it to return control to the saved config.
 
+"Set on cloud and local" means the variable must be visible to the process that
+uses it:
+
+- cloud: the environment of `python -m vci_proxy.reverse_server`, the cloud
+  service wrapper, or the repo `.env` file loaded by that process;
+- local: the environment of the tray process or direct
+  `python -m vci_proxy.reverse_client` process. The local tray also has saved
+  JSON config, but explicit environment variables override it.
+
+After startup, verify configuration from observability rather than assuming the
+environment was inherited correctly. The cloud `process.lifecycle.started` event
+should show the read-ahead/transaction flags, and the local
+`reverse_client.lifecycle.auth_succeeded` reason should include
+`read_ahead=1` and `write_collect=1` when both sides are enabled.
+
 Reverse server and reverse client CLI overrides:
 
 - `--read-ahead`; enables read-ahead for this process
@@ -349,6 +364,17 @@ Compatibility guardrails:
   `proxy.request.forwarded_to_tunnel` then records reason
   `write_collect_guarded_no_collect`, and
   `read_ahead.transaction.guard_armed` records the triggering slow response.
+
+Operational validation as of `2026-05-06`:
+
+- latest ECU Data Display run confirmed transaction capability was active:
+  local auth reason included `write_collect=1`, and forwarded write events used
+  `reason=write_collect_transaction`;
+- no request reached the default `750ms` slow-link threshold in that run, so
+  `read_ahead.transaction.guard_armed` and
+  `write_collect_guarded_no_collect` correctly remained absent;
+- a future slow-link or throttled-network run is still required before claiming
+  the guard branch is proven.
 
 FIFO cleanup:
 
@@ -445,6 +471,17 @@ shadow data. `sweep.shadow.not_ready` means the cloud has no active plan yet, a
 plan is still in the delay window, or an active plan has not drained any results.
 `sweep.shadow.missing` is reserved for later reads where comparison should have
 been possible but no matching shadow result was available.
+
+Operational validation as of `2026-05-06`:
+
+- latest ECU Data Display run used `VCI_PROXY_LOCAL_SWEEP=1` and
+  `VCI_PROXY_LOCAL_SWEEP_MODE=shadow_local` with
+  `VCI_PROXY_LOCAL_SWEEP_SHADOW_ALLOW_GM_A9_PACKET=0`;
+- the server learned a strict GM `A9 81 xx` signature, then skipped the plan with
+  `reason=gm_a9_packet_shadow_disabled`;
+- `sweep.plan.started` and `sweep.batch.drained` were absent, so no local shadow
+  result comparison occurred in that run;
+- this is the intended safe state for current GM A9-only Engine Data evidence.
 
 Not implemented in this stage:
 
