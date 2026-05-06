@@ -679,6 +679,7 @@ def test_reverse_tunnel_shadow_local_keeps_dll_facing_flow_unchanged(monkeypatch
         )
         config = ProxyConfig.from_args(
             auth_token="shared-secret",
+            read_ahead_enabled=False,
             local_sweep_enabled=True,
             local_sweep_mode="shadow_local",
             local_sweep_min_cycles=1,
@@ -707,6 +708,83 @@ def test_reverse_tunnel_shadow_local_keeps_dll_facing_flow_unchanged(monkeypatch
             assert ProtocolDecoder.decode_write_msgs_rsp(write_rsp[3]) == (0, 1)
             assert ProtocolDecoder.decode_read_msgs_rsp(read_rsp[3])[0] == 0
             assert max_active == 1
+        finally:
+            await _stop_reverse_tunnel(bundle)
+
+    asyncio.run(_run())
+
+
+def test_reverse_tunnel_shadow_local_skips_gm_a9_without_extra_local_calls(monkeypatch) -> None:
+    async def _run() -> None:
+        observed: list[str] = []
+
+        fake_driver = types.SimpleNamespace(
+            dll_path="C:/fake/j2534.dll",
+            write_msgs=lambda channel_id, messages, timeout: (
+                observed.append("write_msgs") or (0, len(messages))
+            ),
+            read_msgs=lambda channel_id, num_msgs, timeout: (
+                observed.append("read_msgs")
+                or (
+                    0,
+                    [
+                        {
+                            "protocol_id": 6,
+                            "rx_status": 0,
+                            "tx_flags": 0,
+                            "timestamp": 1,
+                            "data": b"\x00\x00\x05\xe8\xa9\x81\x1a\x00",
+                        }
+                    ],
+                )
+            ),
+        )
+        config = ProxyConfig.from_args(
+            auth_token="shared-secret",
+            read_ahead_enabled=False,
+            local_sweep_enabled=True,
+            local_sweep_mode="shadow_local",
+            local_sweep_min_cycles=1,
+            local_sweep_plan_delay_ms=0,
+            local_sweep_shadow_max_seconds=1,
+            local_sweep_shadow_allow_gm_a9_packet=False,
+        )
+        bundle = await _start_reverse_tunnel(monkeypatch, fake_driver, config=config)
+        try:
+            assert bundle["server"]._vci_sweep_shadow_supported is True
+
+            write_rsp = await _proxy_round_trip(
+                bundle["proxy_port"],
+                ProtocolEncoder.encode_write_msgs_req(
+                    9001,
+                    [
+                        {
+                            "protocol_id": 6,
+                            "timestamp": 1,
+                            "data": b"\x00\x00\x07\xe0\xa9\x81\x1a",
+                        }
+                    ],
+                    timeout=200,
+                    sequence=201,
+                ),
+            )
+            read_rsp = await _proxy_round_trip(
+                bundle["proxy_port"],
+                ProtocolEncoder.encode_read_msgs_req(
+                    9001,
+                    num_msgs=1,
+                    timeout=0,
+                    sequence=202,
+                ),
+            )
+            await asyncio.sleep(0.1)
+
+            assert write_rsp[1] == MsgType.WRITE_MSGS_RSP
+            assert read_rsp[1] == MsgType.READ_MSGS_RSP
+            assert ProtocolDecoder.decode_write_msgs_rsp(write_rsp[3]) == (0, 1)
+            assert ProtocolDecoder.decode_read_msgs_rsp(read_rsp[3])[0] == 0
+            assert bundle["server"]._sweep_active_plan is None
+            assert observed == ["write_msgs", "read_msgs"]
         finally:
             await _stop_reverse_tunnel(bundle)
 

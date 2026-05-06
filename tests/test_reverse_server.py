@@ -1588,6 +1588,124 @@ def test_read_ahead_transaction_guard_arms_after_slow_tunnel_response(
     ]
 
 
+def test_handle_proxy_connection_uses_no_collect_transaction_after_slow_response(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    async def _run() -> None:
+        monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+        server = ReverseProxyServer(
+            config=ProxyConfig.from_args(
+                read_ahead_enabled=True,
+                read_ahead_transaction_enabled=True,
+                read_ahead_window_ms=180,
+                read_ahead_max_reads=2,
+                read_ahead_read_timeout_ms=5,
+                read_ahead_max_messages=8,
+                read_ahead_transaction_max_network_ms=1,
+                read_ahead_transaction_cooldown_ms=10000,
+            )
+        )
+        server.vci_connected.set()
+        server.vci_writer = _FakeWriter(peername=("10.0.0.9", 9000))
+        server._connection_epoch = "epoch-guard"
+        server._vci_write_collect_supported = True
+
+        new_sequences = iter([201, 202])
+        server._next_sequence = lambda: next(new_sequences)
+
+        events: list[dict[str, object]] = []
+
+        def _capture(event_type: str, **fields: object) -> None:
+            events.append({"event_type": event_type, **fields})
+
+        server._emit_proxy_request_event = _capture  # type: ignore[method-assign]
+
+        first_write = ProtocolEncoder.encode_write_msgs_req(
+            44,
+            [{"protocol_id": 6, "timestamp": 1, "data": b"\x22\xf4\x0c"}],
+            timeout=25,
+            sequence=31,
+        )
+        second_write = ProtocolEncoder.encode_write_msgs_req(
+            44,
+            [{"protocol_id": 6, "timestamp": 2, "data": b"\x22\x13\x08"}],
+            timeout=25,
+            sequence=32,
+        )
+        proxy_reader = _FakeReader(first_write, second_write)
+        proxy_writer = _FakeWriter(peername=("127.0.0.1", 50003))
+
+        responses = iter(
+            [
+                (
+                    MsgType.WRITE_MSGS_RSP,
+                    ProtocolEncoder.encode_write_msgs_rsp(0, 1)[HEADER_SIZE:],
+                    0.0,
+                    0.005,
+                ),
+                (
+                    MsgType.WRITE_MSGS_RSP,
+                    ProtocolEncoder.encode_write_msgs_rsp(0, 1)[HEADER_SIZE:],
+                    0.0,
+                    0.0,
+                ),
+            ]
+        )
+
+        async def _wait_for(awaitable, timeout):
+            if isinstance(awaitable, asyncio.Future):
+                resp_type, resp_body, hw_ms, delay_s = next(responses)
+                if delay_s:
+                    await asyncio.sleep(delay_s)
+                return resp_type, resp_body, hw_ms
+            return await awaitable
+
+        monkeypatch.setattr("vci_proxy.reverse_server.asyncio.wait_for", _wait_for)
+
+        await server._handle_proxy_connection(proxy_reader, proxy_writer)
+
+        forwarded_events = [
+            event
+            for event in events
+            if event["event_type"] == "proxy.request.forwarded_to_tunnel"
+        ]
+        assert [event["reason"] for event in forwarded_events] == [
+            "write_collect_transaction",
+            "write_collect_guarded_no_collect",
+        ]
+        assert any(
+            event["event_type"] == "read_ahead.transaction.guard_armed"
+            for event in events
+        )
+
+        first_forwarded = server.vci_writer.writes[0]
+        second_forwarded = server.vci_writer.writes[1]
+        assert Message.decode_header(first_forwarded[:HEADER_SIZE])[2] == (
+            MsgType.WRITE_AND_COLLECT_READS_REQ
+        )
+        assert Message.decode_header(second_forwarded[:HEADER_SIZE])[2] == (
+            MsgType.WRITE_AND_COLLECT_READS_REQ
+        )
+
+        first_request = ProtocolDecoder.decode_write_and_collect_reads_req(
+            first_forwarded[HEADER_SIZE:]
+        )
+        second_request = ProtocolDecoder.decode_write_and_collect_reads_req(
+            second_forwarded[HEADER_SIZE:]
+        )
+        assert first_request.collect_window_ms == 180
+        assert first_request.max_reads == 2
+        assert first_request.read_timeout_ms == 5
+        assert first_request.max_messages == 8
+        assert second_request.collect_window_ms == 0
+        assert second_request.max_reads == 0
+        assert second_request.read_timeout_ms == 0
+        assert second_request.max_messages == 0
+
+    asyncio.run(_run())
+
+
 def test_build_tunnel_request_falls_back_without_client_write_collect_support() -> None:
     server = ReverseProxyServer(
         config=ProxyConfig.from_args(
