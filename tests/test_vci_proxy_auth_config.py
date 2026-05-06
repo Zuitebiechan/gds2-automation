@@ -8,6 +8,7 @@ from vci_proxy.auth import compute_signature, verify_signature
 from vci_proxy.config import (
     AuthConfig,
     IoctlCacheConfig,
+    LocalSweepConfig,
     ProxyConfig,
     ReadAheadConfig,
     ReadMsgsCacheConfig,
@@ -67,6 +68,11 @@ def test_proxy_config_from_args_maps_flat_cli_flags_to_nested_configs() -> None:
         read_ahead_read_timeout_ms=5,
         read_ahead_max_messages=12,
         read_ahead_transaction_enabled=True,
+        local_sweep_enabled=True,
+        local_sweep_mode="shadow_local",
+        local_sweep_min_cycles=3,
+        local_sweep_max_items=12,
+        local_sweep_shadow_max_seconds=30,
     )
 
     assert config == ProxyConfig(
@@ -89,6 +95,13 @@ def test_proxy_config_from_args_maps_flat_cli_flags_to_nested_configs() -> None:
             read_timeout_ms=5,
             max_messages=12,
             transaction_enabled=True,
+        ),
+        local_sweep=LocalSweepConfig(
+            enabled=True,
+            mode="shadow_local",
+            min_cycles=3,
+            max_items=12,
+            shadow_max_seconds=30,
         ),
     )
 
@@ -161,6 +174,51 @@ def test_proxy_config_read_ahead_env_falls_back_on_invalid_values() -> None:
     )
 
 
+def test_proxy_config_uses_shared_local_sweep_env_defaults() -> None:
+    config = ProxyConfig.from_args(
+        environ={
+            "VCI_PROXY_LOCAL_SWEEP": "1",
+            "VCI_PROXY_LOCAL_SWEEP_MODE": "shadow_local",
+            "VCI_PROXY_LOCAL_SWEEP_MIN_CYCLES": "4",
+            "VCI_PROXY_LOCAL_SWEEP_MAX_ITEMS": "7",
+            "VCI_PROXY_LOCAL_SWEEP_ALLOW_UDS_RDBI": "0",
+            "VCI_PROXY_LOCAL_SWEEP_ALLOW_OBD_MODE01": "1",
+            "VCI_PROXY_LOCAL_SWEEP_MAX_RESULT_AGE_MS": "750",
+            "VCI_PROXY_LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS": "8",
+            "VCI_PROXY_LOCAL_SWEEP_READ_TIMEOUT_MS": "1",
+            "VCI_PROXY_LOCAL_SWEEP_SHADOW_MAX_SECONDS": "60",
+            "VCI_PROXY_LOCAL_SWEEP_MISMATCH_THRESHOLD": "2",
+            "VCI_PROXY_LOCAL_SWEEP_ERROR_THRESHOLD": "5",
+        }
+    )
+
+    assert config.local_sweep == LocalSweepConfig(
+        enabled=True,
+        mode="shadow_local",
+        min_cycles=4,
+        max_items=7,
+        allow_uds_rdbi=False,
+        allow_obd_mode01=True,
+        max_result_age_ms=750,
+        min_item_interval_ms=8,
+        read_timeout_ms=1,
+        shadow_max_seconds=60,
+        mismatch_threshold=2,
+        error_threshold=5,
+    )
+
+
+def test_proxy_config_rejects_active_replay_mode_in_this_stage() -> None:
+    config = ProxyConfig.from_args(
+        environ={
+            "VCI_PROXY_LOCAL_SWEEP": "1",
+            "VCI_PROXY_LOCAL_SWEEP_MODE": "active_replay",
+        }
+    )
+
+    assert config.local_sweep == LocalSweepConfig(enabled=True, mode="observe_only")
+
+
 def test_proxy_config_defaults_are_enabled_and_frozen() -> None:
     config = ProxyConfig()
 
@@ -181,6 +239,7 @@ def test_proxy_config_defaults_are_enabled_and_frozen() -> None:
         read_timeout_ms=0,
         max_messages=16,
     )
+    assert config.local_sweep == LocalSweepConfig()
 
     with pytest.raises(FrozenInstanceError):
         config.auth.enabled = True

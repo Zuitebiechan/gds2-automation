@@ -5,14 +5,14 @@
 | Field | Content |
 | --- | --- |
 | Type | Optimization plan / implementation guide |
-| Status | Planning baseline for future implementation |
+| Status | Phases 1-4 plus first Phase 5 observe/shadow stage implemented behind disabled-by-default flags |
 | Owner scope | Proxy J2534 reverse tunnel latency, especially cloud GDS2 live data freshness |
 | Primary code paths | `vci_proxy/reverse_server.py`, `vci_proxy/reverse_client.py`, `vci_proxy/protocol.py`, `vci_proxy/cache_read_msgs.py` |
 | Related docs | `agent_docs/ops/vci_proxy_and_tunnel.md`, `agent_docs/reports/network_ms.md`, `agent_docs/ops/product_observability.md`, `agent_docs/ops/proxy_j2534_local_sweep_scheduler.md` |
 
 ## One-Line Conclusion
 
-Cloud GDS2 live data lag is mainly amplified by `J2534 serial request count x tunnel round-trip cost`. The optimization direction is to preserve the synchronous J2534 behavior visible to GDS2 while reducing the number of real tunnel round trips through safer cache invalidation, adaptive empty-read handling, local-side read-ahead, and, later, protocol-level transaction RPCs.
+Cloud GDS2 live data lag is mainly amplified by `J2534 serial request count x tunnel round-trip cost`. The current optimization stack preserves the synchronous J2534 behavior visible to GDS2 while adding safer cache invalidation, adaptive empty-read handling, local-side read-ahead, transaction RPCs, and a first local sweep observe/shadow stage. The sweep stage does not yet reduce DLL-visible round trips because replay remains disabled.
 
 ## Background
 
@@ -390,13 +390,28 @@ Validation:
 
 Goal: move high-frequency J2534 polling near the VCI and stream results to the cloud.
 
-This is the largest architectural change and should not be the first implementation.
+The first guarded implementation stage is now available as `observe_only` and
+`shadow_local`. It is still disabled by default and does not synthesize GDS2
+responses.
 
 The detailed long-term design is maintained in
 `agent_docs/ops/proxy_j2534_local_sweep_scheduler.md`. That document supersedes
 this short roadmap section when implementing Phase 5.
 
-Design idea:
+Implemented first-stage behavior:
+
+- `observe_only` learns exact allowlisted UDS `0x22` and OBD Mode 01 one-PID
+  request signatures from normal GDS2 traffic and emits candidate/confidence,
+  cadence, rejection, and estimated would-have-shadow-hit observability.
+- `shadow_local` installs a learned plan on the local reverse client only after
+  mode/capability gates pass.
+- v1 shadow transport uses server-driven non-blocking `SWEEP_STATUS_REQ/RSP`
+  plus immediate `SWEEP_DRAIN_RESULTS_REQ/RSP`.
+- Shadow results are stored only for comparison and are never served to GDS2.
+- Real `WRITE_MSGS_REQ` and `READ_MSGS_REQ` continue through the existing
+  normal proxy path; local sweep does not synthesize replies or skip forwarding.
+
+Long-term design idea:
 
 - Cloud sends a subscription or polling plan to the local side.
 - Local reverse client performs repeated J2534 polling near the VCI.
@@ -414,7 +429,23 @@ Risks:
 - More likely to diverge from ordinary J2534 DLL behavior.
 - Requires strong correctness tests and probably protocol-specific tuning.
 
-Use only after Phases 1-4 prove that tunnel RTT count remains the limiting factor.
+Use replay only after Phases 1-4 and the Phase 5 observe/shadow evidence prove
+that tunnel RTT count remains the limiting factor and shadow results match
+normal GDS2-visible responses.
+
+### Phase 5 Not Implemented Yet
+
+The following remain undone and disabled:
+
+- `active_replay`
+- synthetic write success replies
+- synthetic `READ_MSGS_RSP` replies
+- skipped real tunnel forwarding
+- serving shadow data through `_try_serve_cached()` or the read-ahead FIFO
+- unsolicited result push
+- blocking long-poll drain
+- production rollout controls
+- allowlist expansion and adaptive scheduler tuning
 
 ## Optimizations Not Recommended
 
@@ -436,7 +467,11 @@ Recommended order:
 4. Implement Phase 2 adaptive TTL only if Phase 1 improves freshness but increases idle tunnel traffic too much.
 5. Prototype Phase 3 local-side read-ahead behind a disabled-by-default feature flag.
 6. Promote Phase 3 only after logs prove consume-once FIFO correctness.
-7. Consider Phase 4 or Phase 5 only if Phase 3 is insufficient.
+7. Use `VCI_PROXY_LOCAL_SWEEP=1` with `VCI_PROXY_LOCAL_SWEEP_MODE=observe_only`
+   to collect sweep evidence when read-ahead/transaction are still insufficient.
+8. After observe sign-off, use `VCI_PROXY_LOCAL_SWEEP_MODE=shadow_local` only
+   for short comparison windows.
+9. Write a separate ADR/spec before any `active_replay` implementation.
 
 ## Suggested Code Touch Points
 
@@ -446,6 +481,7 @@ Recommended order:
 | Runtime request observability | `vci_proxy/reverse_server.py`, `vci_proxy/benchmark.py`, `agent_docs/ops/product_observability.md` |
 | Protocol sideband / transaction messages | `vci_proxy/protocol.py`, `vci_proxy/reverse_server.py`, `vci_proxy/reverse_client.py` |
 | Local read-ahead execution | `vci_proxy/reverse_client.py` |
+| Local sweep observe/shadow | `vci_proxy/sweep_*.py`, `vci_proxy/reverse_server.py`, `vci_proxy/reverse_client.py`, `vci_proxy/protocol.py` |
 | Tests | `tests/test_vci_proxy_caches.py`, `tests/test_reverse_server.py`, `tests/test_reverse_client.py`, `tests/test_reverse_tunnel_integration.py`, `tests/test_proxy_benchmark.py` |
 
 ## Test Strategy
@@ -465,6 +501,15 @@ Additional coverage for read-ahead:
 - Prefetch FIFO is cleared on channel state mutation.
 - A partial prefetched response plus tunnel fallback does not duplicate messages.
 - Feature flag disabled preserves current request/response behavior byte-for-byte where practical.
+
+Additional coverage for local sweep observe/shadow:
+
+- classifier/signature allowlist and redaction
+- stable-loop learner threshold and would-have-hit estimates
+- internal `SWEEP_*` message encoding
+- shadow store isolation from `_try_serve_cached()` and prefetch FIFO
+- foreground J2534 calls serialized with shadow calls
+- DLL-facing traffic never observes `SWEEP_*`
 
 Recommended test command:
 
@@ -486,6 +531,9 @@ Roll out in guarded stages:
 3. `adaptive_empty_cache`: enable Phase 2 if needed.
 4. `read_ahead_shadow`: execute read-ahead locally but do not serve prefetched messages to GDS2; compare what would have been served.
 5. `read_ahead_enabled`: serve prefetched messages only after shadow results match expected ordering.
+6. `local_sweep_observe_only`: learn read-only Data Display sweep signatures without extra ECU traffic.
+7. `local_sweep_shadow_local`: run a short local shadow plan and compare only; do not synthesize replies or skip normal GDS2 forwarding.
+8. future `active_replay`: separate design and approval required.
 
 Rollback trigger examples:
 

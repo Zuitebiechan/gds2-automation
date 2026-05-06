@@ -15,6 +15,18 @@ READ_AHEAD_MAX_READS_ENV = "VCI_PROXY_READ_AHEAD_MAX_READS"
 READ_AHEAD_READ_TIMEOUT_MS_ENV = "VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS"
 READ_AHEAD_MAX_MESSAGES_ENV = "VCI_PROXY_READ_AHEAD_MAX_MESSAGES"
 READ_AHEAD_TRANSACTION_ENV = "VCI_PROXY_READ_AHEAD_TRANSACTION"
+LOCAL_SWEEP_ENABLED_ENV = "VCI_PROXY_LOCAL_SWEEP"
+LOCAL_SWEEP_MODE_ENV = "VCI_PROXY_LOCAL_SWEEP_MODE"
+LOCAL_SWEEP_MIN_CYCLES_ENV = "VCI_PROXY_LOCAL_SWEEP_MIN_CYCLES"
+LOCAL_SWEEP_MAX_ITEMS_ENV = "VCI_PROXY_LOCAL_SWEEP_MAX_ITEMS"
+LOCAL_SWEEP_ALLOW_UDS_RDBI_ENV = "VCI_PROXY_LOCAL_SWEEP_ALLOW_UDS_RDBI"
+LOCAL_SWEEP_ALLOW_OBD_MODE01_ENV = "VCI_PROXY_LOCAL_SWEEP_ALLOW_OBD_MODE01"
+LOCAL_SWEEP_MAX_RESULT_AGE_MS_ENV = "VCI_PROXY_LOCAL_SWEEP_MAX_RESULT_AGE_MS"
+LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS_ENV = "VCI_PROXY_LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS"
+LOCAL_SWEEP_READ_TIMEOUT_MS_ENV = "VCI_PROXY_LOCAL_SWEEP_READ_TIMEOUT_MS"
+LOCAL_SWEEP_SHADOW_MAX_SECONDS_ENV = "VCI_PROXY_LOCAL_SWEEP_SHADOW_MAX_SECONDS"
+LOCAL_SWEEP_MISMATCH_THRESHOLD_ENV = "VCI_PROXY_LOCAL_SWEEP_MISMATCH_THRESHOLD"
+LOCAL_SWEEP_ERROR_THRESHOLD_ENV = "VCI_PROXY_LOCAL_SWEEP_ERROR_THRESHOLD"
 
 READ_AHEAD_ENV_NAMES = (
     READ_AHEAD_ENABLED_ENV,
@@ -23,6 +35,21 @@ READ_AHEAD_ENV_NAMES = (
     READ_AHEAD_READ_TIMEOUT_MS_ENV,
     READ_AHEAD_MAX_MESSAGES_ENV,
     READ_AHEAD_TRANSACTION_ENV,
+)
+
+LOCAL_SWEEP_ENV_NAMES = (
+    LOCAL_SWEEP_ENABLED_ENV,
+    LOCAL_SWEEP_MODE_ENV,
+    LOCAL_SWEEP_MIN_CYCLES_ENV,
+    LOCAL_SWEEP_MAX_ITEMS_ENV,
+    LOCAL_SWEEP_ALLOW_UDS_RDBI_ENV,
+    LOCAL_SWEEP_ALLOW_OBD_MODE01_ENV,
+    LOCAL_SWEEP_MAX_RESULT_AGE_MS_ENV,
+    LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS_ENV,
+    LOCAL_SWEEP_READ_TIMEOUT_MS_ENV,
+    LOCAL_SWEEP_SHADOW_MAX_SECONDS_ENV,
+    LOCAL_SWEEP_MISMATCH_THRESHOLD_ENV,
+    LOCAL_SWEEP_ERROR_THRESHOLD_ENV,
 )
 
 _TRUE_VALUES = {"1", "true", "yes", "on", "enabled"}
@@ -76,6 +103,15 @@ def read_ahead_env_is_configured(
     return any(name in env for name in READ_AHEAD_ENV_NAMES)
 
 
+def local_sweep_env_is_configured(
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> bool:
+    """Return True when any shared local sweep env setting is present."""
+    env = _resolve_environ(environ)
+    return any(name in env for name in LOCAL_SWEEP_ENV_NAMES)
+
+
 @dataclass(frozen=True)
 class ReadMsgsCacheConfig:
     """ReadMsgs BUFFER_EMPTY short-circuit cache."""
@@ -126,6 +162,39 @@ class ReadAheadConfig:
     transaction_enabled: bool = False
 
 
+@dataclass(frozen=True)
+class LocalSweepConfig:
+    """Guarded local Data Display sweep scheduler stage."""
+    enabled: bool = False
+    mode: str = "observe_only"
+    min_cycles: int = 2
+    max_items: int = 128
+    allow_uds_rdbi: bool = True
+    allow_obd_mode01: bool = True
+    max_result_age_ms: int = 1000
+    min_item_interval_ms: int = 5
+    read_timeout_ms: int = 0
+    shadow_max_seconds: int = 120
+    mismatch_threshold: int = 3
+    error_threshold: int = 3
+
+    @property
+    def observe_only(self) -> bool:
+        return self.enabled and self.mode == "observe_only"
+
+    @property
+    def shadow_local(self) -> bool:
+        return self.enabled and self.mode == "shadow_local"
+
+
+def _normalized_sweep_mode(value: object, default: str) -> str:
+    mode = str(value or "").strip().lower()
+    if mode in {"observe_only", "shadow_local"}:
+        return mode
+    # active_replay is intentionally not accepted in this stage.
+    return default
+
+
 def read_ahead_config_from_env(
     base: ReadAheadConfig | None = None,
     *,
@@ -155,6 +224,79 @@ def read_ahead_config_from_env(
     )
 
 
+def local_sweep_config_from_env(
+    base: LocalSweepConfig | None = None,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> LocalSweepConfig:
+    """Apply shared local sweep environment settings on top of a base config."""
+    base = base or LocalSweepConfig()
+    env = _resolve_environ(environ)
+    return LocalSweepConfig(
+        enabled=env_bool(LOCAL_SWEEP_ENABLED_ENV, base.enabled, environ=env),
+        mode=_normalized_sweep_mode(env.get(LOCAL_SWEEP_MODE_ENV), base.mode),
+        min_cycles=max(
+            1,
+            env_int(LOCAL_SWEEP_MIN_CYCLES_ENV, base.min_cycles, environ=env),
+        ),
+        max_items=max(1, env_int(LOCAL_SWEEP_MAX_ITEMS_ENV, base.max_items, environ=env)),
+        allow_uds_rdbi=env_bool(
+            LOCAL_SWEEP_ALLOW_UDS_RDBI_ENV,
+            base.allow_uds_rdbi,
+            environ=env,
+        ),
+        allow_obd_mode01=env_bool(
+            LOCAL_SWEEP_ALLOW_OBD_MODE01_ENV,
+            base.allow_obd_mode01,
+            environ=env,
+        ),
+        max_result_age_ms=max(
+            1,
+            env_int(
+                LOCAL_SWEEP_MAX_RESULT_AGE_MS_ENV,
+                base.max_result_age_ms,
+                environ=env,
+            ),
+        ),
+        min_item_interval_ms=max(
+            0,
+            env_int(
+                LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS_ENV,
+                base.min_item_interval_ms,
+                environ=env,
+            ),
+        ),
+        read_timeout_ms=max(
+            0,
+            env_int(LOCAL_SWEEP_READ_TIMEOUT_MS_ENV, base.read_timeout_ms, environ=env),
+        ),
+        shadow_max_seconds=max(
+            1,
+            env_int(
+                LOCAL_SWEEP_SHADOW_MAX_SECONDS_ENV,
+                base.shadow_max_seconds,
+                environ=env,
+            ),
+        ),
+        mismatch_threshold=max(
+            1,
+            env_int(
+                LOCAL_SWEEP_MISMATCH_THRESHOLD_ENV,
+                base.mismatch_threshold,
+                environ=env,
+            ),
+        ),
+        error_threshold=max(
+            1,
+            env_int(
+                LOCAL_SWEEP_ERROR_THRESHOLD_ENV,
+                base.error_threshold,
+                environ=env,
+            ),
+        ),
+    )
+
+
 @dataclass(frozen=True)
 class TlsConfig:
     """Optional TLS transport settings for the reverse tunnel."""
@@ -175,6 +317,7 @@ class ProxyConfig:
     vbatt_cache: VbattCacheConfig = VbattCacheConfig()
     ioctl_cache: IoctlCacheConfig = IoctlCacheConfig()
     read_ahead: ReadAheadConfig = ReadAheadConfig()
+    local_sweep: LocalSweepConfig = LocalSweepConfig()
     tls: TlsConfig = TlsConfig()
 
     @classmethod
@@ -243,6 +386,76 @@ class ProxyConfig:
                 else bool(kwargs.get("read_ahead_transaction_enabled"))
             ),
         )
+        local_sweep_defaults = local_sweep_config_from_env(environ=environ)
+        local_sweep = LocalSweepConfig(
+            enabled=(
+                local_sweep_defaults.enabled
+                if kwargs.get("local_sweep_enabled") is None
+                else bool(kwargs.get("local_sweep_enabled"))
+            ),
+            mode=_normalized_sweep_mode(
+                kwargs.get("local_sweep_mode"),
+                local_sweep_defaults.mode,
+            ),
+            min_cycles=max(
+                1,
+                local_sweep_defaults.min_cycles
+                if kwargs.get("local_sweep_min_cycles") is None
+                else int(kwargs.get("local_sweep_min_cycles")),
+            ),
+            max_items=max(
+                1,
+                local_sweep_defaults.max_items
+                if kwargs.get("local_sweep_max_items") is None
+                else int(kwargs.get("local_sweep_max_items")),
+            ),
+            allow_uds_rdbi=(
+                local_sweep_defaults.allow_uds_rdbi
+                if kwargs.get("local_sweep_allow_uds_rdbi") is None
+                else bool(kwargs.get("local_sweep_allow_uds_rdbi"))
+            ),
+            allow_obd_mode01=(
+                local_sweep_defaults.allow_obd_mode01
+                if kwargs.get("local_sweep_allow_obd_mode01") is None
+                else bool(kwargs.get("local_sweep_allow_obd_mode01"))
+            ),
+            max_result_age_ms=max(
+                1,
+                local_sweep_defaults.max_result_age_ms
+                if kwargs.get("local_sweep_max_result_age_ms") is None
+                else int(kwargs.get("local_sweep_max_result_age_ms")),
+            ),
+            min_item_interval_ms=max(
+                0,
+                local_sweep_defaults.min_item_interval_ms
+                if kwargs.get("local_sweep_min_item_interval_ms") is None
+                else int(kwargs.get("local_sweep_min_item_interval_ms")),
+            ),
+            read_timeout_ms=max(
+                0,
+                local_sweep_defaults.read_timeout_ms
+                if kwargs.get("local_sweep_read_timeout_ms") is None
+                else int(kwargs.get("local_sweep_read_timeout_ms")),
+            ),
+            shadow_max_seconds=max(
+                1,
+                local_sweep_defaults.shadow_max_seconds
+                if kwargs.get("local_sweep_shadow_max_seconds") is None
+                else int(kwargs.get("local_sweep_shadow_max_seconds")),
+            ),
+            mismatch_threshold=max(
+                1,
+                local_sweep_defaults.mismatch_threshold
+                if kwargs.get("local_sweep_mismatch_threshold") is None
+                else int(kwargs.get("local_sweep_mismatch_threshold")),
+            ),
+            error_threshold=max(
+                1,
+                local_sweep_defaults.error_threshold
+                if kwargs.get("local_sweep_error_threshold") is None
+                else int(kwargs.get("local_sweep_error_threshold")),
+            ),
+        )
         tls = TlsConfig(
             enabled=bool(kwargs.get("tls_enabled", False)),
             certfile=kwargs.get("tls_certfile"),
@@ -258,5 +471,6 @@ class ProxyConfig:
             vbatt_cache=vbatt_cache,
             ioctl_cache=ioctl_cache,
             read_ahead=read_ahead,
+            local_sweep=local_sweep,
             tls=tls,
         )

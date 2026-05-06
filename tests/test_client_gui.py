@@ -57,6 +57,7 @@ def _import_client_gui(monkeypatch, tmp_path):
         "VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS",
         "VCI_PROXY_READ_AHEAD_MAX_MESSAGES",
         "VCI_PROXY_READ_AHEAD_TRANSACTION",
+        "PRODUCT_LOG_UPLOAD_ENABLED",
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setitem(sys.modules, "pystray", fake_pystray)

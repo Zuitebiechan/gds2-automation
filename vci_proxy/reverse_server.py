@@ -45,12 +45,28 @@ from .prefetch_read_msgs import PrefetchReadMsgsBuffer
 from .protocol import (
     MAGIC,
     HEADER_SIZE,
+    Message,
     MSG_NAMES,
     MsgType,
     ProtocolDecoder,
     ProtocolEncoder,
     strip_read_msgs_prefetch_bundle,
 )
+from .sweep_compare import compare_shadow_to_real
+from .sweep_learner import SweepLearnerEvent, SweepPatternLearner
+from .sweep_protocol import (
+    SweepPlanStartRequest,
+    SweepPlanStopRequest,
+    SweepRequestSpec,
+    decode_sweep_drain_results_rsp,
+    decode_sweep_plan_start_rsp,
+    encode_sweep_drain_results_req,
+    encode_sweep_plan_start_req,
+    encode_sweep_plan_stop_req,
+    encode_sweep_status_req,
+)
+from .sweep_shadow_store import SweepShadowStore
+from .sweep_signatures import SweepObservedRequest
 from .tls_utils import harden_tls_context
 from .tunnel_quality import (
     TunnelQualityTracker,
@@ -200,6 +216,7 @@ class ReverseProxyServer:
         self._process_shutdown_started_emitted = False
         self._process_shutdown_finished_emitted = False
         self._vci_write_collect_supported = False
+        self._vci_sweep_shadow_supported = False
 
         # P1-1: ReadMsgs BUFFER_EMPTY cache
         self._read_cache = ReadMsgsCache(self.config.read_msgs_cache)
@@ -218,6 +235,13 @@ class ReverseProxyServer:
         self._last_live_request_by_channel: dict[int, tuple[str, int | None, float]] = {}
         # channel_id -> (aggregate payload digest, monotonic timestamp)
         self._last_read_payload_by_channel: dict[int, tuple[str, float]] = {}
+        self._sweep_learner = SweepPatternLearner(self.config.local_sweep)
+        self._sweep_shadow_store = SweepShadowStore()
+        self._sweep_active_plan: SweepPlanStartRequest | None = None
+        self._sweep_active_plan_started_mono: float | None = None
+        self._sweep_poll_task: asyncio.Task | None = None
+        self._sweep_mismatch_count = 0
+        self._sweep_error_count = 0
 
     def _current_observability_context(
         self,
@@ -328,6 +352,298 @@ class ReverseProxyServer:
                 logger.debug("Skipping proxy observability during shutdown", exc_info=True)
                 return
             logger.warning("Failed to emit proxy observability event: %s", event_type, exc_info=True)
+
+    def _emit_sweep_learner_events(
+        self,
+        events: list[SweepLearnerEvent],
+        *,
+        dll_seq: int,
+        msg_name: str,
+    ) -> None:
+        for event in events:
+            self._emit_proxy_request_event(
+                event.event_type,
+                dll_seq=dll_seq,
+                msg_name=msg_name,
+                reason=event.event_type,
+                **event.fields,
+            )
+
+    def _observe_sweep_write(
+        self,
+        msg_type: int,
+        body: bytes,
+        *,
+        dll_seq: int,
+        msg_name: str,
+    ) -> None:
+        if msg_type != MsgType.WRITE_MSGS_REQ or not self.config.local_sweep.enabled:
+            return
+        events = self._sweep_learner.observe_write(
+            body,
+            connection_epoch=self._connection_epoch,
+            read_num_msgs=1,
+            read_timeout_ms=self.config.local_sweep.read_timeout_ms,
+        )
+        self._emit_sweep_learner_events(events, dll_seq=dll_seq, msg_name=msg_name)
+
+    def _observe_sweep_read_response(
+        self,
+        msg_type: int,
+        body: bytes,
+        resp_type: int,
+        resp_body: bytes,
+        *,
+        dll_seq: int,
+        msg_name: str,
+    ) -> None:
+        if msg_type != MsgType.READ_MSGS_REQ or resp_type != MsgType.READ_MSGS_RSP:
+            return
+        observed, events = self._sweep_learner.observe_read_response(
+            body,
+            resp_body,
+            connection_epoch=self._connection_epoch,
+        )
+        self._emit_sweep_learner_events(events, dll_seq=dll_seq, msg_name=msg_name)
+        if observed is not None:
+            self._compare_shadow_result(observed, resp_body, dll_seq=dll_seq, msg_name=msg_name)
+            self._maybe_start_shadow_plan(observed)
+
+    def _build_sweep_plan(
+        self,
+        observed: SweepObservedRequest,
+    ) -> SweepPlanStartRequest | None:
+        if self._connection_epoch is None:
+            return None
+        channel_id = observed.signature.channel_id
+        learned = self._sweep_learner.learned_for_channel(
+            channel_id,
+            connection_epoch=self._connection_epoch,
+            limit=self.config.local_sweep.max_items,
+        )
+        if not learned:
+            return None
+        plan_id = f"{self._connection_epoch}-ch{channel_id}-{int(time.time() * 1000)}"
+        return SweepPlanStartRequest(
+            plan_id=plan_id,
+            connection_epoch=self._connection_epoch,
+            channel_id=channel_id,
+            max_result_age_ms=self.config.local_sweep.max_result_age_ms,
+            min_item_interval_ms=self.config.local_sweep.min_item_interval_ms,
+            shadow_max_seconds=self.config.local_sweep.shadow_max_seconds,
+            requests=tuple(
+                SweepRequestSpec(
+                    signature_digest=item.signature.signature_digest,
+                    write_req_body=item.write_req_body,
+                    read_num_msgs=item.read_num_msgs,
+                    read_timeout_ms=item.read_timeout_ms,
+                )
+                for item in learned
+            ),
+        )
+
+    def _maybe_start_shadow_plan(self, observed: SweepObservedRequest) -> None:
+        if not self.config.local_sweep.shadow_local:
+            return
+        if not self._vci_sweep_shadow_supported:
+            return
+        if self._sweep_active_plan is not None:
+            return
+        plan = self._build_sweep_plan(observed)
+        if plan is None:
+            return
+        self._sweep_active_plan = plan
+        self._sweep_active_plan_started_mono = time.monotonic()
+        self._sweep_mismatch_count = 0
+        self._sweep_error_count = 0
+        self._emit_tunnel_event(
+            "sweep.plan.started",
+            reason="shadow_plan_requested",
+            sweep_plan_id=plan.plan_id,
+            channel_id=plan.channel_id,
+            sweep_item_count=len(plan.requests),
+        )
+        self._schedule_sweep_task(self._send_sweep_plan_start(plan))
+
+    def _expire_sweep_plan_if_needed(self) -> None:
+        plan = self._sweep_active_plan
+        started = self._sweep_active_plan_started_mono
+        if plan is None or started is None:
+            return
+        if time.monotonic() - started > plan.shadow_max_seconds:
+            self._cancel_sweep_plan("max_seconds_expired", channel_id=plan.channel_id)
+
+    def _schedule_sweep_task(self, coro) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            close = getattr(coro, "close", None)
+            if callable(close):
+                close()
+            return
+        loop.create_task(coro)
+
+    async def _send_sweep_frame(self, encoded: bytes, *, timeout_s: float = 1.0):
+        if self.vci_writer is None:
+            raise ConnectionError("VCI tunnel unavailable for sweep control")
+        _magic, _length, _msg_type, sequence = Message.decode_header(encoded[:HEADER_SIZE])
+        future = asyncio.get_running_loop().create_future()
+        self.response_futures[sequence] = future
+        try:
+            async with self.vci_lock:
+                if self.vci_writer is None:
+                    raise ConnectionError("VCI tunnel unavailable for sweep control")
+                self.vci_writer.write(encoded)
+                await self.vci_writer.drain()
+            return await asyncio.wait_for(future, timeout=timeout_s)
+        except Exception:
+            self.response_futures.pop(sequence, None)
+            raise
+
+    async def _send_sweep_plan_start(self, plan: SweepPlanStartRequest) -> None:
+        sequence = self._next_sequence()
+        try:
+            resp_type, resp_body, _hw_ms = await self._send_sweep_frame(
+                encode_sweep_plan_start_req(plan, sequence=sequence),
+            )
+            if resp_type != MsgType.SWEEP_PLAN_START_RSP:
+                raise RuntimeError(f"unexpected sweep start response: {resp_type:#x}")
+            response = decode_sweep_plan_start_rsp(resp_body)
+            if not response.success:
+                raise RuntimeError(response.reason)
+            self._schedule_sweep_poll()
+        except Exception as exc:
+            self._emit_tunnel_event(
+                "sweep.plan.cancelled",
+                status="error",
+                failure_code="sweep_plan_start_failed",
+                failure_domain="cloud_proxy_tunnel",
+                reason=str(exc),
+                sweep_plan_id=plan.plan_id,
+                channel_id=plan.channel_id,
+            )
+            if self._sweep_active_plan is plan:
+                self._sweep_active_plan = None
+                self._sweep_active_plan_started_mono = None
+
+    async def _send_sweep_plan_stop(self, plan_id: str, reason: str) -> None:
+        sequence = self._next_sequence()
+        try:
+            await self._send_sweep_frame(
+                encode_sweep_plan_stop_req(
+                    SweepPlanStopRequest(plan_id=plan_id, reason=reason),
+                    sequence=sequence,
+                ),
+            )
+        except Exception:
+            logger.debug("Sweep plan stop control failed", exc_info=True)
+
+    def _schedule_sweep_poll(self) -> None:
+        if self._sweep_active_plan is None:
+            return
+        if self._sweep_poll_task is not None and not self._sweep_poll_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._sweep_poll_task = loop.create_task(self._poll_sweep_once())
+
+    async def _poll_sweep_once(self) -> None:
+        plan = self._sweep_active_plan
+        if plan is None:
+            return
+        self._expire_sweep_plan_if_needed()
+        if self._sweep_active_plan is None:
+            return
+        try:
+            status_seq = self._next_sequence()
+            await self._send_sweep_frame(
+                encode_sweep_status_req(sequence=status_seq),
+                timeout_s=0.5,
+            )
+            drain_seq = self._next_sequence()
+            resp_type, resp_body, _hw_ms = await self._send_sweep_frame(
+                encode_sweep_drain_results_req(sequence=drain_seq),
+                timeout_s=0.5,
+            )
+            if resp_type != MsgType.SWEEP_DRAIN_RESULTS_RSP:
+                return
+            results = decode_sweep_drain_results_rsp(resp_body)
+            for result in results:
+                self._sweep_shadow_store.record_result(
+                    result,
+                    channel_id=plan.channel_id,
+                )
+            self._emit_tunnel_event(
+                "sweep.batch.drained",
+                reason="drain_completed",
+                sweep_plan_id=plan.plan_id,
+                channel_id=plan.channel_id,
+                sweep_result_count=len(results),
+            )
+        except Exception:
+            logger.debug("Sweep status/drain poll failed", exc_info=True)
+
+    def _compare_shadow_result(
+        self,
+        observed: SweepObservedRequest,
+        real_read_rsp_body: bytes,
+        *,
+        dll_seq: int,
+        msg_name: str,
+    ) -> None:
+        if not self.config.local_sweep.shadow_local:
+            return
+        signature_digest = observed.signature.signature_digest
+        result = compare_shadow_to_real(
+            signature_digest=signature_digest,
+            real_read_rsp_body=real_read_rsp_body,
+            shadow_result=self._sweep_shadow_store.latest_for(signature_digest),
+            max_result_age_ms=self.config.local_sweep.max_result_age_ms,
+        )
+        self._emit_proxy_request_event(
+            f"sweep.shadow.{result.outcome}",
+            dll_seq=dll_seq,
+            msg_name=msg_name,
+            reason=f"shadow_{result.outcome}",
+            **result.fields,
+        )
+        if result.outcome == "mismatch":
+            self._sweep_mismatch_count += 1
+            if self._sweep_mismatch_count >= self.config.local_sweep.mismatch_threshold:
+                self._cancel_sweep_plan(
+                    "mismatch_threshold_reached",
+                    channel_id=observed.signature.channel_id,
+                )
+        elif result.outcome == "error":
+            self._sweep_error_count += 1
+            if self._sweep_error_count >= self.config.local_sweep.error_threshold:
+                self._cancel_sweep_plan(
+                    "error_threshold_reached",
+                    channel_id=observed.signature.channel_id,
+                )
+
+    def _cancel_sweep_plan(self, reason: str, *, channel_id: int | None = None) -> None:
+        plan = self._sweep_active_plan
+        if channel_id is not None:
+            self._sweep_shadow_store.clear_channel(channel_id)
+            self._sweep_learner.reset_channel(channel_id)
+        else:
+            self._sweep_shadow_store.clear()
+        if plan is None:
+            return
+        if channel_id is not None and plan.channel_id != channel_id:
+            return
+        self._sweep_active_plan = None
+        self._sweep_active_plan_started_mono = None
+        self._emit_tunnel_event(
+            "sweep.plan.cancelled",
+            reason=reason,
+            sweep_plan_id=plan.plan_id,
+            channel_id=plan.channel_id,
+        )
+        self._schedule_sweep_task(self._send_sweep_plan_stop(plan.plan_id, reason))
 
     @staticmethod
     def _message_payload_bytes(messages: list[dict]) -> int:
@@ -610,6 +926,8 @@ class ReverseProxyServer:
             capabilities.append("read_ahead=1")
             if self.config.read_ahead.transaction_enabled:
                 capabilities.append("write_collect=1")
+        if self.config.local_sweep.shadow_local:
+            capabilities.append("sweep_shadow=1")
         return ";".join(capabilities)
 
     @staticmethod
@@ -667,6 +985,14 @@ class ReverseProxyServer:
                 self.config.read_ahead.max_messages,
                 "enabled" if self.config.read_ahead.transaction_enabled else "disabled",
             )
+        if self.config.local_sweep.enabled:
+            logger.info(
+                "Local sweep enabled (mode=%s, min_cycles=%s, max_items=%s, shadow_max_seconds=%s)",
+                self.config.local_sweep.mode,
+                self.config.local_sweep.min_cycles,
+                self.config.local_sweep.max_items,
+                self.config.local_sweep.shadow_max_seconds,
+            )
         if self.benchmark_writer is not None:
             logger.info("Proxy benchmark logging enabled: %s", self.benchmark_writer.path)
         logger.info("Waiting for local VCI Proxy connection on port %s", self.listen_port)
@@ -678,6 +1004,8 @@ class ReverseProxyServer:
                 reason="server_started",
                 auth_enabled=self.config.auth.enabled,
                 tls_enabled=self.config.tls.enabled,
+                local_sweep_enabled=self.config.local_sweep.enabled,
+                local_sweep_mode=self.config.local_sweep.mode,
             )
 
         try:
@@ -746,6 +1074,10 @@ class ReverseProxyServer:
         self._filter_cache.clear()
         self._ioctl_cache.invalidate()
         self._prefetch_read_msgs.clear()
+        self._sweep_shadow_store.clear()
+        self._sweep_learner.reset_all()
+        self._sweep_active_plan = None
+        self._sweep_active_plan_started_mono = None
         for seq, future in pending:
             if not future.done():
                 future.set_exception(ConnectionError("VCI Proxy 已断开"))
@@ -773,6 +1105,7 @@ class ReverseProxyServer:
         """
         peer = writer.get_extra_info("peername")
         self._vci_write_collect_supported = False
+        self._vci_sweep_shadow_supported = False
         try:
             header = await asyncio.wait_for(
                 reader.readexactly(HEADER_SIZE),
@@ -826,6 +1159,10 @@ class ReverseProxyServer:
                     capabilities,
                     "write_collect",
                 )
+                self._vci_sweep_shadow_supported = self._capability_enabled(
+                    capabilities,
+                    "sweep_shadow",
+                )
                 rsp = ProtocolEncoder.encode_auth_rsp(
                     True,
                     self._auth_success_message(),
@@ -857,6 +1194,10 @@ class ReverseProxyServer:
                     capabilities,
                     "write_collect",
                 )
+                self._vci_sweep_shadow_supported = self._capability_enabled(
+                    capabilities,
+                    "sweep_shadow",
+                )
             rsp = ProtocolEncoder.encode_auth_rsp(success, reason, sequence)
             try:
                 writer.write(rsp)
@@ -877,6 +1218,7 @@ class ReverseProxyServer:
 
         if msg_type == MsgType.HEARTBEAT:
             self._vci_write_collect_supported = False
+            self._vci_sweep_shadow_supported = False
             if self.config.auth.enabled:
                 logger.warning(
                     "Auth required but VCI client sent HEARTBEAT (legacy client)"
@@ -1181,6 +1523,8 @@ class ReverseProxyServer:
             owns_current_tunnel = self.vci_writer is writer
             if owns_current_tunnel:
                 self._vci_write_collect_supported = False
+                self._vci_sweep_shadow_supported = False
+                self._cancel_sweep_plan("connection_epoch_changed")
                 self.vci_connected.clear()
                 self._cancel_pending_futures()
                 await self._cancel_probe_task_async()
@@ -1267,6 +1611,7 @@ class ReverseProxyServer:
         """Invalidate caches based on the request type."""
         if msg_type == MsgType.DISCONNECT_REQ:
             channel_id = ProtocolDecoder.decode_disconnect_req(body)
+            self._cancel_sweep_plan("disconnect_req", channel_id=channel_id)
             self._read_cache.invalidate_channel(channel_id)
             self._filter_cache.invalidate_channel(channel_id)
             self._ioctl_cache.invalidate_channel(channel_id)
@@ -1275,6 +1620,7 @@ class ReverseProxyServer:
             self._last_live_request_by_channel.pop(channel_id, None)
             self._last_read_payload_by_channel.pop(channel_id, None)
         elif msg_type == MsgType.CLOSE_REQ:
+            self._cancel_sweep_plan("close_req")
             self._read_cache.clear()
             self._filter_cache.clear()
             self._ioctl_cache.invalidate()
@@ -1291,11 +1637,13 @@ class ReverseProxyServer:
             channel_id, _filter_type, _mask, _pattern, _flow = (
                 ProtocolDecoder.decode_start_filter_req(body)
             )
+            self._cancel_sweep_plan("start_filter_req", channel_id=channel_id)
             self._read_cache.mark_channel_active(channel_id, invalidate_empty=True)
             self._prefetch_read_msgs.clear_channel(channel_id)
             self._last_read_payload_by_channel.pop(channel_id, None)
         elif msg_type == MsgType.STOP_FILTER_REQ:
             channel_id, filter_id = ProtocolDecoder.decode_stop_filter_req(body)
+            self._cancel_sweep_plan("stop_filter_req", channel_id=channel_id)
             self._read_cache.mark_channel_active(channel_id, invalidate_empty=True)
             self._prefetch_read_msgs.clear_channel(channel_id)
             self._last_read_payload_by_channel.pop(channel_id, None)
@@ -1303,6 +1651,7 @@ class ReverseProxyServer:
         elif msg_type == MsgType.IOCTL_REQ:
             channel_id, ioctl_id, _input = ProtocolDecoder.decode_ioctl_req(body)
             if not self._ioctl_cache.is_cacheable(ioctl_id):
+                self._cancel_sweep_plan("mutating_or_non_cacheable_ioctl", channel_id=channel_id)
                 self._read_cache.mark_channel_active(channel_id, invalidate_empty=True)
                 self._prefetch_read_msgs.clear_channel(channel_id)
                 self._last_read_payload_by_channel.pop(channel_id, None)
@@ -1381,10 +1730,20 @@ class ReverseProxyServer:
         elif msg_type == MsgType.WRITE_MSGS_REQ:
             if resp_type != MsgType.WRITE_MSGS_RSP:
                 self._clear_prefetch_after_failed_write(msg_type, body)
+                try:
+                    channel_id, _messages, _timeout = ProtocolDecoder.decode_write_msgs_req(body)
+                    self._cancel_sweep_plan("failed_write_msgs_rsp_type", channel_id=channel_id)
+                except Exception:
+                    self._cancel_sweep_plan("failed_write_msgs_rsp_type")
                 return
             return_code, _num_written = ProtocolDecoder.decode_write_msgs_rsp(resp_body)
             if return_code != 0:
                 self._clear_prefetch_after_failed_write(msg_type, body)
+                try:
+                    channel_id, _messages, _timeout = ProtocolDecoder.decode_write_msgs_req(body)
+                    self._cancel_sweep_plan("failed_write_msgs_req", channel_id=channel_id)
+                except Exception:
+                    self._cancel_sweep_plan("failed_write_msgs_req")
 
         elif msg_type == MsgType.IOCTL_REQ and ioctl_id is not None and resp_type == MsgType.IOCTL_RSP:
             channel_id = struct.unpack('>I', body[:4])[0]
@@ -1655,6 +2014,12 @@ class ReverseProxyServer:
                     msg_name=msg_name,
                     request_fields=request_fields,
                 )
+                self._observe_sweep_write(
+                    msg_type,
+                    body,
+                    dll_seq=sequence,
+                    msg_name=msg_name,
+                )
 
                 # Try serving from cache
                 cached, ioctl_id, cache_reason = self._try_serve_cached(
@@ -1672,6 +2037,14 @@ class ReverseProxyServer:
                     resp_type, resp_body = decode_benchmark_response(cached)
                     response_fields = self._response_observability_fields(resp_type, resp_body)
                     self._augment_read_payload_delta_fields(request_fields, response_fields)
+                    self._observe_sweep_read_response(
+                        msg_type,
+                        body,
+                        resp_type,
+                        resp_body,
+                        dll_seq=sequence,
+                        msg_name=msg_name,
+                    )
                     self._record_benchmark_event(
                         started_at_s=started_at_s,
                         duration_ms=0.0,
@@ -1693,6 +2066,7 @@ class ReverseProxyServer:
                         **request_fields,
                         **response_fields,
                     )
+                    self._schedule_sweep_poll()
                     continue
                 self._emit_proxy_request_event(
                     "proxy.request.cache_decision",
@@ -1760,6 +2134,14 @@ class ReverseProxyServer:
                     self._record_in_caches(msg_type, body, resp_type, resp_body, ioctl_id)
                     response_fields = self._response_observability_fields(resp_type, resp_body)
                     self._augment_read_payload_delta_fields(request_fields, response_fields)
+                    self._observe_sweep_read_response(
+                        msg_type,
+                        body,
+                        resp_type,
+                        resp_body,
+                        dll_seq=sequence,
+                        msg_name=msg_name,
+                    )
                     self._record_benchmark_event(
                         started_at_s=started_at_s,
                         duration_ms=fwd_ms,
@@ -1802,6 +2184,7 @@ class ReverseProxyServer:
                         **request_fields,
                         **response_fields,
                     )
+                    self._schedule_sweep_poll()
 
                     if fwd_ms > 1000:
                         logger.warning(
@@ -1816,6 +2199,7 @@ class ReverseProxyServer:
                     fwd_ms = (time.monotonic() - fwd_start) * 1000
                     reason = "VCI_DISCONNECTED" if isinstance(e, ConnectionError) else "TIMEOUT"
                     self._clear_prefetch_after_failed_write(msg_type, body)
+                    self._cancel_sweep_plan("gds2_communication_error")
                     self._record_benchmark_event(
                         started_at_s=started_at_s,
                         duration_ms=fwd_ms,
@@ -1948,6 +2332,18 @@ def main():
                        help='Enable internal WRITE_AND_COLLECT_READS transaction RPC when the client advertises support (or VCI_PROXY_READ_AHEAD_TRANSACTION=1)')
     parser.add_argument('--no-read-ahead-transaction', dest='read_ahead_transaction', action='store_false',
                        help='Disable internal read-ahead transaction RPC even if VCI_PROXY_READ_AHEAD_TRANSACTION is set')
+    parser.add_argument('--local-sweep', dest='local_sweep', action='store_true', default=None,
+                       help='Enable guarded local sweep observe/shadow mode (or VCI_PROXY_LOCAL_SWEEP=1)')
+    parser.add_argument('--no-local-sweep', dest='local_sweep', action='store_false',
+                       help='Disable local sweep even if VCI_PROXY_LOCAL_SWEEP is set')
+    parser.add_argument('--local-sweep-mode', choices=['observe_only', 'shadow_local'], default=None,
+                       help='Local sweep mode (default: observe_only or VCI_PROXY_LOCAL_SWEEP_MODE)')
+    parser.add_argument('--local-sweep-min-cycles', type=int, default=None,
+                       help='Minimum complete observed cycles before sweep candidacy')
+    parser.add_argument('--local-sweep-max-items', type=int, default=None,
+                       help='Maximum learned signatures in one shadow plan')
+    parser.add_argument('--local-sweep-shadow-max-seconds', type=int, default=None,
+                       help='Maximum duration for one shadow plan')
     parser.add_argument('--no-filter-dedup', action='store_true',
                        help='Disable StartFilter deduplication')
     parser.add_argument('--no-vbatt-cache', action='store_true',
@@ -1983,6 +2379,11 @@ def main():
         read_ahead_read_timeout_ms=args.read_ahead_read_timeout_ms,
         read_ahead_max_messages=args.read_ahead_max_messages,
         read_ahead_transaction_enabled=args.read_ahead_transaction,
+        local_sweep_enabled=getattr(args, "local_sweep", None),
+        local_sweep_mode=getattr(args, "local_sweep_mode", None),
+        local_sweep_min_cycles=getattr(args, "local_sweep_min_cycles", None),
+        local_sweep_max_items=getattr(args, "local_sweep_max_items", None),
+        local_sweep_shadow_max_seconds=getattr(args, "local_sweep_shadow_max_seconds", None),
         no_filter_dedup=args.no_filter_dedup,
         no_vbatt_cache=args.no_vbatt_cache,
         vbatt_ttl=args.vbatt_ttl,
@@ -2023,6 +2424,14 @@ def main():
         config.read_ahead.read_timeout_ms,
         config.read_ahead.max_messages,
         "enabled" if config.read_ahead.transaction_enabled else "disabled",
+    )
+    logger.info(
+        "Local sweep: %s (mode=%s, min_cycles=%s, max_items=%s, shadow_max_seconds=%s)",
+        "enabled" if config.local_sweep.enabled else "disabled",
+        config.local_sweep.mode,
+        config.local_sweep.min_cycles,
+        config.local_sweep.max_items,
+        config.local_sweep.shadow_max_seconds,
     )
     logger.info(
         "Filter dedup: %s",

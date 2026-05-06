@@ -4,6 +4,8 @@ import asyncio
 import ssl
 import types
 import json
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -20,6 +22,16 @@ from vci_proxy.protocol import (
     strip_read_msgs_prefetch_bundle,
 )
 from vci_proxy.reverse_client import ReverseProxyClient
+from vci_proxy.sweep_protocol import (
+    SweepPlanStartRequest,
+    SweepRequestSpec,
+    decode_sweep_drain_results_rsp,
+    decode_sweep_plan_start_rsp,
+    decode_sweep_status_rsp,
+    encode_sweep_drain_results_req,
+    encode_sweep_plan_start_req,
+    encode_sweep_status_req,
+)
 
 
 class _FakeWriter:
@@ -174,6 +186,27 @@ def test_send_registration_auth_mode_advertises_write_collect_capability(monkeyp
     assert client._server_write_collect_enabled is True
     body = writer.writes[0][HEADER_SIZE:]
     assert ProtocolDecoder.decode_auth_req_capabilities(body) == "read_ahead=1;write_collect=1"
+
+
+def test_send_registration_auth_mode_advertises_sweep_shadow_capability(monkeypatch) -> None:
+    config = ProxyConfig.from_args(
+        auth_token="shared-secret",
+        local_sweep_enabled=True,
+        local_sweep_mode="shadow_local",
+    )
+    client = ReverseProxyClient("example.com", 9000, config=config)
+    reader = _FakeReader(ProtocolEncoder.encode_auth_rsp(True, "ok;sweep_shadow=1", sequence=0))
+    writer = _FakeWriter()
+
+    monkeypatch.setattr("vci_proxy.reverse_client.time.time", lambda: 1_700_000_000)
+    monkeypatch.setattr("vci_proxy.reverse_client.compute_signature", lambda token, timestamp: b"s" * 32)
+
+    result = asyncio.run(client._send_registration(reader, writer))
+
+    assert result is True
+    assert client._server_sweep_shadow_enabled is True
+    body = writer.writes[0][HEADER_SIZE:]
+    assert "sweep_shadow=1" in ProtocolDecoder.decode_auth_req_capabilities(body)
 
 
 def test_proxy_config_from_args_populates_tls_settings() -> None:
@@ -653,6 +686,217 @@ def test_handle_message_returns_ping_response() -> None:
     assert length == HEADER_SIZE
     assert msg_type == MsgType.PING_RSP
     assert sequence == 5
+
+
+def test_handle_sweep_status_and_drain_are_immediate_when_empty() -> None:
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(
+            local_sweep_enabled=True,
+            local_sweep_mode="shadow_local",
+        ),
+    )
+    client._server_sweep_shadow_enabled = True
+
+    status = asyncio.run(
+        client._handle_message(
+            MsgType.SWEEP_STATUS_REQ,
+            encode_sweep_status_req(sequence=7)[HEADER_SIZE:],
+            sequence=7,
+        )
+    )
+    drain = asyncio.run(
+        client._handle_message(
+            MsgType.SWEEP_DRAIN_RESULTS_REQ,
+            encode_sweep_drain_results_req(sequence=8)[HEADER_SIZE:],
+            sequence=8,
+        )
+    )
+
+    _magic, _length, status_type, _sequence = Message.decode_header(status[:HEADER_SIZE])
+    _magic, _length, drain_type, _sequence = Message.decode_header(drain[:HEADER_SIZE])
+    assert status_type == MsgType.SWEEP_STATUS_RSP
+    assert decode_sweep_status_rsp(status[HEADER_SIZE:]).state == "idle"
+    assert drain_type == MsgType.SWEEP_DRAIN_RESULTS_RSP
+    assert decode_sweep_drain_results_rsp(drain[HEADER_SIZE:]) == ()
+
+
+def test_handle_sweep_plan_runs_shadow_executor_without_overlapping_foreground_calls() -> None:
+    async def _run() -> None:
+        active = 0
+        max_active = 0
+        guard = threading.Lock()
+        observed: list[str] = []
+
+        def _enter(name: str):
+            nonlocal active, max_active
+            with guard:
+                active += 1
+                max_active = max(max_active, active)
+                observed.append(name)
+            time.sleep(0.01)
+            with guard:
+                active -= 1
+
+        client = ReverseProxyClient(
+            "example.com",
+            9000,
+            config=ProxyConfig.from_args(
+                local_sweep_enabled=True,
+                local_sweep_mode="shadow_local",
+                local_sweep_shadow_max_seconds=1,
+                local_sweep_min_item_interval_ms=1,
+            ),
+        )
+        client._server_sweep_shadow_enabled = True
+        client.driver = types.SimpleNamespace(
+            write_msgs=lambda channel_id, messages, timeout: (
+                _enter("write_msgs") or (0, len(messages))
+            ),
+            read_msgs=lambda channel_id, num_msgs, timeout: (
+                _enter("read_msgs")
+                or (
+                    0,
+                    [
+                        {
+                            "protocol_id": 6,
+                            "rx_status": 0,
+                            "tx_flags": 0,
+                            "timestamp": 1,
+                            "data": b"\x62\xf4\x0c",
+                        }
+                    ],
+                )
+            ),
+        )
+        write_body = ProtocolEncoder.encode_write_msgs_req(
+            44,
+            [{"protocol_id": 6, "data": b"\x22\xf4\x0c"}],
+            timeout=25,
+        )[HEADER_SIZE:]
+        plan = SweepPlanStartRequest(
+            plan_id="plan-1",
+            connection_epoch="epoch-1",
+            channel_id=44,
+            max_result_age_ms=1000,
+            min_item_interval_ms=1,
+            shadow_max_seconds=1,
+            requests=(SweepRequestSpec("sig", write_body, 1, 0),),
+        )
+
+        start_response = await client._handle_message(
+            MsgType.SWEEP_PLAN_START_REQ,
+            encode_sweep_plan_start_req(plan, sequence=11)[HEADER_SIZE:],
+            sequence=11,
+        )
+        await asyncio.sleep(0.005)
+        foreground_response = await client._handle_message(
+            MsgType.READ_MSGS_REQ,
+            ProtocolEncoder.encode_read_msgs_req(44, 1, 0, sequence=12)[HEADER_SIZE:],
+            sequence=12,
+        )
+        await asyncio.sleep(0.05)
+        drain_response = await client._handle_message(
+            MsgType.SWEEP_DRAIN_RESULTS_REQ,
+            encode_sweep_drain_results_req(sequence=13)[HEADER_SIZE:],
+            sequence=13,
+        )
+        client._sweep_executor.stop("test_finished")
+        await asyncio.sleep(0)
+
+        assert decode_sweep_plan_start_rsp(start_response[HEADER_SIZE:]).success is True
+        assert Message.decode_header(foreground_response[:HEADER_SIZE])[2] == MsgType.READ_MSGS_RSP
+        assert decode_sweep_drain_results_rsp(drain_response[HEADER_SIZE:])
+        assert max_active == 1
+        assert "write_msgs" in observed
+        assert "read_msgs" in observed
+
+    asyncio.run(_run())
+
+
+def test_foreground_invalidation_does_not_overlap_cancelled_shadow_driver_call() -> None:
+    async def _run() -> None:
+        active = 0
+        max_active = 0
+        guard = threading.Lock()
+        shadow_entered = threading.Event()
+        release_shadow = threading.Event()
+        foreground_entered = threading.Event()
+
+        def _enter(name: str) -> None:
+            nonlocal active, max_active
+            with guard:
+                active += 1
+                max_active = max(max_active, active)
+            if name == "shadow_write":
+                shadow_entered.set()
+                release_shadow.wait(timeout=1.0)
+            if name == "foreground_ioctl":
+                foreground_entered.set()
+            with guard:
+                active -= 1
+
+        client = ReverseProxyClient(
+            "example.com",
+            9000,
+            config=ProxyConfig.from_args(
+                local_sweep_enabled=True,
+                local_sweep_mode="shadow_local",
+                local_sweep_shadow_max_seconds=1,
+                local_sweep_min_item_interval_ms=1,
+            ),
+        )
+        client._server_sweep_shadow_enabled = True
+        client.driver = types.SimpleNamespace(
+            write_msgs=lambda channel_id, messages, timeout: (
+                _enter("shadow_write") or (0, len(messages))
+            ),
+            read_msgs=lambda channel_id, num_msgs, timeout: (0, []),
+            ioctl=lambda channel_id, ioctl_id, input_data: (
+                _enter("foreground_ioctl") or (0, b"")
+            ),
+        )
+        write_body = ProtocolEncoder.encode_write_msgs_req(
+            44,
+            [{"protocol_id": 6, "data": b"\x22\xf4\x0c"}],
+            timeout=25,
+        )[HEADER_SIZE:]
+        plan = SweepPlanStartRequest(
+            plan_id="plan-1",
+            connection_epoch="epoch-1",
+            channel_id=44,
+            max_result_age_ms=1000,
+            min_item_interval_ms=1,
+            shadow_max_seconds=1,
+            requests=(SweepRequestSpec("sig", write_body, 1, 0),),
+        )
+
+        start_response = await client._handle_message(
+            MsgType.SWEEP_PLAN_START_REQ,
+            encode_sweep_plan_start_req(plan, sequence=21)[HEADER_SIZE:],
+            sequence=21,
+        )
+        assert decode_sweep_plan_start_rsp(start_response[HEADER_SIZE:]).success is True
+        assert await asyncio.to_thread(shadow_entered.wait, 1.0)
+
+        foreground_task = asyncio.create_task(
+            client._handle_message(
+                MsgType.IOCTL_REQ,
+                ProtocolEncoder.encode_ioctl_req(44, 0x1234, b"", sequence=22)[HEADER_SIZE:],
+                sequence=22,
+            )
+        )
+        await asyncio.sleep(0)
+        assert not await asyncio.to_thread(foreground_entered.wait, 0.03)
+
+        release_shadow.set()
+        foreground_response = await asyncio.wait_for(foreground_task, timeout=1.0)
+        assert Message.decode_header(foreground_response[:HEADER_SIZE])[2] == MsgType.IOCTL_RSP
+        assert foreground_entered.is_set()
+        assert max_active == 1
+
+    asyncio.run(_run())
 
 
 def test_handle_requests_emits_proxy_and_j2534_events(monkeypatch, tmp_path: Path) -> None:

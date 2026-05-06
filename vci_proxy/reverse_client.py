@@ -36,6 +36,17 @@ from vci_proxy.protocol import (
     ProtocolEncoder,
     attach_read_msgs_prefetch_bundle,
 )
+from vci_proxy.sweep_executor import LocalSweepExecutor
+from vci_proxy.sweep_protocol import (
+    SweepPlanResponse,
+    decode_sweep_plan_start_req,
+    decode_sweep_plan_stop_req,
+    encode_sweep_drain_results_rsp,
+    encode_sweep_plan_start_rsp,
+    encode_sweep_plan_stop_rsp,
+    encode_sweep_status_rsp,
+    is_sweep_message_type,
+)
 from vci_proxy.tls_utils import harden_tls_context
 
 
@@ -78,6 +89,16 @@ class ReverseProxyClient:
         )
         self._server_read_ahead_enabled = False
         self._server_write_collect_enabled = False
+        self._server_sweep_shadow_enabled = False
+        self._driver_call_lock = asyncio.Lock()
+        self._foreground_request_depth = 0
+        self._sweep_executor = LocalSweepExecutor(
+            config=self.config.local_sweep,
+            run_driver_call=self._run_driver_call,
+            context_factory=self._sweep_log_context,
+            emit_event=self._emit_client_event,
+            foreground_idle=self._foreground_idle,
+        )
 
     @staticmethod
     def _describe_task_state(task: Optional[asyncio.Task]) -> str:
@@ -180,6 +201,25 @@ class ReverseProxyClient:
             operation_kind=f"j2534:{msg_name}",
         )
 
+    def _sweep_log_context(self, msg_name: str) -> LogContext:
+        return LogContext(
+            worker_request_id=generate_request_id(),
+            operation_kind=f"j2534:{msg_name}",
+        )
+
+    def _foreground_idle(self) -> bool:
+        return self._foreground_request_depth <= 0 and not self._driver_call_lock.locked()
+
+    def _cancel_shadow_for_foreground_if_needed(self, msg_type: int) -> None:
+        if msg_type in {
+            MsgType.DISCONNECT_REQ,
+            MsgType.CLOSE_REQ,
+            MsgType.START_FILTER_REQ,
+            MsgType.STOP_FILTER_REQ,
+            MsgType.IOCTL_REQ,
+        }:
+            self._sweep_executor.stop("foreground_invalidation")
+
     def _ensure_request_context(
         self,
         request_context: LogContext | None,
@@ -220,13 +260,22 @@ class ReverseProxyClient:
             for token in message.replace(",", ";").split(";")
         )
 
+    @staticmethod
+    def _auth_message_enables_sweep_shadow(message: str) -> bool:
+        return any(
+            token.strip().lower() == "sweep_shadow=1"
+            for token in message.replace(",", ";").split(";")
+        )
+
     def _auth_capability_message(self) -> str:
+        capabilities: list[str] = []
         read_ahead = self.config.read_ahead
-        if not read_ahead.enabled:
-            return ""
-        capabilities = ["read_ahead=1"]
-        if read_ahead.transaction_enabled:
-            capabilities.append("write_collect=1")
+        if read_ahead.enabled:
+            capabilities.append("read_ahead=1")
+            if read_ahead.transaction_enabled:
+                capabilities.append("write_collect=1")
+        if self.config.local_sweep.shadow_local:
+            capabilities.append("sweep_shadow=1")
         return ";".join(capabilities)
 
     async def _run_driver_call(
@@ -247,19 +296,20 @@ class ReverseProxyClient:
         )
         started_at = time.monotonic()
         try:
-            result = await loop.run_in_executor(
-                None,
-                functools.partial(
-                    self._invoke_driver_call,
-                    j2534_method,
-                    *args,
-                    log_context={
-                        "proxy_seq": request_context.proxy_seq,
-                        "worker_request_id": request_context.worker_request_id,
-                        "msg_name": msg_name,
-                    },
-                ),
-            )
+            async with self._driver_call_lock:
+                result = await loop.run_in_executor(
+                    None,
+                    functools.partial(
+                        self._invoke_driver_call,
+                        j2534_method,
+                        *args,
+                        log_context={
+                            "proxy_seq": request_context.proxy_seq,
+                            "worker_request_id": request_context.worker_request_id,
+                            "msg_name": msg_name,
+                        },
+                    ),
+                )
         except Exception as exc:
             duration_ms = (time.monotonic() - started_at) * 1000.0
             self._emit_client_event(
@@ -661,6 +711,7 @@ class ReverseProxyClient:
         """Register with the server using auth or the legacy heartbeat path."""
         self._server_read_ahead_enabled = False
         self._server_write_collect_enabled = False
+        self._server_sweep_shadow_enabled = False
         if self.config.auth.enabled and self.config.auth.token:
             timestamp = int(time.time())
             signature = compute_signature(self.config.auth.token, timestamp)
@@ -688,6 +739,7 @@ class ReverseProxyClient:
                 if magic != MAGIC:
                     self._server_read_ahead_enabled = False
                     self._server_write_collect_enabled = False
+                    self._server_sweep_shadow_enabled = False
                     logger.error("Invalid magic in auth response: %#x", magic)
                     return False
 
@@ -701,6 +753,9 @@ class ReverseProxyClient:
                     )
                     self._server_write_collect_enabled = (
                         success and self._auth_message_enables_write_collect(message)
+                    )
+                    self._server_sweep_shadow_enabled = (
+                        success and self._auth_message_enables_sweep_shadow(message)
                     )
                     if success:
                         logger.info("Reverse server authentication succeeded")
@@ -731,6 +786,7 @@ class ReverseProxyClient:
                 if msg_type == MsgType.HEARTBEAT_ACK:
                     self._server_read_ahead_enabled = False
                     self._server_write_collect_enabled = False
+                    self._server_sweep_shadow_enabled = False
                     logger.warning(
                         "[CLIENT_CONN] instance=%s %s server accepted auth as legacy heartbeat",
                         self._instance_id,
@@ -752,6 +808,7 @@ class ReverseProxyClient:
                 )
                 self._server_read_ahead_enabled = False
                 self._server_write_collect_enabled = False
+                self._server_sweep_shadow_enabled = False
                 self._emit_client_event(
                     "reverse_client.lifecycle.auth_failed",
                     status="error",
@@ -765,6 +822,7 @@ class ReverseProxyClient:
             except asyncio.TimeoutError:
                 self._server_read_ahead_enabled = False
                 self._server_write_collect_enabled = False
+                self._server_sweep_shadow_enabled = False
                 logger.error(
                     "[CLIENT_CONN] instance=%s %s auth response timeout after %ss",
                     self._instance_id,
@@ -1308,6 +1366,60 @@ class ReverseProxyClient:
         self._ioctl_cache.record_result(channel_id, ioctl_id, ret, output_data)
         return ProtocolEncoder.encode_ioctl_rsp(ret, output_data, sequence)
 
+    async def _handle_sweep_plan_start(
+        self,
+        body: bytes,
+        sequence: int,
+        request_context: LogContext | None = None,
+    ) -> bytes:
+        request = decode_sweep_plan_start_req(body)
+        if not (self.config.local_sweep.shadow_local and self._server_sweep_shadow_enabled):
+            return encode_sweep_plan_start_rsp(
+                SweepPlanResponse(
+                    success=False,
+                    plan_id=request.plan_id,
+                    reason="shadow_not_enabled_or_not_negotiated",
+                ),
+                sequence=sequence,
+            )
+        success, reason = self._sweep_executor.start(request)
+        return encode_sweep_plan_start_rsp(
+            SweepPlanResponse(success=success, plan_id=request.plan_id, reason=reason),
+            sequence=sequence,
+        )
+
+    async def _handle_sweep_plan_stop(
+        self,
+        body: bytes,
+        sequence: int,
+        request_context: LogContext | None = None,
+    ) -> bytes:
+        request = decode_sweep_plan_stop_req(body)
+        self._sweep_executor.stop(request.reason or "server_stop")
+        return encode_sweep_plan_stop_rsp(
+            SweepPlanResponse(success=True, plan_id=request.plan_id, reason="stopped"),
+            sequence=sequence,
+        )
+
+    async def _handle_sweep_status(
+        self,
+        body: bytes,
+        sequence: int,
+        request_context: LogContext | None = None,
+    ) -> bytes:
+        return encode_sweep_status_rsp(self._sweep_executor.status(), sequence=sequence)
+
+    async def _handle_sweep_drain_results(
+        self,
+        body: bytes,
+        sequence: int,
+        request_context: LogContext | None = None,
+    ) -> bytes:
+        return encode_sweep_drain_results_rsp(
+            self._sweep_executor.drain(),
+            sequence=sequence,
+        )
+
     _DISPATCH = {
         MsgType.OPEN_REQ: _handle_open,
         MsgType.CLOSE_REQ: _handle_close,
@@ -1320,6 +1432,10 @@ class ReverseProxyClient:
         MsgType.START_FILTER_REQ: _handle_start_filter,
         MsgType.STOP_FILTER_REQ: _handle_stop_filter,
         MsgType.IOCTL_REQ: _handle_ioctl,
+        MsgType.SWEEP_PLAN_START_REQ: _handle_sweep_plan_start,
+        MsgType.SWEEP_PLAN_STOP_REQ: _handle_sweep_plan_stop,
+        MsgType.SWEEP_STATUS_REQ: _handle_sweep_status,
+        MsgType.SWEEP_DRAIN_RESULTS_REQ: _handle_sweep_drain_results,
     }
 
     async def _handle_message(
@@ -1340,7 +1456,15 @@ class ReverseProxyClient:
         if handler is None:
             logger.warning("Unknown message type: %#x", msg_type)
             return None
-        return await handler(self, body, sequence, request_context=request_context)
+        foreground_request = not is_sweep_message_type(msg_type)
+        if foreground_request:
+            self._foreground_request_depth += 1
+            self._cancel_shadow_for_foreground_if_needed(msg_type)
+        try:
+            return await handler(self, body, sequence, request_context=request_context)
+        finally:
+            if foreground_request:
+                self._foreground_request_depth = max(0, self._foreground_request_depth - 1)
 
     def stop(self) -> concurrent.futures.Future[None]:
         """Request a graceful shutdown and return a future for completion."""
@@ -1467,6 +1591,43 @@ def main() -> None:
         action="store_false",
         help="Disable internal read-ahead transaction support even if VCI_PROXY_READ_AHEAD_TRANSACTION is set",
     )
+    parser.add_argument(
+        "--local-sweep",
+        dest="local_sweep",
+        action="store_true",
+        default=None,
+        help="Enable guarded local sweep shadow support (or VCI_PROXY_LOCAL_SWEEP=1)",
+    )
+    parser.add_argument(
+        "--no-local-sweep",
+        dest="local_sweep",
+        action="store_false",
+        help="Disable local sweep even if VCI_PROXY_LOCAL_SWEEP is set",
+    )
+    parser.add_argument(
+        "--local-sweep-mode",
+        choices=["observe_only", "shadow_local"],
+        default=None,
+        help="Local sweep mode (default: observe_only or VCI_PROXY_LOCAL_SWEEP_MODE)",
+    )
+    parser.add_argument(
+        "--local-sweep-min-cycles",
+        type=int,
+        default=None,
+        help="Minimum complete observed cycles before sweep candidacy",
+    )
+    parser.add_argument(
+        "--local-sweep-max-items",
+        type=int,
+        default=None,
+        help="Maximum learned signatures in one shadow plan",
+    )
+    parser.add_argument(
+        "--local-sweep-shadow-max-seconds",
+        type=int,
+        default=None,
+        help="Maximum duration for one shadow plan",
+    )
     args = parser.parse_args()
 
     config = ProxyConfig.from_args(
@@ -1484,6 +1645,11 @@ def main() -> None:
         read_ahead_read_timeout_ms=args.read_ahead_read_timeout_ms,
         read_ahead_max_messages=args.read_ahead_max_messages,
         read_ahead_transaction_enabled=args.read_ahead_transaction,
+        local_sweep_enabled=getattr(args, "local_sweep", None),
+        local_sweep_mode=getattr(args, "local_sweep_mode", None),
+        local_sweep_min_cycles=getattr(args, "local_sweep_min_cycles", None),
+        local_sweep_max_items=getattr(args, "local_sweep_max_items", None),
+        local_sweep_shadow_max_seconds=getattr(args, "local_sweep_shadow_max_seconds", None),
     )
 
     print("=" * 50)
@@ -1501,6 +1667,11 @@ def main() -> None:
         f"(window={config.read_ahead.window_ms}ms, max_reads={config.read_ahead.max_reads}, "
         f"timeout={config.read_ahead.read_timeout_ms}ms, max_messages={config.read_ahead.max_messages}, "
         f"transaction={'enabled' if config.read_ahead.transaction_enabled else 'disabled'})"
+    )
+    print(
+        f"Local sweep: {'enabled' if config.local_sweep.enabled else 'disabled'} "
+        f"(mode={config.local_sweep.mode}, min_cycles={config.local_sweep.min_cycles}, "
+        f"max_items={config.local_sweep.max_items}, shadow_max_seconds={config.local_sweep.shadow_max_seconds})"
     )
     print("Press Ctrl+C to stop")
     print("=" * 50)

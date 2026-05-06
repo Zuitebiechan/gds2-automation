@@ -36,6 +36,11 @@ The core data path is:
 | `vci_proxy/cache_read_msgs.py` | short-circuit cache for `ReadMsgs` empty-buffer behavior |
 | `vci_proxy/cache_filter_dedup.py` | StartFilter request deduplication |
 | `vci_proxy/cache_ioctl.py` | read-only IOCTL caching |
+| `vci_proxy/sweep_classifier.py` | allowlist classifier for local sweep observe/shadow |
+| `vci_proxy/sweep_learner.py` | cloud-side stable-loop learner for Data Display sweeps |
+| `vci_proxy/sweep_executor.py` | local serial shadow executor |
+| `vci_proxy/sweep_shadow_store.py` | comparison-only shadow result store |
+| `vci_proxy/sweep_protocol.py` | internal `SWEEP_*` control payload helpers |
 | `vci_proxy/benchmark.py` | benchmark event helpers and JSONL output |
 | `vci_proxy/virtual_dll/` | cloud-side virtual J2534 DLL implementation and component README |
 
@@ -54,6 +59,7 @@ Responsibilities:
 - apply request-side caches
 - track tunnel quality and persist snapshots
 - optionally write benchmark events
+- learn and compare local sweep plans when disabled-by-default local sweep modes are enabled
 
 ## Reverse Client
 
@@ -68,6 +74,7 @@ Responsibilities:
 - execute incoming J2534 requests
 - keep reconnecting with backoff when disconnected
 - optionally pre-warm device-open behavior
+- optionally run a guarded local sweep shadow executor after cloud-side plan installation
 
 ## Local Tray GUI
 
@@ -339,6 +346,72 @@ server can return fewer messages from the FIFO rather than merging with an
 additional tunnel read. That keeps the first implementation conservative and
 avoids duplicating consumed frames. Real-vehicle A/B logs should decide whether a
 partial FIFO plus tunnel-merge hardening pass is worthwhile.
+
+### Local sweep observe/shadow
+
+The first local sweep scheduler stage is disabled by default. It is configured
+with shared environment variables and matching CLI flags on the reverse server
+and reverse client:
+
+- `VCI_PROXY_LOCAL_SWEEP=1`
+- `VCI_PROXY_LOCAL_SWEEP_MODE=observe_only` or `shadow_local`
+- `VCI_PROXY_LOCAL_SWEEP_MIN_CYCLES=2`
+- `VCI_PROXY_LOCAL_SWEEP_MAX_ITEMS=128`
+- `VCI_PROXY_LOCAL_SWEEP_ALLOW_UDS_RDBI=1`
+- `VCI_PROXY_LOCAL_SWEEP_ALLOW_OBD_MODE01=1`
+- `VCI_PROXY_LOCAL_SWEEP_MAX_RESULT_AGE_MS=1000`
+- `VCI_PROXY_LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS=5`
+- `VCI_PROXY_LOCAL_SWEEP_READ_TIMEOUT_MS=0`
+- `VCI_PROXY_LOCAL_SWEEP_SHADOW_MAX_SECONDS=120`
+- `VCI_PROXY_LOCAL_SWEEP_MISMATCH_THRESHOLD=3`
+- `VCI_PROXY_LOCAL_SWEEP_ERROR_THRESHOLD=3`
+
+`observe_only` is cloud-side only. It observes normal `WRITE_MSGS_REQ` and later
+`READ_MSGS_RSP(data)` pairs, learns stable allowlisted UDS `0x22` and OBD Mode
+01 one-identifier request signatures, and emits redacted sweep observability. It
+does not require protocol, reverse-client, local runtime, or local J2534 call
+changes.
+
+`shadow_local` starts only when both sides are configured for the mode and the
+local client advertises `sweep_shadow=1` during tunnel authentication. The cloud
+server sends internal `SWEEP_PLAN_START_REQ/RSP`, `SWEEP_PLAN_STOP_REQ/RSP`,
+`SWEEP_STATUS_REQ/RSP`, and `SWEEP_DRAIN_RESULTS_REQ/RSP` frames. These are
+internal server-to-client control frames; the virtual DLL and GDS2 never see
+them.
+
+The v1 transport uses server-driven non-blocking `STATUS` plus immediate
+`DRAIN`. Drain returns queued shadow results or an empty result set without
+waiting. Unsolicited result push and blocking long-poll drain are not part of
+this stage.
+
+The local shadow executor is serial and uses the same J2534 driver-call path as
+foreground requests. Foreground traffic cancels or pauses shadow work before the
+next local shadow driver call, and a shared driver-call lock prevents overlapping
+foreground/shadow J2534 calls.
+
+Shadow data is comparison-only:
+
+- it is stored in `SweepShadowStore`
+- it is compared with normal GDS2-visible `READ_MSGS_RSP` bodies
+- it is never used by `_try_serve_cached()`
+- it is never written into `PrefetchReadMsgsBuffer`
+- it never fulfills normal `READ_MSGS_REQ`
+
+The stage cancels active shadow plans on disconnect, close, filter mutation,
+non-cacheable or mutating IOCTL, failed writes, connection epoch changes,
+max-seconds expiry, repeated mismatch/error thresholds, and communication-error
+escalation.
+
+Not implemented in this stage:
+
+- `active_replay`
+- synthetic `WRITE_MSGS_RSP`
+- synthetic `READ_MSGS_RSP`
+- skipped real forwarding
+- serving shadow data to GDS2
+- production rollout controls
+- allowlist expansion beyond exact UDS `0x22` and OBD Mode 01 request shapes
+- adaptive sweep-rate tuning
 
 ### Manual GDS2 latency observability
 

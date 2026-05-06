@@ -5,14 +5,31 @@
 | Field | Content |
 | --- | --- |
 | Type | Long-term optimization design |
-| Status | Design proposal for guarded implementation |
+| Status | Guarded `observe_only` and `shadow_local` implemented; `active_replay` remains disabled |
 | Owner scope | Cloud GDS2 Data Display freshness over the Proxy J2534 tunnel |
 | Primary code paths | `vci_proxy/reverse_server.py`, `vci_proxy/reverse_client.py`, `vci_proxy/protocol.py`, `vci_proxy/j2534_worker.py` |
 | Related docs | `agent_docs/ops/proxy_j2534_latency_optimization.md`, `agent_docs/ops/vci_proxy_and_tunnel.md`, `agent_docs/ops/product_observability.md` |
 
 ## One-Line Conclusion
 
-The long-term fix is to move the repeated read-only Data Display sweep close to the real VCI, stream fresh local results to the cloud, and let the cloud-side virtual J2534 path satisfy matching GDS2 synchronous calls from a guarded, short-lived, signature-matched result store.
+The implemented first stage learns repeated read-only Data Display sweeps and can run a local shadow executor for comparison, while real GDS2 requests continue through the existing proxy/tunnel behavior. The long-term replay goal remains future work.
+
+## Current Implementation Stage
+
+The current code implements two disabled-by-default modes:
+
+- `observe_only`: cloud-side `reverse_server` classifies exact allowlisted UDS `0x22` ReadDataByIdentifier and OBD Mode 01 PID write requests, correlates them with later `READ_MSGS_RSP(data)`, and emits candidate count, confidence, cadence, rejection, and estimated would-have-shadow-hit observability. It does not change protocol, reverse-client behavior, local runtime behavior, or local J2534 call counts.
+- `shadow_local`: after observe learning and capability negotiation, the cloud sends an internal sweep plan to the local reverse client. The local client executes the plan serially through the same J2534 driver-call path used by foreground requests, queues shadow read results, and returns them only through server-driven status/drain control frames. Real `WRITE_MSGS_REQ` and `READ_MSGS_REQ` from GDS2 continue through the existing normal proxy path; local sweep does not synthesize replies or skip forwarding.
+
+The v1 shadow transport is server-driven and request/response shaped:
+
+- `SWEEP_STATUS_REQ/RSP` checks local executor state.
+- `SWEEP_DRAIN_RESULTS_REQ/RSP` returns immediately with queued shadow results or an empty result set.
+- Unsolicited client-to-server result push and blocking long-poll drain are not implemented.
+
+Shadow data is comparison-only. It is stored in `SweepShadowStore`, compared against normal GDS2-visible `READ_MSGS_RSP` bodies produced by the existing proxy path, and never consulted by `_try_serve_cached()`, never written to `PrefetchReadMsgsBuffer`, and never used to fulfill normal `READ_MSGS_REQ`.
+
+The observe gate artifact for this stage is `.omx/plans/local-sweep-scheduler-observe-gate-signoff.md`.
 
 ## Background
 
@@ -168,7 +185,7 @@ GDS2 still sees:
 PassThruWriteMsgs -> PassThruReadMsgs -> PassThruWriteMsgs -> PassThruReadMsgs
 ```
 
-Internally, matching read-only pairs may be satisfied by data that the local side already collected.
+Internally in the current stage, matching read-only pairs are compared with data that the local side already collected. They are not satisfied from that data yet.
 
 ## Key Concepts
 
@@ -214,11 +231,12 @@ max_consecutive_errors
 enabled_mode
 ```
 
-`enabled_mode` should support:
+`enabled_mode` currently accepts:
 
 - `observe_only`
 - `shadow_local`
-- `active_replay`
+
+`active_replay` is intentionally rejected by configuration in this stage.
 
 ### Sweep Result
 
@@ -248,13 +266,20 @@ Messages must preserve the J2534 response shape expected by existing `READ_MSGS_
 
 The cloud result store keeps the latest safe result per request signature plus a small bounded history.
 
-Recommended behavior:
+Long-term recommended behavior:
 
 - keep only fresh results within `max_result_age_ms`
 - track `last_served_generation` per signature
 - prefer a new generation over serving the same data twice
 - allow a stale-but-safe fallback only if the configured mode explicitly permits it
 - flush on channel/filter/session mutation
+
+Current behavior:
+
+- store only comparison records
+- enforce freshness during shadow-vs-real comparison
+- never return a `READ_MSGS_RSP` for normal serving
+- flush on disconnect, close, filter mutation, non-cacheable/mutating IOCTL, failed write, connection epoch change, mismatch threshold, error threshold, max-seconds expiry, and communication-error escalation
 
 ## Protocol Extension
 
@@ -265,9 +290,10 @@ SWEEP_PLAN_START_REQ
 SWEEP_PLAN_START_RSP
 SWEEP_PLAN_STOP_REQ
 SWEEP_PLAN_STOP_RSP
-SWEEP_RESULT_BATCH
 SWEEP_STATUS_REQ
 SWEEP_STATUS_RSP
+SWEEP_DRAIN_RESULTS_REQ
+SWEEP_DRAIN_RESULTS_RSP
 ```
 
 ### `SWEEP_PLAN_START_REQ`
@@ -291,28 +317,22 @@ max_cycles_before_refresh
 shadow_only
 ```
 
-### `SWEEP_RESULT_BATCH`
+### `SWEEP_DRAIN_RESULTS_REQ`
 
-Sent by the local reverse client to the cloud reverse server.
+Sent by the cloud reverse server to the local reverse client. It returns immediately and never waits for new data.
 
 Payload:
 
 ```text
-plan_id
-cycle_seq
-results[]
-client_queue_depth
-executor_state
-started_at
-finished_at
+empty request body
+response results[]
 ```
 
-The current protocol is mostly server-request/client-response oriented. This design needs one of two implementation choices:
+The current protocol is mostly server-request/client-response oriented. The implemented v1 choice is server-issued immediate result draining:
 
-1. add true unsolicited client-to-server internal frames tagged by message type, or
-2. implement server-issued long-poll result draining, for example `SWEEP_DRAIN_RESULTS_REQ`.
-
-The unsolicited frame path is better for long-term freshness. The long-poll path is less invasive and may be a safer first implementation if the tunnel reader is difficult to change.
+1. rejected for v1: true unsolicited client-to-server internal frames
+2. implemented for v1: non-blocking `SWEEP_STATUS_REQ` plus immediate `SWEEP_DRAIN_RESULTS_REQ`
+3. rejected for v1: blocking long-poll drain, because it can occupy the current reverse-client request loop
 
 ## Cloud-Side Components
 
@@ -361,8 +381,10 @@ Responsibilities:
 - store fresh local results keyed by request signature
 - enforce `max_result_age_ms`
 - enforce generation checks
-- serve results to synthetic GDS2 read responses
-- record fallback reasons
+- keep comparison-only shadow results
+- record match, mismatch, stale, missing, and error outcomes
+
+Serving results to synthetic GDS2 read responses is not implemented in this stage.
 
 ### `SyntheticReplayGate`
 
@@ -492,11 +514,11 @@ sweep.pattern.observed
 sweep.pattern.learned
 sweep.plan.started
 sweep.plan.cancelled
-sweep.result.received
-sweep.synthetic.write_hit
-sweep.synthetic.read_hit
-sweep.synthetic.fallback
-sweep.synthetic.mismatch
+sweep.batch.drained
+sweep.shadow.match
+sweep.shadow.mismatch
+sweep.shadow.stale
+sweep.shadow.missing
 sweep.did.cadence
 ```
 
@@ -507,7 +529,6 @@ sweep.executor.started
 sweep.executor.stopped
 sweep.item.started
 sweep.item.finished
-sweep.batch.published
 sweep.executor.error
 ```
 
@@ -516,8 +537,8 @@ Important metrics:
 | Metric | Purpose |
 | --- | --- |
 | per-DID observed cadence | prove whether Engine Speed refresh cycle changed |
-| synthetic write hit rate | prove tunnel write RTT reduction |
-| synthetic read hit rate | prove cloud read replay effectiveness |
+| shadow match rate | prove local sweep fidelity before replay |
+| shadow missing/stale/mismatch counts | identify freshness or correctness gaps |
 | result age at serve time | prove data is fresh enough |
 | fallback reason counts | identify unsafe or ineffective cases |
 | local sweep cycle duration | compare to cloud GDS2 page cycle |
@@ -549,6 +570,8 @@ VCI_PROXY_LOCAL_SWEEP_MAX_ITEMS=128
 VCI_PROXY_LOCAL_SWEEP_ALLOW_UDS_RDBI=1
 VCI_PROXY_LOCAL_SWEEP_ALLOW_OBD_MODE01=1
 VCI_PROXY_LOCAL_SWEEP_SHADOW_MAX_SECONDS=120
+VCI_PROXY_LOCAL_SWEEP_MISMATCH_THRESHOLD=3
+VCI_PROXY_LOCAL_SWEEP_ERROR_THRESHOLD=3
 ```
 
 Modes:
@@ -557,15 +580,16 @@ Modes:
 | --- | --- |
 | `observe_only` | learn patterns and log would-have-hit decisions, no local extra polling, no replay |
 | `shadow_local` | install local plan and collect results, but still forward GDS2 calls normally |
-| `active_replay` | allow synthetic write/read handling for matching fresh read-only results |
 
-Default must remain disabled or `observe_only` until real-vehicle validation is complete.
+`active_replay` is documented as a future mode but is not accepted by runtime configuration in this stage.
+
+Default remains disabled until real-vehicle validation is complete.
 
 ## Implementation Phases
 
 ### Phase A: Per-DID Observability And Pattern Learning
 
-Implement first.
+Implemented.
 
 Scope:
 
@@ -584,13 +608,14 @@ Acceptance criteria:
 
 ### Phase B: Protocol And Local Shadow Executor
 
-Scope:
+Implemented scope:
 
 - add internal sweep plan/result protocol messages
 - implement local sequential sweep executor
 - run only in `shadow_local`
 - keep forwarding all GDS2 calls normally
-- compare shadow results against real forwarded responses
+- compare shadow results against normal GDS2-visible responses
+- use server-driven non-blocking `STATUS` and immediate `DRAIN`
 
 Risk:
 
@@ -603,6 +628,8 @@ Acceptance criteria:
 - no GDS2 communication errors increase during shadow windows
 
 ### Phase C: Active Replay For A Small Allowlist
+
+Not implemented in this stage.
 
 Scope:
 
@@ -694,6 +721,23 @@ Required evidence:
 - GDS2 native communication errors
 - tunnel p95 and reconnect events
 
+## Not Implemented In This Stage
+
+These remain undone and disabled:
+
+- `active_replay`
+- synthetic `WRITE_MSGS_RSP`
+- synthetic `READ_MSGS_RSP`
+- skipped real tunnel forwarding
+- serving shadow data to GDS2
+- unsolicited client-to-server sweep result push
+- blocking long-poll drain
+- production rollout controls and tray UI controls
+- allowlist expansion beyond exact UDS `0x22` and OBD Mode 01 one-identifier request shapes
+- adaptive sweep-rate tuning and priority scheduling
+
+Any future replay implementation needs a separate ADR/spec and real-vehicle evidence from `observe_only` and `shadow_local`.
+
 ## Rollout And Rollback
 
 Rollout order:
@@ -702,7 +746,7 @@ Rollout order:
 2. run at least one real-vehicle Data Display test
 3. enable `shadow_local` for a short test window
 4. compare shadow results with normal responses
-5. enable `active_replay` only for allowlisted read-only signatures
+5. write a separate ADR/spec before enabling `active_replay`
 6. expand cautiously after repeated successful tests
 
 Rollback triggers:

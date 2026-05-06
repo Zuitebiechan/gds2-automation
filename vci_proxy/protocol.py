@@ -30,6 +30,10 @@ class MsgType(IntEnum):
     AUTH_REQ = 0x00FE
     HEARTBEAT = 0x00FF
     WRITE_AND_COLLECT_READS_REQ = 0x0106
+    SWEEP_PLAN_START_REQ = 0x0200
+    SWEEP_PLAN_STOP_REQ = 0x0201
+    SWEEP_STATUS_REQ = 0x0202
+    SWEEP_DRAIN_RESULTS_REQ = 0x0203
 
     # Responses (0x80xx)
     OPEN_RSP = 0x8001
@@ -46,6 +50,10 @@ class MsgType(IntEnum):
     PING_RSP = 0x80FC
     AUTH_RSP = 0x80FE
     HEARTBEAT_ACK = 0x80FF
+    SWEEP_PLAN_START_RSP = 0x8200
+    SWEEP_PLAN_STOP_RSP = 0x8201
+    SWEEP_STATUS_RSP = 0x8202
+    SWEEP_DRAIN_RESULTS_RSP = 0x8203
 
 
 MSG_NAMES = {value: value.name for value in MsgType}

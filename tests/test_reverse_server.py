@@ -15,6 +15,11 @@ from vci_proxy.cache_read_msgs import BUFFER_EMPTY
 from vci_proxy.protocol import HEADER_SIZE, Message, MsgType, ProtocolDecoder, ProtocolEncoder
 import vci_proxy.reverse_server as reverse_server_module
 from vci_proxy.reverse_server import ReverseProxyServer
+from vci_proxy.sweep_protocol import (
+    SweepPlanStartRequest,
+    SweepRequestSpec,
+    SweepResultRecord,
+)
 
 
 class _FakeWriter:
@@ -139,7 +144,7 @@ def test_authenticate_vci_advertises_read_ahead_capability(monkeypatch) -> None:
     assert msg_type == MsgType.AUTH_RSP
     success, message = ProtocolDecoder.decode_auth_rsp(writer.writes[0][HEADER_SIZE:length])
     assert success is True
-    assert message == "ok;read_ahead=1"
+    assert "read_ahead=1" in message
 
 
 def test_authenticate_vci_negotiates_write_collect_capability(monkeypatch) -> None:
@@ -170,7 +175,38 @@ def test_authenticate_vci_negotiates_write_collect_capability(monkeypatch) -> No
     assert msg_type == MsgType.AUTH_RSP
     success, message = ProtocolDecoder.decode_auth_rsp(writer.writes[0][HEADER_SIZE:length])
     assert success is True
-    assert message == "ok;read_ahead=1;write_collect=1"
+    assert "read_ahead=1" in message
+    assert "write_collect=1" in message
+
+
+def test_authenticate_vci_negotiates_sweep_shadow_capability(monkeypatch) -> None:
+    server = ReverseProxyServer(
+        config=ProxyConfig.from_args(
+            auth_token="secret",
+            local_sweep_enabled=True,
+            local_sweep_mode="shadow_local",
+        )
+    )
+    reader = _FakeReader(
+        ProtocolEncoder.encode_auth_req(
+            123,
+            b"x" * 32,
+            sequence=7,
+            capabilities="sweep_shadow=1",
+        )
+    )
+    writer = _FakeWriter()
+    monkeypatch.setattr("vci_proxy.reverse_server.verify_signature", lambda token, timestamp, signature: (True, "ok"))
+
+    accepted = asyncio.run(server._authenticate_vci(reader, writer))
+
+    assert accepted is True
+    assert server._vci_sweep_shadow_supported is True
+    _magic, length, msg_type, _sequence = Message.decode_header(writer.writes[0][:HEADER_SIZE])
+    assert msg_type == MsgType.AUTH_RSP
+    success, message = ProtocolDecoder.decode_auth_rsp(writer.writes[0][HEADER_SIZE:length])
+    assert success is True
+    assert "sweep_shadow=1" in message
 
 
 def test_authenticate_vci_rejects_legacy_heartbeat_when_auth_is_required() -> None:
@@ -1426,6 +1462,172 @@ def test_build_tunnel_request_falls_back_without_client_write_collect_support() 
     assert sequence == 77
     assert fwd_body == write_body
     assert reason is None
+
+
+def test_handle_proxy_connection_observe_only_learns_without_sweep_protocol(monkeypatch, tmp_path) -> None:
+    async def _run() -> None:
+        monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+        server = ReverseProxyServer(
+            config=ProxyConfig.from_args(
+                local_sweep_enabled=True,
+                local_sweep_mode="observe_only",
+                local_sweep_min_cycles=2,
+            )
+        )
+        server.vci_connected.set()
+        server.vci_writer = _FakeWriter(peername=("10.0.0.9", 9000))
+        server._connection_epoch = "epoch-observe"
+        new_sequences = iter([101, 102, 103, 104])
+        server._next_sequence = lambda: next(new_sequences)
+
+        write_req = ProtocolEncoder.encode_write_msgs_req(
+            44,
+            [{"protocol_id": 6, "rx_status": 0, "tx_flags": 0, "timestamp": 1, "data": b"\x22\xf4\x0c"}],
+            timeout=25,
+            sequence=31,
+        )
+        read_req = ProtocolEncoder.encode_read_msgs_req(44, num_msgs=1, timeout=0, sequence=32)
+        proxy_reader = _FakeReader(write_req, read_req, write_req, read_req)
+        proxy_writer = _FakeWriter(peername=("127.0.0.1", 50003))
+        read_rsp_body = ProtocolEncoder.encode_read_msgs_rsp(
+            0,
+            [{"protocol_id": 6, "rx_status": 0, "tx_flags": 0, "timestamp": 2, "data": b"\x62\xf4\x0c\x12\x34"}],
+        )[HEADER_SIZE:]
+        responses = iter(
+            [
+                (MsgType.WRITE_MSGS_RSP, ProtocolEncoder.encode_write_msgs_rsp(0, 1)[HEADER_SIZE:], 1.0),
+                (MsgType.READ_MSGS_RSP, read_rsp_body, 1.0),
+                (MsgType.WRITE_MSGS_RSP, ProtocolEncoder.encode_write_msgs_rsp(0, 1)[HEADER_SIZE:], 1.0),
+                (MsgType.READ_MSGS_RSP, read_rsp_body, 1.0),
+            ]
+        )
+
+        async def _success_wait_for(awaitable, timeout):
+            if isinstance(awaitable, asyncio.Future):
+                return next(responses)
+            return await awaitable
+
+        monkeypatch.setattr("vci_proxy.reverse_server.asyncio.wait_for", _success_wait_for)
+
+        await server._handle_proxy_connection(proxy_reader, proxy_writer)
+
+        forwarded_types = [
+            Message.decode_header(write[:HEADER_SIZE])[2]
+            for write in server.vci_writer.writes
+        ]
+        dll_response_types = [
+            Message.decode_header(write[:HEADER_SIZE])[2]
+            for write in proxy_writer.writes
+        ]
+        assert forwarded_types == [
+            MsgType.WRITE_MSGS_REQ,
+            MsgType.READ_MSGS_REQ,
+            MsgType.WRITE_MSGS_REQ,
+            MsgType.READ_MSGS_REQ,
+        ]
+        assert all(
+            msg_type
+            not in {
+                MsgType.SWEEP_PLAN_START_REQ,
+                MsgType.SWEEP_PLAN_STOP_REQ,
+                MsgType.SWEEP_STATUS_REQ,
+                MsgType.SWEEP_DRAIN_RESULTS_REQ,
+                MsgType.SWEEP_PLAN_START_RSP,
+                MsgType.SWEEP_PLAN_STOP_RSP,
+                MsgType.SWEEP_STATUS_RSP,
+                MsgType.SWEEP_DRAIN_RESULTS_RSP,
+            }
+            for msg_type in forwarded_types
+        )
+        assert dll_response_types == [
+            MsgType.WRITE_MSGS_RSP,
+            MsgType.READ_MSGS_RSP,
+            MsgType.WRITE_MSGS_RSP,
+            MsgType.READ_MSGS_RSP,
+        ]
+
+    asyncio.run(_run())
+
+    records = _read_product_log_events(tmp_path)
+    event_types = [record["event_type"] for record in records]
+    assert "sweep.pattern.observed" in event_types
+    assert "sweep.pattern.learned" in event_types
+    assert "sweep.plan.started" not in event_types
+
+
+def test_try_serve_cached_never_uses_shadow_store() -> None:
+    server = ReverseProxyServer(
+        config=ProxyConfig.from_args(
+            local_sweep_enabled=True,
+            local_sweep_mode="shadow_local",
+        )
+    )
+    server._sweep_shadow_store.record_result(
+        SweepResultRecord(
+            plan_id="plan-1",
+            signature_digest="sig",
+            return_code=0,
+            read_rsp_body=ProtocolEncoder.encode_read_msgs_rsp(
+                0,
+                [{"protocol_id": 6, "data": b"\x62\xf4\x0c"}],
+            )[HEADER_SIZE:],
+            started_at_s=1.0,
+            finished_at_s=1.0,
+        ),
+        channel_id=44,
+    )
+    body = ProtocolEncoder.encode_read_msgs_req(44, 1, 0, sequence=7)[HEADER_SIZE:]
+
+    cached, _ioctl_id, reason = server._try_serve_cached(
+        MsgType.READ_MSGS_REQ,
+        body,
+        sequence=7,
+    )
+
+    assert cached is None
+    assert reason is None
+
+
+def test_invalidate_caches_cancels_shadow_plan_and_clears_shadow_store() -> None:
+    write_body = ProtocolEncoder.encode_write_msgs_req(
+        44,
+        [{"protocol_id": 6, "data": b"\x22\xf4\x0c"}],
+        timeout=25,
+    )[HEADER_SIZE:]
+    server = ReverseProxyServer(
+        config=ProxyConfig.from_args(
+            local_sweep_enabled=True,
+            local_sweep_mode="shadow_local",
+        )
+    )
+    server._sweep_active_plan = SweepPlanStartRequest(
+        plan_id="plan-1",
+        connection_epoch="epoch-1",
+        channel_id=44,
+        max_result_age_ms=1000,
+        min_item_interval_ms=5,
+        shadow_max_seconds=120,
+        requests=(SweepRequestSpec("sig", write_body),),
+    )
+    server._sweep_shadow_store.record_result(
+        SweepResultRecord(
+            plan_id="plan-1",
+            signature_digest="sig",
+            return_code=0,
+            read_rsp_body=ProtocolEncoder.encode_read_msgs_rsp(0, [])[HEADER_SIZE:],
+            started_at_s=1.0,
+            finished_at_s=1.0,
+        ),
+        channel_id=44,
+    )
+
+    server._invalidate_caches(
+        MsgType.DISCONNECT_REQ,
+        ProtocolEncoder.encode_disconnect_req(44)[HEADER_SIZE:],
+    )
+
+    assert server._sweep_active_plan is None
+    assert server._sweep_shadow_store.pending_count() == 0
 
 
 def test_handle_proxy_connection_bypasses_read_cache_after_same_channel_write(monkeypatch, tmp_path) -> None:
