@@ -53,6 +53,8 @@ class _MaterializationJob:
 _MATERIALIZATION_QUEUE: queue.Queue[_MaterializationJob] = queue.Queue(maxsize=256)
 _MATERIALIZATION_WORKER_LOCK = threading.Lock()
 _MATERIALIZATION_WORKER: threading.Thread | None = None
+_DIRECT_MATERIALIZATION_THREADS: set[threading.Thread] = set()
+_DIRECT_MATERIALIZATION_THREADS_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -239,14 +241,73 @@ def queue_session_artifact_materialization(
         return False
 
 
+def start_session_artifact_materialization(
+    *,
+    cloud_root: str | Path,
+    session_id: str | None = None,
+    connection_epoch: str | None = None,
+    local_root: str | Path | None = None,
+    triggering_event_type: str | None = None,
+    flush_callback: Callable[[], Any] | None = None,
+) -> bool:
+    """Start one background materialization thread that is not tied to the queue worker."""
+    job = _MaterializationJob(
+        cloud_root=_resolve_cloud_root(cloud_root),
+        session_id=session_id,
+        connection_epoch=connection_epoch,
+        local_root=local_root,
+        triggering_event_type=triggering_event_type,
+        flush_callback=flush_callback,
+    )
+
+    def _runner() -> None:
+        current = threading.current_thread()
+        try:
+            _run_materialization_job(job)
+        finally:
+            with _DIRECT_MATERIALIZATION_THREADS_LOCK:
+                _DIRECT_MATERIALIZATION_THREADS.discard(current)
+
+    thread = threading.Thread(
+        target=_runner,
+        name=(
+            "observability-artifact-direct-"
+            f"{_safe_name(session_id or connection_epoch or 'unknown')}"
+        ),
+        daemon=False,
+    )
+    with _DIRECT_MATERIALIZATION_THREADS_LOCK:
+        _DIRECT_MATERIALIZATION_THREADS.add(thread)
+    try:
+        thread.start()
+        return True
+    except Exception:
+        with _DIRECT_MATERIALIZATION_THREADS_LOCK:
+            _DIRECT_MATERIALIZATION_THREADS.discard(thread)
+        logger.exception(
+            "failed to start direct observability artifact materialization thread session_id=%s connection_epoch=%s",
+            session_id,
+            connection_epoch,
+        )
+        return False
+
+
 def wait_for_observability_artifact_jobs(timeout_s: float = 5.0) -> bool:
     """Best-effort wait for queued artifact work, used by tests and shutdown."""
     deadline = time.time() + max(0.0, float(timeout_s))
     while time.time() <= deadline:
-        if _MATERIALIZATION_QUEUE.unfinished_tasks == 0:
+        with _DIRECT_MATERIALIZATION_THREADS_LOCK:
+            active_threads = [thread for thread in _DIRECT_MATERIALIZATION_THREADS if thread.is_alive()]
+            _DIRECT_MATERIALIZATION_THREADS.intersection_update(active_threads)
+        if _MATERIALIZATION_QUEUE.unfinished_tasks == 0 and not active_threads:
             return True
+        for thread in active_threads:
+            thread.join(timeout=0.01)
         time.sleep(0.01)
-    return _MATERIALIZATION_QUEUE.unfinished_tasks == 0
+    with _DIRECT_MATERIALIZATION_THREADS_LOCK:
+        active_threads = [thread for thread in _DIRECT_MATERIALIZATION_THREADS if thread.is_alive()]
+        _DIRECT_MATERIALIZATION_THREADS.intersection_update(active_threads)
+    return _MATERIALIZATION_QUEUE.unfinished_tasks == 0 and not active_threads
 
 
 def _normalize_context_value(value: Any, *, placeholder: str) -> str | None:
@@ -631,6 +692,7 @@ __all__ = [
     "materialize_session_artifacts",
     "maybe_materialize_cloud_artifacts",
     "queue_session_artifact_materialization",
+    "start_session_artifact_materialization",
     "wait_for_observability_artifact_jobs",
     "ProductLogSettings",
     "resolve_product_log_settings",

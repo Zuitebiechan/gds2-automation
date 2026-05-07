@@ -128,9 +128,9 @@ def emit_session_runtime_event(
     )
     if event_type in _SESSION_TERMINAL_EVENT_TYPES:
         try:
-            from diagnostic_platform.observability_artifacts import queue_session_artifact_materialization
+            from diagnostic_platform.observability_artifacts import start_session_artifact_materialization
 
-            queue_session_artifact_materialization(
+            start_session_artifact_materialization(
                 cloud_root=get_cloud_observability_root(),
                 session_id=str(payload.get("session_id") or "").strip() or None,
                 connection_epoch=str(payload.get("connection_epoch") or "").strip() or None,
