@@ -1204,7 +1204,7 @@ class ReverseProxyServer:
 
         return context
 
-    def _auth_success_message(self) -> str:
+    def _auth_success_message(self, *, connection_epoch: str | None = None) -> str:
         capabilities = ["ok"]
         if self.config.read_ahead.enabled:
             capabilities.append("read_ahead=1")
@@ -1212,6 +1212,8 @@ class ReverseProxyServer:
                 capabilities.append("write_collect=1")
         if self.config.local_sweep.shadow_local:
             capabilities.append("sweep_shadow=1")
+        if connection_epoch:
+            capabilities.append(f"connection_epoch={connection_epoch}")
         return ";".join(capabilities)
 
     @staticmethod
@@ -1391,7 +1393,11 @@ class ReverseProxyServer:
             logger.info(f"已取消 {len(pending)} 个挂起的请求")
 
     async def _authenticate_vci(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        *,
+        connection_epoch_hint: str | None = None,
     ) -> bool:
         """Authenticate the VCI connection.
 
@@ -1470,7 +1476,9 @@ class ReverseProxyServer:
                 )
                 rsp = ProtocolEncoder.encode_auth_rsp(
                     True,
-                    self._auth_success_message(),
+                    self._auth_success_message(
+                        connection_epoch=connection_epoch_hint,
+                    ),
                     sequence,
                 )
                 try:
@@ -1494,7 +1502,9 @@ class ReverseProxyServer:
                 success = False
                 reason = "replay detected"
             if success:
-                reason = self._auth_success_message()
+                reason = self._auth_success_message(
+                    connection_epoch=connection_epoch_hint,
+                )
                 self._vci_write_collect_supported = self._capability_enabled(
                     capabilities,
                     "write_collect",
@@ -1663,8 +1673,17 @@ class ReverseProxyServer:
         if sock is not None:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
+        next_connection_counter = self._connection_counter + 1
+        provisional_epoch = (
+            f"epoch-{int(time.time() * 1000)}-{next_connection_counter:03d}"
+        )
+
         # Authenticate before accepting the connection
-        if not await self._authenticate_vci(reader, writer):
+        if not await self._authenticate_vci(
+            reader,
+            writer,
+            connection_epoch_hint=provisional_epoch,
+        ):
             logger.warning("VCI tunnel authentication failed: %s", addr)
             self._emit_tunnel_event(
                 "tunnel.auth.failed",
@@ -1732,8 +1751,8 @@ class ReverseProxyServer:
         self.vci_reader = reader
         self.vci_writer = writer
         logger.info("VCI Proxy connected: %s", addr)
-        self._connection_counter += 1
-        local_epoch = f"epoch-{int(time.time() * 1000)}-{self._connection_counter:03d}"
+        self._connection_counter = next_connection_counter
+        local_epoch = provisional_epoch
         self._connection_epoch = local_epoch
         self._tunnel_quality.mark_connected(local_epoch)
         self._write_tunnel_quality_snapshot()

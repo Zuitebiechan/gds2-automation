@@ -166,6 +166,27 @@ def test_send_registration_auth_mode_enables_read_ahead_from_server_capability(m
     assert client._server_read_ahead_enabled is True
 
 
+def test_send_registration_auth_mode_records_connection_epoch(monkeypatch) -> None:
+    config = ProxyConfig.from_args(auth_token="shared-secret", read_ahead_enabled=True)
+    client = ReverseProxyClient("example.com", 9000, config=config)
+    reader = _FakeReader(
+        ProtocolEncoder.encode_auth_rsp(
+            True,
+            "ok;read_ahead=1;connection_epoch=epoch-rc-1",
+            sequence=0,
+        )
+    )
+    writer = _FakeWriter()
+
+    monkeypatch.setattr("vci_proxy.reverse_client.time.time", lambda: 1_700_000_000)
+    monkeypatch.setattr("vci_proxy.reverse_client.compute_signature", lambda token, timestamp: b"s" * 32)
+
+    result = asyncio.run(client._send_registration(reader, writer))
+
+    assert result is True
+    assert client._server_connection_epoch == "epoch-rc-1"
+
+
 def test_send_registration_auth_mode_advertises_write_collect_capability(monkeypatch) -> None:
     config = ProxyConfig.from_args(
         auth_token="shared-secret",

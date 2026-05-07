@@ -90,6 +90,7 @@ class ReverseProxyClient:
         self._server_read_ahead_enabled = False
         self._server_write_collect_enabled = False
         self._server_sweep_shadow_enabled = False
+        self._server_connection_epoch: str | None = None
         self._driver_call_lock = asyncio.Lock()
         self._foreground_request_depth = 0
         self._sweep_executor = LocalSweepExecutor(
@@ -196,6 +197,7 @@ class ReverseProxyClient:
 
     def _request_log_context(self, *, sequence: int, msg_name: str, worker_request_id: str) -> LogContext:
         return LogContext(
+            connection_epoch=self._server_connection_epoch,
             proxy_seq=sequence,
             worker_request_id=worker_request_id,
             operation_kind=f"j2534:{msg_name}",
@@ -203,6 +205,7 @@ class ReverseProxyClient:
 
     def _sweep_log_context(self, msg_name: str) -> LogContext:
         return LogContext(
+            connection_epoch=self._server_connection_epoch,
             worker_request_id=generate_request_id(),
             operation_kind=f"j2534:{msg_name}",
         )
@@ -276,6 +279,18 @@ class ReverseProxyClient:
             for token in message.replace(",", ";").split(";")
         )
 
+    @staticmethod
+    def _auth_message_connection_epoch(message: str) -> str | None:
+        for token in str(message or "").replace(",", ";").split(";"):
+            stripped = token.strip()
+            if not stripped:
+                continue
+            if not stripped.lower().startswith("connection_epoch="):
+                continue
+            value = stripped.split("=", 1)[1].strip()
+            return value or None
+        return None
+
     def _auth_capability_message(self) -> str:
         capabilities: list[str] = []
         read_ahead = self.config.read_ahead
@@ -313,6 +328,7 @@ class ReverseProxyClient:
                         j2534_method,
                         *args,
                         log_context={
+                            "connection_epoch": request_context.connection_epoch,
                             "proxy_seq": request_context.proxy_seq,
                             "worker_request_id": request_context.worker_request_id,
                             "msg_name": msg_name,
@@ -721,6 +737,7 @@ class ReverseProxyClient:
         self._server_read_ahead_enabled = False
         self._server_write_collect_enabled = False
         self._server_sweep_shadow_enabled = False
+        self._server_connection_epoch = None
         if self.config.auth.enabled and self.config.auth.token:
             timestamp = int(time.time())
             signature = compute_signature(self.config.auth.token, timestamp)
@@ -766,11 +783,17 @@ class ReverseProxyClient:
                     self._server_sweep_shadow_enabled = (
                         success and self._auth_message_enables_sweep_shadow(message)
                     )
+                    self._server_connection_epoch = (
+                        self._auth_message_connection_epoch(message)
+                        if success
+                        else None
+                    )
                     if success:
                         logger.info("Reverse server authentication succeeded")
                         self._emit_client_event(
                             "reverse_client.lifecycle.auth_succeeded",
                             reason=message or "auth_ok",
+                            connection_epoch=self._server_connection_epoch,
                             instance_id=self._instance_id,
                             attempt_label=attempt_label,
                         )
@@ -796,6 +819,7 @@ class ReverseProxyClient:
                     self._server_read_ahead_enabled = False
                     self._server_write_collect_enabled = False
                     self._server_sweep_shadow_enabled = False
+                    self._server_connection_epoch = None
                     logger.warning(
                         "[CLIENT_CONN] instance=%s %s server accepted auth as legacy heartbeat",
                         self._instance_id,
@@ -832,6 +856,7 @@ class ReverseProxyClient:
                 self._server_read_ahead_enabled = False
                 self._server_write_collect_enabled = False
                 self._server_sweep_shadow_enabled = False
+                self._server_connection_epoch = None
                 logger.error(
                     "[CLIENT_CONN] instance=%s %s auth response timeout after %ss",
                     self._instance_id,

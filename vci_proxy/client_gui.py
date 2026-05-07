@@ -9,10 +9,12 @@ Provides:
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
 import queue
+import re
 import socket
 import sys
 import threading
@@ -222,6 +224,22 @@ STARTUP_NOTIFICATION_MESSAGE = (
 )
 _REAL_THREAD = threading.Thread
 _UI_THREAD_STOP = object()
+_CLIENT_INSTANCE_ID_ALLOWED_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _ascii_client_instance_component(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "host"
+    try:
+        ascii_value = raw.encode("idna").decode("ascii")
+    except UnicodeError:
+        ascii_value = raw
+    normalized = _CLIENT_INSTANCE_ID_ALLOWED_RE.sub("-", ascii_value).strip("-._")
+    if normalized:
+        return normalized
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
+    return f"host-{digest}"
 
 
 class _NullDiagnosticsGuardController:
@@ -242,6 +260,9 @@ class _NullDiagnosticsGuardController:
 
     def has_active_session(self) -> bool:
         return False
+
+    def get_active_session_id(self) -> str | None:
+        return None
 
     def request_guarded_action(
         self,
@@ -817,7 +838,24 @@ class VCIProxyTrayApp:
         self._restart_client()
 
     def _client_instance_id(self) -> str:
-        return f"{socket.gethostname()}-tray"
+        return f"{_ascii_client_instance_component(socket.gethostname())}-tray"
+
+    def _active_observability_session_context(self) -> tuple[str | None, str | None]:
+        session_id = None
+        guard_controller = self._diagnostics_guard_controller
+        if guard_controller is not None:
+            getter = getattr(guard_controller, "get_active_session_id", None)
+            if callable(getter):
+                session_id = str(getter() or "").strip() or None
+
+        connection_epoch = None
+        client = self._client
+        if client is not None:
+            connection_epoch = str(
+                getattr(client, "_server_connection_epoch", "") or ""
+            ).strip() or None
+
+        return session_id, connection_epoch
 
     def _upload_observability_once(self) -> dict[str, int]:
         if not self._product_log_settings.upload_enabled:
@@ -828,7 +866,12 @@ class VCIProxyTrayApp:
             return {"queued_count": 0, "uploaded_count": 0}
         api_base_url = self._effective_api_base_url()
         outbox = ObservabilityOutbox(appdata=os.environ.get("APPDATA", Path.home()))
-        staged = outbox.stage_default_artifacts(client_instance_id=self._client_instance_id())
+        session_id, connection_epoch = self._active_observability_session_context()
+        staged = outbox.stage_default_artifacts(
+            client_instance_id=self._client_instance_id(),
+            default_session_id=session_id,
+            default_connection_epoch=connection_epoch,
+        )
         uploaded = outbox.upload_pending(
             api_base_url=api_base_url,
             api_token=str(cfg.get("api_token") or "").strip(),

@@ -138,6 +138,8 @@ class ObservabilityOutbox:
         client_instance_id: str,
         local_root: str | Path | None = None,
         min_age_seconds: float = 5.0,
+        default_session_id: str | None = None,
+        default_connection_epoch: str | None = None,
     ) -> dict[str, Any]:
         root = Path(local_root) if local_root is not None else get_local_observability_root()
         queued_count = 0
@@ -155,7 +157,8 @@ class ObservabilityOutbox:
                 if age < min_age_seconds:
                     continue
                 session_id, connection_epoch = _read_jsonl_first_context(path)
-                resolved_epoch = connection_epoch or "no-epoch"
+                resolved_session_id = session_id or default_session_id
+                resolved_epoch = connection_epoch or default_connection_epoch or "no-epoch"
                 artifact_id = hashlib.sha1(
                     f"{path.resolve()}|{path.stat().st_size}|{path.stat().st_mtime}".encode("utf-8")
                 ).hexdigest()[:16]
@@ -165,7 +168,7 @@ class ObservabilityOutbox:
                     connection_epoch=resolved_epoch,
                     artifact_id=artifact_id,
                     artifact_type=category,
-                    session_id=session_id,
+                    session_id=resolved_session_id,
                 )
                 if result["queued"]:
                     queued_count += 1

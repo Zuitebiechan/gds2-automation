@@ -148,6 +148,32 @@ def test_authenticate_vci_advertises_read_ahead_capability(monkeypatch) -> None:
     assert "read_ahead=1" in message
 
 
+def test_authenticate_vci_advertises_connection_epoch_hint(monkeypatch) -> None:
+    server = ReverseProxyServer(
+        config=ProxyConfig.from_args(auth_token="secret", read_ahead_enabled=True)
+    )
+    reader = _FakeReader(ProtocolEncoder.encode_auth_req(123, b"x" * 32, sequence=7))
+    writer = _FakeWriter()
+
+    monkeypatch.setattr(
+        "vci_proxy.reverse_server.verify_signature",
+        lambda token, timestamp, signature: (True, "ok"),
+    )
+
+    accepted = asyncio.run(
+        server._authenticate_vci(
+            reader,
+            writer,
+            connection_epoch_hint="epoch-test-001",
+        )
+    )
+
+    assert accepted is True
+    success, message = ProtocolDecoder.decode_auth_rsp(writer.writes[0][HEADER_SIZE:])
+    assert success is True
+    assert "connection_epoch=epoch-test-001" in message
+
+
 def test_authenticate_vci_negotiates_write_collect_capability(monkeypatch) -> None:
     server = ReverseProxyServer(
         config=ProxyConfig.from_args(

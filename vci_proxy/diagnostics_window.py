@@ -149,6 +149,14 @@ class DiagnosticsGuardController:
                 or self._session_terminal_session_id
             )
 
+    def get_active_session_id(self) -> str | None:
+        with self._lock:
+            return (
+                self._session_terminal_session_id
+                or self._session_id
+                or None
+            )
+
     def request_guarded_action(
         self,
         action_name: str,

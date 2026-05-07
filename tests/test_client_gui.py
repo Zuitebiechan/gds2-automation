@@ -360,13 +360,29 @@ def test_upload_observability_once_stages_and_uploads_outbox(monkeypatch, tmp_pa
         "tls_ca_file": "",
         "tls_server_name": "",
     }
+    app._diagnostics_guard_controller = types.SimpleNamespace(
+        get_active_session_id=lambda: "session-live-1"
+    )
+    app._client = types.SimpleNamespace(_server_connection_epoch="epoch-live-1")
 
     result = app._upload_observability_once()
 
     assert result == {"queued_count": 2, "uploaded_count": 1}
     assert observed["stage_kwargs"]["client_instance_id"] == "host-1-tray"
+    assert observed["stage_kwargs"]["default_session_id"] == "session-live-1"
+    assert observed["stage_kwargs"]["default_connection_epoch"] == "epoch-live-1"
     assert observed["upload_kwargs"]["api_base_url"] == "https://diag.example:8080"
     assert observed["upload_kwargs"]["api_token"] == "api-secret"
+
+
+def test_client_instance_id_is_ascii_safe(monkeypatch, tmp_path) -> None:
+    client_gui = _import_client_gui(monkeypatch, tmp_path)
+    monkeypatch.setattr(client_gui.socket, "gethostname", lambda: "大windows")
+
+    app = client_gui.VCIProxyTrayApp()
+
+    assert app._client_instance_id().endswith("-tray")
+    assert app._client_instance_id().isascii()
 
 
 def test_upload_observability_once_prefers_assigned_api_base_over_tunnel_host(monkeypatch, tmp_path) -> None:

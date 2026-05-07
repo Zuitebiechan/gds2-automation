@@ -362,6 +362,36 @@ def test_observability_outbox_stages_context_after_initial_empty_event(tmp_path:
     assert pending[0]["connection_epoch"] == "epoch-6"
 
 
+def test_observability_outbox_uses_default_context_when_raw_artifact_lacks_it(
+    tmp_path: Path,
+) -> None:
+    appdata = tmp_path / "AppData"
+    local_root = appdata / "VCI_Proxy" / "observability"
+    raw_dir = local_root / "raw"
+    raw_dir.mkdir(parents=True)
+    artifact = raw_dir / "local.jsonl"
+    artifact.write_text(
+        json.dumps(_event("2026-04-22T00:00:00Z", "reverse_client", "tunnel.lifecycle.connected")),
+        encoding="utf-8",
+    )
+    stale = time.time() - 10
+    os.utime(artifact, (stale, stale))
+
+    outbox = ObservabilityOutbox(appdata=appdata)
+    staged = outbox.stage_default_artifacts(
+        client_instance_id="client-ctx",
+        local_root=local_root,
+        min_age_seconds=0,
+        default_session_id="session-default",
+        default_connection_epoch="epoch-default",
+    )
+
+    assert staged["queued_count"] == 1
+    pending = outbox.list_pending()
+    assert pending[0]["session_id"] == "session-default"
+    assert pending[0]["connection_epoch"] == "epoch-default"
+
+
 def test_observability_outbox_upload_failure_keeps_pending_manifest(tmp_path: Path) -> None:
     appdata = tmp_path / "AppData"
     local_root = appdata / "VCI_Proxy" / "observability"
