@@ -711,6 +711,159 @@ def test_observability_outbox_upload_failure_keeps_pending_manifest(tmp_path: Pa
     assert staged_artifact_path.exists()
 
 
+def test_observability_outbox_refreshes_existing_pending_for_same_source_file(
+    tmp_path: Path,
+) -> None:
+    appdata = tmp_path / "AppData"
+    local_root = appdata / "VCI_Proxy" / "observability"
+    raw_dir = local_root / "raw"
+    raw_dir.mkdir(parents=True)
+    artifact = raw_dir / "live.jsonl"
+    artifact.write_text(
+        json.dumps(
+            _event(
+                "2026-04-22T00:00:00Z",
+                "reverse_client",
+                "proxy.request.client_received",
+                session_id="session-live",
+                connection_epoch="epoch-live",
+                proxy_seq=10,
+            )
+        ),
+        encoding="utf-8",
+    )
+    old_time = time.time() - 10
+    os.utime(artifact, (old_time, old_time))
+
+    outbox = ObservabilityOutbox(appdata=appdata)
+    first = outbox.stage_default_artifacts(
+        client_instance_id="client-live",
+        local_root=local_root,
+        min_age_seconds=0,
+    )
+    assert first["queued_count"] == 1
+    pending_before = outbox.list_pending()
+    assert len(pending_before) == 1
+    pending_manifest_path = next(outbox.pending_dir.glob("*.json"))
+    pending_artifact_path = Path(pending_before[0]["artifact_path"])
+
+    artifact.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    _event(
+                        "2026-04-22T00:00:00Z",
+                        "reverse_client",
+                        "proxy.request.client_received",
+                        session_id="session-live",
+                        connection_epoch="epoch-live",
+                        proxy_seq=10,
+                    )
+                ),
+                json.dumps(
+                    _event(
+                        "2026-04-22T00:00:01Z",
+                        "reverse_client",
+                        "proxy.request.client_received",
+                        session_id="session-live",
+                        connection_epoch="epoch-live",
+                        proxy_seq=11,
+                    )
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    new_time = time.time() - 1
+    os.utime(artifact, (new_time, new_time))
+
+    second = outbox.stage_default_artifacts(
+        client_instance_id="client-live",
+        local_root=local_root,
+        min_age_seconds=0,
+    )
+    assert second["queued_count"] == 1
+    pending_after = outbox.list_pending()
+    assert len(pending_after) == 1
+    assert pending_manifest_path.exists()
+    assert pending_after[0]["artifact_path"] == str(pending_artifact_path)
+    assert float(pending_after[0]["source_mtime"]) == new_time
+    assert int(pending_after[0]["source_size"]) == artifact.stat().st_size
+    assert Path(pending_after[0]["artifact_path"]).read_text(encoding="utf-8").count("\n") == 1
+
+
+def test_observability_outbox_defers_upload_while_source_file_is_still_growing(
+    tmp_path: Path,
+) -> None:
+    appdata = tmp_path / "AppData"
+    local_root = appdata / "VCI_Proxy" / "observability"
+    raw_dir = local_root / "raw"
+    raw_dir.mkdir(parents=True)
+    artifact = raw_dir / "live.jsonl"
+    artifact.write_text(
+        json.dumps(
+            _event(
+                "2026-04-22T00:00:00Z",
+                "reverse_client",
+                "proxy.request.client_received",
+                session_id="session-live",
+                connection_epoch="epoch-live",
+                proxy_seq=10,
+            )
+        ),
+        encoding="utf-8",
+    )
+    old_time = time.time() - 10
+    os.utime(artifact, (old_time, old_time))
+
+    outbox = ObservabilityOutbox(appdata=appdata)
+    outbox.stage_default_artifacts(
+        client_instance_id="client-live",
+        local_root=local_root,
+        min_age_seconds=0,
+    )
+
+    artifact.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    _event(
+                        "2026-04-22T00:00:00Z",
+                        "reverse_client",
+                        "proxy.request.client_received",
+                        session_id="session-live",
+                        connection_epoch="epoch-live",
+                        proxy_seq=10,
+                    )
+                ),
+                json.dumps(
+                    _event(
+                        "2026-04-22T00:00:01Z",
+                        "reverse_client",
+                        "proxy.request.client_received",
+                        session_id="session-live",
+                        connection_epoch="epoch-live",
+                        proxy_seq=11,
+                    )
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    new_time = time.time() - 1
+    os.utime(artifact, (new_time, new_time))
+
+    uploaded = outbox.upload_pending(
+        api_base_url="https://diag.example:8080",
+        opener=lambda _request: (_ for _ in ()).throw(AssertionError("should not upload growing source")),
+    )
+
+    assert uploaded["uploaded_count"] == 0
+    assert uploaded["failed_count"] == 0
+    assert uploaded["deferred_count"] == 1
+    assert len(outbox.list_pending()) == 1
+
+
 def test_observability_outbox_stages_pretty_printed_json_artifacts(tmp_path: Path) -> None:
     appdata = tmp_path / "AppData"
     local_root = appdata / "VCI_Proxy" / "observability"

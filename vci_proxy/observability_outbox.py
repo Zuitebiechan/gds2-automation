@@ -33,6 +33,13 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> Path:
     return path
 
 
+def _load_json_file(path: Path) -> dict[str, Any] | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
 def _normalize_context_value(value: Any, *, placeholder: str) -> str | None:
     text = str(value or "").strip()
     if not text or text.lower() == placeholder:
@@ -96,6 +103,56 @@ class ObservabilityOutbox:
     def _manifest_name(self, *, client_instance_id: str, connection_epoch: str, artifact_id: str) -> str:
         return f"{_safe_name(client_instance_id)}-{_safe_name(connection_epoch)}-{_safe_name(artifact_id)}.json"
 
+    def _find_source_manifests(
+        self,
+        *,
+        client_instance_id: str,
+        connection_epoch: str,
+        artifact_type: str,
+        source_path: Path,
+    ) -> tuple[list[tuple[Path, dict[str, Any]]], list[tuple[Path, dict[str, Any]]]]:
+        resolved_source = str(source_path.resolve())
+        pending_matches: list[tuple[Path, dict[str, Any]]] = []
+        uploaded_matches: list[tuple[Path, dict[str, Any]]] = []
+        for directory, target in (
+            (self.pending_dir, pending_matches),
+            (self.uploaded_dir, uploaded_matches),
+        ):
+            if not directory.exists():
+                continue
+            for manifest_path in sorted(directory.glob("*.json")):
+                manifest = _load_json_file(manifest_path)
+                if not isinstance(manifest, dict):
+                    continue
+                if str(manifest.get("client_instance_id") or "").strip() != client_instance_id:
+                    continue
+                if str(manifest.get("connection_epoch") or "").strip() != connection_epoch:
+                    continue
+                if str(manifest.get("artifact_type") or "").strip() != artifact_type:
+                    continue
+                if str(manifest.get("source_path") or "").strip() != resolved_source:
+                    continue
+                target.append((manifest_path, manifest))
+        return pending_matches, uploaded_matches
+
+    def _refresh_pending_manifest(
+        self,
+        manifest_path: Path,
+        manifest: dict[str, Any],
+        *,
+        source_path: Path,
+        session_id: str | None,
+    ) -> None:
+        copied_path = Path(manifest["artifact_path"])
+        shutil.copy2(source_path, copied_path)
+        stat = source_path.stat()
+        manifest["session_id"] = session_id
+        manifest["artifact_name"] = source_path.name
+        manifest["source_path"] = str(source_path.resolve())
+        manifest["source_size"] = int(stat.st_size)
+        manifest["source_mtime"] = float(stat.st_mtime)
+        _atomic_write_json(manifest_path, manifest)
+
     def queue_artifact(
         self,
         artifact_path: str | Path,
@@ -107,6 +164,7 @@ class ObservabilityOutbox:
         session_id: str | None = None,
     ) -> dict[str, Any]:
         source_path = Path(artifact_path)
+        source_stat = source_path.stat()
         manifest_name = self._manifest_name(
             client_instance_id=client_instance_id,
             connection_epoch=connection_epoch,
@@ -128,6 +186,9 @@ class ObservabilityOutbox:
             "artifact_type": artifact_type,
             "session_id": session_id,
             "artifact_path": str(copied_path),
+            "source_path": str(source_path.resolve()),
+            "source_size": int(source_stat.st_size),
+            "source_mtime": float(source_stat.st_mtime),
         }
         _atomic_write_json(pending_manifest, manifest)
         return {"queued": True, "manifest_path": pending_manifest}
@@ -159,9 +220,41 @@ class ObservabilityOutbox:
                 session_id, connection_epoch = _read_jsonl_first_context(path)
                 resolved_session_id = session_id or default_session_id
                 resolved_epoch = connection_epoch or default_connection_epoch or "no-epoch"
+                pending_matches, uploaded_matches = self._find_source_manifests(
+                    client_instance_id=client_instance_id,
+                    connection_epoch=resolved_epoch,
+                    artifact_type=category,
+                    source_path=path,
+                )
+                if pending_matches:
+                    manifest_path, manifest = pending_matches[-1]
+                    current_size = int(path.stat().st_size)
+                    current_mtime = float(path.stat().st_mtime)
+                    if (
+                        int(manifest.get("source_size") or -1) == current_size
+                        and float(manifest.get("source_mtime") or -1.0) == current_mtime
+                    ):
+                        continue
+                    self._refresh_pending_manifest(
+                        manifest_path,
+                        manifest,
+                        source_path=path,
+                        session_id=resolved_session_id,
+                    )
+                    queued_count += 1
+                    continue
                 artifact_id = hashlib.sha1(
                     f"{path.resolve()}|{path.stat().st_size}|{path.stat().st_mtime}".encode("utf-8")
                 ).hexdigest()[:16]
+                if uploaded_matches:
+                    last_uploaded_manifest = uploaded_matches[-1][1]
+                    current_size = int(path.stat().st_size)
+                    current_mtime = float(path.stat().st_mtime)
+                    if (
+                        int(last_uploaded_manifest.get("source_size") or -1) == current_size
+                        and float(last_uploaded_manifest.get("source_mtime") or -1.0) == current_mtime
+                    ):
+                        continue
                 result = self.queue_artifact(
                     path,
                     client_instance_id=client_instance_id,
@@ -190,6 +283,7 @@ class ObservabilityOutbox:
     ) -> dict[str, Any]:
         uploaded_count = 0
         failed_count = 0
+        deferred_count = 0
         open_request = opener or urllib.request.urlopen
         for manifest_path in sorted(self.pending_dir.glob("*.json")):
             try:
@@ -206,6 +300,17 @@ class ObservabilityOutbox:
             except OSError:
                 failed_count += 1
                 continue
+            source_path_value = str(manifest.get("source_path") or "").strip()
+            if source_path_value:
+                source_path = Path(source_path_value)
+                if source_path.exists():
+                    source_stat = source_path.stat()
+                    if (
+                        int(manifest.get("source_size") or -1) != int(source_stat.st_size)
+                        or float(manifest.get("source_mtime") or -1.0) != float(source_stat.st_mtime)
+                    ):
+                        deferred_count += 1
+                        continue
             if len(artifact_bytes) > max(1, int(max_artifact_mb)) * 1024 * 1024:
                 failed_count += 1
                 continue
@@ -243,7 +348,11 @@ class ObservabilityOutbox:
                 pass
             shutil.move(str(manifest_path), str(self.uploaded_dir / manifest_path.name))
             uploaded_count += 1
-        return {"uploaded_count": uploaded_count, "failed_count": failed_count}
+        return {
+            "uploaded_count": uploaded_count,
+            "failed_count": failed_count,
+            "deferred_count": deferred_count,
+        }
 
 
 __all__ = [
