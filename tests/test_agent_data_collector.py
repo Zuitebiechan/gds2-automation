@@ -239,6 +239,10 @@ def test_read_and_parse_emits_focus_parameter_samples(tmp_path, monkeypatch) -> 
         "engine_speed": "900",
         "accelerator_pedal_position": "12",
     }
+    assert focus["parameter_value_sources"] == {
+        "engine_speed": "Engine Speed",
+        "accelerator_pedal_position": "Accelerator Pedal Position",
+    }
     assert focus["parameters"] == [
         {
             "key": "engine_speed",
@@ -300,6 +304,10 @@ def test_read_and_parse_emits_focus_parameter_samples(tmp_path, monkeypatch) -> 
     assert focus_events[-1]["parameter_values"] == {
         "engine_speed": "1100",
         "accelerator_pedal_position": "38",
+    }
+    assert focus_events[-1]["parameter_value_sources"] == {
+        "engine_speed": "Engine Speed",
+        "accelerator_pedal_position": "Accelerator Pedal Position",
     }
     assert focus_events[-1]["parameters"][0]["changed"] is True
     assert focus_events[-1]["parameters"][0]["previous_value"] == "900"
@@ -383,6 +391,10 @@ def test_read_and_parse_emits_oem_voltage_aliases_as_battery_voltage(
         "engine_speed": "900",
         "battery_voltage": "12.4",
     }
+    assert focus["parameter_value_sources"] == {
+        "engine_speed": "Engine Speed",
+        "battery_voltage": "Engine Controls Ignition Relay Feedback 2 Signal",
+    }
     assert focus["parameters"] == [
         {
             "key": "engine_speed",
@@ -459,10 +471,82 @@ def test_read_and_parse_emits_oem_voltage_aliases_as_battery_voltage(
         "engine_speed": "950",
         "battery_voltage": "12.9",
     }
+    assert focus_events[-1]["parameter_value_sources"] == {
+        "engine_speed": "Engine Speed",
+        "battery_voltage": "Engine Controls Ignition Relay Feedback 2 Signal",
+    }
     assert focus_events[-1]["parameters"][1]["changed"] is True
     assert focus_events[-1]["parameters"][1]["previous_value"] == "12.4"
     assert focus_events[-1]["parameters"][2]["changed"] is True
     assert focus_events[-1]["parameters"][2]["previous_value"] == "12.4"
+
+
+def test_battery_voltage_prefers_numeric_alias_over_state_value(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("PRODUCT_LOG_CLOUD_ROOT", raising=False)
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+    monkeypatch.setattr(collector_module.time, "time", lambda: 1_710_000_200.200)
+    ActiveSessionSnapshotStore().write(
+        {
+            "session_id": "session-collector-voltage-priority",
+            "backend_name": "gds2",
+            "operation_kind": "live_data.start",
+            "selected_module": "Engine Control Module",
+            "selected_data_category": "Engine Data",
+            "current_page": "data_display",
+            "navigation_session_id": None,
+            "ai_session_id": None,
+            "live_data_active": True,
+            "connection_epoch": "epoch-collector-voltage-priority",
+        }
+    )
+    json_path = tmp_path / "latest.json"
+    _write_agent_payload(
+        json_path,
+        {
+            "timestamp": 1_710_000_200_120,
+            "extractionCount": 31,
+            "extractionDurationMs": 4,
+            "pageContext": {"page": "data_display"},
+            "tables": [
+                {
+                    "tableType": "data_display",
+                    "columns": ["Control Module", "Parameter Name", "Value", "Unit"],
+                    "rows": [
+                        {
+                            "Control Module": " Engine Control Module",
+                            "Parameter Name": " Ignition 1 Signal",
+                            "Value": " On ",
+                            "Unit": "",
+                        },
+                        {
+                            "Control Module": " Engine Control Module",
+                            "Parameter Name": " Engine Controls Ignition Relay Feedback 2 Signal",
+                            "Value": "11.8 ",
+                            "Unit": " V",
+                        },
+                    ],
+                }
+            ],
+        },
+    )
+    collector = AgentDataCollector(json_path=json_path)
+
+    snapshot = collector._read_and_parse()
+
+    assert snapshot is not None
+    focus = next(
+        event
+        for event in _read_cloud_events(tmp_path)
+        if event["event_type"] == "agent.collector.focus_parameters_sampled"
+    )
+    assert focus["parameter_values"]["battery_voltage"] == "11.8"
+    assert (
+        focus["parameter_value_sources"]["battery_voltage"]
+        == "Engine Controls Ignition Relay Feedback 2 Signal"
+    )
 
 
 def test_guard_event_signature_stringifies_non_json_values() -> None:

@@ -48,8 +48,8 @@ _FOCUS_PARAMETER_ALIASES: dict[str, tuple[str, ...]] = {
     "accelerator_pedal_position": ("accelerator pedal position",),
     "battery_voltage": (
         "battery voltage",
-        "ignition 1 signal",
         "engine controls ignition relay feedback 2 signal",
+        "ignition 1 signal",
     ),
 }
 _FOCUS_PARAMETER_KEYS: tuple[str, ...] = (
@@ -87,6 +87,26 @@ def _focus_parameter_key(parameter_name: Any) -> str | None:
             ):
                 return key
     return None
+
+
+def _is_numeric_text(value: Any) -> bool:
+    text = _clean_text(value)
+    if not text:
+        return False
+    try:
+        float(text)
+    except ValueError:
+        return False
+    return True
+
+
+def _focus_parameter_alias_rank(key: str, parameter_name: Any) -> int:
+    normalized_name = _normalize_parameter_name(parameter_name)
+    aliases = _FOCUS_PARAMETER_ALIASES.get(key, ())
+    for index, alias in enumerate(aliases):
+        if normalized_name == _normalize_parameter_name(alias):
+            return index
+    return len(aliases) + 1
 
 
 def _focus_parameter_identity(
@@ -210,6 +230,35 @@ def _extract_focus_parameter_samples(
     samples.sort(key=lambda item: (order.get(str(item.get("key")), 99), str(item.get("name"))))
     missing_keys = [key for key in _FOCUS_PARAMETER_KEYS if key not in seen_keys]
     return samples, missing_keys, current_values
+
+
+def _prefer_primary_focus_sample(
+    current: dict[str, Any] | None,
+    candidate: dict[str, Any],
+) -> dict[str, Any]:
+    if current is None:
+        return candidate
+
+    current_key = str(current.get("key", ""))
+    candidate_key = str(candidate.get("key", ""))
+    if current_key != candidate_key:
+        return current
+
+    current_numeric = _is_numeric_text(current.get("value"))
+    candidate_numeric = _is_numeric_text(candidate.get("value"))
+    if candidate_numeric != current_numeric:
+        return candidate if candidate_numeric else current
+
+    current_rank = _focus_parameter_alias_rank(current_key, current.get("name"))
+    candidate_rank = _focus_parameter_alias_rank(candidate_key, candidate.get("name"))
+    if candidate_rank != current_rank:
+        return candidate if candidate_rank < current_rank else current
+
+    current_name = str(current.get("name", ""))
+    candidate_name = str(candidate.get("name", ""))
+    if candidate_name < current_name:
+        return candidate
+    return current
 
 
 @dataclass
@@ -862,15 +911,36 @@ class AgentDataCollector:
             missing_target_keys=missing_keys,
             parameters=samples,
             parameter_values=self._parameter_values_by_key(samples),
+            parameter_value_sources=self._parameter_value_sources(samples),
         )
 
     @staticmethod
     def _parameter_values_by_key(samples: list[dict[str, Any]]) -> dict[str, str]:
-        values: dict[str, str] = {}
+        preferred_samples: dict[str, dict[str, Any]] = {}
         for sample in samples:
             key = str(sample["key"])
-            values.setdefault(key, str(sample["value"]))
-        return values
+            preferred_samples[key] = _prefer_primary_focus_sample(
+                preferred_samples.get(key),
+                sample,
+            )
+        return {
+            key: str(sample["value"])
+            for key, sample in preferred_samples.items()
+        }
+
+    @staticmethod
+    def _parameter_value_sources(samples: list[dict[str, Any]]) -> dict[str, str]:
+        preferred_samples: dict[str, dict[str, Any]] = {}
+        for sample in samples:
+            key = str(sample["key"])
+            preferred_samples[key] = _prefer_primary_focus_sample(
+                preferred_samples.get(key),
+                sample,
+            )
+        return {
+            key: str(sample["name"])
+            for key, sample in preferred_samples.items()
+        }
 
     def _detect_param_changes(self, new_params: List[dict]) -> List[dict]:
         """Detect parameter value changes."""

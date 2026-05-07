@@ -271,6 +271,8 @@ Latest known interpretation:
     value/unit are emitted under the same focus key for correlation
   - current explicit `battery_voltage` aliases include OEM-specific names such
     as `Ignition 1 Signal` and `Engine Controls Ignition Relay Feedback 2 Signal`
+  - `parameter_value_sources` identifies which parameter name supplied the
+    primary value for each focused key
 - `vci_proxy/reverse_server.py`
   - emits tunnel lifecycle, probe, tunnel-quality, proxy-request staged events, and reverse-server process lifecycle events
   - reverse-server process lifecycle events include local sweep mode, `local_sweep_allow_gm_a9_packet`, `local_sweep_shadow_allow_gm_a9_packet`, and `local_sweep_min_item_interval_ms` when reporting startup configuration
