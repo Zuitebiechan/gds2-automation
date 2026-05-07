@@ -5,7 +5,7 @@
 | Field | Content |
 | --- | --- |
 | Type | Long-term optimization design |
-| Status | Guarded `observe_only` implemented; `shadow_local` transport is available; `active_replay` is now an explicit experimental mode with a narrow exact-signature replay path |
+| Status | Guarded `observe_only` implemented; `shadow_local` transport is available; `active_replay` is now an explicit experimental mode with a narrow exact-signature replay path that re-polls the shadow drain after replay-served DLL replies |
 | Owner scope | Cloud GDS2 Data Display freshness over the Proxy J2534 tunnel |
 | Primary code paths | `vci_proxy/reverse_server.py`, `vci_proxy/reverse_client.py`, `vci_proxy/protocol.py`, `vci_proxy/j2534_worker.py` |
 | Related docs | `agent_docs/ops/proxy_j2534_latency_optimization.md`, `agent_docs/ops/vci_proxy_and_tunnel.md`, `agent_docs/ops/product_observability.md` |
@@ -26,6 +26,7 @@ The v1 shadow transport is server-driven and request/response shaped:
 - `SWEEP_STATUS_REQ/RSP` checks local executor state.
 - `SWEEP_DRAIN_RESULTS_REQ/RSP` returns immediately with queued shadow results or an empty result set.
 - Unsolicited client-to-server result push and blocking long-poll drain are not implemented.
+- When the cloud serves a DLL-visible write/read pair from `active_replay`, it must still schedule the next status/drain poll so the cloud-side `SweepShadowStore` keeps receiving fresh local results instead of aging out after one replay hit.
 
 Shadow data is comparison-only. It is stored in `SweepShadowStore`, compared against normal GDS2-visible `READ_MSGS_RSP` bodies produced by the existing proxy path, and never consulted by `_try_serve_cached()`, never written to `PrefetchReadMsgsBuffer`, and never used to fulfill normal `READ_MSGS_REQ`.
 

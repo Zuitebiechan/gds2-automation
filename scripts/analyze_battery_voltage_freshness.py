@@ -157,6 +157,16 @@ def _summarize_change_window(
         if event.get("event_type") == "proxy.request.forwarded_to_tunnel"
         and str(event.get("reason") or "") == "write_collect_transaction"
     )
+    active_replay_armed_count = sum(
+        1
+        for event in events
+        if event.get("event_type") == "proxy.request.active_replay_armed"
+    )
+    active_replay_served_count = sum(
+        1
+        for event in events
+        if event.get("event_type") == "proxy.request.active_replay_served"
+    )
     forwarded_to_tunnel_count = sum(
         1
         for event in events
@@ -167,6 +177,8 @@ def _summarize_change_window(
         "event_count": len(events),
         "network_ms": _latency_block(network_values),
         "write_collect_transaction_count": write_collect_transaction_count,
+        "active_replay_armed_count": active_replay_armed_count,
+        "active_replay_served_count": active_replay_served_count,
         "forwarded_to_tunnel_count": forwarded_to_tunnel_count,
         "cache_decision_counts": cache_counts,
     }
@@ -295,8 +307,8 @@ def generate_markdown_report(payload: dict[str, Any]) -> str:
                 f"- Data category: `{(session.get('page_context') or {}).get('data_category')}`",
                 f"- Significant battery changes: `{len(session.get('battery_voltage_changes') or [])}`",
                 "",
-                "| TS | Prev V | Curr V | Delta V | Lag ms | RTT p95 ms | Write-collect txns |",
-                "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+                "| TS | Prev V | Curr V | Delta V | Lag ms | RTT p95 ms | Write-collect txns | Replay armed | Replay served | Forwarded |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
             ]
         )
         for change in session.get("battery_voltage_changes") or []:
@@ -304,7 +316,10 @@ def generate_markdown_report(payload: dict[str, Any]) -> str:
                 f"| {change.get('ts')} | {change.get('previous_value_number')} | {change.get('current_value_number')} | "
                 f"{change.get('delta_value_number')} | {change.get('collector_lag_ms')} | "
                 f"{(change.get('window') or {}).get('network_ms', {}).get('p95')} | "
-                f"{(change.get('window') or {}).get('write_collect_transaction_count')} |"
+                f"{(change.get('window') or {}).get('write_collect_transaction_count')} | "
+                f"{(change.get('window') or {}).get('active_replay_armed_count')} | "
+                f"{(change.get('window') or {}).get('active_replay_served_count')} | "
+                f"{(change.get('window') or {}).get('forwarded_to_tunnel_count')} |"
             )
         lines.append("")
     if not payload.get("sessions"):

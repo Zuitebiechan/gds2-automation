@@ -2228,6 +2228,8 @@ def test_handle_proxy_connection_active_replay_serves_write_read_from_shadow_sto
             ),
             channel_id=observed.signature.channel_id,
         )
+        poll_calls: list[str] = []
+        server._schedule_sweep_poll = lambda: poll_calls.append("poll")
 
         proxy_reader = _FakeReader(write_request, read_request)
         proxy_writer = _FakeWriter(peername=("127.0.0.1", 50003))
@@ -2257,6 +2259,7 @@ def test_handle_proxy_connection_active_replay_serves_write_read_from_shadow_sto
                 "data": b"\x00\x00\x05\xe8\xa9\x81\x1a\x00",
             }
         ])
+        assert poll_calls == ["poll", "poll"]
 
     asyncio.run(_run())
 

@@ -2577,6 +2577,7 @@ class ReverseProxyServer:
                             **request_fields,
                             **response_fields,
                         )
+                        self._schedule_sweep_poll()
                         continue
 
                 if msg_type == MsgType.WRITE_MSGS_REQ:
@@ -2630,6 +2631,7 @@ class ReverseProxyServer:
                             **request_fields,
                             **response_fields,
                         )
+                        self._schedule_sweep_poll()
                         continue
 
                 self._observe_sweep_write(

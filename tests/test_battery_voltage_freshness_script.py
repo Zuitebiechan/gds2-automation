@@ -101,6 +101,13 @@ def test_battery_voltage_freshness_script_reports_significant_changes(tmp_path: 
             reason="write_collect_transaction",
         ),
         _event(
+            "2026-04-22T00:00:10.150000Z",
+            "reverse_server",
+            "proxy.request.active_replay_armed",
+            session_id="session-fresh-1",
+            connection_epoch="epoch-fresh-1",
+        ),
+        _event(
             "2026-04-22T00:00:10.200000Z",
             "agent_data_collector",
             "agent.collector.focus_value_changed",
@@ -115,6 +122,13 @@ def test_battery_voltage_freshness_script_reports_significant_changes(tmp_path: 
             delta_value_number=-1.6,
             change_threshold_number=0.5,
             collector_lag_ms=55.0,
+        ),
+        _event(
+            "2026-04-22T00:00:10.300000Z",
+            "reverse_server",
+            "proxy.request.active_replay_served",
+            session_id="session-fresh-1",
+            connection_epoch="epoch-fresh-1",
         ),
         _event(
             "2026-04-22T00:00:10.500000Z",
@@ -184,5 +198,8 @@ def test_battery_voltage_freshness_script_reports_significant_changes(tmp_path: 
     assert change["delta_value_number"] == -1.6
     assert change["window"]["network_ms"]["p95"] == 40.0
     assert change["window"]["write_collect_transaction_count"] == 1
+    assert change["window"]["active_replay_armed_count"] == 1
+    assert change["window"]["active_replay_served_count"] == 1
+    assert change["window"]["forwarded_to_tunnel_count"] == 1
     assert change["window"]["cache_decision_counts"]["cache_hit"] == 1
     assert "# Battery Voltage Freshness Report" in report_path.read_text(encoding="utf-8")
