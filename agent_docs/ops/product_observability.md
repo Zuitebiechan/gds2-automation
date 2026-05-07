@@ -198,7 +198,7 @@ Current runtime behavior:
 - trace assembly treats `no-session` and `no-epoch` as missing selectors and falls back to the active snapshot or raw-event context before materializing a trace
 - runtime-triggered trace/incident materialization runs on a background queue; terminal session events and uploaded local artifacts must not block the API request path while large traces are assembled
 - transient upload/API failures leave pending manifests in place for the next uploader pass instead of crashing the tray background loop
-- the cloud-side agent collector emits `agent.collector.focus_value_changed` for primary focused value transitions such as `battery_voltage`, with previous/current values plus collector timing context for direct freshness analysis
+- the cloud-side agent collector emits `agent.collector.focus_value_changed` for primary focused value transitions such as `battery_voltage`, with previous/current values plus collector timing context for direct freshness analysis; noisy numeric signals may apply a key-specific significance threshold before a change event is emitted
 
 ## Current VCI Latency Analysis Handoff - 2026-05-06
 

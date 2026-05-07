@@ -533,6 +533,8 @@ def test_read_and_parse_emits_oem_voltage_aliases_as_battery_voltage(
     assert battery_change["source_parameter_module"] == "Engine Control Module"
     assert battery_change["previous_value_number"] == 12.4
     assert battery_change["current_value_number"] == 12.9
+    assert battery_change["delta_value_number"] == 0.5
+    assert battery_change["change_threshold_number"] == 0.5
 
 
 def test_battery_voltage_prefers_numeric_alias_over_state_value(
@@ -601,6 +603,96 @@ def test_battery_voltage_prefers_numeric_alias_over_state_value(
         focus["parameter_value_sources"]["battery_voltage"]
         == "Engine Controls Ignition Relay Feedback 2 Signal"
     )
+
+
+def test_battery_voltage_change_ignores_small_jitter_until_threshold_crossed(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("PRODUCT_LOG_CLOUD_ROOT", raising=False)
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+    ActiveSessionSnapshotStore().write(
+        {
+            "session_id": "session-collector-voltage-threshold",
+            "backend_name": "gds2",
+            "operation_kind": "live_data.start",
+            "selected_module": "Engine Control Module",
+            "selected_data_category": "Engine Data",
+            "current_page": "data_display",
+            "navigation_session_id": None,
+            "ai_session_id": None,
+            "live_data_active": True,
+            "connection_epoch": "epoch-collector-voltage-threshold",
+        }
+    )
+    json_path = tmp_path / "latest.json"
+    collector = AgentDataCollector(json_path=json_path)
+
+    payloads = [
+        ("1_710_000_300_100", 41, "11.8"),
+        ("1_710_000_300_200", 42, "11.9"),
+        ("1_710_000_300_300", 43, "12.0"),
+        ("1_710_000_300_400", 44, "12.4"),
+    ]
+    time_values = [
+        1_710_000_300.150,
+        1_710_000_300.250,
+        1_710_000_300.350,
+        1_710_000_300.450,
+    ]
+    time_state = {"index": 0}
+
+    def _mock_time() -> float:
+        index = time_state["index"]
+        if index < len(time_values) - 1:
+            time_state["index"] = index + 1
+        return time_values[min(index, len(time_values) - 1)]
+
+    monkeypatch.setattr(collector_module.time, "time", _mock_time)
+
+    for index, (timestamp, extraction_count, value) in enumerate(payloads, start=1):
+        _write_agent_payload(
+            json_path,
+            {
+                "timestamp": int(timestamp.replace("_", "")),
+                "extractionCount": extraction_count,
+                "extractionDurationMs": 5,
+                "pageContext": {"page": "data_display"},
+                "tables": [
+                    {
+                        "tableType": "data_display",
+                        "columns": ["Control Module", "Parameter Name", "Value", "Unit"],
+                        "rows": [
+                            {
+                                "Control Module": " Engine Control Module",
+                                "Parameter Name": " Engine Controls Ignition Relay Feedback 2 Signal",
+                                "Value": f"{value} ",
+                                "Unit": " V",
+                            },
+                        ],
+                    }
+                ],
+            },
+        )
+        next_mtime = json_path.stat().st_mtime + float(index)
+        os.utime(json_path, (next_mtime, next_mtime))
+        collector._read_and_parse()
+
+    change_events = [
+        event
+        for event in _read_cloud_events(tmp_path)
+        if event["event_type"] == "agent.collector.focus_value_changed"
+    ]
+    assert len(change_events) == 1
+    change = change_events[0]
+    assert change["focus_key"] == "battery_voltage"
+    assert change["previous_value"] == "11.8"
+    assert change["current_value"] == "12.4"
+    assert change["previous_value_number"] == 11.8
+    assert change["current_value_number"] == 12.4
+    assert change["delta_value_number"] == 0.6
+    assert change["change_threshold_number"] == 0.5
+
 
 
 def test_guard_event_signature_stringifies_non_json_values() -> None:

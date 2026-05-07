@@ -57,6 +57,9 @@ _FOCUS_PARAMETER_KEYS: tuple[str, ...] = (
     "accelerator_pedal_position",
     "battery_voltage",
 )
+_FOCUS_VALUE_CHANGE_NUMERIC_THRESHOLDS: dict[str, float] = {
+    "battery_voltage": 0.5,
+}
 
 
 def _guard_event_signature(payload: Any) -> str:
@@ -562,6 +565,7 @@ class AgentDataCollector:
         self._last_guard_event_signature: Optional[str] = None
         self._last_focus_parameter_values: Dict[str, str] = {}
         self._last_focus_primary_samples: Dict[str, Dict[str, Any]] = {}
+        self._last_focus_change_reference_samples: Dict[str, Dict[str, Any]] = {}
 
     def start(self):
         """Start polling the Agent JSON file."""
@@ -960,13 +964,31 @@ class AgentDataCollector:
         preferred_samples: dict[str, dict[str, Any]],
     ) -> None:
         for key, sample in preferred_samples.items():
-            previous_sample = self._last_focus_primary_samples.get(key)
+            previous_sample = self._last_focus_change_reference_samples.get(key)
             if previous_sample is None:
+                self._last_focus_change_reference_samples[key] = dict(sample)
                 continue
 
             previous_value = _clean_text(previous_sample.get("value"))
             current_value = _clean_text(sample.get("value"))
             if previous_value == current_value:
+                continue
+
+            previous_value_number = _numeric_value(previous_value)
+            current_value_number = _numeric_value(current_value)
+            delta_value_number: Optional[float] = None
+            if previous_value_number is not None and current_value_number is not None:
+                delta_value_number = round(
+                    current_value_number - previous_value_number,
+                    3,
+                )
+
+            threshold_number = _FOCUS_VALUE_CHANGE_NUMERIC_THRESHOLDS.get(key)
+            if (
+                threshold_number is not None
+                and delta_value_number is not None
+                and abs(delta_value_number) < threshold_number
+            ):
                 continue
 
             payload: dict[str, Any] = {
@@ -984,12 +1006,14 @@ class AgentDataCollector:
                 "collector_lag_ms": snapshot.collector_lag_ms,
                 "page_context": snapshot.page_context,
             }
-            previous_value_number = _numeric_value(previous_value)
-            current_value_number = _numeric_value(current_value)
             if previous_value_number is not None:
                 payload["previous_value_number"] = previous_value_number
             if current_value_number is not None:
                 payload["current_value_number"] = current_value_number
+            if delta_value_number is not None:
+                payload["delta_value_number"] = delta_value_number
+            if threshold_number is not None:
+                payload["change_threshold_number"] = threshold_number
 
             emit_collector_event(
                 "agent.collector.focus_value_changed",
@@ -997,6 +1021,7 @@ class AgentDataCollector:
                 reason="focus_value_changed",
                 **payload,
             )
+            self._last_focus_change_reference_samples[key] = dict(sample)
 
     def _detect_param_changes(self, new_params: List[dict]) -> List[dict]:
         """Detect parameter value changes."""
