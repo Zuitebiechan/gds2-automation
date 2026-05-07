@@ -2,14 +2,24 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from diagnostic_platform.observability import (
     LogContext,
     emit_event,
+    flush_product_log_writers,
+    get_cloud_observability_root,
     get_product_log_writer,
     read_active_session_snapshot,
 )
+
+logger = logging.getLogger(__name__)
+_SESSION_TERMINAL_EVENT_TYPES = {
+    "session.lifecycle.completed",
+    "session.lifecycle.aborted",
+    "session.lifecycle.failed",
+}
 
 
 def _safe_connection_epoch(runtime: Any | None, session_id: str | None, backend: Any | None) -> str | None:
@@ -95,7 +105,7 @@ def emit_session_runtime_event(
     connection_epoch: str | None = None,
     **extra: object,
 ) -> dict[str, Any]:
-    return emit_event(
+    payload = emit_event(
         get_product_log_writer("session_runtime"),
         component="session_runtime",
         event_type=event_type,
@@ -116,6 +126,25 @@ def emit_session_runtime_event(
         impact_scope=impact_scope,
         **extra,
     )
+    if event_type in _SESSION_TERMINAL_EVENT_TYPES:
+        try:
+            from diagnostic_platform.observability_artifacts import queue_session_artifact_materialization
+
+            queue_session_artifact_materialization(
+                cloud_root=get_cloud_observability_root(),
+                session_id=str(payload.get("session_id") or "").strip() or None,
+                connection_epoch=str(payload.get("connection_epoch") or "").strip() or None,
+                triggering_event_type=None,
+                flush_callback=flush_product_log_writers,
+            )
+        except Exception:
+            logger.debug(
+                "Failed to queue explicit terminal session trace refresh for event_type=%s session_id=%s",
+                event_type,
+                payload.get("session_id"),
+                exc_info=True,
+            )
+    return payload
 
 
 def emit_gds2_ui_event(

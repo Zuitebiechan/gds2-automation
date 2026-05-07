@@ -7,8 +7,9 @@ import threading
 import time
 import urllib.error
 from pathlib import Path
+from types import SimpleNamespace
 
-from diagnostic_platform.observability import JsonlWriter, emit_event
+from diagnostic_platform.observability import JsonlWriter, close_product_log_writers, emit_event
 import diagnostic_platform.observability_artifacts as observability_artifacts
 from diagnostic_platform.observability_artifacts import (
     cleanup_product_observability,
@@ -18,6 +19,7 @@ from diagnostic_platform.observability_artifacts import (
     materialize_session_artifacts,
     wait_for_observability_artifact_jobs,
 )
+from diagnostic_platform.session_observability import emit_session_runtime_event
 from vci_proxy.observability_outbox import ObservabilityOutbox
 
 
@@ -141,6 +143,58 @@ def test_emit_event_auto_materializes_aborted_trace_after_terminal_event(
     trace_payload = json.loads(trace_path.read_text(encoding="utf-8"))
     assert trace_payload["status"] == "aborted"
     assert trace_payload["timeline"][-1]["event_type"] == "session.lifecycle.aborted"
+
+
+def test_session_runtime_terminal_event_refreshes_trace_even_if_generic_hook_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
+    close_product_log_writers()
+
+    def _raise_materialize(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        observability_artifacts,
+        "maybe_materialize_cloud_artifacts",
+        _raise_materialize,
+    )
+    session = SimpleNamespace(
+        session_id="session-terminal-backup",
+        current_page="data_display",
+        selected_module="Engine Control Module",
+        selected_data_category="Engine Data",
+    )
+    try:
+        emit_session_runtime_event(
+            "session.lifecycle.started",
+            session=session,
+            connection_epoch="epoch-terminal-backup",
+            operation_kind="session.start",
+            reason="session_started",
+        )
+        emit_session_runtime_event(
+            "session.lifecycle.aborted",
+            session=session,
+            connection_epoch="epoch-terminal-backup",
+            operation_kind="session.abort",
+            status="error",
+            failure_code="aborted",
+            failure_domain="session_runtime",
+            reason="Aborted by user",
+        )
+        assert wait_for_observability_artifact_jobs(timeout_s=5.0)
+
+        trace_path = get_cloud_session_traces_dir(tmp_path / "ProgramData") / "trace-session-terminal-backup.json"
+        trace_payload = json.loads(trace_path.read_text(encoding="utf-8"))
+        assert trace_payload["status"] == "aborted"
+        assert [event["event_type"] for event in trace_payload["timeline"]] == [
+            "session.lifecycle.started",
+            "session.lifecycle.aborted",
+        ]
+    finally:
+        close_product_log_writers()
 
 
 def test_emit_event_queues_materialization_without_blocking_request_thread(

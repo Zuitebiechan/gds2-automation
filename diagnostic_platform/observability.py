@@ -32,6 +32,7 @@ _JSON_DUMP_KWARGS = {"ensure_ascii": False, "separators": (",", ":")}
 _SENTINEL = object()
 _WRITER_REGISTRY: dict[tuple[str, str], "JsonlWriter"] = {}
 _WRITER_LOCK = threading.RLock()
+logger = logging.getLogger(__name__)
 
 
 def utc_now_iso(ts: float | None = None) -> str:
@@ -602,7 +603,12 @@ def emit_event(
                     flush_callback=getattr(writer, "flush", None),
                 )
             except Exception:
-                pass
+                logger.debug(
+                    "Failed to trigger observability artifact materialization for event_type=%s component=%s",
+                    event_type,
+                    component,
+                    exc_info=True,
+                )
     return payload
 
 
