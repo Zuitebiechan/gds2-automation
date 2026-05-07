@@ -102,9 +102,21 @@ def _atomic_write_text(path: Path, text: str) -> Path:
         )
         temp_path.write_text(text, encoding="utf-8")
         os.replace(temp_path, path)
+        _cleanup_atomic_temp_siblings(path, keep_path=None)
     except OSError:
         return path
     return path
+
+
+def _cleanup_atomic_temp_siblings(path: Path, *, keep_path: Path | None) -> None:
+    pattern = f"{path.name}.*.tmp"
+    for candidate in path.parent.glob(pattern):
+        if keep_path is not None and candidate == keep_path:
+            continue
+        try:
+            candidate.unlink(missing_ok=True)
+        except OSError:
+            continue
 
 
 def _sha256_hex(value: bytes) -> str:
@@ -707,6 +719,7 @@ class ActiveSessionSnapshotStore:
             self.path.unlink(missing_ok=True)
         except OSError:
             return
+        _cleanup_atomic_temp_siblings(self.path, keep_path=None)
 
 
 __all__ = [

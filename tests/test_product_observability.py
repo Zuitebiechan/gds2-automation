@@ -153,9 +153,42 @@ def test_active_session_snapshot_store_round_trips_and_recovers_from_corruption(
 
     assert read_active_session_snapshot() is None
 
+    stale_temp = snapshot_path.with_name(f"{snapshot_path.name}.stale.tmp")
+    stale_temp.write_text("{}", encoding="utf-8")
     store.clear()
     assert not snapshot_path.exists()
+    assert not stale_temp.exists()
     flush_product_log_writers()
+
+
+def test_active_session_snapshot_store_write_cleans_stale_temp_siblings(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+    store = ActiveSessionSnapshotStore()
+    snapshot_path = get_active_session_snapshot_path()
+    stale_temp = snapshot_path.with_name(f"{snapshot_path.name}.old.tmp")
+    stale_temp.parent.mkdir(parents=True, exist_ok=True)
+    stale_temp.write_text("{}", encoding="utf-8")
+
+    store.write(
+        {
+            "session_id": "session-clean-1",
+            "backend_name": "gds2",
+            "operation_kind": "live_data.start",
+            "selected_module": "Engine Control Module",
+            "selected_data_category": "Engine Data",
+            "current_page": "data_display",
+            "navigation_session_id": None,
+            "ai_session_id": None,
+            "live_data_active": True,
+            "connection_epoch": "epoch-clean-1",
+        }
+    )
+
+    assert snapshot_path.exists()
+    assert not stale_temp.exists()
 
 
 def test_get_cloud_observability_root_prefers_product_log_cloud_root_env(
