@@ -5,7 +5,7 @@
 | Field | Content |
 | --- | --- |
 | Type | Optimization plan / implementation guide |
-| Status | Phases 1-4 plus first Phase 5 observe/inventory implemented; guarded `shadow_local` transport exists but active replay remains disabled |
+| Status | Phases 1-4 plus first Phase 5 observe/inventory implemented; guarded `shadow_local` transport exists and `active_replay` now has an explicit narrow experimental path |
 | Owner scope | Proxy J2534 reverse tunnel latency, especially cloud GDS2 live data freshness |
 | Primary code paths | `vci_proxy/reverse_server.py`, `vci_proxy/reverse_client.py`, `vci_proxy/protocol.py`, `vci_proxy/cache_read_msgs.py` |
 | Related docs | `agent_docs/ops/vci_proxy_and_tunnel.md`, `agent_docs/reports/network_ms.md`, `agent_docs/ops/product_observability.md`, `agent_docs/ops/proxy_j2534_local_sweep_scheduler.md` |
@@ -60,8 +60,10 @@ Interpretation:
 - the transaction/read-ahead path appears stable under a healthy tunnel;
 - the current implementation still cannot remove the remaining
   `N requests x tunnel RTT` cost for a full Data Display page because
-  `active_replay` is not implemented and shadow results are never served to
-  GDS2.
+  `active_replay` is now available only as an explicit experimental mode. The
+  current implementation can serve exact learned signatures from a fresh local
+  shadow result, but it still falls back to the normal tunnel path whenever a
+  replay precondition is missing.
 
 ## Background
 

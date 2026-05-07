@@ -316,6 +316,29 @@ class SweepPatternLearner:
             return learned[: max(0, int(limit))]
         return learned
 
+    def replay_candidate_for_write(
+        self,
+        body: bytes,
+        *,
+        connection_epoch: str | None,
+        read_num_msgs: int = 1,
+        read_timeout_ms: int = 0,
+    ) -> SweepObservedRequest | None:
+        classification = self._classifier.classify_write_request_body(
+            body,
+            connection_epoch=connection_epoch,
+            read_num_msgs=read_num_msgs,
+            read_timeout_ms=read_timeout_ms,
+        )
+        if not classification.accepted or classification.observed is None:
+            return None
+        state = self._candidates.get(
+            classification.observed.signature.signature_digest
+        )
+        if state is None or not state.learned:
+            return None
+        return classification.observed
+
     def reset_channel(self, channel_id: int) -> None:
         self._pending_by_channel.pop(channel_id, None)
         self._candidates = {

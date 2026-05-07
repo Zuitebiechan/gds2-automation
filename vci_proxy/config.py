@@ -208,12 +208,19 @@ class LocalSweepConfig:
     def shadow_local(self) -> bool:
         return self.enabled and self.mode == "shadow_local"
 
+    @property
+    def active_replay(self) -> bool:
+        return self.enabled and self.mode == "active_replay"
+
+    @property
+    def shadow_transport_enabled(self) -> bool:
+        return self.enabled and self.mode in {"shadow_local", "active_replay"}
+
 
 def _normalized_sweep_mode(value: object, default: str) -> str:
     mode = str(value or "").strip().lower()
-    if mode in {"observe_only", "shadow_local"}:
+    if mode in {"observe_only", "shadow_local", "active_replay"}:
         return mode
-    # active_replay is intentionally not accepted in this stage.
     return default
 
 

@@ -153,22 +153,30 @@ class SweepInventorySignatureState:
         learned: bool,
     ) -> dict[str, object]:
         if not learned:
-            candidate = False
-            reason = "awaiting_min_cycles"
+            replay_candidate = False
+            replay_reason = "awaiting_min_cycles"
+            shadow_eligible = False
+            shadow_reason = "awaiting_min_cycles"
         elif (
             self.signature.identifier_kind == "gm_a9_packet"
             and not config.shadow_allow_gm_a9_packet
         ):
-            candidate = False
-            reason = "gm_a9_packet_shadow_disabled"
+            replay_candidate = True
+            replay_reason = "learned_safe_signature"
+            shadow_eligible = False
+            shadow_reason = "gm_a9_packet_shadow_disabled"
         else:
-            candidate = True
-            reason = "learned_safe_signature"
+            replay_candidate = True
+            replay_reason = "learned_safe_signature"
+            shadow_eligible = True
+            shadow_reason = "learned_safe_signature"
         return {
-            "sweep_inventory_shadow_eligible": candidate,
-            "sweep_inventory_replay_candidate": candidate,
+            "sweep_inventory_shadow_eligible": shadow_eligible,
+            "sweep_inventory_replay_candidate": replay_candidate,
             "sweep_inventory_active_replay_enabled": False,
-            "sweep_inventory_eligibility_reason": reason,
+            "sweep_inventory_eligibility_reason": replay_reason,
+            "sweep_inventory_shadow_eligibility_reason": shadow_reason,
+            "sweep_inventory_replay_eligibility_reason": replay_reason,
         }
 
     def fields(

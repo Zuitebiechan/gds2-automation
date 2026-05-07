@@ -128,7 +128,7 @@ def test_inventory_reports_coverage_and_projected_rtt_savings() -> None:
     }
 
 
-def test_inventory_marks_gm_a9_as_non_replay_candidate_by_default() -> None:
+def test_inventory_marks_gm_a9_as_replay_candidate_but_not_shadow_eligible_by_default() -> None:
     learner = SweepPatternLearner(
         LocalSweepConfig(
             enabled=True,
@@ -165,14 +165,25 @@ def test_inventory_marks_gm_a9_as_non_replay_candidate_by_default() -> None:
 
     assert signature_event.fields["sweep_identifier_kind"] == "gm_a9_packet"
     assert signature_event.fields["sweep_inventory_learned"] is True
-    assert signature_event.fields["sweep_inventory_replay_candidate"] is False
-    assert signature_event.fields["sweep_inventory_eligibility_reason"] == (
+    assert signature_event.fields["sweep_inventory_shadow_eligible"] is False
+    assert signature_event.fields["sweep_inventory_replay_candidate"] is True
+    assert signature_event.fields["sweep_inventory_shadow_eligibility_reason"] == (
         "gm_a9_packet_shadow_disabled"
     )
+    assert signature_event.fields["sweep_inventory_replay_eligibility_reason"] == (
+        "learned_safe_signature"
+    )
+    assert signature_event.fields["sweep_inventory_eligibility_reason"] == (
+        "learned_safe_signature"
+    )
     assert summary_event.fields["sweep_inventory_learned_signature_count"] == 1
-    assert summary_event.fields["sweep_inventory_replay_candidate_signature_count"] == 0
-    assert summary_event.fields["sweep_inventory_replay_candidate_coverage_pct"] == 0.0
+    assert summary_event.fields["sweep_inventory_replay_candidate_signature_count"] == 1
+    assert summary_event.fields["sweep_inventory_replay_candidate_request_count"] == 1
+    assert summary_event.fields["sweep_inventory_replay_candidate_coverage_pct"] == 100.0
     assert summary_event.fields["sweep_inventory_request_count_by_kind"] == {
+        "gm_a9_packet": 1
+    }
+    assert summary_event.fields["sweep_inventory_replay_candidate_request_count_by_kind"] == {
         "gm_a9_packet": 1
     }
 

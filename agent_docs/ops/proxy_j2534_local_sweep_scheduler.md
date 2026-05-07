@@ -5,7 +5,7 @@
 | Field | Content |
 | --- | --- |
 | Type | Long-term optimization design |
-| Status | Guarded `observe_only` implemented; `shadow_local` transport is available but GM `A9 81 xx` shadow execution remains disabled by default; `active_replay` remains disabled |
+| Status | Guarded `observe_only` implemented; `shadow_local` transport is available; `active_replay` is now an explicit experimental mode with a narrow exact-signature replay path |
 | Owner scope | Cloud GDS2 Data Display freshness over the Proxy J2534 tunnel |
 | Primary code paths | `vci_proxy/reverse_server.py`, `vci_proxy/reverse_client.py`, `vci_proxy/protocol.py`, `vci_proxy/j2534_worker.py` |
 | Related docs | `agent_docs/ops/proxy_j2534_latency_optimization.md`, `agent_docs/ops/vci_proxy_and_tunnel.md`, `agent_docs/ops/product_observability.md` |
@@ -31,10 +31,13 @@ Shadow data is comparison-only. It is stored in `SweepShadowStore`, compared aga
 
 Inventory data is also observability-only. `SweepInventoryTracker` records the
 allowlisted request signatures seen during the foreground GDS2 stream, their
-learned/replay-candidate status, counts by request kind, rejection reasons,
-write/read network p50/p95/max, and the observed write/pair RTT cost that could
-be removed by a future replay stage. It does not decode the meaning of GM data
-packets, does not serve responses, and does not enable `active_replay`.
+learned/replay-candidate status, shadow eligibility, counts by request kind,
+rejection reasons, write/read network p50/p95/max, and the observed write/pair
+RTT cost that could be removed by a future replay stage. GM `A9 81 xx`
+signatures can now count toward future replay coverage even while
+`shadow_local` execution for those signatures remains blocked by default. The
+tracker still does not decode the meaning of GM data packets, does not serve
+responses, and does not enable `active_replay`.
 
 The observe gate artifact for this stage is `.omx/plans/local-sweep-scheduler-observe-gate-signoff.md`.
 
@@ -283,7 +286,11 @@ enabled_mode
 - `observe_only`
 - `shadow_local`
 
-`active_replay` is intentionally rejected by configuration in this stage.
+`active_replay` is now accepted only as an explicit experimental mode. It uses
+the same local sweep transport as `shadow_local`, but DLL-facing replay is
+limited to exact learned signatures with a fresh shadow result already present.
+Fallback to the normal tunnel path remains the default when any replay
+precondition is missing.
 
 ### Sweep Result
 

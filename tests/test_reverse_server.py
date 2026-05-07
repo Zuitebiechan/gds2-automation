@@ -1986,6 +1986,84 @@ def test_shadow_plan_skips_gm_a9_by_default_but_keeps_observing(monkeypatch, tmp
     assert skipped[-1]["sweep_shadow_allow_gm_a9_packet"] is False
 
 
+def test_active_replay_mode_allows_gm_a9_shadow_plan_start(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+
+    async def _run() -> None:
+        server = ReverseProxyServer(
+            config=ProxyConfig.from_args(
+                local_sweep_enabled=True,
+                local_sweep_mode="active_replay",
+                local_sweep_min_cycles=1,
+                local_sweep_plan_delay_ms=0,
+            )
+        )
+        server._connection_epoch = "epoch-gm-a9-replay"
+        server._vci_sweep_shadow_supported = True
+        sent_plans: list[SweepPlanStartRequest] = []
+
+        async def _record_plan_start(plan: SweepPlanStartRequest) -> None:
+            sent_plans.append(plan)
+
+        server._send_sweep_plan_start = _record_plan_start
+
+        write_body = ProtocolEncoder.encode_write_msgs_req(
+            44,
+            [
+                {
+                    "protocol_id": 6,
+                    "rx_status": 0,
+                    "tx_flags": 0,
+                    "timestamp": 1,
+                    "data": b"\x00\x00\x07\xe0\xa9\x81\x1a",
+                }
+            ],
+            timeout=25,
+        )[HEADER_SIZE:]
+        read_body = ProtocolEncoder.encode_read_msgs_req(44, num_msgs=1, timeout=0)[
+            HEADER_SIZE:
+        ]
+        read_rsp_body = ProtocolEncoder.encode_read_msgs_rsp(
+            0,
+            [
+                {
+                    "protocol_id": 6,
+                    "rx_status": 0,
+                    "tx_flags": 0,
+                    "timestamp": 2,
+                    "data": b"\x00\x00\x05\xe8\xa9\x81\x1a\x00",
+                }
+            ],
+        )[HEADER_SIZE:]
+
+        server._observe_sweep_write(
+            MsgType.WRITE_MSGS_REQ,
+            write_body,
+            dll_seq=61,
+            msg_name="WRITE_MSGS_REQ",
+        )
+        server._observe_sweep_read_response(
+            MsgType.READ_MSGS_REQ,
+            read_body,
+            MsgType.READ_MSGS_RSP,
+            read_rsp_body,
+            dll_seq=62,
+            msg_name="READ_MSGS_REQ",
+        )
+        await asyncio.sleep(0)
+
+        assert sent_plans
+        assert server._sweep_active_plan is sent_plans[0]
+        assert sent_plans[0].requests
+
+    asyncio.run(_run())
+
+    records = _read_product_log_events(tmp_path)
+    event_types = [record["event_type"] for record in records]
+    assert "sweep.plan.started" in event_types
+    assert "sweep.plan.skipped" not in event_types
+
+
 def test_shadow_missing_before_plan_is_logged_as_not_ready(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
     server = ReverseProxyServer(
@@ -2064,6 +2142,128 @@ def test_try_serve_cached_never_uses_shadow_store() -> None:
 
     assert cached is None
     assert reason is None
+
+
+def test_handle_proxy_connection_active_replay_serves_write_read_from_shadow_store(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    async def _run() -> None:
+        monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+        server = ReverseProxyServer(
+            config=ProxyConfig.from_args(
+                local_sweep_enabled=True,
+                local_sweep_mode="active_replay",
+                local_sweep_min_cycles=1,
+            )
+        )
+        server.vci_connected.set()
+        server.vci_writer = _FakeWriter(peername=("10.0.0.9", 9000))
+        server._connection_epoch = "epoch-replay"
+
+        write_request = ProtocolEncoder.encode_write_msgs_req(
+            44,
+            [
+                {
+                    "protocol_id": 6,
+                    "rx_status": 0,
+                    "tx_flags": 0,
+                    "timestamp": 1,
+                    "data": b"\x00\x00\x07\xe0\xa9\x81\x1a",
+                }
+            ],
+            timeout=25,
+            sequence=31,
+        )
+        write_body = write_request[HEADER_SIZE:]
+        read_request = ProtocolEncoder.encode_read_msgs_req(
+            44,
+            num_msgs=1,
+            timeout=0,
+            sequence=32,
+        )
+        read_body = read_request[HEADER_SIZE:]
+        read_rsp_body = ProtocolEncoder.encode_read_msgs_rsp(
+            0,
+            [
+                {
+                    "protocol_id": 6,
+                    "rx_status": 0,
+                    "tx_flags": 0,
+                    "timestamp": 2,
+                    "data": b"\x00\x00\x05\xe8\xa9\x81\x1a\x00",
+                }
+            ],
+        )[HEADER_SIZE:]
+
+        server._observe_sweep_write(
+            MsgType.WRITE_MSGS_REQ,
+            write_body,
+            dll_seq=10,
+            msg_name="WRITE_MSGS_REQ",
+        )
+        server._observe_sweep_read_response(
+            MsgType.READ_MSGS_REQ,
+            read_body,
+            MsgType.READ_MSGS_RSP,
+            read_rsp_body,
+            dll_seq=11,
+            msg_name="READ_MSGS_REQ",
+        )
+        observed = server._sweep_learner.replay_candidate_for_write(
+            write_body,
+            connection_epoch="epoch-replay",
+            read_num_msgs=1,
+            read_timeout_ms=server.config.local_sweep.read_timeout_ms,
+        )
+        assert observed is not None
+        server._sweep_shadow_store.record_result(
+            SweepResultRecord(
+                plan_id="plan-1",
+                signature_digest=observed.signature.signature_digest,
+                return_code=0,
+                read_rsp_body=read_rsp_body,
+                started_at_s=time.time(),
+                finished_at_s=time.time(),
+            ),
+            channel_id=observed.signature.channel_id,
+        )
+
+        proxy_reader = _FakeReader(write_request, read_request)
+        proxy_writer = _FakeWriter(peername=("127.0.0.1", 50003))
+
+        await server._handle_proxy_connection(proxy_reader, proxy_writer)
+
+        assert server.vci_writer.writes == []
+        response_types = [
+            Message.decode_header(chunk[:HEADER_SIZE])[2]
+            for chunk in proxy_writer.writes
+        ]
+        assert response_types == [
+            MsgType.WRITE_MSGS_RSP,
+            MsgType.READ_MSGS_RSP,
+        ]
+        assert ProtocolDecoder.decode_write_msgs_rsp(
+            proxy_writer.writes[0][HEADER_SIZE:]
+        ) == (0, 1)
+        assert ProtocolDecoder.decode_read_msgs_rsp(
+            proxy_writer.writes[1][HEADER_SIZE:]
+        ) == (0, [
+            {
+                "protocol_id": 6,
+                "rx_status": 0,
+                "tx_flags": 0,
+                "timestamp": 2,
+                "data": b"\x00\x00\x05\xe8\xa9\x81\x1a\x00",
+            }
+        ])
+
+    asyncio.run(_run())
+
+    records = _read_product_log_events(tmp_path)
+    event_types = [record["event_type"] for record in records]
+    assert "proxy.request.active_replay_armed" in event_types
+    assert "proxy.request.active_replay_served" in event_types
 
 
 def test_invalidate_caches_cancels_shadow_plan_and_clears_shadow_store() -> None:

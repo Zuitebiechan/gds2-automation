@@ -298,7 +298,7 @@ class ReverseProxyClient:
             capabilities.append("read_ahead=1")
             if read_ahead.transaction_enabled:
                 capabilities.append("write_collect=1")
-        if self.config.local_sweep.shadow_local:
+        if self.config.local_sweep.shadow_transport_enabled:
             capabilities.append("sweep_shadow=1")
         return ";".join(capabilities)
 
@@ -1407,7 +1407,7 @@ class ReverseProxyClient:
         request_context: LogContext | None = None,
     ) -> bytes:
         request = decode_sweep_plan_start_req(body)
-        if not (self.config.local_sweep.shadow_local and self._server_sweep_shadow_enabled):
+        if not (self.config.local_sweep.shadow_transport_enabled and self._server_sweep_shadow_enabled):
             return encode_sweep_plan_start_rsp(
                 SweepPlanResponse(
                     success=False,
@@ -1640,7 +1640,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--local-sweep-mode",
-        choices=["observe_only", "shadow_local"],
+        choices=["observe_only", "shadow_local", "active_replay"],
         default=None,
         help="Local sweep mode (default: observe_only or VCI_PROXY_LOCAL_SWEEP_MODE)",
     )

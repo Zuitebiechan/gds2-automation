@@ -247,7 +247,7 @@ def test_proxy_config_enforces_local_sweep_shadow_interval_floor() -> None:
     )
 
 
-def test_proxy_config_rejects_active_replay_mode_in_this_stage() -> None:
+def test_proxy_config_accepts_active_replay_mode() -> None:
     config = ProxyConfig.from_args(
         environ={
             "VCI_PROXY_LOCAL_SWEEP": "1",
@@ -255,7 +255,7 @@ def test_proxy_config_rejects_active_replay_mode_in_this_stage() -> None:
         }
     )
 
-    assert config.local_sweep == LocalSweepConfig(enabled=True, mode="observe_only")
+    assert config.local_sweep == LocalSweepConfig(enabled=True, mode="active_replay")
 
 
 def test_proxy_config_defaults_are_enabled_and_frozen() -> None:

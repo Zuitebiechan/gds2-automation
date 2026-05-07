@@ -53,7 +53,7 @@ class LocalSweepExecutor:
         return self._active_plan.plan_id if self._active_plan is not None else None
 
     def start(self, plan: SweepPlanStartRequest) -> tuple[bool, str]:
-        if not self._config.shadow_local:
+        if not self._config.shadow_transport_enabled:
             return False, "local_sweep_shadow_disabled"
         if not plan.requests:
             return False, "empty_plan"

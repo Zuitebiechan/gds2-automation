@@ -19,6 +19,7 @@ import ssl
 import signal
 import os
 import hashlib
+from dataclasses import dataclass
 from typing import Optional
 from pathlib import Path
 
@@ -58,6 +59,7 @@ from .sweep_protocol import (
     SweepPlanStartRequest,
     SweepPlanStopRequest,
     SweepRequestSpec,
+    SweepResultRecord,
     decode_sweep_drain_results_rsp,
     decode_sweep_plan_start_rsp,
     encode_sweep_drain_results_req,
@@ -182,6 +184,12 @@ async def _read_frame_body(
         ) from exc
 
 
+@dataclass(frozen=True)
+class _ActiveReplayPending:
+    observed: SweepObservedRequest
+    shadow_result: SweepResultRecord
+
+
 class ReverseProxyServer:
     """反向代理服务器 - 接受 VCI Proxy 的连接"""
 
@@ -248,6 +256,7 @@ class ReverseProxyServer:
         self._sweep_mismatch_count = 0
         self._sweep_error_count = 0
         self._sweep_plan_skip_logged: set[tuple[str | None, int, str]] = set()
+        self._active_replay_pending_by_channel: dict[int, _ActiveReplayPending] = {}
 
     def _current_observability_context(
         self,
@@ -445,13 +454,73 @@ class ReverseProxyServer:
         )
         self._emit_sweep_learner_events(events, dll_seq=dll_seq, msg_name=msg_name)
 
+    def _active_replay_result_ready(
+        self,
+        observed: SweepObservedRequest,
+    ) -> SweepResultRecord | None:
+        if not self.config.local_sweep.active_replay:
+            return None
+        signature_digest = observed.signature.signature_digest
+        shadow_result = self._sweep_shadow_store.latest_for(signature_digest)
+        if shadow_result is None:
+            return None
+        if shadow_result.error_name:
+            return None
+        if shadow_result.age_ms > self.config.local_sweep.max_result_age_ms:
+            return None
+        return shadow_result
+
+    def _candidate_for_active_replay(
+        self,
+        body: bytes,
+    ) -> SweepObservedRequest | None:
+        if not self.config.local_sweep.active_replay:
+            return None
+        return self._sweep_learner.replay_candidate_for_write(
+            body,
+            connection_epoch=self._connection_epoch,
+            read_num_msgs=1,
+            read_timeout_ms=self.config.local_sweep.read_timeout_ms,
+        )
+
+    def _try_prepare_active_replay_write(
+        self,
+        body: bytes,
+    ) -> _ActiveReplayPending | None:
+        observed = self._candidate_for_active_replay(body)
+        if observed is None:
+            return None
+        shadow_result = self._active_replay_result_ready(observed)
+        if shadow_result is None:
+            return None
+        return _ActiveReplayPending(observed=observed, shadow_result=shadow_result)
+
+    def _try_consume_active_replay_read(
+        self,
+        body: bytes,
+    ) -> _ActiveReplayPending | None:
+        if not self.config.local_sweep.active_replay:
+            return None
+        try:
+            channel_id, _num_msgs, _timeout = ProtocolDecoder.decode_read_msgs_req(body)
+        except Exception:
+            return None
+        pending = self._active_replay_pending_by_channel.get(channel_id)
+        if pending is None:
+            return None
+        if not self._active_replay_result_ready(pending.observed):
+            self._active_replay_pending_by_channel.pop(channel_id, None)
+            return None
+        self._active_replay_pending_by_channel.pop(channel_id, None)
+        return pending
+
     def _shadow_plan_request_allowed(self, observed: SweepObservedRequest) -> bool:
         signature = observed.signature
         if (
             signature.identifier_kind == "gm_a9_packet"
             and not self.config.local_sweep.shadow_allow_gm_a9_packet
         ):
-            return False
+            return self.config.local_sweep.active_replay
         return True
 
     def _learned_for_shadow_plan(
@@ -562,7 +631,7 @@ class ReverseProxyServer:
         self._schedule_sweep_task(self._send_sweep_plan_start(plan))
 
     def _maybe_start_shadow_plan(self, observed: SweepObservedRequest) -> None:
-        if not self.config.local_sweep.shadow_local:
+        if not self.config.local_sweep.shadow_transport_enabled:
             return
         if not self._vci_sweep_shadow_supported:
             return
@@ -619,7 +688,7 @@ class ReverseProxyServer:
             await asyncio.sleep(delay_ms / 1000.0)
             if self._sweep_active_plan is not None:
                 return
-            if not (self.config.local_sweep.shadow_local and self._vci_sweep_shadow_supported):
+            if not (self.config.local_sweep.shadow_transport_enabled and self._vci_sweep_shadow_supported):
                 return
             if self._sweep_pending_plan_channel != channel_id:
                 return
@@ -801,7 +870,7 @@ class ReverseProxyServer:
         dll_seq: int,
         msg_name: str,
     ) -> None:
-        if not self.config.local_sweep.shadow_local:
+        if not self.config.local_sweep.shadow_transport_enabled:
             return
         signature_digest = observed.signature.signature_digest
         shadow_result = self._sweep_shadow_store.latest_for(signature_digest)
@@ -888,8 +957,10 @@ class ReverseProxyServer:
         if channel_id is not None:
             self._sweep_shadow_store.clear_channel(channel_id)
             self._sweep_learner.reset_channel(channel_id)
+            self._active_replay_pending_by_channel.pop(channel_id, None)
         else:
             self._sweep_shadow_store.clear()
+            self._active_replay_pending_by_channel.clear()
         if plan is None:
             return
         if channel_id is not None and plan.channel_id != channel_id:
@@ -1210,7 +1281,7 @@ class ReverseProxyServer:
             capabilities.append("read_ahead=1")
             if self.config.read_ahead.transaction_enabled:
                 capabilities.append("write_collect=1")
-        if self.config.local_sweep.shadow_local:
+        if self.config.local_sweep.shadow_transport_enabled:
             capabilities.append("sweep_shadow=1")
         if connection_epoch:
             capabilities.append(f"connection_epoch={connection_epoch}")
@@ -1936,6 +2007,7 @@ class ReverseProxyServer:
         if msg_type == MsgType.DISCONNECT_REQ:
             channel_id = ProtocolDecoder.decode_disconnect_req(body)
             self._cancel_sweep_plan("disconnect_req", channel_id=channel_id)
+            self._active_replay_pending_by_channel.pop(channel_id, None)
             self._read_cache.invalidate_channel(channel_id)
             self._filter_cache.invalidate_channel(channel_id)
             self._ioctl_cache.invalidate_channel(channel_id)
@@ -1945,6 +2017,7 @@ class ReverseProxyServer:
             self._last_read_payload_by_channel.pop(channel_id, None)
         elif msg_type == MsgType.CLOSE_REQ:
             self._cancel_sweep_plan("close_req")
+            self._active_replay_pending_by_channel.clear()
             self._read_cache.clear()
             self._filter_cache.clear()
             self._ioctl_cache.invalidate()
@@ -1962,12 +2035,14 @@ class ReverseProxyServer:
                 ProtocolDecoder.decode_start_filter_req(body)
             )
             self._cancel_sweep_plan("start_filter_req", channel_id=channel_id)
+            self._active_replay_pending_by_channel.pop(channel_id, None)
             self._read_cache.mark_channel_active(channel_id, invalidate_empty=True)
             self._prefetch_read_msgs.clear_channel(channel_id)
             self._last_read_payload_by_channel.pop(channel_id, None)
         elif msg_type == MsgType.STOP_FILTER_REQ:
             channel_id, filter_id = ProtocolDecoder.decode_stop_filter_req(body)
             self._cancel_sweep_plan("stop_filter_req", channel_id=channel_id)
+            self._active_replay_pending_by_channel.pop(channel_id, None)
             self._read_cache.mark_channel_active(channel_id, invalidate_empty=True)
             self._prefetch_read_msgs.clear_channel(channel_id)
             self._last_read_payload_by_channel.pop(channel_id, None)
@@ -1976,6 +2051,7 @@ class ReverseProxyServer:
             channel_id, ioctl_id, _input = ProtocolDecoder.decode_ioctl_req(body)
             if not self._ioctl_cache.is_cacheable(ioctl_id):
                 self._cancel_sweep_plan("mutating_or_non_cacheable_ioctl", channel_id=channel_id)
+                self._active_replay_pending_by_channel.pop(channel_id, None)
                 self._read_cache.mark_channel_active(channel_id, invalidate_empty=True)
                 self._prefetch_read_msgs.clear_channel(channel_id)
                 self._last_read_payload_by_channel.pop(channel_id, None)
@@ -2448,6 +2524,114 @@ class ReverseProxyServer:
                     msg_name=msg_name,
                     request_fields=request_fields,
                 )
+
+                if msg_type == MsgType.READ_MSGS_REQ:
+                    replay_pending = self._try_consume_active_replay_read(body)
+                    if replay_pending is not None:
+                        replay_response = Message(
+                            MsgType.READ_MSGS_RSP,
+                            sequence,
+                            replay_pending.shadow_result.read_rsp_body,
+                        ).encode()
+                        resp_type, resp_body = decode_benchmark_response(replay_response)
+                        response_fields = self._response_observability_fields(
+                            resp_type,
+                            resp_body,
+                        )
+                        self._augment_read_payload_delta_fields(
+                            request_fields,
+                            response_fields,
+                        )
+                        self._record_benchmark_event(
+                            started_at_s=started_at_s,
+                            duration_ms=0.0,
+                            msg_type=msg_type,
+                            req_body=body,
+                            resp_type=resp_type,
+                            resp_body=resp_body,
+                            cache_hit=False,
+                            status="success",
+                        )
+                        self._emit_proxy_request_event(
+                            "proxy.request.active_replay_served",
+                            dll_seq=sequence,
+                            msg_name=msg_name,
+                            reason="active_replay_read_served",
+                            replay_signature_digest=(
+                                replay_pending.observed.signature.signature_digest
+                            ),
+                            replay_shadow_age_ms=round(
+                                replay_pending.shadow_result.age_ms,
+                                3,
+                            ),
+                            **request_fields,
+                            **response_fields,
+                        )
+                        writer.write(replay_response)
+                        await writer.drain()
+                        self._emit_proxy_request_event(
+                            "proxy.request.replied_to_dll",
+                            dll_seq=sequence,
+                            msg_name=msg_name,
+                            reason="active_replay_read_served",
+                            **request_fields,
+                            **response_fields,
+                        )
+                        continue
+
+                if msg_type == MsgType.WRITE_MSGS_REQ:
+                    replay_pending = self._try_prepare_active_replay_write(body)
+                    if replay_pending is not None:
+                        channel_id = replay_pending.observed.signature.channel_id
+                        self._active_replay_pending_by_channel[channel_id] = replay_pending
+                        self._invalidate_caches(msg_type, body, sequence)
+                        replay_response = ProtocolEncoder.encode_write_msgs_rsp(
+                            0,
+                            1,
+                            sequence,
+                        )
+                        resp_type, resp_body = decode_benchmark_response(replay_response)
+                        response_fields = self._response_observability_fields(
+                            resp_type,
+                            resp_body,
+                        )
+                        self._record_benchmark_event(
+                            started_at_s=started_at_s,
+                            duration_ms=0.0,
+                            msg_type=msg_type,
+                            req_body=body,
+                            resp_type=resp_type,
+                            resp_body=resp_body,
+                            cache_hit=False,
+                            status="success",
+                        )
+                        self._emit_proxy_request_event(
+                            "proxy.request.active_replay_armed",
+                            dll_seq=sequence,
+                            msg_name=msg_name,
+                            reason="active_replay_write_ack",
+                            replay_signature_digest=(
+                                replay_pending.observed.signature.signature_digest
+                            ),
+                            replay_shadow_age_ms=round(
+                                replay_pending.shadow_result.age_ms,
+                                3,
+                            ),
+                            **request_fields,
+                            **response_fields,
+                        )
+                        writer.write(replay_response)
+                        await writer.drain()
+                        self._emit_proxy_request_event(
+                            "proxy.request.replied_to_dll",
+                            dll_seq=sequence,
+                            msg_name=msg_name,
+                            reason="active_replay_write_ack",
+                            **request_fields,
+                            **response_fields,
+                        )
+                        continue
+
                 self._observe_sweep_write(
                     msg_type,
                     body,
@@ -2799,7 +2983,7 @@ def main():
                        help='Enable guarded local sweep observe/shadow mode (or VCI_PROXY_LOCAL_SWEEP=1)')
     parser.add_argument('--no-local-sweep', dest='local_sweep', action='store_false',
                        help='Disable local sweep even if VCI_PROXY_LOCAL_SWEEP is set')
-    parser.add_argument('--local-sweep-mode', choices=['observe_only', 'shadow_local'], default=None,
+    parser.add_argument('--local-sweep-mode', choices=['observe_only', 'shadow_local', 'active_replay'], default=None,
                        help='Local sweep mode (default: observe_only or VCI_PROXY_LOCAL_SWEEP_MODE)')
     parser.add_argument('--local-sweep-min-cycles', type=int, default=None,
                        help='Minimum complete observed cycles before sweep candidacy')
