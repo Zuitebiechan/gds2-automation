@@ -100,6 +100,16 @@ def _is_numeric_text(value: Any) -> bool:
     return True
 
 
+def _numeric_value(value: Any) -> Optional[float]:
+    text = _clean_text(value)
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
 def _focus_parameter_alias_rank(key: str, parameter_name: Any) -> int:
     normalized_name = _normalize_parameter_name(parameter_name)
     aliases = _FOCUS_PARAMETER_ALIASES.get(key, ())
@@ -551,6 +561,7 @@ class AgentDataCollector:
         self._fatal_error: Optional[str] = None
         self._last_guard_event_signature: Optional[str] = None
         self._last_focus_parameter_values: Dict[str, str] = {}
+        self._last_focus_primary_samples: Dict[str, Dict[str, Any]] = {}
 
     def start(self):
         """Start polling the Agent JSON file."""
@@ -895,7 +906,16 @@ class AgentDataCollector:
         if not samples:
             return
 
+        preferred_samples = self._preferred_focus_samples_by_key(samples)
+        self._emit_focus_value_changes(
+            snapshot,
+            preferred_samples=preferred_samples,
+        )
         self._last_focus_parameter_values = current_values
+        self._last_focus_primary_samples = {
+            key: dict(sample)
+            for key, sample in preferred_samples.items()
+        }
         emit_collector_event(
             "agent.collector.focus_parameters_sampled",
             operation_kind="agent_data_value_sample",
@@ -910,12 +930,20 @@ class AgentDataCollector:
             target_keys=list(_FOCUS_PARAMETER_KEYS),
             missing_target_keys=missing_keys,
             parameters=samples,
-            parameter_values=self._parameter_values_by_key(samples),
-            parameter_value_sources=self._parameter_value_sources(samples),
+            parameter_values={
+                key: str(sample["value"])
+                for key, sample in preferred_samples.items()
+            },
+            parameter_value_sources={
+                key: str(sample["name"])
+                for key, sample in preferred_samples.items()
+            },
         )
 
     @staticmethod
-    def _parameter_values_by_key(samples: list[dict[str, Any]]) -> dict[str, str]:
+    def _preferred_focus_samples_by_key(
+        samples: list[dict[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
         preferred_samples: dict[str, dict[str, Any]] = {}
         for sample in samples:
             key = str(sample["key"])
@@ -923,24 +951,52 @@ class AgentDataCollector:
                 preferred_samples.get(key),
                 sample,
             )
-        return {
-            key: str(sample["value"])
-            for key, sample in preferred_samples.items()
-        }
+        return preferred_samples
 
-    @staticmethod
-    def _parameter_value_sources(samples: list[dict[str, Any]]) -> dict[str, str]:
-        preferred_samples: dict[str, dict[str, Any]] = {}
-        for sample in samples:
-            key = str(sample["key"])
-            preferred_samples[key] = _prefer_primary_focus_sample(
-                preferred_samples.get(key),
-                sample,
+    def _emit_focus_value_changes(
+        self,
+        snapshot: AgentSnapshot,
+        *,
+        preferred_samples: dict[str, dict[str, Any]],
+    ) -> None:
+        for key, sample in preferred_samples.items():
+            previous_sample = self._last_focus_primary_samples.get(key)
+            if previous_sample is None:
+                continue
+
+            previous_value = _clean_text(previous_sample.get("value"))
+            current_value = _clean_text(sample.get("value"))
+            if previous_value == current_value:
+                continue
+
+            payload: dict[str, Any] = {
+                "focus_key": key,
+                "previous_value": previous_value,
+                "current_value": current_value,
+                "source_parameter_name": _clean_text(sample.get("name")),
+                "source_parameter_unit": _clean_text(sample.get("unit")),
+                "source_parameter_module": _clean_text(sample.get("module")),
+                "page": "data_display",
+                "extraction_count": snapshot.extraction_count,
+                "extraction_duration_ms": snapshot.extraction_duration_ms,
+                "agent_timestamp_s": snapshot.agent_timestamp_s,
+                "collected_at_s": snapshot.collected_at_s,
+                "collector_lag_ms": snapshot.collector_lag_ms,
+                "page_context": snapshot.page_context,
+            }
+            previous_value_number = _numeric_value(previous_value)
+            current_value_number = _numeric_value(current_value)
+            if previous_value_number is not None:
+                payload["previous_value_number"] = previous_value_number
+            if current_value_number is not None:
+                payload["current_value_number"] = current_value_number
+
+            emit_collector_event(
+                "agent.collector.focus_value_changed",
+                operation_kind="agent_data_value_change",
+                reason="focus_value_changed",
+                **payload,
             )
-        return {
-            key: str(sample["name"])
-            for key, sample in preferred_samples.items()
-        }
 
     def _detect_param_changes(self, new_params: List[dict]) -> List[dict]:
         """Detect parameter value changes."""

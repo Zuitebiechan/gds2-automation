@@ -261,6 +261,11 @@ def test_read_and_parse_emits_focus_parameter_samples(tmp_path, monkeypatch) -> 
             "changed": False,
         },
     ]
+    assert [
+        event
+        for event in events
+        if event["event_type"] == "agent.collector.focus_value_changed"
+    ] == []
 
     _write_agent_payload(
         json_path,
@@ -301,6 +306,11 @@ def test_read_and_parse_emits_focus_parameter_samples(tmp_path, monkeypatch) -> 
         for event in _read_cloud_events(tmp_path)
         if event["event_type"] == "agent.collector.focus_parameters_sampled"
     ]
+    change_events = [
+        event
+        for event in _read_cloud_events(tmp_path)
+        if event["event_type"] == "agent.collector.focus_value_changed"
+    ]
     assert focus_events[-1]["parameter_values"] == {
         "engine_speed": "1100",
         "accelerator_pedal_position": "38",
@@ -311,6 +321,28 @@ def test_read_and_parse_emits_focus_parameter_samples(tmp_path, monkeypatch) -> 
     }
     assert focus_events[-1]["parameters"][0]["changed"] is True
     assert focus_events[-1]["parameters"][0]["previous_value"] == "900"
+    assert {event["focus_key"] for event in change_events} == {
+        "engine_speed",
+        "accelerator_pedal_position",
+    }
+    engine_speed_change = next(
+        event for event in change_events if event["focus_key"] == "engine_speed"
+    )
+    assert engine_speed_change["previous_value"] == "900"
+    assert engine_speed_change["current_value"] == "1100"
+    assert engine_speed_change["source_parameter_name"] == "Engine Speed"
+    assert engine_speed_change["previous_value_number"] == 900.0
+    assert engine_speed_change["current_value_number"] == 1100.0
+    pedal_change = next(
+        event
+        for event in change_events
+        if event["focus_key"] == "accelerator_pedal_position"
+    )
+    assert pedal_change["previous_value"] == "12"
+    assert pedal_change["current_value"] == "38"
+    assert pedal_change["source_parameter_name"] == "Accelerator Pedal Position"
+    assert pedal_change["previous_value_number"] == 12.0
+    assert pedal_change["current_value_number"] == 38.0
 
 
 def test_read_and_parse_emits_oem_voltage_aliases_as_battery_voltage(
@@ -467,6 +499,11 @@ def test_read_and_parse_emits_oem_voltage_aliases_as_battery_voltage(
         for event in _read_cloud_events(tmp_path)
         if event["event_type"] == "agent.collector.focus_parameters_sampled"
     ]
+    change_events = [
+        event
+        for event in _read_cloud_events(tmp_path)
+        if event["event_type"] == "agent.collector.focus_value_changed"
+    ]
     assert focus_events[-1]["parameter_values"] == {
         "engine_speed": "950",
         "battery_voltage": "12.9",
@@ -479,6 +516,23 @@ def test_read_and_parse_emits_oem_voltage_aliases_as_battery_voltage(
     assert focus_events[-1]["parameters"][1]["previous_value"] == "12.4"
     assert focus_events[-1]["parameters"][2]["changed"] is True
     assert focus_events[-1]["parameters"][2]["previous_value"] == "12.4"
+    assert {event["focus_key"] for event in change_events} == {
+        "engine_speed",
+        "battery_voltage",
+    }
+    battery_change = next(
+        event for event in change_events if event["focus_key"] == "battery_voltage"
+    )
+    assert battery_change["previous_value"] == "12.4"
+    assert battery_change["current_value"] == "12.9"
+    assert (
+        battery_change["source_parameter_name"]
+        == "Engine Controls Ignition Relay Feedback 2 Signal"
+    )
+    assert battery_change["source_parameter_unit"] == "V"
+    assert battery_change["source_parameter_module"] == "Engine Control Module"
+    assert battery_change["previous_value_number"] == 12.4
+    assert battery_change["current_value_number"] == 12.9
 
 
 def test_battery_voltage_prefers_numeric_alias_over_state_value(
