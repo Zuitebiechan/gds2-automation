@@ -97,7 +97,9 @@ def _sanitize_component_for_filename(component: str) -> str:
 def _atomic_write_text(path: Path, text: str) -> Path:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        temp_path = path.with_name(
+            f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+        )
         temp_path.write_text(text, encoding="utf-8")
         os.replace(temp_path, path)
     except OSError:

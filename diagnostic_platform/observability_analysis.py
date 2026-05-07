@@ -659,18 +659,18 @@ def _domain_from_events(events: list[dict[str, Any]]) -> str:
         return "local_j2534_driver"
 
     if any(
-        str(event.get("event_type") or "") in {"page_guard_triggered", "recovery_failed", "agent.collector.guard_failed", "agent.collector.error"}
-        or event.get("failure_domain") == "gds2_ui_or_agent"
-        for event in events
-    ):
-        return "gds2_ui_or_agent"
-
-    if any(
         str(event.get("event_type") or "").startswith("session.network_gate.")
         or event.get("failure_domain") == "session_runtime"
         for event in events
     ):
         return "session_runtime"
+
+    if any(
+        str(event.get("event_type") or "") in {"page_guard_triggered", "recovery_failed", "agent.collector.guard_failed", "agent.collector.error"}
+        or event.get("failure_domain") == "gds2_ui_or_agent"
+        for event in events
+    ):
+        return "gds2_ui_or_agent"
 
     return "unknown"
 

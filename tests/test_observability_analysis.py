@@ -153,6 +153,36 @@ def test_observability_classifier_maps_session_runtime() -> None:
     assert classification["primary_failure_domain"] == "session_runtime"
 
 
+def test_observability_classifier_prefers_session_runtime_over_gds2_ui_events() -> None:
+    events = [
+        _event(
+            "2026-04-22T00:00:01Z",
+            "gds2_ui_or_agent",
+            "agent.collector.error",
+            session_id="session-mixed-1",
+            status="error",
+            failure_code="collector_error",
+            failure_domain="gds2_ui_or_agent",
+        ),
+        _event(
+            "2026-04-22T00:00:02Z",
+            "session_runtime",
+            "session.network_gate.blocked",
+            session_id="session-mixed-1",
+            connection_epoch="epoch-mixed-1",
+            status="error",
+            failure_code="network_gate_blocked",
+            failure_domain="session_runtime",
+        ),
+    ]
+
+    classification = classify_incident(events)
+
+    assert classification["primary_failure_domain"] == "session_runtime"
+    assert classification["first_abnormal_event"]["event_type"] == "agent.collector.error"
+    assert classification["triggering_event"]["event_type"] == "session.network_gate.blocked"
+
+
 def test_observability_classifier_maps_node_routing() -> None:
     events = [
         _event(

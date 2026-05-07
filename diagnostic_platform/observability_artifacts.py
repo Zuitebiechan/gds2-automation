@@ -10,6 +10,7 @@ import os
 import queue
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -108,7 +109,9 @@ def get_cloud_uploads_dir(programdata: str | Path | None = None) -> Path:
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    temp_path = path.with_name(
+        f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    )
     temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(temp_path, path)
     return path

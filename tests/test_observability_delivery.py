@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from diagnostic_platform.observability import JsonlWriter, close_product_log_writers, emit_event
+import diagnostic_platform.observability as observability_module
 import diagnostic_platform.observability_artifacts as observability_artifacts
 from diagnostic_platform.observability_artifacts import (
     cleanup_product_observability,
@@ -75,6 +76,46 @@ def test_materialize_session_artifacts_writes_trace_and_incident_bundle(tmp_path
     bundle_payload = json.loads(result["incident_paths"][0].read_text(encoding="utf-8"))
     assert trace_payload["trace_id"] == "trace:session-1"
     assert bundle_payload["primary_failure_domain"] == "cloud_proxy_tunnel"
+
+
+def test_atomic_write_json_uses_unique_temp_path_per_write(tmp_path: Path, monkeypatch) -> None:
+    target = tmp_path / "cloud" / "trace.json"
+    original_write_text = Path.write_text
+    temp_names: list[str] = []
+
+    def _recording_write_text(self: Path, *args, **kwargs):
+        if self.suffix == ".tmp":
+            temp_names.append(self.name)
+        return original_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", _recording_write_text)
+
+    observability_artifacts._atomic_write_json(target, {"value": 1})
+    observability_artifacts._atomic_write_json(target, {"value": 2})
+
+    assert len(temp_names) == 2
+    assert temp_names[0] != temp_names[1]
+    assert json.loads(target.read_text(encoding="utf-8")) == {"value": 2}
+
+
+def test_atomic_write_text_uses_unique_temp_path_per_write(tmp_path: Path, monkeypatch) -> None:
+    target = tmp_path / "cloud" / "snapshot.json"
+    original_write_text = Path.write_text
+    temp_names: list[str] = []
+
+    def _recording_write_text(self: Path, *args, **kwargs):
+        if self.suffix == ".tmp":
+            temp_names.append(self.name)
+        return original_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", _recording_write_text)
+
+    observability_module._atomic_write_text(target, '{"value": 1}')
+    observability_module._atomic_write_text(target, '{"value": 2}')
+
+    assert len(temp_names) == 2
+    assert temp_names[0] != temp_names[1]
+    assert json.loads(target.read_text(encoding="utf-8")) == {"value": 2}
 
 
 def test_emit_event_auto_materializes_cloud_trace_and_bundle(tmp_path: Path, monkeypatch) -> None:
