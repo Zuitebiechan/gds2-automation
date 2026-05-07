@@ -214,6 +214,65 @@ def test_ingest_uploaded_artifact_discovers_context_after_initial_empty_event(tm
     ]
 
 
+def test_ingest_uploaded_artifact_infers_session_id_from_cloud_epoch_context(
+    tmp_path: Path,
+) -> None:
+    cloud_root = tmp_path / "ProgramData" / "RPA_Diagnostic" / "observability" / "cloud"
+    raw_dir = cloud_root / "raw"
+    raw_dir.mkdir(parents=True)
+    (raw_dir / "cloud.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    _event(
+                        "2026-04-22T00:00:00Z",
+                        "session_runtime",
+                        "session.live_data.started",
+                        session_id="session-epoch-only",
+                        connection_epoch="epoch-ctx-1",
+                        page="data_display",
+                    )
+                ),
+                json.dumps(
+                    _event(
+                        "2026-04-22T00:00:01Z",
+                        "session_runtime",
+                        "session.lifecycle.aborted",
+                        session_id="session-epoch-only",
+                        connection_epoch="epoch-ctx-1",
+                        status="error",
+                        failure_code="aborted",
+                    )
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    payload_bytes = "\n".join(
+        [
+            json.dumps(_event("2026-04-22T00:00:02Z", "reverse_client", "proxy.request.client_received")),
+            json.dumps(_event("2026-04-22T00:00:03Z", "j2534_worker", "worker.rpc.received")),
+        ]
+    ).encode("utf-8")
+    payload = {
+        "client_instance_id": "client-epoch",
+        "connection_epoch": "epoch-ctx-1",
+        "artifact_id": "artifact-epoch",
+        "artifact_name": "local.jsonl",
+        "artifact_type": "raw",
+        "session_id": None,
+        "content_base64": base64.b64encode(payload_bytes).decode("ascii"),
+    }
+
+    result = ingest_uploaded_artifact(payload, cloud_root=cloud_root)
+
+    manifest_payload = json.loads(result["manifest_path"].read_text(encoding="utf-8"))
+    trace_payload = json.loads(result["trace_path"].read_text(encoding="utf-8"))
+    assert manifest_payload["session_id"] == "session-epoch-only"
+    assert trace_payload["session_id"] == "session-epoch-only"
+    assert trace_payload["connection_epoch"] == "epoch-ctx-1"
+
+
 def test_materialize_session_artifacts_ignores_placeholder_epoch(tmp_path: Path) -> None:
     cloud_root = tmp_path / "ProgramData" / "RPA_Diagnostic" / "observability" / "cloud"
     raw_dir = cloud_root / "raw"

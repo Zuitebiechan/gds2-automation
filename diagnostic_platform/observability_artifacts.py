@@ -278,6 +278,30 @@ def _discover_connection_context_from_artifact(path: Path) -> tuple[str | None, 
     return session_id, connection_epoch
 
 
+def _infer_session_id_from_cloud_context(
+    *,
+    cloud_root: Path,
+    connection_epoch: str | None,
+) -> str | None:
+    normalized_epoch = _normalize_context_value(
+        connection_epoch,
+        placeholder="no-epoch",
+    )
+    if normalized_epoch is None:
+        return None
+    try:
+        trace = assemble_session_trace(
+            cloud_root=cloud_root,
+            connection_epoch=normalized_epoch,
+        )
+    except Exception:
+        return None
+    return _normalize_context_value(
+        trace.get("session_id"),
+        placeholder="no-session",
+    )
+
+
 def ingest_uploaded_artifact(
     payload: dict[str, Any],
     *,
@@ -287,7 +311,11 @@ def ingest_uploaded_artifact(
 ) -> dict[str, Any]:
     cloud_root_path = _resolve_cloud_root(cloud_root)
     client_instance_id = str(payload.get("client_instance_id") or "").strip()
-    connection_epoch = _normalize_context_value(payload.get("connection_epoch"), placeholder="no-epoch") or "no-epoch"
+    payload_connection_epoch = _normalize_context_value(
+        payload.get("connection_epoch"),
+        placeholder="no-epoch",
+    )
+    connection_epoch = payload_connection_epoch or "no-epoch"
     artifact_id = str(payload.get("artifact_id") or "").strip()
     artifact_name = str(payload.get("artifact_name") or "").strip()
     content_base64 = str(payload.get("content_base64") or "").strip()
@@ -304,6 +332,24 @@ def ingest_uploaded_artifact(
         if len(artifact_bytes) > max(1, int(max_artifact_mb)) * 1024 * 1024:
             raise ValueError("artifact exceeds PRODUCT_LOG_MAX_ARTIFACT_MB")
         artifact_path.write_bytes(artifact_bytes)
+    session_id = _normalize_context_value(payload.get("session_id"), placeholder="no-session")
+    if session_id is None or payload_connection_epoch is None:
+        try:
+            discovered_session_id, discovered_connection_epoch = (
+                _discover_connection_context_from_artifact(artifact_path)
+            )
+        except Exception:
+            discovered_session_id, discovered_connection_epoch = None, None
+        session_id = session_id or discovered_session_id
+        if payload_connection_epoch is None and discovered_connection_epoch:
+            connection_epoch = discovered_connection_epoch
+    if session_id is None:
+        session_id = _infer_session_id_from_cloud_context(
+            cloud_root=cloud_root_path,
+            connection_epoch=connection_epoch,
+        )
+
+    if not deduped:
         _atomic_write_json(
             manifest_path,
             {
@@ -312,17 +358,10 @@ def ingest_uploaded_artifact(
                 "artifact_id": artifact_id,
                 "artifact_name": artifact_name,
                 "artifact_type": payload.get("artifact_type"),
-                "session_id": payload.get("session_id"),
+                "session_id": session_id,
                 "ingested_at": time.time(),
             },
         )
-
-    session_id = _normalize_context_value(payload.get("session_id"), placeholder="no-session")
-    if session_id is None:
-        try:
-            session_id, _ = _discover_connection_context_from_artifact(artifact_path)
-        except Exception:
-            session_id = None
 
     if materialize_async:
         materialization_queued = queue_session_artifact_materialization(
