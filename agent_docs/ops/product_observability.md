@@ -54,6 +54,13 @@ Materialized cloud artifacts:
 - `incidents\*.json`
 - `uploads\<client_instance_id>\<connection_epoch>\*`
 
+Session trace status semantics:
+
+- `completed`: session observed a `session.lifecycle.completed` terminal event
+- `aborted`: session observed a `session.lifecycle.aborted` terminal event
+- `failed`: session observed a `session.lifecycle.failed` terminal event
+- `partial`: no terminal session event has been assembled yet
+
 Local artifacts:
 
 - `raw\*.jsonl`
@@ -187,6 +194,7 @@ Current runtime behavior:
 - tray client startup runs best-effort cleanup for uploaded outbox entries
 - tray client runs a background uploader loop that stages local artifacts into the outbox and uploads them to the cloud ingest API
 - local outbox staging scans artifact contents for the first non-placeholder `session_id` and `connection_epoch`; leading lifecycle events without session context do not force the upload into `no-epoch`
+- cloud materialization may backfill uploaded artifact manifests with a resolved `session_id` when the artifact initially arrived with only `connection_epoch` and its event window overlaps the assembled session trace
 - trace assembly treats `no-session` and `no-epoch` as missing selectors and falls back to the active snapshot or raw-event context before materializing a trace
 - runtime-triggered trace/incident materialization runs on a background queue; terminal session events and uploaded local artifacts must not block the API request path while large traces are assembled
 - transient upload/API failures leave pending manifests in place for the next uploader pass instead of crashing the tray background loop

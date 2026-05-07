@@ -11,6 +11,7 @@ import queue
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -134,6 +135,18 @@ def materialize_session_artifacts(
         session_id=session_id,
         connection_epoch=connection_epoch,
     )
+    if _backfill_uploaded_manifest_session_ids(
+        cloud_root=cloud_root_path,
+        session_id=trace.get("session_id"),
+        connection_epoch=trace.get("connection_epoch"),
+        timeline=list(trace.get("timeline") or []),
+    ):
+        trace = assemble_session_trace(
+            cloud_root=cloud_root_path,
+            local_root=local_root,
+            session_id=session_id,
+            connection_epoch=connection_epoch,
+        )
     if trace.get("session_id") is None and trace.get("connection_epoch") is None:
         return {"trace": trace, "trace_path": None, "incident_paths": []}
 
@@ -300,6 +313,121 @@ def _infer_session_id_from_cloud_context(
         trace.get("session_id"),
         placeholder="no-session",
     )
+
+
+def _parse_event_ts(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _artifact_event_bounds(path: Path) -> tuple[datetime | None, datetime | None]:
+    if path.suffix == ".gz":
+        import gzip
+
+        handle = gzip.open(path, "rt", encoding="utf-8")
+    else:
+        handle = path.open("rt", encoding="utf-8")
+
+    with handle:
+        start: datetime | None = None
+        end: datetime | None = None
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                payload = json.loads(line)
+            except Exception:
+                continue
+            ts = _parse_event_ts(payload.get("ts"))
+            if ts is None:
+                continue
+            start = ts if start is None or ts < start else start
+            end = ts if end is None or ts > end else end
+    return start, end
+
+
+def _timeline_event_bounds(events: list[dict[str, Any]]) -> tuple[datetime | None, datetime | None]:
+    start: datetime | None = None
+    end: datetime | None = None
+    for event in events:
+        ts = _parse_event_ts(event.get("ts"))
+        if ts is None:
+            continue
+        start = ts if start is None or ts < start else start
+        end = ts if end is None or ts > end else end
+    return start, end
+
+
+def _backfill_uploaded_manifest_session_ids(
+    *,
+    cloud_root: Path,
+    session_id: str | None,
+    connection_epoch: str | None,
+    timeline: list[dict[str, Any]],
+) -> int:
+    normalized_session_id = _normalize_context_value(session_id, placeholder="no-session")
+    normalized_epoch = _normalize_context_value(connection_epoch, placeholder="no-epoch")
+    if normalized_session_id is None or normalized_epoch is None:
+        return 0
+
+    uploads_root = get_cloud_uploads_dir(cloud_root)
+    if not uploads_root.exists():
+        return 0
+
+    window_start, window_end = _timeline_event_bounds(timeline)
+    updated = 0
+    for client_dir in uploads_root.iterdir():
+        if not client_dir.is_dir():
+            continue
+        epoch_dir = client_dir / _safe_name(normalized_epoch)
+        if not epoch_dir.exists():
+            continue
+        for manifest_path in epoch_dir.glob("*.manifest.json"):
+            try:
+                payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            existing_session_id = _normalize_context_value(
+                payload.get("session_id"),
+                placeholder="no-session",
+            )
+            if existing_session_id is not None:
+                continue
+
+            artifact_id = str(payload.get("artifact_id") or "").strip()
+            artifact_name = str(payload.get("artifact_name") or "").strip()
+            if not artifact_id or not artifact_name:
+                continue
+            artifact_path = epoch_dir / f"{_safe_name(artifact_id)}-{_safe_name(artifact_name)}"
+            if not artifact_path.exists():
+                continue
+
+            try:
+                discovered_session_id, discovered_connection_epoch = _discover_connection_context_from_artifact(
+                    artifact_path
+                )
+            except Exception:
+                discovered_session_id, discovered_connection_epoch = None, None
+            if discovered_session_id is not None and discovered_session_id != normalized_session_id:
+                continue
+            if discovered_connection_epoch is not None and discovered_connection_epoch != normalized_epoch:
+                continue
+
+            artifact_start, artifact_end = _artifact_event_bounds(artifact_path)
+            if window_start is not None and artifact_end is not None and artifact_end < window_start:
+                continue
+            if window_end is not None and artifact_start is not None and artifact_start > window_end:
+                continue
+
+            payload["session_id"] = normalized_session_id
+            _atomic_write_json(manifest_path, payload)
+            updated += 1
+    return updated
 
 
 def ingest_uploaded_artifact(

@@ -316,12 +316,56 @@ def _iter_text_lines(path: Path) -> Iterable[tuple[int, str]]:
             yield line_number, line
 
 
+def _load_upload_manifest_context(path: Path) -> tuple[str | None, str | None]:
+    if "uploads" not in path.parts:
+        return None, None
+    artifact_id, separator, _remainder = path.name.partition("-")
+    if not separator:
+        return None, None
+    manifest_path = path.with_name(f"{artifact_id}.manifest.json")
+    if not manifest_path.exists():
+        return None, None
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None, None
+    return (
+        _normalize_selector(
+            payload.get("session_id"),
+            placeholders=PLACEHOLDER_SESSION_IDS,
+        ),
+        _normalize_selector(
+            payload.get("connection_epoch"),
+            placeholders=PLACEHOLDER_CONNECTION_EPOCHS,
+        ),
+    )
+
+
 def _iter_event_file(path: Path) -> Iterable[dict[str, Any]]:
     resolved_path = str(path.resolve())
+    manifest_session_id, manifest_connection_epoch = _load_upload_manifest_context(path)
     for line_number, line in _iter_text_lines(path):
         if not line.strip():
             continue
         payload = json.loads(line)
+        if (
+            manifest_session_id is not None
+            and _normalize_selector(
+                payload.get("session_id"),
+                placeholders=PLACEHOLDER_SESSION_IDS,
+            )
+            is None
+        ):
+            payload["session_id"] = manifest_session_id
+        if (
+            manifest_connection_epoch is not None
+            and _normalize_selector(
+                payload.get("connection_epoch"),
+                placeholders=PLACEHOLDER_CONNECTION_EPOCHS,
+            )
+            is None
+        ):
+            payload["connection_epoch"] = manifest_connection_epoch
         payload["source_artifact"] = resolved_path
         payload["source_line"] = line_number
         yield payload
@@ -513,15 +557,20 @@ def assemble_session_trace(
     )
     unique_sources = list(dict.fromkeys(source_artifacts))
 
+    if any(event.get("event_type") == "session.lifecycle.completed" for event in timeline):
+        trace_status = "completed"
+    elif any(event.get("event_type") == "session.lifecycle.failed" for event in timeline):
+        trace_status = "failed"
+    elif any(event.get("event_type") == "session.lifecycle.aborted" for event in timeline):
+        trace_status = "aborted"
+    else:
+        trace_status = "partial"
+
     return {
         "trace_id": f"trace:{resolved_session_id}" if resolved_session_id else None,
         "session_id": resolved_session_id,
         "connection_epoch": resolved_connection_epoch,
-        "status": (
-            "completed"
-            if any(event.get("event_type") == "session.lifecycle.completed" for event in timeline)
-            else "partial"
-        ),
+        "status": trace_status,
         "page_context": _derive_page_context(timeline, snapshot),
         "network_context": _derive_network_context(timeline),
         "route_context": _derive_route_context(timeline),

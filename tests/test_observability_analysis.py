@@ -265,6 +265,84 @@ def test_observability_analysis_treats_placeholder_epoch_as_missing(tmp_path: Pa
     assert trace["page_context"]["page"] == "data_display"
 
 
+def test_observability_analysis_uses_upload_manifest_context_for_epoch_only_local_events(
+    tmp_path: Path,
+) -> None:
+    cloud_root = tmp_path / "ProgramData" / "RPA_Diagnostic" / "observability" / "cloud"
+    raw_dir = cloud_root / "raw"
+    upload_dir = cloud_root / "uploads" / "client-ctx" / "epoch-ctx-2"
+    raw_dir.mkdir(parents=True)
+    upload_dir.mkdir(parents=True)
+
+    (raw_dir / "cloud.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    _event(
+                        "2026-04-22T00:00:05Z",
+                        "session_runtime",
+                        "session.lifecycle.started",
+                        session_id="session-ctx-2",
+                        connection_epoch="epoch-ctx-2",
+                    )
+                ),
+                json.dumps(
+                    _event(
+                        "2026-04-22T00:00:10Z",
+                        "session_runtime",
+                        "session.lifecycle.aborted",
+                        session_id="session-ctx-2",
+                        connection_epoch="epoch-ctx-2",
+                        status="error",
+                        failure_code="aborted",
+                    )
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (upload_dir / "artifactctx-local.jsonl").write_text(
+        json.dumps(
+            _event(
+                "2026-04-22T00:00:06Z",
+                "reverse_client",
+                "proxy.request.client_received",
+                session_id=None,
+                connection_epoch=None,
+                proxy_seq=602,
+            )
+        ),
+        encoding="utf-8",
+    )
+    (upload_dir / "artifactctx.manifest.json").write_text(
+        json.dumps(
+            {
+                "client_instance_id": "client-ctx",
+                "connection_epoch": "epoch-ctx-2",
+                "artifact_id": "artifactctx",
+                "artifact_name": "local.jsonl",
+                "artifact_type": "raw",
+                "session_id": "session-ctx-2",
+                "ingested_at": 1770000000.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    trace = assemble_session_trace(
+        cloud_root=cloud_root,
+        session_id="session-ctx-2",
+        connection_epoch="epoch-ctx-2",
+    )
+
+    assert trace["status"] == "aborted"
+    assert [event["event_type"] for event in trace["timeline"]] == [
+        "session.lifecycle.started",
+        "proxy.request.client_received",
+        "session.lifecycle.aborted",
+    ]
+
+
 def test_observability_session_trace_does_not_expand_to_other_sessions_in_same_epoch() -> None:
     events = [
         _event(

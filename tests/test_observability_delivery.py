@@ -107,6 +107,42 @@ def test_emit_event_auto_materializes_cloud_trace_and_bundle(tmp_path: Path, mon
     assert incident_files
 
 
+def test_emit_event_auto_materializes_aborted_trace_after_terminal_event(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
+    writer = JsonlWriter(
+        tmp_path / "ProgramData" / "RPA_Diagnostic" / "observability" / "cloud" / "raw" / "session.jsonl"
+    )
+
+    emit_event(
+        writer,
+        component="session_runtime",
+        event_type="session.lifecycle.started",
+        session_id="session-abort-1",
+        connection_epoch="epoch-abort-1",
+    )
+    emit_event(
+        writer,
+        component="session_runtime",
+        event_type="session.lifecycle.aborted",
+        session_id="session-abort-1",
+        connection_epoch="epoch-abort-1",
+        status="error",
+        failure_code="aborted",
+        failure_domain="session_runtime",
+        reason="Aborted by user",
+    )
+    writer.close()
+    assert wait_for_observability_artifact_jobs(timeout_s=5.0)
+
+    trace_path = get_cloud_session_traces_dir(tmp_path / "ProgramData") / "trace-session-abort-1.json"
+    trace_payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    assert trace_payload["status"] == "aborted"
+    assert trace_payload["timeline"][-1]["event_type"] == "session.lifecycle.aborted"
+
+
 def test_emit_event_queues_materialization_without_blocking_request_thread(
     tmp_path: Path,
     monkeypatch,
@@ -316,6 +352,91 @@ def test_materialize_session_artifacts_ignores_placeholder_epoch(tmp_path: Path)
     assert trace_payload["connection_epoch"] == "epoch-9"
     assert trace_payload["key_metrics"]["event_count"] == 1
     assert trace_payload["page_context"]["page"] == "data_display"
+
+
+def test_materialize_session_artifacts_backfills_epoch_only_upload_manifest_within_session_window(
+    tmp_path: Path,
+) -> None:
+    cloud_root = tmp_path / "ProgramData" / "RPA_Diagnostic" / "observability" / "cloud"
+    raw_dir = cloud_root / "raw"
+    upload_dir = cloud_root / "uploads" / "client-backfill" / "epoch-backfill-1"
+    raw_dir.mkdir(parents=True)
+    upload_dir.mkdir(parents=True)
+
+    (raw_dir / "cloud.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    _event(
+                        "2026-04-22T00:00:05Z",
+                        "session_runtime",
+                        "session.lifecycle.started",
+                        session_id="session-backfill-1",
+                        connection_epoch="epoch-backfill-1",
+                        page="data_display",
+                    )
+                ),
+                json.dumps(
+                    _event(
+                        "2026-04-22T00:00:12Z",
+                        "session_runtime",
+                        "session.lifecycle.aborted",
+                        session_id="session-backfill-1",
+                        connection_epoch="epoch-backfill-1",
+                        page="data_display",
+                        status="error",
+                        failure_code="aborted",
+                        failure_domain="session_runtime",
+                    )
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (upload_dir / "artifactbackfill-local.jsonl").write_text(
+        json.dumps(
+            _event(
+                "2026-04-22T00:00:06Z",
+                "reverse_client",
+                "proxy.request.client_received",
+                session_id=None,
+                connection_epoch=None,
+                proxy_seq=901,
+            )
+        ),
+        encoding="utf-8",
+    )
+    manifest_path = upload_dir / "artifactbackfill.manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "client_instance_id": "client-backfill",
+                "connection_epoch": "epoch-backfill-1",
+                "artifact_id": "artifactbackfill",
+                "artifact_name": "local.jsonl",
+                "artifact_type": "raw",
+                "session_id": None,
+                "ingested_at": 1770000000.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = materialize_session_artifacts(
+        cloud_root=cloud_root,
+        session_id="session-backfill-1",
+        connection_epoch="epoch-backfill-1",
+    )
+
+    manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    trace_payload = json.loads(result["trace_path"].read_text(encoding="utf-8"))
+    assert manifest_payload["session_id"] == "session-backfill-1"
+    assert trace_payload["status"] == "aborted"
+    assert [event["event_type"] for event in trace_payload["timeline"]] == [
+        "session.lifecycle.started",
+        "proxy.request.client_received",
+        "session.lifecycle.aborted",
+    ]
 
 
 def test_observability_outbox_queues_and_uploads_pending_artifacts(tmp_path: Path) -> None:
