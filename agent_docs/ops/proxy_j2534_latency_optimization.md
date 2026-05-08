@@ -5,14 +5,60 @@
 | Field | Content |
 | --- | --- |
 | Type | Optimization plan / implementation guide |
-| Status | Phases 1-4 plus first Phase 5 observe/inventory implemented; guarded `shadow_local` transport exists and `active_replay` now has an explicit narrow experimental path |
+| Status | Phases 1-4 plus first Phase 5 observe/inventory implemented; guarded `shadow_local` transport exists and `active_replay` now has an explicit narrow experimental path, but latest ECU evidence requires GM `A9 81 xx` execution to stay out of the active optimization lane |
 | Owner scope | Proxy J2534 reverse tunnel latency, especially cloud GDS2 live data freshness |
 | Primary code paths | `vci_proxy/reverse_server.py`, `vci_proxy/reverse_client.py`, `vci_proxy/protocol.py`, `vci_proxy/cache_read_msgs.py` |
 | Related docs | `agent_docs/ops/vci_proxy_and_tunnel.md`, `agent_docs/reports/network_ms.md`, `agent_docs/ops/product_observability.md`, `agent_docs/ops/proxy_j2534_local_sweep_scheduler.md` |
 
 ## One-Line Conclusion
 
-Cloud GDS2 live data lag is mainly amplified by `J2534 serial request count x tunnel round-trip cost`. The current optimization stack preserves the synchronous J2534 behavior visible to GDS2 while adding safer cache invalidation, adaptive empty-read handling, local-side read-ahead, transaction RPCs, and a first local sweep observe/inventory stage. The sweep stage does not yet reduce DLL-visible round trips because replay remains disabled, and GM `A9 81 xx` shadow execution is disabled by default after ECU stability testing.
+Cloud GDS2 live data lag is mainly amplified by `J2534 serial request count x tunnel round-trip cost`. The current optimization stack preserves the synchronous J2534 behavior visible to GDS2 while adding safer cache invalidation, adaptive empty-read handling, local-side read-ahead, transaction RPCs, and a first local sweep observe/inventory stage. A narrow `active_replay` path now exists, but latest ECU evidence shows that GM `A9 81 xx` local execution can regress Data Display semantics before replay ever serves, so GM `A9 81 xx` is now forced back to observe-only / inventory-only and replay advances only on safer signatures whose latest shadow generations are comparison-clean.
+
+## Current Progress Snapshot - 2026-05-08
+
+Latest ECU Data Display validation showed a regression mode that is more
+specific than a tunnel stall: visible Data Display values latched at page-entry
+plateaus even though foreground proxy and local worker traffic kept moving.
+
+Validated active configuration in raw observability:
+
+- cloud reverse server startup logged `read_ahead_enabled=true`,
+  `read_ahead_transaction_enabled=true`,
+  `local_sweep_enabled=true`,
+  `local_sweep_mode=active_replay`,
+  `local_sweep_allow_gm_a9_packet=true`, and
+  `local_sweep_shadow_allow_gm_a9_packet=false`;
+- the run used session `4ba7b8ee031c4c1f`, connection epoch
+  `epoch-1778208278843-001`, with Data Display entered at
+  `2026-05-08T02:46:33Z`;
+- the server started a local shadow plan and drained shadow batches repeatedly
+  during the Data Display window;
+- cloud raw observability recorded no
+  `proxy.request.active_replay_armed` and no
+  `proxy.request.active_replay_served`;
+- cloud collector samples plateaued at page-entry values rather than updating in
+  page: the first entry stayed near `12.9V`, a later re-entry stayed near
+  `13.5V`, and `Engine Speed` / `Accelerator Pedal Position` stayed `0`;
+- foreground `READ_MSGS_REQ(data)` responses still arrived and their payload
+  digests changed throughout the same window, so the system was not simply
+  disconnected or idle;
+- local shadow items finished with `return_code=18`, which maps to
+  `ERR_NOT_UNIQUE` in the current J2534 error table and should not be treated as
+  replay-ready evidence;
+- the later `vci_disconnected` / tunnel EOF happened after the user-aborted
+  session and was not the first failure in the frozen-value window.
+
+Interpretation:
+
+- this run does not show replay serving stale shadow data, because replay never
+  armed or served;
+- it does show that GM A9 local shadow execution is already disruptive in the
+  current architecture, likely because it shares a consumptive `ReadMsgs` path
+  with the foreground Data Display loop;
+- the immediate optimization step is not "tune replay harder", but to push GM
+  A9 back to observe-only / inventory-only and continue optimizing only on
+  safer signatures whose latest shadow results are `return_code == 0`,
+  non-empty, and comparison-stable.
 
 ## Current Progress Snapshot - 2026-05-06
 
@@ -45,7 +91,7 @@ Validated active configuration in raw observability:
   enough to exercise the guard.
 - local sweep observe/inventory was active and learned one strict GM
   `A9 81 xx` signature. The plan was skipped with
-  `reason=gm_a9_packet_shadow_disabled`, so no local shadow executor plan
+  `reason=gm_a9_packet_observe_only`, so no local shadow executor plan
   contributed data in this run.
 - focused value samples for `Engine Speed`, `Accelerator Pedal Position`,
   and `Battery Voltage`
@@ -61,8 +107,9 @@ Interpretation:
 - the current implementation still cannot remove the remaining
   `N requests x tunnel RTT` cost for a full Data Display page because
   `active_replay` is now available only as an explicit experimental mode. The
-  current implementation can serve exact learned signatures from a fresh local
-  shadow result, but it still falls back to the normal tunnel path whenever a
+  current implementation can serve exact learned signatures only from a fresh,
+  validated local shadow result whose latest generation has already passed the
+  clean-compare gate; it still falls back to the normal tunnel path whenever a
   replay precondition is missing.
 
 ## Background
@@ -569,7 +616,10 @@ Recommended order:
    gaps, and acceptable tunnel RTT. If the tunnel becomes slow, verify
    `read_ahead.transaction.guard_armed` and
    `write_collect_guarded_no_collect` appear.
-10. Write a separate ADR/spec before any `active_replay` implementation.
+10. Enable `active_replay` only for non-GM-A9 signatures with clean
+    `return_code == 0`, non-empty shadow results and repeated comparison
+    success on the latest shadow generation; write a separate ADR/spec before
+    any GM A9 execution or broader replay rollout.
 
 ## Suggested Code Touch Points
 

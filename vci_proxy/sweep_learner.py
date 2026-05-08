@@ -337,6 +337,8 @@ class SweepPatternLearner:
         )
         if state is None or not state.learned:
             return None
+        if classification.observed.signature.identifier_kind == "gm_a9_packet":
+            return None
         return classification.observed
 
     def reset_channel(self, channel_id: int) -> None:

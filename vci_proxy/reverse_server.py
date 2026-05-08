@@ -461,14 +461,20 @@ class ReverseProxyServer:
         if not self.config.local_sweep.active_replay:
             return None
         signature_digest = observed.signature.signature_digest
-        shadow_result = self._sweep_shadow_store.latest_for(signature_digest)
-        if shadow_result is None:
-            return None
-        if shadow_result.error_name:
-            return None
-        if shadow_result.age_ms > self.config.local_sweep.max_result_age_ms:
-            return None
-        return shadow_result
+        return self._sweep_shadow_store.latest_replay_ready(
+            signature_digest,
+            max_result_age_ms=self.config.local_sweep.max_result_age_ms,
+            min_clean_matches=self._active_replay_min_clean_matches(),
+        )
+
+    def _active_replay_min_clean_matches(self) -> int:
+        # Replay must prove the latest shadow generation is comparison-clean,
+        # not merely "present", before it can replace a foreground request.
+        return max(2, int(self.config.local_sweep.min_cycles))
+
+    @staticmethod
+    def _observe_inventory_only_request(observed: SweepObservedRequest) -> bool:
+        return observed.signature.identifier_kind == "gm_a9_packet"
 
     def _candidate_for_active_replay(
         self,
@@ -476,12 +482,17 @@ class ReverseProxyServer:
     ) -> SweepObservedRequest | None:
         if not self.config.local_sweep.active_replay:
             return None
-        return self._sweep_learner.replay_candidate_for_write(
+        observed = self._sweep_learner.replay_candidate_for_write(
             body,
             connection_epoch=self._connection_epoch,
             read_num_msgs=1,
             read_timeout_ms=self.config.local_sweep.read_timeout_ms,
         )
+        if observed is None:
+            return None
+        if self._observe_inventory_only_request(observed):
+            return None
+        return observed
 
     def _try_prepare_active_replay_write(
         self,
@@ -508,20 +519,18 @@ class ReverseProxyServer:
         pending = self._active_replay_pending_by_channel.get(channel_id)
         if pending is None:
             return None
-        if not self._active_replay_result_ready(pending.observed):
+        shadow_result = self._active_replay_result_ready(pending.observed)
+        if shadow_result is None:
             self._active_replay_pending_by_channel.pop(channel_id, None)
             return None
         self._active_replay_pending_by_channel.pop(channel_id, None)
-        return pending
+        return _ActiveReplayPending(
+            observed=pending.observed,
+            shadow_result=shadow_result,
+        )
 
     def _shadow_plan_request_allowed(self, observed: SweepObservedRequest) -> bool:
-        signature = observed.signature
-        if (
-            signature.identifier_kind == "gm_a9_packet"
-            and not self.config.local_sweep.shadow_allow_gm_a9_packet
-        ):
-            return self.config.local_sweep.active_replay
-        return True
+        return not self._observe_inventory_only_request(observed)
 
     def _learned_for_shadow_plan(
         self,
@@ -648,7 +657,7 @@ class ReverseProxyServer:
             if skipped_gm_a9_count:
                 self._emit_shadow_plan_skipped_once(
                     channel_id=channel_id,
-                    reason="gm_a9_packet_shadow_disabled",
+                    reason="gm_a9_packet_observe_only",
                     skipped_count=skipped_count,
                     skipped_gm_a9_count=skipped_gm_a9_count,
                     observed=observed,
@@ -895,7 +904,7 @@ class ReverseProxyServer:
                     **result.fields,
                     **state_fields,
                     sweep_shadow_not_ready_reason=not_ready_reason,
-                )
+            )
                 return
             missing_reason = (
                 "signature_not_in_active_plan"
@@ -908,6 +917,44 @@ class ReverseProxyServer:
             }
         else:
             result_fields = result.fields
+        if shadow_result is not None:
+            real_return_code = result.fields.get("sweep_real_return_code")
+            real_message_count = result.fields.get("sweep_real_message_count")
+            shadow_return_code = result.fields.get("sweep_shadow_return_code")
+            shadow_message_count = result.fields.get("sweep_shadow_message_count")
+            shadow_structurally_clean = (
+                shadow_return_code is not None
+                and int(shadow_return_code) == 0
+                and shadow_message_count is not None
+                and int(shadow_message_count) > 0
+            )
+            real_structurally_clean = (
+                real_return_code is not None
+                and int(real_return_code) == 0
+                and real_message_count is not None
+                and int(real_message_count) > 0
+            )
+            clean_match = (
+                result.outcome == "match"
+                and real_structurally_clean
+                and shadow_structurally_clean
+            )
+            self._sweep_shadow_store.record_comparison(
+                signature_digest,
+                result=shadow_result,
+                clean_match=clean_match,
+                reset_streak=(
+                    result.outcome in {"mismatch", "error"}
+                    or not shadow_structurally_clean
+                ),
+            )
+            result_fields = {
+                **result_fields,
+                "sweep_shadow_clean_match_streak": self._sweep_shadow_store.replay_match_streak(
+                    signature_digest
+                ),
+                "sweep_replay_min_clean_matches": self._active_replay_min_clean_matches(),
+            }
         self._emit_proxy_request_event(
             f"sweep.shadow.{result.outcome}",
             dll_seq=dll_seq,
@@ -2564,6 +2611,10 @@ class ReverseProxyServer:
                                 replay_pending.shadow_result.age_ms,
                                 3,
                             ),
+                            replay_shadow_clean_match_streak=self._sweep_shadow_store.replay_match_streak(
+                                replay_pending.observed.signature.signature_digest
+                            ),
+                            replay_min_clean_matches=self._active_replay_min_clean_matches(),
                             **request_fields,
                             **response_fields,
                         )
@@ -2618,6 +2669,10 @@ class ReverseProxyServer:
                                 replay_pending.shadow_result.age_ms,
                                 3,
                             ),
+                            replay_shadow_clean_match_streak=self._sweep_shadow_store.replay_match_streak(
+                                replay_pending.observed.signature.signature_digest
+                            ),
+                            replay_min_clean_matches=self._active_replay_min_clean_matches(),
                             **request_fields,
                             **response_fields,
                         )

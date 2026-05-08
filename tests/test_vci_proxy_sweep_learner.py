@@ -128,7 +128,7 @@ def test_inventory_reports_coverage_and_projected_rtt_savings() -> None:
     }
 
 
-def test_inventory_marks_gm_a9_as_replay_candidate_but_not_shadow_eligible_by_default() -> None:
+def test_inventory_marks_gm_a9_as_observe_only_by_default() -> None:
     learner = SweepPatternLearner(
         LocalSweepConfig(
             enabled=True,
@@ -166,26 +166,60 @@ def test_inventory_marks_gm_a9_as_replay_candidate_but_not_shadow_eligible_by_de
     assert signature_event.fields["sweep_identifier_kind"] == "gm_a9_packet"
     assert signature_event.fields["sweep_inventory_learned"] is True
     assert signature_event.fields["sweep_inventory_shadow_eligible"] is False
-    assert signature_event.fields["sweep_inventory_replay_candidate"] is True
+    assert signature_event.fields["sweep_inventory_replay_candidate"] is False
     assert signature_event.fields["sweep_inventory_shadow_eligibility_reason"] == (
-        "gm_a9_packet_shadow_disabled"
+        "gm_a9_packet_observe_only"
     )
     assert signature_event.fields["sweep_inventory_replay_eligibility_reason"] == (
-        "learned_safe_signature"
+        "gm_a9_packet_observe_only"
     )
     assert signature_event.fields["sweep_inventory_eligibility_reason"] == (
-        "learned_safe_signature"
+        "gm_a9_packet_observe_only"
     )
     assert summary_event.fields["sweep_inventory_learned_signature_count"] == 1
-    assert summary_event.fields["sweep_inventory_replay_candidate_signature_count"] == 1
-    assert summary_event.fields["sweep_inventory_replay_candidate_request_count"] == 1
-    assert summary_event.fields["sweep_inventory_replay_candidate_coverage_pct"] == 100.0
+    assert summary_event.fields["sweep_inventory_replay_candidate_signature_count"] == 0
+    assert summary_event.fields["sweep_inventory_replay_candidate_request_count"] == 0
+    assert summary_event.fields["sweep_inventory_replay_candidate_coverage_pct"] == 0.0
     assert summary_event.fields["sweep_inventory_request_count_by_kind"] == {
         "gm_a9_packet": 1
     }
-    assert summary_event.fields["sweep_inventory_replay_candidate_request_count_by_kind"] == {
-        "gm_a9_packet": 1
-    }
+    assert summary_event.fields["sweep_inventory_replay_candidate_request_count_by_kind"] == {}
+
+
+def test_replay_candidate_for_write_rejects_gm_a9_even_when_learned() -> None:
+    learner = SweepPatternLearner(
+        LocalSweepConfig(
+            enabled=True,
+            mode="active_replay",
+            min_cycles=1,
+        )
+    )
+    write_body = _write_body(b"\x00\x00\x07\xe0\xa9\x81\x1a")
+
+    learner.observe_write(write_body, connection_epoch="epoch-1")
+    learner.observe_write_response(
+        write_body,
+        MsgType.WRITE_MSGS_RSP,
+        _write_rsp_body(),
+        connection_epoch="epoch-1",
+        duration_ms=30.0,
+        network_ms=25.0,
+    )
+    learner.observe_read_response(
+        _read_req_body(),
+        _read_rsp_body(b"\x00\x00\x05\xe8\xa9\x81\x1a\x00"),
+        connection_epoch="epoch-1",
+        duration_ms=5.0,
+        network_ms=2.0,
+    )
+
+    assert (
+        learner.replay_candidate_for_write(
+            write_body,
+            connection_epoch="epoch-1",
+        )
+        is None
+    )
 
 
 def test_learner_rejects_non_data_read_response_and_epoch_drift() -> None:

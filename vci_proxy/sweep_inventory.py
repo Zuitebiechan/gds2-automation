@@ -157,14 +157,11 @@ class SweepInventorySignatureState:
             replay_reason = "awaiting_min_cycles"
             shadow_eligible = False
             shadow_reason = "awaiting_min_cycles"
-        elif (
-            self.signature.identifier_kind == "gm_a9_packet"
-            and not config.shadow_allow_gm_a9_packet
-        ):
-            replay_candidate = True
-            replay_reason = "learned_safe_signature"
+        elif self.signature.identifier_kind == "gm_a9_packet":
+            replay_candidate = False
+            replay_reason = "gm_a9_packet_observe_only"
             shadow_eligible = False
-            shadow_reason = "gm_a9_packet_shadow_disabled"
+            shadow_reason = "gm_a9_packet_observe_only"
         else:
             replay_candidate = True
             replay_reason = "learned_safe_signature"

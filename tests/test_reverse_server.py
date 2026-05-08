@@ -1981,12 +1981,12 @@ def test_shadow_plan_skips_gm_a9_by_default_but_keeps_observing(monkeypatch, tmp
     assert "sweep.plan.started" not in event_types
     skipped = [record for record in records if record["event_type"] == "sweep.plan.skipped"]
     assert skipped
-    assert skipped[-1]["reason"] == "gm_a9_packet_shadow_disabled"
+    assert skipped[-1]["reason"] == "gm_a9_packet_observe_only"
     assert skipped[-1]["sweep_identifier_kind"] == "gm_a9_packet"
     assert skipped[-1]["sweep_shadow_allow_gm_a9_packet"] is False
 
 
-def test_active_replay_mode_allows_gm_a9_shadow_plan_start(monkeypatch, tmp_path) -> None:
+def test_active_replay_mode_keeps_gm_a9_out_of_shadow_plan(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
 
     async def _run() -> None:
@@ -2052,16 +2052,17 @@ def test_active_replay_mode_allows_gm_a9_shadow_plan_start(monkeypatch, tmp_path
         )
         await asyncio.sleep(0)
 
-        assert sent_plans
-        assert server._sweep_active_plan is sent_plans[0]
-        assert sent_plans[0].requests
+        assert sent_plans == []
+        assert server._sweep_active_plan is None
 
     asyncio.run(_run())
 
     records = _read_product_log_events(tmp_path)
     event_types = [record["event_type"] for record in records]
-    assert "sweep.plan.started" in event_types
-    assert "sweep.plan.skipped" not in event_types
+    assert "sweep.plan.started" not in event_types
+    skipped = [record for record in records if record["event_type"] == "sweep.plan.skipped"]
+    assert skipped
+    assert skipped[-1]["reason"] == "gm_a9_packet_observe_only"
 
 
 def test_shadow_missing_before_plan_is_logged_as_not_ready(monkeypatch, tmp_path) -> None:
@@ -2169,7 +2170,7 @@ def test_handle_proxy_connection_active_replay_serves_write_read_from_shadow_sto
                     "rx_status": 0,
                     "tx_flags": 0,
                     "timestamp": 1,
-                    "data": b"\x00\x00\x07\xe0\xa9\x81\x1a",
+                    "data": b"\x22\xf4\x0c",
                 }
             ],
             timeout=25,
@@ -2191,7 +2192,7 @@ def test_handle_proxy_connection_active_replay_serves_write_read_from_shadow_sto
                     "rx_status": 0,
                     "tx_flags": 0,
                     "timestamp": 2,
-                    "data": b"\x00\x00\x05\xe8\xa9\x81\x1a\x00",
+                    "data": b"\x62\xf4\x0c\x12\x34",
                 }
             ],
         )[HEADER_SIZE:]
@@ -2217,17 +2218,47 @@ def test_handle_proxy_connection_active_replay_serves_write_read_from_shadow_sto
             read_timeout_ms=server.config.local_sweep.read_timeout_ms,
         )
         assert observed is not None
+        now = time.time()
+        first_shadow_result = SweepResultRecord(
+            plan_id="plan-1",
+            signature_digest=observed.signature.signature_digest,
+            return_code=0,
+            read_rsp_body=read_rsp_body,
+            started_at_s=now - 0.2,
+            finished_at_s=now - 0.1,
+        )
         server._sweep_shadow_store.record_result(
-            SweepResultRecord(
-                plan_id="plan-1",
-                signature_digest=observed.signature.signature_digest,
-                return_code=0,
-                read_rsp_body=read_rsp_body,
-                started_at_s=time.time(),
-                finished_at_s=time.time(),
-            ),
+            first_shadow_result,
             channel_id=observed.signature.channel_id,
         )
+        server._compare_shadow_result(
+            observed,
+            read_rsp_body,
+            dll_seq=12,
+            msg_name="READ_MSGS_REQ",
+        )
+        assert (
+            server._active_replay_result_ready(observed) is None
+        ), "one clean match should not satisfy the replay threshold"
+        second_shadow_result = SweepResultRecord(
+            plan_id="plan-1",
+            signature_digest=observed.signature.signature_digest,
+            return_code=0,
+            read_rsp_body=read_rsp_body,
+            started_at_s=now - 0.09,
+            finished_at_s=now - 0.05,
+        )
+        server._sweep_shadow_store.record_result(
+            second_shadow_result,
+            channel_id=observed.signature.channel_id,
+        )
+        server._compare_shadow_result(
+            observed,
+            read_rsp_body,
+            dll_seq=13,
+            msg_name="READ_MSGS_REQ",
+        )
+        assert server._active_replay_result_ready(observed) is not None
         poll_calls: list[str] = []
         server._schedule_sweep_poll = lambda: poll_calls.append("poll")
 
@@ -2256,7 +2287,7 @@ def test_handle_proxy_connection_active_replay_serves_write_read_from_shadow_sto
                 "rx_status": 0,
                 "tx_flags": 0,
                 "timestamp": 2,
-                "data": b"\x00\x00\x05\xe8\xa9\x81\x1a\x00",
+                "data": b"\x62\xf4\x0c\x12\x34",
             }
         ])
         assert poll_calls == ["poll", "poll"]

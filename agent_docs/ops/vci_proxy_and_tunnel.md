@@ -396,7 +396,7 @@ with shared environment variables and matching CLI flags on the reverse server
 and reverse client:
 
 - `VCI_PROXY_LOCAL_SWEEP=1`
-- `VCI_PROXY_LOCAL_SWEEP_MODE=observe_only` or `shadow_local`
+- `VCI_PROXY_LOCAL_SWEEP_MODE=observe_only`, `shadow_local`, or `active_replay`
 - `VCI_PROXY_LOCAL_SWEEP_MIN_CYCLES=2`
 - `VCI_PROXY_LOCAL_SWEEP_MAX_ITEMS=128`
 - `VCI_PROXY_LOCAL_SWEEP_ALLOW_UDS_RDBI=1`
@@ -430,12 +430,13 @@ sends internal `SWEEP_PLAN_START_REQ/RSP`, `SWEEP_PLAN_STOP_REQ/RSP`,
 internal server-to-client control frames; the virtual DLL and GDS2 never see
 them.
 
-GM `A9 81 xx` signatures remain observable in `shadow_local`, but they are not
-included in local shadow execution by default. The cloud emits
-`sweep.plan.skipped` with reason `gm_a9_packet_shadow_disabled` when the learned
-plan contains only these guarded signatures. Set
-`VCI_PROXY_LOCAL_SWEEP_SHADOW_ALLOW_GM_A9_PACKET=1` only for a tightly bounded
-experiment after an `observe_only` baseline proves Data Display stability.
+GM `A9 81 xx` signatures remain observable, but in the current implementation
+they are forced back to observe-only / inventory-only across both
+`shadow_local` and `active_replay`. The cloud emits `sweep.plan.skipped` with
+reason `gm_a9_packet_observe_only` when the learned plan contains only these
+guarded signatures. The legacy `VCI_PROXY_LOCAL_SWEEP_SHADOW_ALLOW_GM_A9_PACKET`
+flag is still logged for compatibility and rollback analysis, but it does not
+re-open GM A9 execution in the current runtime.
 
 The v1 transport uses server-driven non-blocking `STATUS` plus immediate
 `DRAIN`. Drain returns queued shadow results or an empty result set without
@@ -460,6 +461,10 @@ Shadow data is comparison-only:
 - it is never used by `_try_serve_cached()`
 - it is never written into `PrefetchReadMsgsBuffer`
 - it never fulfills normal `READ_MSGS_REQ`
+- exact-signature `active_replay` now requires the latest shadow generation to
+  be fresh, `return_code == 0`, decoded `READ_MSGS_RSP` data to be non-empty,
+  and the latest generation to have reached the replay clean-match streak
+  threshold before DLL-facing arm/serve can happen
 
 The stage cancels active shadow plans on disconnect, close, filter mutation,
 non-cacheable or mutating IOCTL, failed writes, connection epoch changes,
@@ -472,29 +477,56 @@ plan is still in the delay window, or an active plan has not drained any results
 `sweep.shadow.missing` is reserved for later reads where comparison should have
 been possible but no matching shadow result was available.
 
+Operational validation as of `2026-05-08`:
+
+- latest ECU Data Display run used `VCI_PROXY_LOCAL_SWEEP=1` and
+  `VCI_PROXY_LOCAL_SWEEP_MODE=active_replay` with
+  `VCI_PROXY_LOCAL_SWEEP_ALLOW_GM_A9_PACKET=1` and
+  `VCI_PROXY_LOCAL_SWEEP_SHADOW_ALLOW_GM_A9_PACKET=0`;
+- the cloud started a local sweep plan and drained shadow batches repeatedly
+  during Data Display, but the run recorded no
+  `proxy.request.active_replay_armed` and no
+  `proxy.request.active_replay_served`;
+- the visible regression was a latched Data Display page: collector samples held
+  the entry-page values instead of updating in place, while foreground
+  `READ_MSGS_REQ(data)` payloads still changed underneath;
+- local shadow items finished with `return_code=18`, which maps to
+  `ERR_NOT_UNIQUE` in the current J2534 error table and should be treated as an
+  invalid shadow result rather than replay-ready evidence;
+- this is not safe evidence for GM A9 execution. For the current design, GM
+  `A9 81 xx` must remain observe-only / inventory-only, even when
+  `active_replay` is enabled for other future-safe signatures.
+
 Operational validation as of `2026-05-06`:
 
 - latest ECU Data Display run used `VCI_PROXY_LOCAL_SWEEP=1` and
   `VCI_PROXY_LOCAL_SWEEP_MODE=shadow_local` with
   `VCI_PROXY_LOCAL_SWEEP_SHADOW_ALLOW_GM_A9_PACKET=0`;
 - the server learned a strict GM `A9 81 xx` signature, then skipped the plan with
-  `reason=gm_a9_packet_shadow_disabled`;
+  `reason=gm_a9_packet_observe_only`;
 - `sweep.plan.started` and `sweep.batch.drained` were absent, so no local shadow
   result comparison occurred in that run;
 - this is the intended safe state for current GM A9-only Engine Data evidence.
 
-Not implemented in this stage:
+Implemented but still experimental in this stage:
 
-- `active_replay`
-- synthetic `WRITE_MSGS_RSP`
-- synthetic `READ_MSGS_RSP`
-- skipped real forwarding
+- `active_replay` for exact learned signatures only, with DLL-facing replay
+  gated on a fresh, validated shadow result already being present; replay now
+  also requires `return_code == 0`, non-empty decoded read data, and a clean
+  shadow-vs-real comparison streak for the latest shadow generation
+- synthetic `WRITE_MSGS_RSP` / `READ_MSGS_RSP` only inside that narrow replay
+  path
+
+Still not implemented or not supported in this stage:
+
+- broad skipped real forwarding outside the exact-signature replay path
 - serving shadow data to GDS2
 - production rollout controls
 - allowlist expansion beyond exact UDS `0x22`, OBD Mode 01, and strict observed
   GM `A9 81 xx` request shapes
 - adaptive sweep-rate tuning
-- safe GM `A9 81 xx` shadow execution by default
+- safe GM `A9 81 xx` shadow execution or GM `A9 81 xx` replay as a supported
+  configuration
 
 ### Manual GDS2 latency observability
 

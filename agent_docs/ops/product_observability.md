@@ -228,7 +228,7 @@ actually active:
   `sweep.pattern.observed`, `sweep.pattern.learned`,
   `sweep.inventory.signature`, and `sweep.inventory.summary`;
 - skipped GM A9 shadow plans:
-  `sweep.plan.skipped` with `reason=gm_a9_packet_shadow_disabled`;
+  `sweep.plan.skipped` with `reason=gm_a9_packet_observe_only`;
 - actual local shadow execution:
   `sweep.plan.started`, `sweep.batch.drained`, and `sweep.shadow.*`.
 
@@ -237,7 +237,7 @@ Latest known interpretation:
 - absence of `read_ahead.transaction.guard_armed` is expected when no
   non-cache-hit tunnel response reaches the configured threshold, currently
   `750ms`; it does not mean the feature was missing;
-- a GM A9-only plan skipped by `gm_a9_packet_shadow_disabled` means local shadow
+- a GM A9-only plan skipped by `gm_a9_packet_observe_only` means local shadow
   execution did not run and therefore could not improve or harm the run through
   extra local polling;
 - no `j2534_disconnect`, no `proxy.j2534.cadence_gap`, no
@@ -293,8 +293,9 @@ Latest known interpretation:
   - observed 11-bit GM CAN-ID-prefixed payload samples in the `0x500..0x7FF` range add `can_id`, `can_id_hex`, `can_payload_length`, and `can_payload_prefix_hex`; strict GM `A9 81 xx` request samples also add `gm_request_service_id`, `gm_request_subfunction`, `gm_request_packet_id`, and `gm_request_packet_id_hex`, while `0x500..0x5FF` response samples add `gm_data_packet_id` and `gm_data_packet_id_hex`
   - payload samples include a best-effort `*_engine_speed_candidate_rpm` only when standard `41 0C` or `62 F4 0C` Engine Speed response patterns are visible; treat this as a correlation hint, not a protocol guarantee
   - local sweep observe/shadow events include `sweep.pattern.*`, `sweep.inventory.signature`, `sweep.inventory.summary`, `sweep.plan.deferred`, `sweep.plan.started`, `sweep.plan.skipped`, `sweep.batch.drained`, and `sweep.shadow.*`; `sweep.plan.skipped` records guardrails such as default GM `A9 81 xx` observe-only handling, `sweep.shadow.not_ready` marks plan-pending/startup/no-drained-result windows, while `sweep.shadow.missing` is reserved for comparable windows where a matching shadow result is absent
-  - `sweep.inventory.signature` records per-signature observed write count, learned/replay-candidate status, eligibility reason, read data/empty/error counts, cache-hit/forwarded read counts, write/read/pair duration and network p50/p95/max, and projected write/pair RTT savings; `sweep.inventory.summary` records aggregate signature/request counts by kind, rejected write counts by reason, learned and replay-candidate coverage percentages, and total projected RTT savings. These events are observability-only and do not enable active replay.
+- `sweep.inventory.signature` records per-signature observed write count, learned/replay-candidate status, shadow eligibility, eligibility reasons, read data/empty/error counts, cache-hit/forwarded read counts, write/read/pair duration and network p50/p95/max, and projected write/pair RTT savings; `sweep.inventory.summary` records aggregate signature/request counts by kind, rejected write counts by reason, learned and replay-candidate coverage percentages, and total projected RTT savings. Under the current GM A9 rollback, GM `A9 81 xx` stays observe-only / inventory-only and is no longer counted as a replay candidate. These events are observability-only and do not enable active replay.
   - shadow comparison events include plan state fields such as `sweep_plan_active`, `sweep_plan_pending`, `sweep_store_pending_count`, `sweep_signature_in_active_plan`, and `sweep_shadow_missing_reason` / `sweep_shadow_not_ready_reason` when applicable
+  - `sweep.shadow.*` comparison events now include `sweep_shadow_clean_match_streak` and `sweep_replay_min_clean_matches`; `proxy.request.active_replay_armed` / `proxy.request.active_replay_served` include the same replay-quality gate fields when replay is actually permitted
 - `vci_proxy/reverse_client.py`
   - emits reverse tunnel connection lifecycle, request receipt, and J2534 call events
   - local sweep executor logs distinguish plan start/stop, shadow item execution, foreground invalidation, configured/effective shadow item interval, and error count; cacheable/read-only IOCTL foreground calls pause through the shared driver lock without emitting a shadow stop
