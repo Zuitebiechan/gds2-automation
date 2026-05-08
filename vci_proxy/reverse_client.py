@@ -1174,6 +1174,10 @@ class ReverseProxyClient:
         effective_max_consecutive_empty_reads = int(
             read_ahead.max_consecutive_empty_reads
         )
+        effective_min_drain_ms = min(
+            effective_window_ms,
+            max(0, int(read_ahead.min_drain_ms)),
+        )
         if (
             effective_window_ms <= 0
             or effective_max_reads <= 0
@@ -1181,7 +1185,9 @@ class ReverseProxyClient:
         ):
             return []
 
-        deadline = time.monotonic() + max(0, effective_window_ms) / 1000.0
+        started_at_mono = time.monotonic()
+        deadline = started_at_mono + max(0, effective_window_ms) / 1000.0
+        min_drain_until = started_at_mono + effective_min_drain_ms / 1000.0
         collected: list[bytes] = []
         collected_messages = 0
         attempted_reads = 0
@@ -1231,6 +1237,15 @@ class ReverseProxyClient:
             if ret == BUFFER_EMPTY or not messages:
                 empty_reads += 1
                 consecutive_empty_reads += 1
+                now = time.monotonic()
+                if now < min_drain_until and read_index + 1 < effective_max_reads:
+                    sleep_s = min(
+                        0.005,
+                        max(0.0, min(min_drain_until, deadline) - now),
+                    )
+                    if sleep_s > 0:
+                        await asyncio.sleep(sleep_s)
+                    continue
                 if (
                     effective_max_empty_reads > 0
                     and empty_reads >= effective_max_empty_reads
@@ -1279,6 +1294,7 @@ class ReverseProxyClient:
             max_messages=effective_max_messages,
             max_empty_reads=effective_max_empty_reads,
             max_consecutive_empty_reads=effective_max_consecutive_empty_reads,
+            min_drain_ms=effective_min_drain_ms,
         )
         return collected
 
@@ -1679,6 +1695,12 @@ def main() -> None:
         help="Stop local read-ahead after this many consecutive empty reads (default: 0 or VCI_PROXY_READ_AHEAD_MAX_CONSECUTIVE_EMPTY_READS; 0 disables)",
     )
     parser.add_argument(
+        "--read-ahead-min-drain-ms",
+        type=int,
+        default=None,
+        help="Keep local read-ahead draining through early empty reads for at least this many ms (default: 0 or VCI_PROXY_READ_AHEAD_MIN_DRAIN_MS; 0 disables)",
+    )
+    parser.add_argument(
         "--read-ahead-transaction",
         dest="read_ahead_transaction",
         action="store_true",
@@ -1773,6 +1795,7 @@ def main() -> None:
         read_ahead_max_consecutive_empty_reads=(
             args.read_ahead_max_consecutive_empty_reads
         ),
+        read_ahead_min_drain_ms=args.read_ahead_min_drain_ms,
         read_ahead_transaction_enabled=args.read_ahead_transaction,
         local_sweep_enabled=getattr(args, "local_sweep", None),
         local_sweep_mode=getattr(args, "local_sweep_mode", None),
@@ -1804,6 +1827,7 @@ def main() -> None:
         f"timeout={config.read_ahead.read_timeout_ms}ms, max_messages={config.read_ahead.max_messages}, "
         f"max_empty_reads={config.read_ahead.max_empty_reads}, "
         f"max_consecutive_empty_reads={config.read_ahead.max_consecutive_empty_reads}, "
+        f"min_drain={config.read_ahead.min_drain_ms}ms, "
         f"transaction={'enabled' if config.read_ahead.transaction_enabled else 'disabled'})"
     )
     print(

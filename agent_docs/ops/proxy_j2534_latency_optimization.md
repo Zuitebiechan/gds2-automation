@@ -379,6 +379,7 @@ VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS=0
 VCI_PROXY_READ_AHEAD_MAX_MESSAGES=16
 VCI_PROXY_READ_AHEAD_MAX_EMPTY_READS=0
 VCI_PROXY_READ_AHEAD_MAX_CONSECUTIVE_EMPTY_READS=0
+VCI_PROXY_READ_AHEAD_MIN_DRAIN_MS=0
 VCI_PROXY_READ_AHEAD_TRANSACTION=0
 VCI_PROXY_READ_AHEAD_TRANSACTION_MAX_NETWORK_MS=750
 VCI_PROXY_READ_AHEAD_TRANSACTION_COOLDOWN_MS=10000
@@ -394,8 +395,13 @@ prevent local read collection. CLI flags still exist for one-off tests:
 `--read-ahead`, `--no-read-ahead`, `--read-ahead-window-ms`,
 `--read-ahead-max-reads`, `--read-ahead-read-timeout-ms`,
 `--read-ahead-max-messages`, `--read-ahead-max-empty-reads`,
-`--read-ahead-max-consecutive-empty-reads`, `--read-ahead-transaction`, and
-`--no-read-ahead-transaction`. The reverse-server-only slow-link guard is
+`--read-ahead-max-consecutive-empty-reads`, `--read-ahead-min-drain-ms`,
+`--read-ahead-transaction`, and `--no-read-ahead-transaction`.
+`VCI_PROXY_READ_AHEAD_MIN_DRAIN_MS` is default-off; when set, the local client
+keeps trying through early empty reads until the minimum drain window elapses,
+which helps capture frames that arrive shortly after a successful foreground
+write instead of exiting immediately on two zero-timeout empty polls. The
+reverse-server-only slow-link guard is
 controlled by `--read-ahead-transaction-max-network-ms` and
 `--read-ahead-transaction-cooldown-ms`.
 

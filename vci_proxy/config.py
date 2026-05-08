@@ -18,6 +18,7 @@ READ_AHEAD_MAX_EMPTY_READS_ENV = "VCI_PROXY_READ_AHEAD_MAX_EMPTY_READS"
 READ_AHEAD_MAX_CONSECUTIVE_EMPTY_READS_ENV = (
     "VCI_PROXY_READ_AHEAD_MAX_CONSECUTIVE_EMPTY_READS"
 )
+READ_AHEAD_MIN_DRAIN_MS_ENV = "VCI_PROXY_READ_AHEAD_MIN_DRAIN_MS"
 READ_AHEAD_TRANSACTION_ENV = "VCI_PROXY_READ_AHEAD_TRANSACTION"
 READ_AHEAD_TRANSACTION_MAX_NETWORK_MS_ENV = (
     "VCI_PROXY_READ_AHEAD_TRANSACTION_MAX_NETWORK_MS"
@@ -51,6 +52,7 @@ READ_AHEAD_ENV_NAMES = (
     READ_AHEAD_MAX_MESSAGES_ENV,
     READ_AHEAD_MAX_EMPTY_READS_ENV,
     READ_AHEAD_MAX_CONSECUTIVE_EMPTY_READS_ENV,
+    READ_AHEAD_MIN_DRAIN_MS_ENV,
     READ_AHEAD_TRANSACTION_ENV,
     READ_AHEAD_TRANSACTION_MAX_NETWORK_MS_ENV,
     READ_AHEAD_TRANSACTION_COOLDOWN_MS_ENV,
@@ -184,6 +186,7 @@ class ReadAheadConfig:
     max_messages: int = 16
     max_empty_reads: int = 0
     max_consecutive_empty_reads: int = 0
+    min_drain_ms: int = 0
     transaction_enabled: bool = False
     transaction_max_network_ms: int = 750
     transaction_cooldown_ms: int = 10000
@@ -266,6 +269,14 @@ def read_ahead_config_from_env(
             env_int(
                 READ_AHEAD_MAX_CONSECUTIVE_EMPTY_READS_ENV,
                 base.max_consecutive_empty_reads,
+                environ=environ,
+            ),
+        ),
+        min_drain_ms=max(
+            0,
+            env_int(
+                READ_AHEAD_MIN_DRAIN_MS_ENV,
+                base.min_drain_ms,
                 environ=environ,
             ),
         ),
@@ -478,6 +489,12 @@ class ProxyConfig:
                 read_ahead_defaults.max_consecutive_empty_reads
                 if kwargs.get("read_ahead_max_consecutive_empty_reads") is None
                 else int(kwargs.get("read_ahead_max_consecutive_empty_reads")),
+            ),
+            min_drain_ms=max(
+                0,
+                read_ahead_defaults.min_drain_ms
+                if kwargs.get("read_ahead_min_drain_ms") is None
+                else int(kwargs.get("read_ahead_min_drain_ms")),
             ),
             transaction_enabled=(
                 read_ahead_defaults.transaction_enabled

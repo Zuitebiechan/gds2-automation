@@ -973,6 +973,7 @@ def test_main_disables_windows_quick_edit_before_starting_server(monkeypatch) ->
             read_ahead_max_messages=16,
             read_ahead_max_empty_reads=0,
             read_ahead_max_consecutive_empty_reads=0,
+            read_ahead_min_drain_ms=0,
             read_ahead_transaction=None,
             read_ahead_transaction_max_network_ms=None,
             read_ahead_transaction_cooldown_ms=None,

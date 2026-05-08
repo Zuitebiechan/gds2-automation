@@ -215,6 +215,7 @@ actually active:
   `read_ahead_enabled`, `read_ahead_transaction_enabled`,
   `read_ahead_max_empty_reads`,
   `read_ahead_max_consecutive_empty_reads`,
+  `read_ahead_min_drain_ms`,
   `read_ahead_transaction_max_network_ms`,
   `read_ahead_transaction_cooldown_ms`, `local_sweep_enabled`,
   `local_sweep_mode`, and `local_sweep_shadow_allow_gm_a9_packet`;

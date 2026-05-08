@@ -673,6 +673,80 @@ def test_handle_write_msgs_read_ahead_stops_on_consecutive_empty_reads(monkeypat
     ]
 
 
+def test_handle_write_msgs_read_ahead_min_drain_keeps_trying_after_early_empty_reads(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    observed: list[tuple[str, int, int, int]] = []
+    prefetched_message = {"protocol_id": 6, "data": b"\x62"}
+    read_results = iter(
+        [
+            (BUFFER_EMPTY, []),
+            (BUFFER_EMPTY, []),
+            (0, [prefetched_message]),
+        ]
+    )
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_max_reads=3,
+            read_ahead_max_messages=4,
+            read_ahead_read_timeout_ms=0,
+            read_ahead_max_consecutive_empty_reads=2,
+            read_ahead_min_drain_ms=50,
+        ),
+    )
+    client._server_read_ahead_enabled = True
+    client.driver = types.SimpleNamespace(
+        write_msgs=lambda channel_id, messages, timeout: (
+            observed.append(("write_msgs", channel_id, len(messages), timeout))
+            or (0, len(messages))
+        ),
+        read_msgs=lambda channel_id, num_msgs, timeout: (
+            observed.append(("read_msgs", channel_id, num_msgs, timeout))
+            or next(read_results)
+        ),
+    )
+
+    async def _fake_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr("vci_proxy.reverse_client.asyncio.sleep", _fake_sleep)
+    body = ProtocolEncoder.encode_write_msgs_req(
+        44,
+        [{"protocol_id": 6, "data": b"\x22"}],
+        timeout=25,
+        sequence=7,
+    )[HEADER_SIZE:]
+
+    response = asyncio.run(client._handle_write_msgs(body, sequence=7))
+    clean_body, bundle = strip_read_msgs_prefetch_bundle(response[HEADER_SIZE:])
+
+    assert clean_body == ProtocolEncoder.encode_write_msgs_rsp(0, 1, sequence=7)[HEADER_SIZE:]
+    assert bundle is not None
+    assert ProtocolDecoder.decode_read_msgs_rsp(bundle.read_rsp_bodies[0]) == (
+        0,
+        [
+            {
+                "protocol_id": 6,
+                "rx_status": 0,
+                "tx_flags": 0,
+                "timestamp": 0,
+                "data": b"\x62",
+            }
+        ],
+    )
+    assert observed == [
+        ("write_msgs", 44, 1, 25),
+        ("read_msgs", 44, 4, 0),
+        ("read_msgs", 44, 4, 0),
+        ("read_msgs", 44, 4, 0),
+    ]
+
+
 def test_handle_write_and_collect_reads_uses_transaction_limits(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("APPDATA", str(tmp_path))
     observed: list[tuple[str, int, int, int]] = []

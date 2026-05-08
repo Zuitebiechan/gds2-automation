@@ -58,6 +58,7 @@ def _import_client_gui(monkeypatch, tmp_path):
         "VCI_PROXY_READ_AHEAD_MAX_MESSAGES",
         "VCI_PROXY_READ_AHEAD_MAX_EMPTY_READS",
         "VCI_PROXY_READ_AHEAD_MAX_CONSECUTIVE_EMPTY_READS",
+        "VCI_PROXY_READ_AHEAD_MIN_DRAIN_MS",
         "VCI_PROXY_READ_AHEAD_TRANSACTION",
         "PRODUCT_LOG_UPLOAD_ENABLED",
     ):
@@ -98,6 +99,7 @@ def test_load_config_merges_saved_values_with_defaults(monkeypatch, tmp_path) ->
         "read_ahead_max_messages": 16,
         "read_ahead_max_empty_reads": 0,
         "read_ahead_max_consecutive_empty_reads": 0,
+        "read_ahead_min_drain_ms": 0,
         "read_ahead_transaction_enabled": False,
     }
 
@@ -122,6 +124,7 @@ def test_save_config_persists_json(monkeypatch, tmp_path) -> None:
         "read_ahead_max_messages": 16,
         "read_ahead_max_empty_reads": 0,
         "read_ahead_max_consecutive_empty_reads": 0,
+        "read_ahead_min_drain_ms": 0,
         "read_ahead_transaction_enabled": False,
     }
 
@@ -148,6 +151,7 @@ def test_apply_read_ahead_env_overrides_uses_shared_env_names(monkeypatch, tmp_p
     monkeypatch.setenv("VCI_PROXY_READ_AHEAD_MAX_MESSAGES", "10")
     monkeypatch.setenv("VCI_PROXY_READ_AHEAD_MAX_EMPTY_READS", "6")
     monkeypatch.setenv("VCI_PROXY_READ_AHEAD_MAX_CONSECUTIVE_EMPTY_READS", "2")
+    monkeypatch.setenv("VCI_PROXY_READ_AHEAD_MIN_DRAIN_MS", "40")
     monkeypatch.setenv("VCI_PROXY_READ_AHEAD_TRANSACTION", "1")
 
     updated = client_gui.apply_read_ahead_env_overrides(
@@ -159,6 +163,7 @@ def test_apply_read_ahead_env_overrides_uses_shared_env_names(monkeypatch, tmp_p
             "read_ahead_max_messages": 16,
             "read_ahead_max_empty_reads": 0,
             "read_ahead_max_consecutive_empty_reads": 0,
+            "read_ahead_min_drain_ms": 0,
             "read_ahead_transaction_enabled": False,
             "host": "diag.example",
         }
@@ -172,6 +177,7 @@ def test_apply_read_ahead_env_overrides_uses_shared_env_names(monkeypatch, tmp_p
         "read_ahead_max_messages": 10,
         "read_ahead_max_empty_reads": 6,
         "read_ahead_max_consecutive_empty_reads": 2,
+        "read_ahead_min_drain_ms": 40,
         "read_ahead_transaction_enabled": True,
         "host": "diag.example",
     }
@@ -201,6 +207,7 @@ def test_effective_runtime_config_applies_read_ahead_env_overrides(monkeypatch, 
         "read_ahead_max_messages": 16,
         "read_ahead_max_empty_reads": 0,
         "read_ahead_max_consecutive_empty_reads": 0,
+        "read_ahead_min_drain_ms": 0,
         "read_ahead_transaction_enabled": False,
     }
 
@@ -338,6 +345,7 @@ def test_start_client_builds_reverse_proxy_client_and_starts_thread(monkeypatch,
         "read_ahead_max_messages": 16,
         "read_ahead_max_empty_reads": 0,
         "read_ahead_max_consecutive_empty_reads": 0,
+        "read_ahead_min_drain_ms": 0,
         "read_ahead_transaction_enabled": False,
     }
     assert callable(observed["on_status_change"])
@@ -1088,6 +1096,7 @@ def test_run_settings_dialog_defers_restart_when_active_session_exists(monkeypat
         "read_ahead_max_messages": 16,
         "read_ahead_max_empty_reads": 0,
         "read_ahead_max_consecutive_empty_reads": 0,
+        "read_ahead_min_drain_ms": 0,
     }
     app._client_thread = types.SimpleNamespace(is_alive=lambda: True)
     monkeypatch.setattr(client_gui, "ConfigDialog", _FakeDialog)

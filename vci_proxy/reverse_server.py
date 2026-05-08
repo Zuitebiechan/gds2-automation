@@ -1388,13 +1388,14 @@ class ReverseProxyServer:
             )
         if self.config.read_ahead.enabled:
             logger.info(
-                "Read-ahead enabled (window=%sms, max_reads=%s, timeout=%sms, max_messages=%s, max_empty_reads=%s, max_consecutive_empty_reads=%s, transaction=%s, transaction_guard=%sms/%sms)",
+                "Read-ahead enabled (window=%sms, max_reads=%s, timeout=%sms, max_messages=%s, max_empty_reads=%s, max_consecutive_empty_reads=%s, min_drain=%sms, transaction=%s, transaction_guard=%sms/%sms)",
                 self.config.read_ahead.window_ms,
                 self.config.read_ahead.max_reads,
                 self.config.read_ahead.read_timeout_ms,
                 self.config.read_ahead.max_messages,
                 self.config.read_ahead.max_empty_reads,
                 self.config.read_ahead.max_consecutive_empty_reads,
+                self.config.read_ahead.min_drain_ms,
                 "enabled" if self.config.read_ahead.transaction_enabled else "disabled",
                 self.config.read_ahead.transaction_max_network_ms,
                 self.config.read_ahead.transaction_cooldown_ms,
@@ -1428,6 +1429,7 @@ class ReverseProxyServer:
                 read_ahead_max_consecutive_empty_reads=(
                     self.config.read_ahead.max_consecutive_empty_reads
                 ),
+                read_ahead_min_drain_ms=self.config.read_ahead.min_drain_ms,
                 read_ahead_transaction_max_network_ms=(
                     self.config.read_ahead.transaction_max_network_ms
                 ),
@@ -3415,6 +3417,8 @@ def main():
                        help='Stop local read-ahead after this many empty reads (default: 0 or VCI_PROXY_READ_AHEAD_MAX_EMPTY_READS; 0 disables)')
     parser.add_argument('--read-ahead-max-consecutive-empty-reads', type=int, default=None,
                        help='Stop local read-ahead after this many consecutive empty reads (default: 0 or VCI_PROXY_READ_AHEAD_MAX_CONSECUTIVE_EMPTY_READS; 0 disables)')
+    parser.add_argument('--read-ahead-min-drain-ms', type=int, default=None,
+                       help='Keep local read-ahead draining through early empty reads for at least this many ms (default: 0 or VCI_PROXY_READ_AHEAD_MIN_DRAIN_MS; 0 disables)')
     parser.add_argument('--read-ahead-transaction', dest='read_ahead_transaction', action='store_true', default=None,
                        help='Enable internal WRITE_AND_COLLECT_READS transaction RPC when the client advertises support (or VCI_PROXY_READ_AHEAD_TRANSACTION=1)')
     parser.add_argument('--no-read-ahead-transaction', dest='read_ahead_transaction', action='store_false',
@@ -3485,6 +3489,7 @@ def main():
         read_ahead_max_consecutive_empty_reads=(
             args.read_ahead_max_consecutive_empty_reads
         ),
+        read_ahead_min_drain_ms=args.read_ahead_min_drain_ms,
         read_ahead_transaction_enabled=args.read_ahead_transaction,
         read_ahead_transaction_max_network_ms=args.read_ahead_transaction_max_network_ms,
         read_ahead_transaction_cooldown_ms=args.read_ahead_transaction_cooldown_ms,
@@ -3533,7 +3538,7 @@ def main():
         config.read_msgs_cache.max_cacheable_timeout_ms,
     )
     logger.info(
-        "Read-ahead: %s (window=%sms, max_reads=%s, timeout=%sms, max_messages=%s, max_empty_reads=%s, max_consecutive_empty_reads=%s, transaction=%s, transaction_guard=%sms/%sms)",
+        "Read-ahead: %s (window=%sms, max_reads=%s, timeout=%sms, max_messages=%s, max_empty_reads=%s, max_consecutive_empty_reads=%s, min_drain=%sms, transaction=%s, transaction_guard=%sms/%sms)",
         "enabled" if config.read_ahead.enabled else "disabled",
         config.read_ahead.window_ms,
         config.read_ahead.max_reads,
@@ -3541,6 +3546,7 @@ def main():
         config.read_ahead.max_messages,
         config.read_ahead.max_empty_reads,
         config.read_ahead.max_consecutive_empty_reads,
+        config.read_ahead.min_drain_ms,
         "enabled" if config.read_ahead.transaction_enabled else "disabled",
         config.read_ahead.transaction_max_network_ms,
         config.read_ahead.transaction_cooldown_ms,

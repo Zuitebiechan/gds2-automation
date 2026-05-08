@@ -214,6 +214,7 @@ Read-ahead keys are also accepted for guarded Phase 3 testing:
 - `read_ahead_max_messages`
 - `read_ahead_max_empty_reads`
 - `read_ahead_max_consecutive_empty_reads`
+- `read_ahead_min_drain_ms`
 - `read_ahead_transaction_enabled`
 
 These values are passed through to `vci_proxy.reverse_client.ReverseProxyClient`
@@ -297,6 +298,7 @@ Unified runtime config:
 - `VCI_PROXY_READ_AHEAD_MAX_MESSAGES=16`
 - `VCI_PROXY_READ_AHEAD_MAX_EMPTY_READS=0`
 - `VCI_PROXY_READ_AHEAD_MAX_CONSECUTIVE_EMPTY_READS=0`
+- `VCI_PROXY_READ_AHEAD_MIN_DRAIN_MS=0`
 - `VCI_PROXY_READ_AHEAD_TRANSACTION=0`
 - `VCI_PROXY_READ_AHEAD_TRANSACTION_MAX_NETWORK_MS=750`
 - `VCI_PROXY_READ_AHEAD_TRANSACTION_COOLDOWN_MS=10000`
@@ -336,6 +338,10 @@ Reverse server and reverse client CLI overrides:
   explicitly set
 - `--read-ahead-max-consecutive-empty-reads <count>`; default `0`, disabled
   unless explicitly set
+- `--read-ahead-min-drain-ms <milliseconds>`; default `0`, disabled unless
+  explicitly set. When set, early empty read-ahead polls do not stop collection
+  before this minimum drain window elapses; the local client spaces retries
+  briefly so delayed ECU frames can still be captured near the VCI.
 - `--read-ahead-transaction`; enables the internal
   `WRITE_AND_COLLECT_READS_REQ` RPC when both sides advertise support
 - `--no-read-ahead-transaction`; disables that internal transaction path even if
