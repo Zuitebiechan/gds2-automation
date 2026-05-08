@@ -70,6 +70,8 @@ DEFAULT_CONFIG = {
     "read_ahead_max_reads": 3,
     "read_ahead_read_timeout_ms": 0,
     "read_ahead_max_messages": 16,
+    "read_ahead_max_empty_reads": 0,
+    "read_ahead_max_consecutive_empty_reads": 0,
     "read_ahead_transaction_enabled": False,
 }
 
@@ -86,6 +88,8 @@ TUNNEL_RESTART_KEYS = (
     "read_ahead_max_reads",
     "read_ahead_read_timeout_ms",
     "read_ahead_max_messages",
+    "read_ahead_max_empty_reads",
+    "read_ahead_max_consecutive_empty_reads",
     "read_ahead_transaction_enabled",
 )
 
@@ -140,6 +144,12 @@ def apply_read_ahead_env_overrides(
         max_reads=config_int(cfg, "read_ahead_max_reads", 3),
         read_timeout_ms=config_int(cfg, "read_ahead_read_timeout_ms", 0),
         max_messages=config_int(cfg, "read_ahead_max_messages", 16),
+        max_empty_reads=config_int(cfg, "read_ahead_max_empty_reads", 0),
+        max_consecutive_empty_reads=config_int(
+            cfg,
+            "read_ahead_max_consecutive_empty_reads",
+            0,
+        ),
         transaction_enabled=bool(cfg.get("read_ahead_transaction_enabled")),
     )
     read_ahead = read_ahead_config_from_env(base, environ=environ)
@@ -151,6 +161,10 @@ def apply_read_ahead_env_overrides(
             "read_ahead_max_reads": read_ahead.max_reads,
             "read_ahead_read_timeout_ms": read_ahead.read_timeout_ms,
             "read_ahead_max_messages": read_ahead.max_messages,
+            "read_ahead_max_empty_reads": read_ahead.max_empty_reads,
+            "read_ahead_max_consecutive_empty_reads": (
+                read_ahead.max_consecutive_empty_reads
+            ),
             "read_ahead_transaction_enabled": read_ahead.transaction_enabled,
         }
     )
@@ -951,6 +965,12 @@ class VCIProxyTrayApp:
             read_ahead_max_reads=config_int(cfg, "read_ahead_max_reads", 3),
             read_ahead_read_timeout_ms=config_int(cfg, "read_ahead_read_timeout_ms", 0),
             read_ahead_max_messages=config_int(cfg, "read_ahead_max_messages", 16),
+            read_ahead_max_empty_reads=config_int(cfg, "read_ahead_max_empty_reads", 0),
+            read_ahead_max_consecutive_empty_reads=config_int(
+                cfg,
+                "read_ahead_max_consecutive_empty_reads",
+                0,
+            ),
             read_ahead_transaction_enabled=bool(cfg.get("read_ahead_transaction_enabled")),
         )
 

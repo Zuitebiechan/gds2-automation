@@ -628,6 +628,51 @@ def test_handle_write_msgs_attaches_prefetch_bundle_when_read_ahead_enabled(monk
     ]
 
 
+def test_handle_write_msgs_read_ahead_stops_on_consecutive_empty_reads(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    observed: list[tuple[str, int, int, int]] = []
+    read_results = iter([(BUFFER_EMPTY, []), (BUFFER_EMPTY, []), (0, [{"protocol_id": 6, "data": b"\x62"}])])
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_max_reads=5,
+            read_ahead_max_messages=4,
+            read_ahead_read_timeout_ms=0,
+            read_ahead_max_consecutive_empty_reads=2,
+        ),
+    )
+    client._server_read_ahead_enabled = True
+    client.driver = types.SimpleNamespace(
+        write_msgs=lambda channel_id, messages, timeout: (
+            observed.append(("write_msgs", channel_id, len(messages), timeout))
+            or (0, len(messages))
+        ),
+        read_msgs=lambda channel_id, num_msgs, timeout: (
+            observed.append(("read_msgs", channel_id, num_msgs, timeout))
+            or next(read_results)
+        ),
+    )
+    body = ProtocolEncoder.encode_write_msgs_req(
+        44,
+        [{"protocol_id": 6, "data": b"\x22"}],
+        timeout=25,
+        sequence=7,
+    )[HEADER_SIZE:]
+
+    response = asyncio.run(client._handle_write_msgs(body, sequence=7))
+    clean_body, bundle = strip_read_msgs_prefetch_bundle(response[HEADER_SIZE:])
+
+    assert clean_body == ProtocolEncoder.encode_write_msgs_rsp(0, 1, sequence=7)[HEADER_SIZE:]
+    assert bundle is None
+    assert observed == [
+        ("write_msgs", 44, 1, 25),
+        ("read_msgs", 44, 4, 0),
+        ("read_msgs", 44, 4, 0),
+    ]
+
+
 def test_handle_write_and_collect_reads_uses_transaction_limits(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("APPDATA", str(tmp_path))
     observed: list[tuple[str, int, int, int]] = []

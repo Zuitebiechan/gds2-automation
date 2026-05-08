@@ -377,6 +377,8 @@ VCI_PROXY_READ_AHEAD_WINDOW_MS=200
 VCI_PROXY_READ_AHEAD_MAX_READS=3
 VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS=0
 VCI_PROXY_READ_AHEAD_MAX_MESSAGES=16
+VCI_PROXY_READ_AHEAD_MAX_EMPTY_READS=0
+VCI_PROXY_READ_AHEAD_MAX_CONSECUTIVE_EMPTY_READS=0
 VCI_PROXY_READ_AHEAD_TRANSACTION=0
 VCI_PROXY_READ_AHEAD_TRANSACTION_MAX_NETWORK_MS=750
 VCI_PROXY_READ_AHEAD_TRANSACTION_COOLDOWN_MS=10000
@@ -391,7 +393,8 @@ Set `VCI_PROXY_READ_AHEAD_WINDOW_MS` to `0` to keep the feature configured but
 prevent local read collection. CLI flags still exist for one-off tests:
 `--read-ahead`, `--no-read-ahead`, `--read-ahead-window-ms`,
 `--read-ahead-max-reads`, `--read-ahead-read-timeout-ms`,
-`--read-ahead-max-messages`, `--read-ahead-transaction`, and
+`--read-ahead-max-messages`, `--read-ahead-max-empty-reads`,
+`--read-ahead-max-consecutive-empty-reads`, `--read-ahead-transaction`, and
 `--no-read-ahead-transaction`. The reverse-server-only slow-link guard is
 controlled by `--read-ahead-transaction-max-network-ms` and
 `--read-ahead-transaction-cooldown-ms`.
@@ -407,10 +410,11 @@ Important behavior rules:
   its local config flag is set.
 - If channel state changes, clear prefetch FIFO.
 - If `STOP_FILTER_REQ`, mutating `IOCTL_REQ`, `DISCONNECT_REQ`, or `CLOSE_REQ` occurs, clear affected FIFO.
-- If GDS2 requests more messages than prefetched, the current implementation can
-  return fewer messages from the FIFO, matching normal `PassThruReadMsgs`
-  behavior. A future hardening pass can add partial FIFO plus tunnel merge if
-  logs show it is necessary.
+- If GDS2 requests more messages than prefetched, the server now forwards one
+  reduced `READ_MSGS_REQ` for the remaining count and merges prefetched frames
+  first, then tunnel frames. If the reduced tunnel read returns `BUFFER_EMPTY`,
+  the prefetched frames are returned with success. If it returns another error,
+  the drained FIFO frames are restored and the tunnel error is returned.
 - If a `READ_MSGS_REQ` arrives while read-ahead is in progress, a future
   hardening pass may wait for a very small grace window, for example `20-40ms`,
   then fall back to a real tunnel read.

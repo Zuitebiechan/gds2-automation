@@ -32,7 +32,7 @@ from diagnostic_platform.observability import (
 )
 
 from .config import ProxyConfig
-from .cache_read_msgs import ReadMsgsCache
+from .cache_read_msgs import BUFFER_EMPTY, ReadMsgsCache
 from .cache_filter_dedup import FilterDeduplicationCache
 from .cache_ioctl import IoctlCache
 from .auth import MAX_DRIFT_S, verify_signature
@@ -42,7 +42,7 @@ from .benchmark import (
     make_proxy_benchmark_event,
     strip_timing_trailer,
 )
-from .prefetch_read_msgs import PrefetchReadMsgsBuffer
+from .prefetch_read_msgs import PrefetchReadMsgsBuffer, PrefetchReadMsgsDrain
 from .protocol import (
     MAGIC,
     HEADER_SIZE,
@@ -240,6 +240,7 @@ class ReverseProxyServer:
             enabled=self.config.read_ahead.enabled,
             max_messages=self.config.read_ahead.max_messages,
         )
+        self._prefetch_read_locks: dict[int, asyncio.Lock] = {}
         # channel_id -> (dll sequence, monotonic timestamp)
         self._last_write_by_channel: dict[int, tuple[int | None, float]] = {}
         # channel_id -> (message name, dll sequence, monotonic timestamp)
@@ -1275,6 +1276,11 @@ class ReverseProxyServer:
         bypass_ms = self.config.read_msgs_cache.post_write_bypass_ms
         if isinstance(age_ms, (int, float)) and bypass_ms > 0 and age_ms <= bypass_ms:
             return "post_write_bypass"
+        if (
+            self.config.read_ahead.enabled
+            and request_fields.get("prefetch_fifo_pending_before") == 0
+        ):
+            return "prefetch_miss"
         return "cache_miss"
 
     def _emit_process_lifecycle_event(
@@ -1382,11 +1388,13 @@ class ReverseProxyServer:
             )
         if self.config.read_ahead.enabled:
             logger.info(
-                "Read-ahead enabled (window=%sms, max_reads=%s, timeout=%sms, max_messages=%s, transaction=%s, transaction_guard=%sms/%sms)",
+                "Read-ahead enabled (window=%sms, max_reads=%s, timeout=%sms, max_messages=%s, max_empty_reads=%s, max_consecutive_empty_reads=%s, transaction=%s, transaction_guard=%sms/%sms)",
                 self.config.read_ahead.window_ms,
                 self.config.read_ahead.max_reads,
                 self.config.read_ahead.read_timeout_ms,
                 self.config.read_ahead.max_messages,
+                self.config.read_ahead.max_empty_reads,
+                self.config.read_ahead.max_consecutive_empty_reads,
                 "enabled" if self.config.read_ahead.transaction_enabled else "disabled",
                 self.config.read_ahead.transaction_max_network_ms,
                 self.config.read_ahead.transaction_cooldown_ms,
@@ -1416,6 +1424,10 @@ class ReverseProxyServer:
                 tls_enabled=self.config.tls.enabled,
                 read_ahead_enabled=self.config.read_ahead.enabled,
                 read_ahead_transaction_enabled=self.config.read_ahead.transaction_enabled,
+                read_ahead_max_empty_reads=self.config.read_ahead.max_empty_reads,
+                read_ahead_max_consecutive_empty_reads=(
+                    self.config.read_ahead.max_consecutive_empty_reads
+                ),
                 read_ahead_transaction_max_network_ms=(
                     self.config.read_ahead.transaction_max_network_ms
                 ),
@@ -2012,6 +2024,333 @@ class ReverseProxyServer:
                 )
             writer.close()
 
+    @staticmethod
+    def _frame_response(resp_type: int, resp_body: bytes, sequence: int) -> bytes:
+        return Message(resp_type, sequence, resp_body).encode()
+
+    @staticmethod
+    def _prefetch_drain_fields(drain: PrefetchReadMsgsDrain) -> dict[str, object]:
+        return {
+            "prefetch_fifo_pending_before": drain.pending_before,
+            "prefetch_fifo_pending_after": drain.pending_after,
+            "prefetch_requested_count": drain.requested_count,
+            "prefetch_served_count": drain.served_count,
+            "prefetch_underfill_count": drain.underfill_count,
+        }
+
+    def _prefetch_read_lock(self, channel_id: int) -> asyncio.Lock:
+        lock = self._prefetch_read_locks.get(channel_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._prefetch_read_locks[channel_id] = lock
+        return lock
+
+    def _finalize_prefetch_underfill_response(
+        self,
+        drain: PrefetchReadMsgsDrain,
+        *,
+        resp_type: int,
+        resp_body: bytes,
+        sequence: int,
+    ) -> tuple[int, bytes, str, dict[str, object], bool]:
+        """Merge a partial FIFO drain with the reduced tunnel response.
+
+        Returns (final_type, final_body, reason, fields, should_restore_fifo).
+        """
+        fields: dict[str, object] = {}
+        if resp_type != MsgType.READ_MSGS_RSP:
+            fields["prefetch_merge_unexpected_resp_type"] = int(resp_type)
+            return (
+                resp_type,
+                resp_body,
+                "prefetch_underfill_tunnel_unexpected_response",
+                fields,
+                True,
+            )
+
+        try:
+            return_code, tunnel_messages = ProtocolDecoder.decode_read_msgs_rsp(resp_body)
+        except Exception:
+            fields["prefetch_merge_decode_error"] = True
+            return (
+                resp_type,
+                resp_body,
+                "prefetch_underfill_tunnel_decode_error",
+                fields,
+                True,
+            )
+
+        fields.update(
+            {
+                "prefetch_merge_tunnel_return_code": return_code,
+                "prefetch_merge_tunnel_message_count": len(tunnel_messages),
+            }
+        )
+
+        if return_code == 0:
+            limited_tunnel_messages = tunnel_messages[:drain.underfill_count]
+            fields["prefetch_merge_tunnel_limited_message_count"] = len(
+                limited_tunnel_messages
+            )
+            merged_messages = list(drain.messages) + limited_tunnel_messages
+            fields["prefetch_merge_final_message_count"] = len(merged_messages)
+            final_body = ProtocolEncoder.encode_read_msgs_rsp(
+                0,
+                merged_messages,
+                sequence,
+            )[HEADER_SIZE:]
+            return (
+                MsgType.READ_MSGS_RSP,
+                final_body,
+                "prefetch_merge_tunnel_data",
+                fields,
+                False,
+            )
+
+        if return_code == BUFFER_EMPTY:
+            merged_messages = list(drain.messages)
+            fields["prefetch_merge_final_message_count"] = len(merged_messages)
+            final_body = ProtocolEncoder.encode_read_msgs_rsp(
+                0,
+                merged_messages,
+                sequence,
+            )[HEADER_SIZE:]
+            return (
+                MsgType.READ_MSGS_RSP,
+                final_body,
+                "prefetch_merge_tunnel_empty",
+                fields,
+                False,
+            )
+
+        return (
+            resp_type,
+            resp_body,
+            "prefetch_underfill_tunnel_error",
+            fields,
+            True,
+        )
+
+    async def _serve_prefetch_underfill(
+        self,
+        *,
+        writer: asyncio.StreamWriter,
+        body: bytes,
+        sequence: int,
+        msg_name: str,
+        started_at_s: float,
+        request_fields: dict[str, object],
+        drain: PrefetchReadMsgsDrain,
+    ) -> bool:
+        remaining = drain.underfill_count
+        merge_fields = {
+            **self._prefetch_drain_fields(drain),
+            "prefetch_merge_requested_count": remaining,
+        }
+        event_fields = {**request_fields, **merge_fields}
+        self._emit_proxy_request_event(
+            "proxy.request.cache_decision",
+            dll_seq=sequence,
+            msg_name=msg_name,
+            cache_hit=False,
+            reason="prefetch_underfill_forwarded",
+            **event_fields,
+        )
+
+        new_seq = self._next_sequence()
+        fwd_start = time.monotonic()
+        future = asyncio.get_running_loop().create_future()
+        self.response_futures[new_seq] = future
+        tunnel_request = ProtocolEncoder.encode_read_msgs_req(
+            drain.channel_id,
+            num_msgs=remaining,
+            timeout=int(request_fields.get("timeout", 0)),
+            sequence=new_seq,
+        )
+
+        try:
+            async with self.vci_lock:
+                if self.vci_writer is None:
+                    raise ConnectionError("VCI tunnel disconnected")
+                self.vci_writer.write(tunnel_request)
+                await self.vci_writer.drain()
+            self._emit_proxy_request_event(
+                "proxy.request.forwarded_to_tunnel",
+                dll_seq=sequence,
+                proxy_seq=new_seq,
+                msg_name=msg_name,
+                reason="prefetch_underfill_forwarded",
+                forwarded_msg_type=int(MsgType.READ_MSGS_REQ),
+                forwarded_msg_name=MSG_NAMES.get(MsgType.READ_MSGS_REQ),
+                reduced_num_msgs=remaining,
+                original_num_msgs=drain.requested_count,
+                **event_fields,
+                **self._read_ahead_transaction_guard_fields(),
+            )
+        except Exception as exc:
+            logger.error("Failed to forward reduced ReadMsgs request: %s", exc)
+            self.response_futures.pop(new_seq, None)
+            restored = self._prefetch_read_msgs.restore_front(
+                drain.channel_id,
+                drain.messages,
+            )
+            self._emit_proxy_request_event(
+                "proxy.request.failed",
+                dll_seq=sequence,
+                proxy_seq=new_seq,
+                msg_name=msg_name,
+                status="error",
+                failure_code="forward_failed",
+                failure_domain="cloud_proxy_tunnel",
+                reason=str(exc),
+                prefetch_restored_count=restored,
+                **event_fields,
+            )
+            return False
+
+        try:
+            resp_type, resp_body, hw_ms = await asyncio.wait_for(future, timeout=30.0)
+        except (asyncio.TimeoutError, ConnectionError) as exc:
+            self.response_futures.pop(new_seq, None)
+            fwd_ms = (time.monotonic() - fwd_start) * 1000
+            restored = self._prefetch_read_msgs.restore_front(
+                drain.channel_id,
+                drain.messages,
+            )
+            reason = "VCI_DISCONNECTED" if isinstance(exc, ConnectionError) else "TIMEOUT"
+            self._cancel_sweep_plan("gds2_communication_error")
+            self._record_benchmark_event(
+                started_at_s=started_at_s,
+                duration_ms=fwd_ms,
+                msg_type=MsgType.READ_MSGS_REQ,
+                req_body=body,
+                resp_type=None,
+                resp_body=b"",
+                cache_hit=False,
+                status=reason.lower(),
+            )
+            self._emit_proxy_request_event(
+                "proxy.request.timeout" if isinstance(exc, asyncio.TimeoutError) else "proxy.request.failed",
+                dll_seq=sequence,
+                proxy_seq=new_seq,
+                msg_name=msg_name,
+                status="error",
+                failure_code="timeout" if isinstance(exc, asyncio.TimeoutError) else "vci_disconnected",
+                failure_domain="cloud_proxy_tunnel",
+                reason="wait_response_timeout" if isinstance(exc, asyncio.TimeoutError) else "wait_response_connection_lost",
+                duration_ms=fwd_ms,
+                prefetch_restored_count=restored,
+                **event_fields,
+            )
+            logger.error("[PROXY] %s seq=%s %s after %.0fms", msg_name, sequence, reason, fwd_ms)
+            return False
+
+        fwd_ms = (time.monotonic() - fwd_start) * 1000
+        network_ms = max(0.0, fwd_ms - float(hw_ms or 0.0))
+        self._arm_read_ahead_transaction_guard(
+            network_ms=network_ms,
+            duration_ms=fwd_ms,
+            dll_seq=sequence,
+            proxy_seq=new_seq,
+            msg_name=msg_name,
+            request_fields=event_fields,
+        )
+        final_type, final_body, reason, final_fields, should_restore = (
+            self._finalize_prefetch_underfill_response(
+                drain,
+                resp_type=resp_type,
+                resp_body=resp_body,
+                sequence=sequence,
+            )
+        )
+        if should_restore:
+            final_fields["prefetch_restored_count"] = self._prefetch_read_msgs.restore_front(
+                drain.channel_id,
+                drain.messages,
+            )
+
+        self._observe_sweep_write_response(
+            MsgType.READ_MSGS_REQ,
+            body,
+            final_type,
+            final_body,
+            dll_seq=sequence,
+            msg_name=msg_name,
+            duration_ms=fwd_ms,
+            network_ms=network_ms,
+        )
+        if final_type == MsgType.READ_MSGS_RSP:
+            self._record_in_caches(
+                MsgType.READ_MSGS_REQ,
+                body,
+                final_type,
+                final_body,
+                ioctl_id=None,
+            )
+        response_fields = self._response_observability_fields(final_type, final_body)
+        self._augment_read_payload_delta_fields(request_fields, response_fields)
+        self._observe_sweep_read_response(
+            MsgType.READ_MSGS_REQ,
+            body,
+            final_type,
+            final_body,
+            dll_seq=sequence,
+            msg_name=msg_name,
+            duration_ms=fwd_ms,
+            network_ms=network_ms,
+            cache_hit=False,
+        )
+        self._record_benchmark_event(
+            started_at_s=started_at_s,
+            duration_ms=fwd_ms,
+            msg_type=MsgType.READ_MSGS_REQ,
+            req_body=body,
+            resp_type=final_type,
+            resp_body=final_body,
+            cache_hit=False,
+            status="success",
+            hw_ms=hw_ms,
+        )
+        self._emit_proxy_request_event(
+            "proxy.request.response_received",
+            dll_seq=sequence,
+            proxy_seq=new_seq,
+            msg_name=msg_name,
+            duration_ms=fwd_ms,
+            hw_ms=hw_ms,
+            network_ms=network_ms,
+            reason=reason,
+            **event_fields,
+            **final_fields,
+            **response_fields,
+        )
+
+        writer.write(self._frame_response(final_type, final_body, sequence))
+        await writer.drain()
+        self._emit_proxy_request_event(
+            "proxy.request.replied_to_dll",
+            dll_seq=sequence,
+            proxy_seq=new_seq,
+            msg_name=msg_name,
+            duration_ms=fwd_ms,
+            hw_ms=hw_ms,
+            network_ms=network_ms,
+            reason=reason,
+            **event_fields,
+            **final_fields,
+            **response_fields,
+        )
+        self._schedule_sweep_poll()
+
+        if fwd_ms > 1000:
+            logger.warning(
+                "Slow proxy request: %s seq=%s duration=%.1fms",
+                msg_name,
+                sequence,
+                fwd_ms,
+            )
+        return True
+
     def _try_serve_cached(self, msg_type: int, body: bytes,
                           sequence: int) -> tuple[Optional[bytes], Optional[int], str | None]:
         """Try to serve the request from cache.
@@ -2024,15 +2363,11 @@ class ReverseProxyServer:
 
         if msg_type == MsgType.READ_MSGS_REQ:
             channel_id, num_msgs, timeout = ProtocolDecoder.decode_read_msgs_req(body)
-            prefetched = self._prefetch_read_msgs.try_serve(channel_id, num_msgs, sequence)
-            if prefetched is not None:
-                return prefetched, ioctl_id, "prefetch_hit"
-
             cached = self._read_cache.try_serve_from_cache(
                 channel_id, num_msgs, timeout, sequence
             )
             if cached is not None:
-                return cached, ioctl_id, "cache_hit"
+                return cached, ioctl_id, "empty_cache_hit"
 
         elif msg_type == MsgType.START_FILTER_REQ:
             cached = self._filter_cache.try_dedup(body, sequence)
@@ -2696,10 +3031,36 @@ class ReverseProxyServer:
                     msg_name=msg_name,
                 )
 
-                # Try serving from cache
-                cached, ioctl_id, cache_reason = self._try_serve_cached(
-                    msg_type, body, sequence
-                )
+                # Try serving from consume-once read-ahead FIFO before empty cache.
+                cached = None
+                ioctl_id = None
+                cache_reason = None
+                if msg_type == MsgType.READ_MSGS_REQ:
+                    channel_id, num_msgs, _timeout = ProtocolDecoder.decode_read_msgs_req(body)
+                    async with self._prefetch_read_lock(channel_id):
+                        drain = self._prefetch_read_msgs.drain(channel_id, num_msgs)
+                        request_fields.update(self._prefetch_drain_fields(drain))
+                        if drain.is_full:
+                            cached = drain.to_response(sequence)
+                            cache_reason = "prefetch_hit"
+                        elif drain.is_partial:
+                            served = await self._serve_prefetch_underfill(
+                                writer=writer,
+                                body=body,
+                                sequence=sequence,
+                                msg_name=msg_name,
+                                started_at_s=started_at_s,
+                                request_fields=request_fields,
+                                drain=drain,
+                            )
+                            if served:
+                                continue
+                            break
+
+                if cached is None:
+                    cached, ioctl_id, cache_reason = self._try_serve_cached(
+                        msg_type, body, sequence
+                    )
                 if cached is not None:
                     self._emit_proxy_request_event(
                         "proxy.request.cache_decision",
@@ -3028,6 +3389,10 @@ def main():
                        help='Timeout passed to local read-ahead ReadMsgs calls in ms (default: 0 or VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS)')
     parser.add_argument('--read-ahead-max-messages', type=int, default=None,
                        help='Maximum prefetched messages retained per channel (default: 16 or VCI_PROXY_READ_AHEAD_MAX_MESSAGES)')
+    parser.add_argument('--read-ahead-max-empty-reads', type=int, default=None,
+                       help='Stop local read-ahead after this many empty reads (default: 0 or VCI_PROXY_READ_AHEAD_MAX_EMPTY_READS; 0 disables)')
+    parser.add_argument('--read-ahead-max-consecutive-empty-reads', type=int, default=None,
+                       help='Stop local read-ahead after this many consecutive empty reads (default: 0 or VCI_PROXY_READ_AHEAD_MAX_CONSECUTIVE_EMPTY_READS; 0 disables)')
     parser.add_argument('--read-ahead-transaction', dest='read_ahead_transaction', action='store_true', default=None,
                        help='Enable internal WRITE_AND_COLLECT_READS transaction RPC when the client advertises support (or VCI_PROXY_READ_AHEAD_TRANSACTION=1)')
     parser.add_argument('--no-read-ahead-transaction', dest='read_ahead_transaction', action='store_false',
@@ -3094,6 +3459,10 @@ def main():
         read_ahead_max_reads=args.read_ahead_max_reads,
         read_ahead_read_timeout_ms=args.read_ahead_read_timeout_ms,
         read_ahead_max_messages=args.read_ahead_max_messages,
+        read_ahead_max_empty_reads=args.read_ahead_max_empty_reads,
+        read_ahead_max_consecutive_empty_reads=(
+            args.read_ahead_max_consecutive_empty_reads
+        ),
         read_ahead_transaction_enabled=args.read_ahead_transaction,
         read_ahead_transaction_max_network_ms=args.read_ahead_transaction_max_network_ms,
         read_ahead_transaction_cooldown_ms=args.read_ahead_transaction_cooldown_ms,
@@ -3142,12 +3511,14 @@ def main():
         config.read_msgs_cache.max_cacheable_timeout_ms,
     )
     logger.info(
-        "Read-ahead: %s (window=%sms, max_reads=%s, timeout=%sms, max_messages=%s, transaction=%s, transaction_guard=%sms/%sms)",
+        "Read-ahead: %s (window=%sms, max_reads=%s, timeout=%sms, max_messages=%s, max_empty_reads=%s, max_consecutive_empty_reads=%s, transaction=%s, transaction_guard=%sms/%sms)",
         "enabled" if config.read_ahead.enabled else "disabled",
         config.read_ahead.window_ms,
         config.read_ahead.max_reads,
         config.read_ahead.read_timeout_ms,
         config.read_ahead.max_messages,
+        config.read_ahead.max_empty_reads,
+        config.read_ahead.max_consecutive_empty_reads,
         "enabled" if config.read_ahead.transaction_enabled else "disabled",
         config.read_ahead.transaction_max_network_ms,
         config.read_ahead.transaction_cooldown_ms,

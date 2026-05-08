@@ -14,6 +14,10 @@ READ_AHEAD_WINDOW_MS_ENV = "VCI_PROXY_READ_AHEAD_WINDOW_MS"
 READ_AHEAD_MAX_READS_ENV = "VCI_PROXY_READ_AHEAD_MAX_READS"
 READ_AHEAD_READ_TIMEOUT_MS_ENV = "VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS"
 READ_AHEAD_MAX_MESSAGES_ENV = "VCI_PROXY_READ_AHEAD_MAX_MESSAGES"
+READ_AHEAD_MAX_EMPTY_READS_ENV = "VCI_PROXY_READ_AHEAD_MAX_EMPTY_READS"
+READ_AHEAD_MAX_CONSECUTIVE_EMPTY_READS_ENV = (
+    "VCI_PROXY_READ_AHEAD_MAX_CONSECUTIVE_EMPTY_READS"
+)
 READ_AHEAD_TRANSACTION_ENV = "VCI_PROXY_READ_AHEAD_TRANSACTION"
 READ_AHEAD_TRANSACTION_MAX_NETWORK_MS_ENV = (
     "VCI_PROXY_READ_AHEAD_TRANSACTION_MAX_NETWORK_MS"
@@ -45,6 +49,8 @@ READ_AHEAD_ENV_NAMES = (
     READ_AHEAD_MAX_READS_ENV,
     READ_AHEAD_READ_TIMEOUT_MS_ENV,
     READ_AHEAD_MAX_MESSAGES_ENV,
+    READ_AHEAD_MAX_EMPTY_READS_ENV,
+    READ_AHEAD_MAX_CONSECUTIVE_EMPTY_READS_ENV,
     READ_AHEAD_TRANSACTION_ENV,
     READ_AHEAD_TRANSACTION_MAX_NETWORK_MS_ENV,
     READ_AHEAD_TRANSACTION_COOLDOWN_MS_ENV,
@@ -176,6 +182,8 @@ class ReadAheadConfig:
     max_reads: int = 3
     read_timeout_ms: int = 0
     max_messages: int = 16
+    max_empty_reads: int = 0
+    max_consecutive_empty_reads: int = 0
     transaction_enabled: bool = False
     transaction_max_network_ms: int = 750
     transaction_cooldown_ms: int = 10000
@@ -244,6 +252,22 @@ def read_ahead_config_from_env(
             READ_AHEAD_MAX_MESSAGES_ENV,
             base.max_messages,
             environ=environ,
+        ),
+        max_empty_reads=max(
+            0,
+            env_int(
+                READ_AHEAD_MAX_EMPTY_READS_ENV,
+                base.max_empty_reads,
+                environ=environ,
+            ),
+        ),
+        max_consecutive_empty_reads=max(
+            0,
+            env_int(
+                READ_AHEAD_MAX_CONSECUTIVE_EMPTY_READS_ENV,
+                base.max_consecutive_empty_reads,
+                environ=environ,
+            ),
         ),
         transaction_enabled=env_bool(
             READ_AHEAD_TRANSACTION_ENV,
@@ -442,6 +466,18 @@ class ProxyConfig:
                 read_ahead_defaults.max_messages
                 if kwargs.get("read_ahead_max_messages") is None
                 else kwargs.get("read_ahead_max_messages")
+            ),
+            max_empty_reads=max(
+                0,
+                read_ahead_defaults.max_empty_reads
+                if kwargs.get("read_ahead_max_empty_reads") is None
+                else int(kwargs.get("read_ahead_max_empty_reads")),
+            ),
+            max_consecutive_empty_reads=max(
+                0,
+                read_ahead_defaults.max_consecutive_empty_reads
+                if kwargs.get("read_ahead_max_consecutive_empty_reads") is None
+                else int(kwargs.get("read_ahead_max_consecutive_empty_reads")),
             ),
             transaction_enabled=(
                 read_ahead_defaults.transaction_enabled

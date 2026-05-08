@@ -212,6 +212,8 @@ Read-ahead keys are also accepted for guarded Phase 3 testing:
 - `read_ahead_max_reads`
 - `read_ahead_read_timeout_ms`
 - `read_ahead_max_messages`
+- `read_ahead_max_empty_reads`
+- `read_ahead_max_consecutive_empty_reads`
 - `read_ahead_transaction_enabled`
 
 These values are passed through to `vci_proxy.reverse_client.ReverseProxyClient`
@@ -293,6 +295,8 @@ Unified runtime config:
 - `VCI_PROXY_READ_AHEAD_MAX_READS=3`
 - `VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS=0`
 - `VCI_PROXY_READ_AHEAD_MAX_MESSAGES=16`
+- `VCI_PROXY_READ_AHEAD_MAX_EMPTY_READS=0`
+- `VCI_PROXY_READ_AHEAD_MAX_CONSECUTIVE_EMPTY_READS=0`
 - `VCI_PROXY_READ_AHEAD_TRANSACTION=0`
 - `VCI_PROXY_READ_AHEAD_TRANSACTION_MAX_NETWORK_MS=750`
 - `VCI_PROXY_READ_AHEAD_TRANSACTION_COOLDOWN_MS=10000`
@@ -328,6 +332,10 @@ Reverse server and reverse client CLI overrides:
 - `--read-ahead-max-reads <count>`; default `3`
 - `--read-ahead-read-timeout-ms <milliseconds>`; default `0`
 - `--read-ahead-max-messages <count>`; default `16`
+- `--read-ahead-max-empty-reads <count>`; default `0`, disabled unless
+  explicitly set
+- `--read-ahead-max-consecutive-empty-reads <count>`; default `0`, disabled
+  unless explicitly set
 - `--read-ahead-transaction`; enables the internal
   `WRITE_AND_COLLECT_READS_REQ` RPC when both sides advertise support
 - `--no-read-ahead-transaction`; disables that internal transaction path even if
@@ -383,11 +391,15 @@ FIFO cleanup:
 - `START_FILTER_REQ`, `STOP_FILTER_REQ`, and non-cacheable/mutating `IOCTL_REQ`
   clear the affected channel
 
-Current limitation: if GDS2 requests more messages than are prefetched, the
-server can return fewer messages from the FIFO rather than merging with an
-additional tunnel read. That keeps the first implementation conservative and
-avoids duplicating consumed frames. Real-vehicle A/B logs should decide whether a
-partial FIFO plus tunnel-merge hardening pass is worthwhile.
+If GDS2 requests more messages than are currently prefetched, the server now
+drains the available FIFO frames, forwards one reduced `READ_MSGS_REQ` for the
+remaining count, and returns the prefetched frames first followed by any tunnel
+frames. If the reduced tunnel read returns `BUFFER_EMPTY`, the server returns
+the prefetched frames with success. If the reduced tunnel read returns another
+error, the server restores the drained FIFO frames and returns the real tunnel
+error to preserve J2534-visible semantics. Same-channel FIFO drain/merge is
+serialized with a per-channel lock so another `READ_MSGS_REQ` cannot observe
+the FIFO while a partial underfill fallback is still waiting on the tunnel.
 
 ### Local sweep observe/shadow
 

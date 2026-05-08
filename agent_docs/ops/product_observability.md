@@ -213,6 +213,8 @@ actually active:
 
 - cloud `reverse_server` `process.lifecycle.started`:
   `read_ahead_enabled`, `read_ahead_transaction_enabled`,
+  `read_ahead_max_empty_reads`,
+  `read_ahead_max_consecutive_empty_reads`,
   `read_ahead_transaction_max_network_ms`,
   `read_ahead_transaction_cooldown_ms`, `local_sweep_enabled`,
   `local_sweep_mode`, and `local_sweep_shadow_allow_gm_a9_packet`;
@@ -286,6 +288,7 @@ Latest known interpretation:
   - emits tunnel lifecycle, probe, tunnel-quality, proxy-request staged events, and reverse-server process lifecycle events
   - reverse-server process lifecycle events include local sweep mode, `local_sweep_allow_gm_a9_packet`, `local_sweep_shadow_allow_gm_a9_packet`, and `local_sweep_min_item_interval_ms` when reporting startup configuration
   - proxy-request events for `READ_MSGS_REQ` include decoded request metadata (`channel_id`, `num_msgs`, `timeout`) and, when applicable, `last_write_seq` plus `post_write_age_ms`
+  - read-ahead FIFO decisions add `prefetch_fifo_pending_before`, `prefetch_fifo_pending_after`, `prefetch_requested_count`, `prefetch_served_count`, and `prefetch_underfill_count`; partial FIFO fallback uses `reason=prefetch_underfill_forwarded`, then response/reply events use `prefetch_merge_tunnel_data`, `prefetch_merge_tunnel_empty`, or `prefetch_underfill_tunnel_error`
   - proxy-request response events for `READ_MSGS_RSP` include `return_code`, `message_count`, `payload_bytes`, `read_result` (`empty` or `data`), redacted payload digest/prefix samples, and read-payload change markers
   - `WRITE_MSGS_REQ` request events include `channel_id`, `write_message_count`, `timeout`, `write_payload_bytes`, and redacted payload digest/prefix samples without logging full raw payload data
   - read-ahead transaction guard events include `read_ahead.transaction.guard_armed`; while active, forwarded write events record `reason=write_collect_guarded_no_collect` plus guard fields such as `read_ahead_transaction_guard_active`, `read_ahead_transaction_guard_reason`, `read_ahead_transaction_guard_remaining_ms`, `read_ahead_transaction_max_network_ms`, and `read_ahead_transaction_cooldown_ms`
@@ -298,6 +301,7 @@ Latest known interpretation:
   - `sweep.shadow.*` comparison events now include `sweep_shadow_clean_match_streak` and `sweep_replay_min_clean_matches`; `proxy.request.active_replay_armed` / `proxy.request.active_replay_served` include the same replay-quality gate fields when replay is actually permitted
 - `vci_proxy/reverse_client.py`
   - emits reverse tunnel connection lifecycle, request receipt, and J2534 call events
+  - local read-ahead collection emits `read_ahead.collection_finished` with attempted/data/empty read counts, collected message counts, effective budgets, and the stop reason
   - local sweep executor logs distinguish plan start/stop, shadow item execution, foreground invalidation, configured/effective shadow item interval, and error count; cacheable/read-only IOCTL foreground calls pause through the shared driver lock without emitting a shadow stop
 - `vci_proxy/j2534_worker.py`
   - emits worker lifecycle, spawn status, RPC receipt/return/failure, and propagates `worker_request_id`

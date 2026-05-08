@@ -1170,6 +1170,10 @@ class ReverseProxyClient:
             read_ahead.max_messages,
             read_ahead.max_messages if max_messages is None else int(max_messages),
         )
+        effective_max_empty_reads = int(read_ahead.max_empty_reads)
+        effective_max_consecutive_empty_reads = int(
+            read_ahead.max_consecutive_empty_reads
+        )
         if (
             effective_window_ms <= 0
             or effective_max_reads <= 0
@@ -1180,14 +1184,22 @@ class ReverseProxyClient:
         deadline = time.monotonic() + max(0, effective_window_ms) / 1000.0
         collected: list[bytes] = []
         collected_messages = 0
+        attempted_reads = 0
+        data_reads = 0
+        empty_reads = 0
+        consecutive_empty_reads = 0
+        stop_reason = "max_reads"
         for read_index in range(effective_max_reads):
             if time.monotonic() > deadline:
+                stop_reason = "window_elapsed"
                 break
 
             remaining = effective_max_messages - collected_messages
             if remaining <= 0:
+                stop_reason = "max_messages"
                 break
 
+            attempted_reads += 1
             try:
                 ret, messages = await self._run_driver_call(
                     "read_msgs",
@@ -1209,16 +1221,40 @@ class ReverseProxyClient:
                     channel_id,
                     exc_info=True,
                 )
+                stop_reason = "driver_exception"
                 break
 
-            if ret != 0 or not messages:
+            if ret not in (0, BUFFER_EMPTY):
+                stop_reason = f"return_code_{ret}"
+                break
+
+            if ret == BUFFER_EMPTY or not messages:
+                empty_reads += 1
+                consecutive_empty_reads += 1
+                if (
+                    effective_max_empty_reads > 0
+                    and empty_reads >= effective_max_empty_reads
+                ):
+                    stop_reason = "max_empty_reads"
+                    break
+                if (
+                    effective_max_consecutive_empty_reads > 0
+                    and consecutive_empty_reads >= effective_max_consecutive_empty_reads
+                ):
+                    stop_reason = "max_consecutive_empty_reads"
+                    break
                 continue
 
             limited_messages = messages[:remaining]
+            data_reads += 1
+            consecutive_empty_reads = 0
             collected_messages += len(limited_messages)
             collected.append(
                 ProtocolEncoder.encode_read_msgs_rsp(0, limited_messages, 0)[HEADER_SIZE:]
             )
+            if collected_messages >= effective_max_messages:
+                stop_reason = "max_messages"
+                break
 
         if collected:
             logger.debug(
@@ -1226,6 +1262,24 @@ class ReverseProxyClient:
                 len(collected),
                 channel_id,
             )
+        self._emit_client_event(
+            "read_ahead.collection_finished",
+            context=request_context,
+            reason=stop_reason,
+            channel_id=channel_id,
+            attempted_reads=attempted_reads,
+            data_reads=data_reads,
+            empty_reads=empty_reads,
+            consecutive_empty_reads=consecutive_empty_reads,
+            collected_responses=len(collected),
+            collected_messages=collected_messages,
+            collect_window_ms=effective_window_ms,
+            max_reads=effective_max_reads,
+            read_timeout_ms=effective_timeout_ms,
+            max_messages=effective_max_messages,
+            max_empty_reads=effective_max_empty_reads,
+            max_consecutive_empty_reads=effective_max_consecutive_empty_reads,
+        )
         return collected
 
     async def _handle_write_msgs_common(
@@ -1613,6 +1667,18 @@ def main() -> None:
         help="Maximum prefetched messages retained per channel (default: 16 or VCI_PROXY_READ_AHEAD_MAX_MESSAGES)",
     )
     parser.add_argument(
+        "--read-ahead-max-empty-reads",
+        type=int,
+        default=None,
+        help="Stop local read-ahead after this many empty reads (default: 0 or VCI_PROXY_READ_AHEAD_MAX_EMPTY_READS; 0 disables)",
+    )
+    parser.add_argument(
+        "--read-ahead-max-consecutive-empty-reads",
+        type=int,
+        default=None,
+        help="Stop local read-ahead after this many consecutive empty reads (default: 0 or VCI_PROXY_READ_AHEAD_MAX_CONSECUTIVE_EMPTY_READS; 0 disables)",
+    )
+    parser.add_argument(
         "--read-ahead-transaction",
         dest="read_ahead_transaction",
         action="store_true",
@@ -1703,6 +1769,10 @@ def main() -> None:
         read_ahead_max_reads=args.read_ahead_max_reads,
         read_ahead_read_timeout_ms=args.read_ahead_read_timeout_ms,
         read_ahead_max_messages=args.read_ahead_max_messages,
+        read_ahead_max_empty_reads=args.read_ahead_max_empty_reads,
+        read_ahead_max_consecutive_empty_reads=(
+            args.read_ahead_max_consecutive_empty_reads
+        ),
         read_ahead_transaction_enabled=args.read_ahead_transaction,
         local_sweep_enabled=getattr(args, "local_sweep", None),
         local_sweep_mode=getattr(args, "local_sweep_mode", None),
@@ -1732,6 +1802,8 @@ def main() -> None:
         f"Read-ahead: {'enabled' if config.read_ahead.enabled else 'disabled'} "
         f"(window={config.read_ahead.window_ms}ms, max_reads={config.read_ahead.max_reads}, "
         f"timeout={config.read_ahead.read_timeout_ms}ms, max_messages={config.read_ahead.max_messages}, "
+        f"max_empty_reads={config.read_ahead.max_empty_reads}, "
+        f"max_consecutive_empty_reads={config.read_ahead.max_consecutive_empty_reads}, "
         f"transaction={'enabled' if config.read_ahead.transaction_enabled else 'disabled'})"
     )
     print(
