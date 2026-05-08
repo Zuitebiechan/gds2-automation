@@ -1396,6 +1396,68 @@ def test_handle_proxy_connection_serves_prefetched_read_msgs_before_empty_cache(
     assert replied["read_result"] == "data"
 
 
+def test_handle_proxy_connection_serves_oversized_nonblocking_prefetch_without_tunnel(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    async def _run() -> None:
+        monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+        server = ReverseProxyServer(
+            config=ProxyConfig.from_args(read_ahead_enabled=True, read_ahead_max_messages=4)
+        )
+        server.vci_connected.set()
+        server.vci_writer = _FakeWriter(peername=("10.0.0.9", 9000))
+        server._connection_epoch = "epoch-prefetch-partial"
+        message = {
+            "protocol_id": 6,
+            "rx_status": 0,
+            "tx_flags": 0,
+            "timestamp": 123,
+            "data": b"\x62\x01",
+        }
+        server._prefetch_read_msgs.record_read_rsp_body(
+            77,
+            ProtocolEncoder.encode_read_msgs_rsp(0, [message], sequence=0)[HEADER_SIZE:],
+        )
+
+        proxy_reader = _FakeReader(
+            ProtocolEncoder.encode_read_msgs_req(77, num_msgs=300, timeout=0, sequence=21)
+        )
+        proxy_writer = _FakeWriter(peername=("127.0.0.1", 50002))
+
+        await server._handle_proxy_connection(proxy_reader, proxy_writer)
+
+        assert server.vci_writer.writes == []
+        assert len(proxy_writer.writes) == 1
+        assert ProtocolDecoder.decode_read_msgs_rsp(proxy_writer.writes[0][HEADER_SIZE:]) == (
+            0,
+            [message],
+        )
+        assert server._prefetch_read_msgs.try_serve(77, 1, 22) is None
+
+    asyncio.run(_run())
+
+    records = _read_product_log_events(tmp_path)
+    event_types = [record["event_type"] for record in records]
+
+    assert "proxy.request.forwarded_to_tunnel" not in event_types
+
+    cache_decision = next(record for record in records if record["event_type"] == "proxy.request.cache_decision")
+    replied = next(record for record in records if record["event_type"] == "proxy.request.replied_to_dll")
+
+    assert cache_decision["reason"] == "prefetch_partial_hit"
+    assert cache_decision["cache_hit"] is True
+    assert cache_decision["prefetch_partial_direct"] is True
+    assert cache_decision["prefetch_partial_direct_reason"] == "oversized_nonblocking_read"
+    assert cache_decision["prefetch_requested_count"] == 300
+    assert cache_decision["prefetch_served_count"] == 1
+    assert cache_decision["prefetch_underfill_count"] == 299
+    assert replied["cache_hit"] is True
+    assert replied["return_code"] == 0
+    assert replied["message_count"] == 1
+    assert replied["read_result"] == "data"
+
+
 def test_handle_proxy_connection_merges_partial_prefetch_with_tunnel_data(monkeypatch, tmp_path) -> None:
     async def _run() -> None:
         monkeypatch.setenv("PROGRAMDATA", str(tmp_path))

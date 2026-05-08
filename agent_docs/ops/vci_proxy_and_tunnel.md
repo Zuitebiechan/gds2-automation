@@ -401,6 +401,15 @@ error to preserve J2534-visible semantics. Same-channel FIFO drain/merge is
 serialized with a per-channel lock so another `READ_MSGS_REQ` cannot observe
 the FIFO while a partial underfill fallback is still waiting on the tunnel.
 
+For oversized non-blocking reads, the server uses a tighter fast path. When
+`READ_MSGS_REQ` has `timeout=0`, the FIFO already contains data, and the request
+asks for more messages than the FIFO can ever hold, the server returns the
+available prefetched frames immediately with `reason=prefetch_partial_hit`
+instead of issuing a reduced tunnel read. This preserves non-blocking J2534
+semantics because `num_msgs` is a maximum, not a required fill count, and avoids
+the observed `num_msgs=300` Data Display pattern paying another tunnel RTT after
+local read-ahead already captured fresh frames.
+
 ### Local sweep observe/shadow
 
 The first local sweep scheduler stage is disabled by default. It is configured

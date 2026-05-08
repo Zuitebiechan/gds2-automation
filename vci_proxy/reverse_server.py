@@ -2038,6 +2038,18 @@ class ReverseProxyServer:
             "prefetch_underfill_count": drain.underfill_count,
         }
 
+    def _should_serve_partial_prefetch_without_tunnel(
+        self,
+        drain: PrefetchReadMsgsDrain,
+        *,
+        timeout_ms: int,
+    ) -> bool:
+        return (
+            drain.is_partial
+            and timeout_ms <= 0
+            and drain.requested_count > max(0, int(self.config.read_ahead.max_messages))
+        )
+
     def _prefetch_read_lock(self, channel_id: int) -> asyncio.Lock:
         lock = self._prefetch_read_locks.get(channel_id)
         if lock is None:
@@ -3036,13 +3048,23 @@ class ReverseProxyServer:
                 ioctl_id = None
                 cache_reason = None
                 if msg_type == MsgType.READ_MSGS_REQ:
-                    channel_id, num_msgs, _timeout = ProtocolDecoder.decode_read_msgs_req(body)
+                    channel_id, num_msgs, timeout_ms = ProtocolDecoder.decode_read_msgs_req(body)
                     async with self._prefetch_read_lock(channel_id):
                         drain = self._prefetch_read_msgs.drain(channel_id, num_msgs)
                         request_fields.update(self._prefetch_drain_fields(drain))
                         if drain.is_full:
                             cached = drain.to_response(sequence)
                             cache_reason = "prefetch_hit"
+                        elif self._should_serve_partial_prefetch_without_tunnel(
+                            drain,
+                            timeout_ms=timeout_ms,
+                        ):
+                            request_fields["prefetch_partial_direct"] = True
+                            request_fields["prefetch_partial_direct_reason"] = (
+                                "oversized_nonblocking_read"
+                            )
+                            cached = drain.to_response(sequence)
+                            cache_reason = "prefetch_partial_hit"
                         elif drain.is_partial:
                             served = await self._serve_prefetch_underfill(
                                 writer=writer,
