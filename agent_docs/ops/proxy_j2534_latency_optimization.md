@@ -427,6 +427,10 @@ Important behavior rules:
   budget is exhausted at that point, the local client may spend one extra
   after-data grace read attempt, still bounded by the collection deadline and
   message limit.
+- If the read-tail probe reaches its normal `max_reads` budget while the latest
+  local read still returned data, it may also spend one final data-continuation
+  probe to capture the next short burst segment. This probe is not stacked on
+  top of an already budget-extending empty-grace retry.
 - If GDS2 requests more messages than prefetched, the server now forwards one
   reduced `READ_MSGS_REQ` for the remaining count and merges prefetched frames
   first, then tunnel frames. If the reduced tunnel read returns `BUFFER_EMPTY`,

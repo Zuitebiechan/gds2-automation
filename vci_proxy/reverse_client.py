@@ -1145,6 +1145,7 @@ class ReverseProxyClient:
         min_drain_ms: int | None = None,
         local_max_reads: int | None = None,
         stop_after_empty_once_min_drain_elapsed: bool = False,
+        extra_read_after_data_at_max: bool = False,
     ) -> bytes:
         channel_id, num_msgs, timeout = ProtocolDecoder.decode_read_msgs_req(body)
         request_context = self._ensure_request_context(
@@ -1196,6 +1197,7 @@ class ReverseProxyClient:
             stop_after_empty_once_min_drain_elapsed=(
                 stop_after_empty_once_min_drain_elapsed
             ),
+            extra_read_after_data_at_max=extra_read_after_data_at_max,
         )
         return attach_read_msgs_prefetch_bundle(
             response,
@@ -1228,6 +1230,7 @@ class ReverseProxyClient:
         min_drain_ms: int | None = None,
         local_max_reads: int | None = None,
         stop_after_empty_once_min_drain_elapsed: bool = False,
+        extra_read_after_data_at_max: bool = False,
         soft_max_reads_after_data: int | None = None,
     ) -> list[bytes]:
         read_ahead = self.config.read_ahead
@@ -1294,6 +1297,8 @@ class ReverseProxyClient:
         empty_after_data_grace_extra_read_pending = False
         empty_after_data_grace_skipped_reason: str | None = None
         empty_after_data_grace_sleep_ms = 0.0
+        extra_read_after_data_at_max_used = False
+        extra_read_after_data_at_max_pending = False
         stop_reason = "max_reads"
         read_index = 0
         while True:
@@ -1302,13 +1307,22 @@ class ReverseProxyClient:
                 break
 
             current_read_is_extra_grace = False
+            current_read_is_extra_data_at_max = False
             if read_index >= effective_max_reads:
                 if empty_after_data_grace_extra_read_pending:
                     empty_after_data_grace_extra_read_pending = False
                     empty_after_data_grace_extra_read_used = True
                     current_read_is_extra_grace = True
+                elif extra_read_after_data_at_max_pending:
+                    extra_read_after_data_at_max_pending = False
+                    extra_read_after_data_at_max_used = True
+                    current_read_is_extra_data_at_max = True
                 else:
-                    stop_reason = "max_reads"
+                    stop_reason = (
+                        "extra_read_after_data_at_max_limit"
+                        if extra_read_after_data_at_max_used
+                        else "max_reads"
+                    )
                     break
 
             remaining = effective_max_messages - collected_messages
@@ -1334,6 +1348,9 @@ class ReverseProxyClient:
                         "read_ahead_index": current_read_index,
                         "read_ahead_extra_after_data_grace": (
                             current_read_is_extra_grace
+                        ),
+                        "read_ahead_extra_after_data_at_max": (
+                            current_read_is_extra_data_at_max
                         ),
                     },
                 )
@@ -1372,6 +1389,9 @@ class ReverseProxyClient:
                         break
                     if not empty_after_data_grace_used:
                         if read_index >= effective_max_reads:
+                            if extra_read_after_data_at_max_used:
+                                stop_reason = "extra_read_after_data_at_max_empty"
+                                break
                             if now >= deadline:
                                 empty_after_data_grace_skipped_reason = "window_elapsed"
                                 stop_reason = "window_elapsed"
@@ -1419,6 +1439,17 @@ class ReverseProxyClient:
             ):
                 stop_reason = "soft_max_reads_after_data"
                 break
+            if (
+                extra_read_after_data_at_max
+                and stop_after_empty_once_min_drain_elapsed
+                and not empty_after_data_grace_used
+                and not empty_after_data_grace_extra_read_used
+                and not extra_read_after_data_at_max_used
+                and read_index >= effective_max_reads
+                and time.monotonic() < deadline
+            ):
+                extra_read_after_data_at_max_pending = True
+                continue
 
         if collected:
             logger.debug(
@@ -1460,6 +1491,8 @@ class ReverseProxyClient:
                 empty_after_data_grace_sleep_ms,
                 3,
             ),
+            extra_read_after_data_at_max_enabled=extra_read_after_data_at_max,
+            extra_read_after_data_at_max_used=extra_read_after_data_at_max_used,
         )
         return collected
 
@@ -1587,6 +1620,7 @@ class ReverseProxyClient:
                 request.collect_window_ms,
             ),
             stop_after_empty_once_min_drain_elapsed=True,
+            extra_read_after_data_at_max=True,
         )
 
     async def _handle_read_version(self, body: bytes, sequence: int, request_context: LogContext | None = None) -> bytes:

@@ -1278,6 +1278,7 @@ def test_handle_read_and_collect_reads_caps_configured_min_drain(
     assert bundle is None
     assert captured["min_drain_ms"] == 8
     assert captured["stop_after_empty_once_min_drain_elapsed"] is True
+    assert captured["extra_read_after_data_at_max"] is True
 
 
 def test_read_collect_min_drain_uses_zero_when_not_configured() -> None:
@@ -1548,6 +1549,133 @@ def test_read_collect_empty_after_data_uses_one_extra_grace_read_after_budget(
     assert collection_events[-1]["empty_after_data_grace_used"] is True
     assert collection_events[-1]["empty_after_data_grace_extra_read_used"] is True
     assert collection_events[-1]["empty_after_data_grace_skipped_reason"] is None
+
+
+def test_read_collect_data_at_max_uses_one_extra_read(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    first_tail_message = {"protocol_id": 6, "data": b"\x62\x13\x08"}
+    second_tail_message = {"protocol_id": 6, "data": b"\x62\x13\x09"}
+    third_tail_message = {"protocol_id": 6, "data": b"\x62\x13\x0a"}
+    read_results = iter(
+        [
+            (0, [first_tail_message]),
+            (0, [second_tail_message]),
+            (0, [third_tail_message]),
+        ]
+    )
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+            read_ahead_window_ms=200,
+            read_ahead_max_reads=3,
+            read_ahead_max_messages=8,
+            read_ahead_read_timeout_ms=0,
+        ),
+    )
+    client._server_read_ahead_enabled = True
+
+    async def _fake_run_driver_call(*_args, **_kwargs):
+        return next(read_results)
+
+    monkeypatch.setattr(client, "_run_driver_call", _fake_run_driver_call)
+
+    bodies = asyncio.run(
+        client._collect_read_ahead_bodies(
+            44,
+            LogContext(operation_kind="j2534:READ_AND_COLLECT_READS_REQ"),
+            collect_window_ms=40,
+            max_reads=2,
+            read_timeout_ms=0,
+            max_messages=4,
+            min_drain_ms=0,
+            stop_after_empty_once_min_drain_elapsed=True,
+            extra_read_after_data_at_max=True,
+        )
+    )
+
+    assert [
+        ProtocolDecoder.decode_read_msgs_rsp(read_rsp_body)[1][0]["data"]
+        for read_rsp_body in bodies
+    ] == [b"\x62\x13\x08", b"\x62\x13\x09", b"\x62\x13\x0a"]
+    collection_events = [
+        event
+        for event in _read_local_events(tmp_path)
+        if event.get("event_type") == "read_ahead.collection_finished"
+    ]
+    assert collection_events[-1]["reason"] == "extra_read_after_data_at_max_limit"
+    assert collection_events[-1]["attempted_reads"] == 3
+    assert collection_events[-1]["max_reads"] == 2
+    assert collection_events[-1]["extra_read_after_data_at_max_used"] is True
+    assert collection_events[-1]["empty_after_data_grace_used"] is False
+
+
+def test_read_collect_data_at_max_extra_empty_stops_without_grace_stack(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    first_tail_message = {"protocol_id": 6, "data": b"\x62\x13\x08"}
+    second_tail_message = {"protocol_id": 6, "data": b"\x62\x13\x09"}
+    read_results = iter(
+        [
+            (0, [first_tail_message]),
+            (0, [second_tail_message]),
+            (BUFFER_EMPTY, []),
+        ]
+    )
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+            read_ahead_window_ms=200,
+            read_ahead_max_reads=3,
+            read_ahead_max_messages=8,
+            read_ahead_read_timeout_ms=0,
+        ),
+    )
+    client._server_read_ahead_enabled = True
+
+    async def _fake_run_driver_call(*_args, **_kwargs):
+        return next(read_results)
+
+    monkeypatch.setattr(client, "_run_driver_call", _fake_run_driver_call)
+
+    bodies = asyncio.run(
+        client._collect_read_ahead_bodies(
+            44,
+            LogContext(operation_kind="j2534:READ_AND_COLLECT_READS_REQ"),
+            collect_window_ms=40,
+            max_reads=2,
+            read_timeout_ms=0,
+            max_messages=4,
+            min_drain_ms=0,
+            stop_after_empty_once_min_drain_elapsed=True,
+            extra_read_after_data_at_max=True,
+        )
+    )
+
+    assert [
+        ProtocolDecoder.decode_read_msgs_rsp(read_rsp_body)[1][0]["data"]
+        for read_rsp_body in bodies
+    ] == [b"\x62\x13\x08", b"\x62\x13\x09"]
+    collection_events = [
+        event
+        for event in _read_local_events(tmp_path)
+        if event.get("event_type") == "read_ahead.collection_finished"
+    ]
+    assert collection_events[-1]["reason"] == "extra_read_after_data_at_max_empty"
+    assert collection_events[-1]["attempted_reads"] == 3
+    assert collection_events[-1]["max_reads"] == 2
+    assert collection_events[-1]["extra_read_after_data_at_max_used"] is True
+    assert collection_events[-1]["empty_after_data_grace_used"] is False
 
 
 def test_handle_read_and_collect_reads_falls_back_without_negotiated_capability() -> None:
