@@ -423,7 +423,10 @@ Important behavior rules:
   probe clamps the drain window to `8ms` rather than using the full post-write
   drain setting. If tail data has already been collected and a following tail
   read is empty, the one empty-read grace retry may also wait briefly within the
-  same `8ms` cap before trying once more.
+  same `8ms` cap before trying once more. When the normal read-tail `max_reads`
+  budget is exhausted at that point, the local client may spend one extra
+  after-data grace read attempt, still bounded by the collection deadline and
+  message limit.
 - If GDS2 requests more messages than prefetched, the server now forwards one
   reduced `READ_MSGS_REQ` for the remaining count and merges prefetched frames
   first, then tunnel frames. If the reduced tunnel read returns `BUFFER_EMPTY`,

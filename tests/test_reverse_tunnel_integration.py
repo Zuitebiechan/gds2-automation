@@ -790,6 +790,7 @@ def test_reverse_tunnel_read_collect_prefetches_tail_after_foreground_empty(monk
                 (BUFFER_EMPTY, []),
                 (0, [prefetched_message]),
                 (BUFFER_EMPTY, []),
+                (BUFFER_EMPTY, []),
             ]
         )
 
@@ -831,6 +832,7 @@ def test_reverse_tunnel_read_collect_prefetches_tail_after_foreground_empty(monk
             assert observed == [
                 ("read_msgs", (9001, 4, 0)),
                 ("read_msgs", (9001, 4, 0)),
+                ("read_msgs", (9001, 3, 0)),
                 ("read_msgs", (9001, 3, 0)),
             ]
         finally:

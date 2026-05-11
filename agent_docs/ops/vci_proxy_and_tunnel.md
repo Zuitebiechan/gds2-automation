@@ -415,13 +415,15 @@ without replaying or decoding GM A9 payloads.
 
 The read-tail drain stops after the first `BUFFER_EMPTY` when no tail data has
 been collected after the capped minimum-drain window. If tail data was already
-collected, one empty-read grace attempt is allowed before stopping when local
-read budget remains; the client can wait briefly, capped at `8ms`, before that
-grace retry so short burst gaps can still be captured without returning to an
-unconditional three-read drain. Observability separates the two terminal cases:
+collected, one empty-read grace attempt is allowed before stopping. When the
+normal read-tail budget is already exhausted, the client may spend one extra
+local read attempt for this after-data grace path, still bounded by the
+collection deadline and message limit. The client can wait briefly, capped at
+`8ms`, before that grace retry so short burst gaps can still be captured without
+returning to an unconditional three-read drain. Observability reports
+`empty_after_data_grace_extra_read_used=true` when this extra attempt was needed.
 `empty_after_data_grace_empty` means the grace retry was actually attempted and
-also returned empty, while `empty_after_data_no_grace_budget` means there was no
-remaining local read budget to attempt that retry.
+also returned empty.
 This only changes opportunistic extra local reads; it does not drop data or
 change the foreground `READ_MSGS_RSP`, because later ECU frames remain in the
 real J2534 queue for the next GDS2 read. Cloud FIFO hit events include

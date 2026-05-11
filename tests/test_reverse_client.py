@@ -1064,6 +1064,7 @@ def test_handle_read_and_collect_reads_returns_foreground_read_and_prefetches_ta
             (0, [foreground_message]),
             (0, [prefetched_message]),
             (BUFFER_EMPTY, []),
+            (BUFFER_EMPTY, []),
         ]
     )
     client = ReverseProxyClient(
@@ -1137,6 +1138,7 @@ def test_handle_read_and_collect_reads_returns_foreground_read_and_prefetches_ta
         ("read_msgs", 44, 300, 0),
         ("read_msgs", 44, 4, 0),
         ("read_msgs", 44, 3, 0),
+        ("read_msgs", 44, 3, 0),
     ]
 
 
@@ -1151,6 +1153,7 @@ def test_handle_read_and_collect_reads_prefetches_tail_after_foreground_empty(
         [
             (BUFFER_EMPTY, []),
             (0, [prefetched_message]),
+            (BUFFER_EMPTY, []),
             (BUFFER_EMPTY, []),
         ]
     )
@@ -1212,6 +1215,7 @@ def test_handle_read_and_collect_reads_prefetches_tail_after_foreground_empty(
     assert observed == [
         ("read_msgs", 44, 300, 0),
         ("read_msgs", 44, 4, 0),
+        ("read_msgs", 44, 3, 0),
         ("read_msgs", 44, 3, 0),
     ]
 
@@ -1483,16 +1487,18 @@ def test_read_collect_empty_after_data_grace_waits_briefly_before_retry(
     ] == [b"\x62\x13\x08", b"\x62\x13\x09"]
 
 
-def test_read_collect_empty_after_data_without_retry_budget_logs_skipped_grace(
+def test_read_collect_empty_after_data_uses_one_extra_grace_read_after_budget(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("APPDATA", str(tmp_path))
-    tail_message = {"protocol_id": 6, "data": b"\x62\x13\x08"}
+    first_tail_message = {"protocol_id": 6, "data": b"\x62\x13\x08"}
+    second_tail_message = {"protocol_id": 6, "data": b"\x62\x13\x09"}
     read_results = iter(
         [
-            (0, [tail_message]),
+            (0, [first_tail_message]),
             (BUFFER_EMPTY, []),
+            (0, [second_tail_message]),
         ]
     )
     client = ReverseProxyClient(
@@ -1530,15 +1536,18 @@ def test_read_collect_empty_after_data_without_retry_budget_logs_skipped_grace(
     assert [
         ProtocolDecoder.decode_read_msgs_rsp(read_rsp_body)[1][0]["data"]
         for read_rsp_body in bodies
-    ] == [b"\x62\x13\x08"]
+    ] == [b"\x62\x13\x08", b"\x62\x13\x09"]
     collection_events = [
         event
         for event in _read_local_events(tmp_path)
         if event.get("event_type") == "read_ahead.collection_finished"
     ]
-    assert collection_events[-1]["reason"] == "empty_after_data_no_grace_budget"
-    assert collection_events[-1]["empty_after_data_grace_used"] is False
-    assert collection_events[-1]["empty_after_data_grace_skipped_reason"] == "max_reads"
+    assert collection_events[-1]["reason"] == "max_reads"
+    assert collection_events[-1]["attempted_reads"] == 3
+    assert collection_events[-1]["max_reads"] == 2
+    assert collection_events[-1]["empty_after_data_grace_used"] is True
+    assert collection_events[-1]["empty_after_data_grace_extra_read_used"] is True
+    assert collection_events[-1]["empty_after_data_grace_skipped_reason"] is None
 
 
 def test_handle_read_and_collect_reads_falls_back_without_negotiated_capability() -> None:

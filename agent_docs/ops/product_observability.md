@@ -315,11 +315,12 @@ Latest known interpretation:
   - `sweep.shadow.*` comparison events now include `sweep_shadow_clean_match_streak` and `sweep_replay_min_clean_matches`; `proxy.request.active_replay_armed` / `proxy.request.active_replay_served` include the same replay-quality gate fields when replay is actually permitted
 - `vci_proxy/reverse_client.py`
   - emits reverse tunnel connection lifecycle, request receipt, and J2534 call events
-  - local read-ahead collection emits `read_ahead.collection_finished` with attempted/data/empty read counts, collected message counts, effective budgets including `local_max_reads`, whether one-empty tail stop was enabled, whether the after-data empty-read grace was used, `empty_after_data_grace_sleep_ms`, and the stop reason
+  - local read-ahead collection emits `read_ahead.collection_finished` with attempted/data/empty read counts, collected message counts, effective budgets including `local_max_reads`, whether one-empty tail stop was enabled, whether the after-data empty-read grace was used, whether it consumed the one extra local read attempt (`empty_after_data_grace_extra_read_used`), `empty_after_data_grace_sleep_ms`, and the stop reason
   - after-data empty-read stop reasons distinguish a real grace retry
-    (`empty_after_data_grace_empty`) from a skipped retry caused by no
-    remaining local read budget (`empty_after_data_no_grace_budget` plus
-    `empty_after_data_grace_skipped_reason=max_reads`)
+    (`empty_after_data_grace_empty`) from ordinary budget/window termination;
+    when normal read-tail `max_reads` is exhausted after tail data was already
+    collected, the client can spend one extra local read attempt before
+    stopping
   - local sweep executor logs distinguish plan start/stop, shadow item execution, foreground invalidation, configured/effective shadow item interval, and error count; cacheable/read-only IOCTL foreground calls pause through the shared driver lock without emitting a shadow stop
 - `vci_proxy/j2534_worker.py`
   - emits worker lifecycle, spawn status, RPC receipt/return/failure, and propagates `worker_request_id`

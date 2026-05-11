@@ -1290,19 +1290,34 @@ class ReverseProxyClient:
         empty_reads = 0
         consecutive_empty_reads = 0
         empty_after_data_grace_used = False
+        empty_after_data_grace_extra_read_used = False
+        empty_after_data_grace_extra_read_pending = False
         empty_after_data_grace_skipped_reason: str | None = None
         empty_after_data_grace_sleep_ms = 0.0
         stop_reason = "max_reads"
-        for read_index in range(effective_max_reads):
+        read_index = 0
+        while True:
             if time.monotonic() > deadline:
                 stop_reason = "window_elapsed"
                 break
+
+            current_read_is_extra_grace = False
+            if read_index >= effective_max_reads:
+                if empty_after_data_grace_extra_read_pending:
+                    empty_after_data_grace_extra_read_pending = False
+                    empty_after_data_grace_extra_read_used = True
+                    current_read_is_extra_grace = True
+                else:
+                    stop_reason = "max_reads"
+                    break
 
             remaining = effective_max_messages - collected_messages
             if remaining <= 0:
                 stop_reason = "max_messages"
                 break
 
+            current_read_index = read_index
+            read_index += 1
             attempted_reads += 1
             try:
                 ret, messages = await self._run_driver_call(
@@ -1316,7 +1331,10 @@ class ReverseProxyClient:
                         "channel_id": channel_id,
                         "num_msgs": remaining,
                         "read_ahead": True,
-                        "read_ahead_index": read_index,
+                        "read_ahead_index": current_read_index,
+                        "read_ahead_extra_after_data_grace": (
+                            current_read_is_extra_grace
+                        ),
                     },
                 )
             except Exception:
@@ -1340,7 +1358,7 @@ class ReverseProxyClient:
                 ):
                     stop_reason = "soft_max_reads_after_data"
                     break
-                if now < min_drain_until and read_index + 1 < effective_max_reads:
+                if now < min_drain_until and read_index < effective_max_reads:
                     sleep_s = min(
                         0.005,
                         max(0.0, min(min_drain_until, deadline) - now),
@@ -1353,10 +1371,12 @@ class ReverseProxyClient:
                         stop_reason = "empty_after_min_drain"
                         break
                     if not empty_after_data_grace_used:
-                        if read_index + 1 >= effective_max_reads:
-                            empty_after_data_grace_skipped_reason = "max_reads"
-                            stop_reason = "empty_after_data_no_grace_budget"
-                            break
+                        if read_index >= effective_max_reads:
+                            if now >= deadline:
+                                empty_after_data_grace_skipped_reason = "window_elapsed"
+                                stop_reason = "window_elapsed"
+                                break
+                            empty_after_data_grace_extra_read_pending = True
                         sleep_s = min(
                             READ_COLLECT_MIN_DRAIN_CAP_MS / 1000.0,
                             max(0.0, min(min_drain_until, deadline) - now),
@@ -1430,6 +1450,9 @@ class ReverseProxyClient:
                 stop_after_empty_once_min_drain_elapsed
             ),
             empty_after_data_grace_used=empty_after_data_grace_used,
+            empty_after_data_grace_extra_read_used=(
+                empty_after_data_grace_extra_read_used
+            ),
             empty_after_data_grace_skipped_reason=(
                 empty_after_data_grace_skipped_reason
             ),
