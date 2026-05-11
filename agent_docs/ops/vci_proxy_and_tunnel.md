@@ -452,7 +452,11 @@ real J2534 queue for the next GDS2 read. Cloud FIFO hit events include
 `prefetch_source_counts` and `prefetch_age_*_ms` fields so local
 simulated-cloud tests can separate `read_collect` and `write_collect`
 usefulness and measure how long prefetched frames waited before DLL
-consumption.
+consumption. FIFO miss events include `prefetch_miss_detail`, read-collect
+eligibility/block reason, empty-cache state, and last prefetch record/drain/read
+result ages so analysis can distinguish no prior local collection, a
+just-exhausted FIFO, a recently confirmed empty read, or a temporarily
+unavailable read-collect path.
 
 Operational validation as of `2026-05-06`:
 

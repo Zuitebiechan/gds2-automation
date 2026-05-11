@@ -118,6 +118,76 @@ class ReadMsgsCache:
         )
         return header + body
 
+    def observability_state(
+        self,
+        channel_id: int,
+        timeout: int,
+        *,
+        now: float | None = None,
+    ) -> dict[str, object]:
+        """Describe cache state without changing hit/miss counters."""
+        ts = time.monotonic() if now is None else now
+        timeout_cacheable = (
+            self._max_cacheable_timeout_ms < 0
+            or timeout <= self._max_cacheable_timeout_ms
+        )
+        fields: dict[str, object] = {
+            "empty_cache_enabled": self._enabled,
+            "empty_cache_max_timeout_ms": self._max_cacheable_timeout_ms,
+            "empty_cache_timeout_cacheable": timeout_cacheable,
+        }
+        if not self._enabled:
+            return fields
+
+        active_until = self._active_until.get(channel_id)
+        active = active_until is not None and ts <= active_until
+        fields["empty_cache_active_window"] = active
+        if active and active_until is not None:
+            fields["empty_cache_active_remaining_ms"] = round(
+                max(0.0, (active_until - ts) * 1000.0),
+                3,
+            )
+
+        last_write_at = self._last_write_at.get(channel_id)
+        post_write_bypass_active = (
+            last_write_at is not None
+            and self._post_write_bypass_s > 0
+            and ts - last_write_at <= self._post_write_bypass_s
+        )
+        fields["empty_cache_post_write_bypass_active"] = post_write_bypass_active
+        if last_write_at is not None:
+            fields["empty_cache_last_write_age_ms"] = round(
+                max(0.0, (ts - last_write_at) * 1000.0),
+                3,
+            )
+            if post_write_bypass_active:
+                remaining_ms = (
+                    self._post_write_bypass_s * 1000.0
+                    - (ts - last_write_at) * 1000.0
+                )
+                fields["empty_cache_post_write_bypass_remaining_ms"] = round(
+                    max(0.0, remaining_ms),
+                    3,
+                )
+
+        entry = self._channels.get(channel_id)
+        fields["empty_cache_has_entry"] = entry is not None
+        if entry is None:
+            return fields
+
+        entry_ts, return_code = entry
+        ttl_s = self._current_ttl_s(channel_id, ts)
+        age_ms = max(0.0, (ts - entry_ts) * 1000.0)
+        fields.update(
+            {
+                "empty_cache_entry_return_code": return_code,
+                "empty_cache_entry_age_ms": round(age_ms, 3),
+                "empty_cache_effective_ttl_ms": round(ttl_s * 1000.0, 3),
+                "empty_cache_entry_expired": age_ms > ttl_s * 1000.0,
+            }
+        )
+        return fields
+
     def record_result(
         self,
         channel_id: int,

@@ -190,6 +190,34 @@ class _ActiveReplayPending:
     shadow_result: SweepResultRecord
 
 
+@dataclass(frozen=True)
+class _PrefetchRecordObservation:
+    message_count: int
+    source: str | None
+    proxy_seq: int | None
+    observed_mono: float
+
+
+@dataclass(frozen=True)
+class _PrefetchDrainObservation:
+    reason: str
+    requested_count: int
+    served_count: int
+    pending_before: int
+    pending_after: int
+    observed_mono: float
+
+
+@dataclass(frozen=True)
+class _ReadResultObservation:
+    result: str
+    return_code: int
+    message_count: int
+    dll_seq: int | None
+    proxy_seq: int | None
+    observed_mono: float
+
+
 class ReverseProxyServer:
     """反向代理服务器 - 接受 VCI Proxy 的连接"""
 
@@ -249,6 +277,9 @@ class ReverseProxyServer:
         self._last_live_request_by_channel: dict[int, tuple[str, int | None, float]] = {}
         # channel_id -> (aggregate payload digest, monotonic timestamp)
         self._last_read_payload_by_channel: dict[int, tuple[str, float]] = {}
+        self._last_prefetch_record_by_channel: dict[int, _PrefetchRecordObservation] = {}
+        self._last_prefetch_drain_by_channel: dict[int, _PrefetchDrainObservation] = {}
+        self._last_read_result_by_channel: dict[int, _ReadResultObservation] = {}
         self._sweep_learner = SweepPatternLearner(self.config.local_sweep)
         self._sweep_shadow_store = SweepShadowStore()
         self._sweep_active_plan: SweepPlanStartRequest | None = None
@@ -1991,6 +2022,12 @@ class ReverseProxyServer:
                                     source=prefetch_source,
                                 )
                                 if recorded:
+                                    self._record_prefetch_record_observation(
+                                        prefetch_bundle.channel_id,
+                                        message_count=recorded,
+                                        source=prefetch_source,
+                                        proxy_seq=sequence,
+                                    )
                                     logger.debug(
                                         "Recorded %s prefetched ReadMsgs message(s) for channel_id=%s",
                                         recorded,
@@ -2086,6 +2123,195 @@ class ReverseProxyServer:
                         "prefetch_age_max_ms": drain.age_max_ms,
                     }
                 )
+        return fields
+
+    @staticmethod
+    def _observation_age_ms(observed_mono: float, now: float) -> float:
+        return round(max(0.0, (now - observed_mono) * 1000.0), 3)
+
+    def _record_prefetch_record_observation(
+        self,
+        channel_id: int,
+        *,
+        message_count: int,
+        source: str | None,
+        proxy_seq: int | None,
+    ) -> None:
+        self._last_prefetch_record_by_channel[channel_id] = _PrefetchRecordObservation(
+            message_count=max(0, int(message_count)),
+            source=source,
+            proxy_seq=proxy_seq,
+            observed_mono=time.monotonic(),
+        )
+
+    def _record_prefetch_drain_observation(
+        self,
+        drain: PrefetchReadMsgsDrain,
+        *,
+        reason: str,
+    ) -> None:
+        self._last_prefetch_drain_by_channel[drain.channel_id] = _PrefetchDrainObservation(
+            reason=reason,
+            requested_count=drain.requested_count,
+            served_count=drain.served_count,
+            pending_before=drain.pending_before,
+            pending_after=drain.pending_after,
+            observed_mono=time.monotonic(),
+        )
+
+    def _record_read_result_observation(
+        self,
+        channel_id: int,
+        *,
+        return_code: int,
+        message_count: int,
+        dll_seq: int | None,
+        proxy_seq: int | None,
+    ) -> None:
+        result = "data" if message_count else "empty"
+        if return_code not in {0, BUFFER_EMPTY} and message_count == 0:
+            result = "error"
+        self._last_read_result_by_channel[channel_id] = _ReadResultObservation(
+            result=result,
+            return_code=int(return_code),
+            message_count=max(0, int(message_count)),
+            dll_seq=dll_seq,
+            proxy_seq=proxy_seq,
+            observed_mono=time.monotonic(),
+        )
+
+    def _read_collect_blocked_reason(self, msg_type: int, body: bytes) -> str | None:
+        if msg_type != MsgType.READ_MSGS_REQ:
+            return "not_read_msgs_req"
+        read_ahead = self.config.read_ahead
+        if not read_ahead.enabled:
+            return "read_ahead_disabled"
+        if not read_ahead.transaction_enabled:
+            return "read_ahead_transaction_disabled"
+        if not self._vci_read_collect_supported:
+            return "client_read_collect_not_supported"
+        if read_ahead.window_ms <= 0:
+            return "read_ahead_window_disabled"
+        if read_ahead.max_reads <= 0:
+            return "read_ahead_max_reads_disabled"
+        if read_ahead.max_messages <= 0:
+            return "read_ahead_max_messages_disabled"
+        try:
+            _channel_id, num_msgs, timeout = ProtocolDecoder.decode_read_msgs_req(body)
+        except Exception:
+            return "decode_error"
+        if timeout > 0:
+            return "blocking_read"
+        if num_msgs <= 0:
+            return "zero_requested_messages"
+        if self._read_ahead_transaction_guard_active():
+            return "transaction_guard_active"
+        return None
+
+    def _prefetch_miss_detail(
+        self,
+        channel_id: int,
+        drain: PrefetchReadMsgsDrain,
+        *,
+        read_collect_blocked_reason: str | None,
+    ) -> str:
+        if not self.config.read_ahead.enabled or not self._prefetch_read_msgs.enabled:
+            return "fifo_disabled"
+        if self.config.read_ahead.max_messages <= 0:
+            return "fifo_capacity_zero"
+        if drain.pending_before > 0:
+            return "fifo_underfilled"
+        last_read = self._last_read_result_by_channel.get(channel_id)
+        if last_read is not None and last_read.result == "empty":
+            return "fifo_empty_after_confirmed_empty"
+        last_drain = self._last_prefetch_drain_by_channel.get(channel_id)
+        if (
+            last_drain is not None
+            and last_drain.served_count > 0
+            and last_drain.pending_after == 0
+        ):
+            return "fifo_empty_after_prefetch_exhausted"
+        if self._last_prefetch_record_by_channel.get(channel_id) is not None:
+            return "fifo_empty_after_prefetch_recorded"
+        if read_collect_blocked_reason is not None:
+            return "fifo_empty_read_collect_unavailable"
+        return "fifo_empty_no_prior_prefetch"
+
+    def _prefetch_state_fields(
+        self,
+        channel_id: int,
+        *,
+        msg_type: int,
+        body: bytes,
+        timeout_ms: int,
+        drain: PrefetchReadMsgsDrain,
+    ) -> dict[str, object]:
+        now = time.monotonic()
+        read_collect_blocked = self._read_collect_blocked_reason(msg_type, body)
+        fields: dict[str, object] = {
+            "prefetch_fifo_enabled": self._prefetch_read_msgs.enabled,
+            "prefetch_fifo_capacity": self._prefetch_read_msgs.max_messages,
+            "read_collect_supported": self._vci_read_collect_supported,
+            "write_collect_supported": self._vci_write_collect_supported,
+            "read_collect_eligible": read_collect_blocked is None,
+        }
+        if read_collect_blocked is not None:
+            fields["read_collect_blocked_reason"] = read_collect_blocked
+
+        fields.update(self._read_cache.observability_state(channel_id, timeout_ms, now=now))
+
+        last_record = self._last_prefetch_record_by_channel.get(channel_id)
+        if last_record is not None:
+            fields.update(
+                {
+                    "prefetch_last_record_age_ms": self._observation_age_ms(
+                        last_record.observed_mono,
+                        now,
+                    ),
+                    "prefetch_last_record_count": last_record.message_count,
+                    "prefetch_last_record_source": last_record.source,
+                    "prefetch_last_record_proxy_seq": last_record.proxy_seq,
+                }
+            )
+
+        last_drain = self._last_prefetch_drain_by_channel.get(channel_id)
+        if last_drain is not None:
+            fields.update(
+                {
+                    "prefetch_last_drain_age_ms": self._observation_age_ms(
+                        last_drain.observed_mono,
+                        now,
+                    ),
+                    "prefetch_last_drain_reason": last_drain.reason,
+                    "prefetch_last_drain_requested_count": last_drain.requested_count,
+                    "prefetch_last_drain_served_count": last_drain.served_count,
+                    "prefetch_last_drain_pending_before": last_drain.pending_before,
+                    "prefetch_last_drain_pending_after": last_drain.pending_after,
+                }
+            )
+
+        last_read = self._last_read_result_by_channel.get(channel_id)
+        if last_read is not None:
+            fields.update(
+                {
+                    "prefetch_last_real_read_age_ms": self._observation_age_ms(
+                        last_read.observed_mono,
+                        now,
+                    ),
+                    "prefetch_last_real_read_result": last_read.result,
+                    "prefetch_last_real_read_return_code": last_read.return_code,
+                    "prefetch_last_real_read_message_count": last_read.message_count,
+                    "prefetch_last_real_read_dll_seq": last_read.dll_seq,
+                    "prefetch_last_real_read_proxy_seq": last_read.proxy_seq,
+                }
+            )
+
+        if drain.is_empty:
+            fields["prefetch_miss_detail"] = self._prefetch_miss_detail(
+                channel_id,
+                drain,
+                read_collect_blocked_reason=read_collect_blocked,
+            )
         return fields
 
     def _should_serve_partial_prefetch_without_tunnel(
@@ -2350,6 +2576,8 @@ class ReverseProxyServer:
                 final_type,
                 final_body,
                 ioctl_id=None,
+                dll_seq=sequence,
+                proxy_seq=new_seq,
             )
         response_fields = self._response_observability_fields(final_type, final_body)
         self._augment_read_payload_delta_fields(request_fields, response_fields)
@@ -2461,6 +2689,9 @@ class ReverseProxyServer:
             self._last_write_by_channel.pop(channel_id, None)
             self._last_live_request_by_channel.pop(channel_id, None)
             self._last_read_payload_by_channel.pop(channel_id, None)
+            self._last_prefetch_record_by_channel.pop(channel_id, None)
+            self._last_prefetch_drain_by_channel.pop(channel_id, None)
+            self._last_read_result_by_channel.pop(channel_id, None)
         elif msg_type == MsgType.CLOSE_REQ:
             self._cancel_sweep_plan("close_req")
             self._active_replay_pending_by_channel.clear()
@@ -2471,6 +2702,9 @@ class ReverseProxyServer:
             self._last_write_by_channel.clear()
             self._last_live_request_by_channel.clear()
             self._last_read_payload_by_channel.clear()
+            self._last_prefetch_record_by_channel.clear()
+            self._last_prefetch_drain_by_channel.clear()
+            self._last_read_result_by_channel.clear()
         elif msg_type == MsgType.WRITE_MSGS_REQ:
             channel_id, _messages, _timeout = ProtocolDecoder.decode_write_msgs_req(body)
             now = time.monotonic()
@@ -2485,6 +2719,9 @@ class ReverseProxyServer:
             self._read_cache.mark_channel_active(channel_id, invalidate_empty=True)
             self._prefetch_read_msgs.clear_channel(channel_id)
             self._last_read_payload_by_channel.pop(channel_id, None)
+            self._last_prefetch_record_by_channel.pop(channel_id, None)
+            self._last_prefetch_drain_by_channel.pop(channel_id, None)
+            self._last_read_result_by_channel.pop(channel_id, None)
         elif msg_type == MsgType.STOP_FILTER_REQ:
             channel_id, filter_id = ProtocolDecoder.decode_stop_filter_req(body)
             self._cancel_sweep_plan("stop_filter_req", channel_id=channel_id)
@@ -2492,6 +2729,9 @@ class ReverseProxyServer:
             self._read_cache.mark_channel_active(channel_id, invalidate_empty=True)
             self._prefetch_read_msgs.clear_channel(channel_id)
             self._last_read_payload_by_channel.pop(channel_id, None)
+            self._last_prefetch_record_by_channel.pop(channel_id, None)
+            self._last_prefetch_drain_by_channel.pop(channel_id, None)
+            self._last_read_result_by_channel.pop(channel_id, None)
             self._filter_cache.on_stop_filter(filter_id)
         elif msg_type == MsgType.IOCTL_REQ:
             channel_id, ioctl_id, _input = ProtocolDecoder.decode_ioctl_req(body)
@@ -2501,6 +2741,9 @@ class ReverseProxyServer:
                 self._read_cache.mark_channel_active(channel_id, invalidate_empty=True)
                 self._prefetch_read_msgs.clear_channel(channel_id)
                 self._last_read_payload_by_channel.pop(channel_id, None)
+                self._last_prefetch_record_by_channel.pop(channel_id, None)
+                self._last_prefetch_drain_by_channel.pop(channel_id, None)
+                self._last_read_result_by_channel.pop(channel_id, None)
 
     def _clear_prefetch_after_failed_write(self, msg_type: int, body: bytes) -> None:
         if msg_type != MsgType.WRITE_MSGS_REQ:
@@ -2510,6 +2753,8 @@ class ReverseProxyServer:
         except Exception:
             return
         self._prefetch_read_msgs.clear_channel(channel_id)
+        self._last_prefetch_record_by_channel.pop(channel_id, None)
+        self._last_prefetch_drain_by_channel.pop(channel_id, None)
 
     def _write_collect_transaction_base_allowed(self, msg_type: int, body: bytes) -> bool:
         if msg_type != MsgType.WRITE_MSGS_REQ:
@@ -2708,13 +2953,28 @@ class ReverseProxyServer:
         header = struct.pack('>IIHI', MAGIC, HEADER_SIZE + len(body), msg_type, sequence)
         return header + body, msg_type, body, None
 
-    def _record_in_caches(self, msg_type: int, body: bytes,
-                          resp_type: int, resp_body: bytes,
-                          ioctl_id: Optional[int]):
+    def _record_in_caches(
+        self,
+        msg_type: int,
+        body: bytes,
+        resp_type: int,
+        resp_body: bytes,
+        ioctl_id: Optional[int],
+        *,
+        dll_seq: int | None = None,
+        proxy_seq: int | None = None,
+    ):
         """Record response in caches for future lookups."""
         if msg_type == MsgType.READ_MSGS_REQ:
             channel_id = struct.unpack('>I', body[:4])[0]
             return_code, messages = ProtocolDecoder.decode_read_msgs_rsp(resp_body)
+            self._record_read_result_observation(
+                channel_id,
+                return_code=return_code,
+                message_count=len(messages),
+                dll_seq=dll_seq,
+                proxy_seq=proxy_seq,
+            )
             self._read_cache.record_result(
                 channel_id,
                 return_code,
@@ -3146,9 +3406,22 @@ class ReverseProxyServer:
                     async with self._prefetch_read_lock(channel_id):
                         drain = self._prefetch_read_msgs.drain(channel_id, num_msgs)
                         request_fields.update(self._prefetch_drain_fields(drain))
+                        request_fields.update(
+                            self._prefetch_state_fields(
+                                channel_id,
+                                msg_type=msg_type,
+                                body=body,
+                                timeout_ms=timeout_ms,
+                                drain=drain,
+                            )
+                        )
                         if drain.is_full:
                             cached = drain.to_response(sequence)
                             cache_reason = "prefetch_hit"
+                            self._record_prefetch_drain_observation(
+                                drain,
+                                reason=cache_reason,
+                            )
                         elif self._should_serve_partial_prefetch_without_tunnel(
                             drain,
                             timeout_ms=timeout_ms,
@@ -3159,7 +3432,15 @@ class ReverseProxyServer:
                             )
                             cached = drain.to_response(sequence)
                             cache_reason = "prefetch_partial_hit"
+                            self._record_prefetch_drain_observation(
+                                drain,
+                                reason=cache_reason,
+                            )
                         elif drain.is_partial:
+                            self._record_prefetch_drain_observation(
+                                drain,
+                                reason="prefetch_underfill_forwarded",
+                            )
                             served = await self._serve_prefetch_underfill(
                                 writer=writer,
                                 body=body,
@@ -3172,6 +3453,11 @@ class ReverseProxyServer:
                             if served:
                                 continue
                             break
+                        else:
+                            self._record_prefetch_drain_observation(
+                                drain,
+                                reason="prefetch_miss",
+                            )
 
                 if cached is None:
                     cached, ioctl_id, cache_reason = self._try_serve_cached(
@@ -3315,7 +3601,15 @@ class ReverseProxyServer:
                         duration_ms=fwd_ms,
                         network_ms=network_ms,
                     )
-                    self._record_in_caches(msg_type, body, resp_type, resp_body, ioctl_id)
+                    self._record_in_caches(
+                        msg_type,
+                        body,
+                        resp_type,
+                        resp_body,
+                        ioctl_id,
+                        dll_seq=sequence,
+                        proxy_seq=new_seq,
+                    )
                     response_fields = self._response_observability_fields(resp_type, resp_body)
                     self._augment_read_payload_delta_fields(request_fields, response_fields)
                     self._observe_sweep_read_response(

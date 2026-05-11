@@ -139,18 +139,24 @@ def _summarize_change_window(
         if event.get("event_type") == "proxy.request.response_received"
         and event.get("network_ms") not in (None, "")
     ]
-    cache_counts = {
-        "cache_hit": 0,
-        "cache_miss": 0,
-        "post_write_bypass": 0,
-        "prefetch_hit": 0,
-    }
+    cache_counts: dict[str, int] = {}
+    prefetch_miss_detail_counts: dict[str, int] = {}
+    read_collect_blocked_counts: dict[str, int] = {}
     for event in events:
         if event.get("event_type") != "proxy.request.cache_decision":
             continue
         reason = str(event.get("reason") or "")
-        if reason in cache_counts:
-            cache_counts[reason] += 1
+        cache_counts[reason] = cache_counts.get(reason, 0) + 1
+        if reason == "prefetch_miss":
+            detail = str(event.get("prefetch_miss_detail") or "unknown")
+            prefetch_miss_detail_counts[detail] = (
+                prefetch_miss_detail_counts.get(detail, 0) + 1
+            )
+        blocked = str(event.get("read_collect_blocked_reason") or "")
+        if blocked:
+            read_collect_blocked_counts[blocked] = (
+                read_collect_blocked_counts.get(blocked, 0) + 1
+            )
     write_collect_transaction_count = sum(
         1
         for event in events
@@ -181,6 +187,8 @@ def _summarize_change_window(
         "active_replay_served_count": active_replay_served_count,
         "forwarded_to_tunnel_count": forwarded_to_tunnel_count,
         "cache_decision_counts": cache_counts,
+        "prefetch_miss_detail_counts": prefetch_miss_detail_counts,
+        "read_collect_blocked_counts": read_collect_blocked_counts,
     }
 
 
@@ -284,6 +292,12 @@ def analyze_battery_voltage_freshness(
     }
 
 
+def _format_counts(counts: dict[str, int] | None) -> str:
+    if not counts:
+        return "-"
+    return ", ".join(f"{key}:{value}" for key, value in sorted(counts.items()))
+
+
 def generate_markdown_report(payload: dict[str, Any]) -> str:
     lines = [
         "# Battery Voltage Freshness Report",
@@ -307,8 +321,8 @@ def generate_markdown_report(payload: dict[str, Any]) -> str:
                 f"- Data category: `{(session.get('page_context') or {}).get('data_category')}`",
                 f"- Significant battery changes: `{len(session.get('battery_voltage_changes') or [])}`",
                 "",
-                "| TS | Prev V | Curr V | Delta V | Lag ms | RTT p95 ms | Write-collect txns | Replay armed | Replay served | Forwarded |",
-                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+                "| TS | Prev V | Curr V | Delta V | Lag ms | RTT p95 ms | Write-collect txns | Replay armed | Replay served | Forwarded | Prefetch miss details |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
             ]
         )
         for change in session.get("battery_voltage_changes") or []:
@@ -319,7 +333,8 @@ def generate_markdown_report(payload: dict[str, Any]) -> str:
                 f"{(change.get('window') or {}).get('write_collect_transaction_count')} | "
                 f"{(change.get('window') or {}).get('active_replay_armed_count')} | "
                 f"{(change.get('window') or {}).get('active_replay_served_count')} | "
-                f"{(change.get('window') or {}).get('forwarded_to_tunnel_count')} |"
+                f"{(change.get('window') or {}).get('forwarded_to_tunnel_count')} | "
+                f"{_format_counts((change.get('window') or {}).get('prefetch_miss_detail_counts'))} |"
             )
         lines.append("")
     if not payload.get("sessions"):

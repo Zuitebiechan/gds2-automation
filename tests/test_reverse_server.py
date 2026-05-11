@@ -1405,6 +1405,158 @@ def test_handle_proxy_connection_serves_prefetched_read_msgs_before_empty_cache(
     assert replied["read_result"] == "data"
 
 
+def test_prefetch_miss_observability_describes_empty_fifo_without_history(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    async def _run() -> None:
+        monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+        server = ReverseProxyServer(
+            config=ProxyConfig.from_args(
+                read_ahead_enabled=True,
+                read_ahead_transaction_enabled=True,
+            )
+        )
+        server.vci_connected.set()
+        server.vci_writer = _FakeWriter(peername=("10.0.0.9", 9000))
+        server._connection_epoch = "epoch-prefetch-miss-empty"
+        server._next_sequence = lambda: 88
+
+        proxy_reader = _FakeReader(
+            ProtocolEncoder.encode_read_msgs_req(
+                77,
+                num_msgs=300,
+                timeout=0,
+                sequence=21,
+            )
+        )
+        proxy_writer = _FakeWriter(peername=("127.0.0.1", 50002))
+
+        async def _empty_wait_for(awaitable, timeout):
+            if isinstance(awaitable, asyncio.Future):
+                return (
+                    MsgType.READ_MSGS_RSP,
+                    ProtocolEncoder.encode_read_msgs_rsp(BUFFER_EMPTY, [], sequence=0)[
+                        HEADER_SIZE:
+                    ],
+                    1.0,
+                )
+            return await awaitable
+
+        monkeypatch.setattr("vci_proxy.reverse_server.asyncio.wait_for", _empty_wait_for)
+
+        await server._handle_proxy_connection(proxy_reader, proxy_writer)
+
+        assert len(server.vci_writer.writes) == 1
+
+    asyncio.run(_run())
+
+    records = _read_product_log_events(tmp_path)
+    cache_decision = next(
+        record
+        for record in records
+        if record["event_type"] == "proxy.request.cache_decision"
+        and record.get("msg_name") == "READ_MSGS_REQ"
+    )
+
+    assert cache_decision["reason"] == "prefetch_miss"
+    assert cache_decision["prefetch_miss_detail"] == "fifo_empty_read_collect_unavailable"
+    assert cache_decision["prefetch_fifo_enabled"] is True
+    assert cache_decision["prefetch_fifo_capacity"] == 16
+    assert cache_decision["prefetch_fifo_pending_before"] == 0
+    assert cache_decision["prefetch_requested_count"] == 300
+    assert cache_decision["read_collect_eligible"] is False
+    assert cache_decision["read_collect_blocked_reason"] == "client_read_collect_not_supported"
+    assert cache_decision["empty_cache_timeout_cacheable"] is True
+    assert cache_decision["empty_cache_has_entry"] is False
+
+
+def test_prefetch_miss_observability_reports_exhausted_fifo(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    async def _run() -> None:
+        monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+        server = ReverseProxyServer(
+            config=ProxyConfig.from_args(
+                read_ahead_enabled=True,
+                read_ahead_transaction_enabled=True,
+            )
+        )
+        server.vci_connected.set()
+        server.vci_writer = _FakeWriter(peername=("10.0.0.9", 9000))
+        server._connection_epoch = "epoch-prefetch-miss-exhausted"
+        server._vci_read_collect_supported = True
+        server._vci_write_collect_supported = True
+        server._next_sequence = lambda: 88
+        message = {
+            "protocol_id": 6,
+            "rx_status": 0,
+            "tx_flags": 0,
+            "timestamp": 123,
+            "data": b"\x62\x01",
+        }
+        server._prefetch_read_msgs.record_read_rsp_body(
+            77,
+            ProtocolEncoder.encode_read_msgs_rsp(0, [message], sequence=0)[HEADER_SIZE:],
+            source="read_collect",
+        )
+        server._record_prefetch_record_observation(
+            77,
+            message_count=1,
+            source="read_collect",
+            proxy_seq=55,
+        )
+
+        proxy_reader = _FakeReader(
+            ProtocolEncoder.encode_read_msgs_req(77, num_msgs=1, timeout=0, sequence=21),
+            ProtocolEncoder.encode_read_msgs_req(77, num_msgs=1, timeout=0, sequence=22),
+        )
+        proxy_writer = _FakeWriter(peername=("127.0.0.1", 50002))
+
+        async def _empty_wait_for(awaitable, timeout):
+            if isinstance(awaitable, asyncio.Future):
+                return (
+                    MsgType.READ_MSGS_RSP,
+                    ProtocolEncoder.encode_read_msgs_rsp(BUFFER_EMPTY, [], sequence=0)[
+                        HEADER_SIZE:
+                    ],
+                    1.0,
+                )
+            return await awaitable
+
+        monkeypatch.setattr("vci_proxy.reverse_server.asyncio.wait_for", _empty_wait_for)
+
+        await server._handle_proxy_connection(proxy_reader, proxy_writer)
+
+        assert len(server.vci_writer.writes) == 1
+
+    asyncio.run(_run())
+
+    records = _read_product_log_events(tmp_path)
+    read_decisions = [
+        record
+        for record in records
+        if record["event_type"] == "proxy.request.cache_decision"
+        and record.get("msg_name") == "READ_MSGS_REQ"
+    ]
+
+    assert [record["reason"] for record in read_decisions] == [
+        "prefetch_hit",
+        "prefetch_miss",
+    ]
+    miss = read_decisions[-1]
+    assert miss["prefetch_miss_detail"] == "fifo_empty_after_prefetch_exhausted"
+    assert miss["read_collect_eligible"] is True
+    assert miss["prefetch_last_record_count"] == 1
+    assert miss["prefetch_last_record_source"] == "read_collect"
+    assert miss["prefetch_last_record_proxy_seq"] == 55
+    assert miss["prefetch_last_drain_reason"] == "prefetch_hit"
+    assert miss["prefetch_last_drain_served_count"] == 1
+    assert miss["prefetch_last_drain_pending_after"] == 0
+    assert miss["prefetch_last_drain_age_ms"] >= 0.0
+
+
 def test_handle_proxy_connection_serves_oversized_nonblocking_prefetch_without_tunnel(
     monkeypatch,
     tmp_path,
