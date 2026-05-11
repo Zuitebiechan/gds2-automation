@@ -235,6 +235,10 @@ When `read_cache_post_write_bypass_ms` is greater than `0`, a write invalidates
 that channel's empty-read cache and forces immediate same-channel `READ_MSGS_REQ`
 calls through the tunnel during the configured bypass window. Set the bypass
 window to `0` to disable only the post-write invalidation/forced-bypass behavior.
+After a real post-write `ReadMsgs(BUFFER_EMPTY)` result is observed, that
+confirmed empty result clears the write-bypass marker for the channel; later
+short-timeout polls can use the normal active empty-cache TTL instead of paying
+the rest of the bypass window.
 When Phase 2 adaptive TTL is enabled, writes may still put the channel into active
 TTL mode. To fully approximate the older fixed-TTL behavior, also set
 `--read-cache-active-window-ms 0` and `--read-cache-max-timeout-ms -1`.

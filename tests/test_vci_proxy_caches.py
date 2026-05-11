@@ -55,7 +55,7 @@ def test_read_msgs_cache_misses_when_disabled_expired_or_invalidated(monkeypatch
     assert cache.stats == (0, 2)
 
 
-def test_read_msgs_cache_bypasses_empty_cache_after_same_channel_write(monkeypatch) -> None:
+def test_read_msgs_cache_allows_confirmed_empty_after_same_channel_write(monkeypatch) -> None:
     cache = ReadMsgsCache(
         ReadMsgsCacheConfig(
             enabled=True,
@@ -71,11 +71,10 @@ def test_read_msgs_cache_bypasses_empty_cache_after_same_channel_write(monkeypat
     cache.record_write(44)
     cache.record_result(44, BUFFER_EMPTY)
 
-    assert cache.try_serve_from_cache(44, 1, 1, 1) is None
-    response = cache.try_serve_from_cache(44, 1, 1, 2)
+    response = cache.try_serve_from_cache(44, 1, 1, 1)
     assert response is not None
     assert ProtocolDecoder.decode_read_msgs_rsp(response[HEADER_SIZE:]) == (BUFFER_EMPTY, [])
-    assert cache.stats == (1, 1)
+    assert cache.stats == (1, 0)
 
 
 def test_read_msgs_cache_post_write_bypass_does_not_affect_unrelated_channels(monkeypatch) -> None:

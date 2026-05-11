@@ -1882,6 +1882,96 @@ def test_record_in_caches_clears_prefetched_fifo_after_failed_write_response() -
     assert server._prefetch_read_msgs.try_serve(44, num_msgs=1, sequence=32) is None
 
 
+def test_confirmed_post_write_empty_read_allows_following_empty_cache_hit(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    async def _run() -> None:
+        monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+        server = ReverseProxyServer(config=ProxyConfig.from_args())
+        server.vci_connected.set()
+        server.vci_writer = _FakeWriter(peername=("10.0.0.9", 9000))
+        server._connection_epoch = "epoch-post-write-empty"
+        sequences = iter([101, 102])
+        server._next_sequence = lambda: next(sequences)
+
+        write_req = ProtocolEncoder.encode_write_msgs_req(
+            44,
+            [{"protocol_id": 6, "timestamp": 1, "data": b"\x22"}],
+            timeout=25,
+            sequence=31,
+        )
+        first_read = ProtocolEncoder.encode_read_msgs_req(
+            44,
+            num_msgs=300,
+            timeout=0,
+            sequence=32,
+        )
+        second_read = ProtocolEncoder.encode_read_msgs_req(
+            44,
+            num_msgs=300,
+            timeout=0,
+            sequence=33,
+        )
+        proxy_reader = _FakeReader(write_req, first_read, second_read)
+        proxy_writer = _FakeWriter(peername=("127.0.0.1", 50003))
+
+        responses = iter(
+            [
+                (
+                    MsgType.WRITE_MSGS_RSP,
+                    ProtocolEncoder.encode_write_msgs_rsp(0, 1)[HEADER_SIZE:],
+                    0.0,
+                ),
+                (
+                    MsgType.READ_MSGS_RSP,
+                    ProtocolEncoder.encode_read_msgs_rsp(
+                        BUFFER_EMPTY,
+                        [],
+                    )[HEADER_SIZE:],
+                    0.0,
+                ),
+            ]
+        )
+
+        async def _wait_for(awaitable, timeout):
+            if isinstance(awaitable, asyncio.Future):
+                return next(responses)
+            return await awaitable
+
+        monkeypatch.setattr("vci_proxy.reverse_server.asyncio.wait_for", _wait_for)
+
+        await server._handle_proxy_connection(proxy_reader, proxy_writer)
+
+        assert len(server.vci_writer.writes) == 2
+        assert len(proxy_writer.writes) == 3
+        assert ProtocolDecoder.decode_read_msgs_rsp(
+            proxy_writer.writes[2][HEADER_SIZE:]
+        ) == (BUFFER_EMPTY, [])
+
+    asyncio.run(_run())
+
+    records = _read_product_log_events(tmp_path)
+    forwarded = [
+        record
+        for record in records
+        if record["event_type"] == "proxy.request.forwarded_to_tunnel"
+    ]
+    cache_replies = [
+        record
+        for record in records
+        if record["event_type"] == "proxy.request.cache_decision"
+        and record.get("cache_hit") is True
+    ]
+
+    assert [record["msg_name"] for record in forwarded] == [
+        "WRITE_MSGS_REQ",
+        "READ_MSGS_REQ",
+    ]
+    assert cache_replies[-1]["dll_seq"] == 33
+    assert cache_replies[-1]["reason"] == "empty_cache_hit"
+
+
 def test_clear_prefetch_after_failed_write_ignores_non_write_requests() -> None:
     server = ReverseProxyServer(
         config=ProxyConfig.from_args(read_ahead_enabled=True, read_ahead_max_messages=4)

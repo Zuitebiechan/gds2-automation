@@ -130,6 +130,9 @@ class ReadMsgsCache:
         if not self._enabled:
             return
         ts = time.monotonic() if now is None else now
+        # Once a real post-write read has completed, any older write marker is no
+        # longer protecting against stale pre-write empties.
+        self._last_write_at.pop(channel_id, None)
         if return_code == BUFFER_EMPTY and message_count == 0:
             self._channels[channel_id] = (ts, return_code)
             return
