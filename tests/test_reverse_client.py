@@ -1531,6 +1531,7 @@ def test_read_collect_empty_after_data_uses_one_extra_grace_read_after_budget(
             max_messages=4,
             min_drain_ms=0,
             stop_after_empty_once_min_drain_elapsed=True,
+            extra_read_after_data_at_max=True,
         )
     )
 
@@ -1549,9 +1550,12 @@ def test_read_collect_empty_after_data_uses_one_extra_grace_read_after_budget(
     assert collection_events[-1]["empty_after_data_grace_used"] is True
     assert collection_events[-1]["empty_after_data_grace_extra_read_used"] is True
     assert collection_events[-1]["empty_after_data_grace_skipped_reason"] is None
+    assert collection_events[-1]["extra_read_after_data_at_max_used"] is False
+    assert collection_events[-1]["extra_read_after_data_at_max_attempts"] == 0
+    assert collection_events[-1]["extra_read_after_data_at_max_limit"] == 2
 
 
-def test_read_collect_data_at_max_uses_one_extra_read(
+def test_read_collect_data_at_max_uses_bounded_extra_reads(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -1559,11 +1563,13 @@ def test_read_collect_data_at_max_uses_one_extra_read(
     first_tail_message = {"protocol_id": 6, "data": b"\x62\x13\x08"}
     second_tail_message = {"protocol_id": 6, "data": b"\x62\x13\x09"}
     third_tail_message = {"protocol_id": 6, "data": b"\x62\x13\x0a"}
+    fourth_tail_message = {"protocol_id": 6, "data": b"\x62\x13\x0b"}
     read_results = iter(
         [
             (0, [first_tail_message]),
             (0, [second_tail_message]),
             (0, [third_tail_message]),
+            (0, [fourth_tail_message]),
         ]
     )
     client = ReverseProxyClient(
@@ -1592,7 +1598,7 @@ def test_read_collect_data_at_max_uses_one_extra_read(
             collect_window_ms=40,
             max_reads=2,
             read_timeout_ms=0,
-            max_messages=4,
+            max_messages=8,
             min_drain_ms=0,
             stop_after_empty_once_min_drain_elapsed=True,
             extra_read_after_data_at_max=True,
@@ -1602,16 +1608,23 @@ def test_read_collect_data_at_max_uses_one_extra_read(
     assert [
         ProtocolDecoder.decode_read_msgs_rsp(read_rsp_body)[1][0]["data"]
         for read_rsp_body in bodies
-    ] == [b"\x62\x13\x08", b"\x62\x13\x09", b"\x62\x13\x0a"]
+    ] == [
+        b"\x62\x13\x08",
+        b"\x62\x13\x09",
+        b"\x62\x13\x0a",
+        b"\x62\x13\x0b",
+    ]
     collection_events = [
         event
         for event in _read_local_events(tmp_path)
         if event.get("event_type") == "read_ahead.collection_finished"
     ]
     assert collection_events[-1]["reason"] == "extra_read_after_data_at_max_limit"
-    assert collection_events[-1]["attempted_reads"] == 3
+    assert collection_events[-1]["attempted_reads"] == 4
     assert collection_events[-1]["max_reads"] == 2
     assert collection_events[-1]["extra_read_after_data_at_max_used"] is True
+    assert collection_events[-1]["extra_read_after_data_at_max_attempts"] == 2
+    assert collection_events[-1]["extra_read_after_data_at_max_limit"] == 2
     assert collection_events[-1]["empty_after_data_grace_used"] is False
 
 
@@ -1675,6 +1688,8 @@ def test_read_collect_data_at_max_extra_empty_stops_without_grace_stack(
     assert collection_events[-1]["attempted_reads"] == 3
     assert collection_events[-1]["max_reads"] == 2
     assert collection_events[-1]["extra_read_after_data_at_max_used"] is True
+    assert collection_events[-1]["extra_read_after_data_at_max_attempts"] == 1
+    assert collection_events[-1]["extra_read_after_data_at_max_limit"] == 2
     assert collection_events[-1]["empty_after_data_grace_used"] is False
 
 

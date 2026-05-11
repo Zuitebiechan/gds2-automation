@@ -53,6 +53,7 @@ from vci_proxy.tls_utils import harden_tls_context
 logger = logging.getLogger(__name__)
 
 READ_COLLECT_MIN_DRAIN_CAP_MS = 8
+READ_COLLECT_DATA_AT_MAX_EXTRA_READS = 2
 
 
 class ReverseProxyClient:
@@ -1298,6 +1299,12 @@ class ReverseProxyClient:
         empty_after_data_grace_skipped_reason: str | None = None
         empty_after_data_grace_sleep_ms = 0.0
         extra_read_after_data_at_max_used = False
+        extra_read_after_data_at_max_attempts = 0
+        extra_read_after_data_at_max_limit = (
+            READ_COLLECT_DATA_AT_MAX_EXTRA_READS
+            if extra_read_after_data_at_max
+            else 0
+        )
         extra_read_after_data_at_max_pending = False
         stop_reason = "max_reads"
         read_index = 0
@@ -1316,11 +1323,12 @@ class ReverseProxyClient:
                 elif extra_read_after_data_at_max_pending:
                     extra_read_after_data_at_max_pending = False
                     extra_read_after_data_at_max_used = True
+                    extra_read_after_data_at_max_attempts += 1
                     current_read_is_extra_data_at_max = True
                 else:
                     stop_reason = (
                         "extra_read_after_data_at_max_limit"
-                        if extra_read_after_data_at_max_used
+                        if extra_read_after_data_at_max_attempts > 0
                         else "max_reads"
                     )
                     break
@@ -1444,7 +1452,8 @@ class ReverseProxyClient:
                 and stop_after_empty_once_min_drain_elapsed
                 and not empty_after_data_grace_used
                 and not empty_after_data_grace_extra_read_used
-                and not extra_read_after_data_at_max_used
+                and extra_read_after_data_at_max_attempts
+                < extra_read_after_data_at_max_limit
                 and read_index >= effective_max_reads
                 and time.monotonic() < deadline
             ):
@@ -1493,6 +1502,10 @@ class ReverseProxyClient:
             ),
             extra_read_after_data_at_max_enabled=extra_read_after_data_at_max,
             extra_read_after_data_at_max_used=extra_read_after_data_at_max_used,
+            extra_read_after_data_at_max_attempts=(
+                extra_read_after_data_at_max_attempts
+            ),
+            extra_read_after_data_at_max_limit=extra_read_after_data_at_max_limit,
         )
         return collected
 

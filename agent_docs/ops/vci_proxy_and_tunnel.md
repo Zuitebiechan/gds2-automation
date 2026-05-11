@@ -425,13 +425,16 @@ returning to an unconditional three-read drain. Observability reports
 `empty_after_data_grace_empty` means the grace retry was actually attempted and
 also returned empty.
 If the read-tail probe reaches its normal `max_reads` budget while the latest
-local read still returned data, the client may spend one additional
-data-continuation probe before stopping. This is reported as
-`extra_read_after_data_at_max_used=true` and stops with
-`extra_read_after_data_at_max_limit` when that final probe also returned data, or
-`extra_read_after_data_at_max_empty` when it found the burst boundary. This
-extra probe is not stacked on top of an already budget-extending empty-grace
-retry.
+local read still returned data, the client may spend a small fixed number
+(currently `2`) of
+additional data-continuation probes before stopping. This is reported as
+`extra_read_after_data_at_max_used=true` with
+`extra_read_after_data_at_max_attempts` and
+`extra_read_after_data_at_max_limit`; collection stops with
+`extra_read_after_data_at_max_limit` when the bounded final probe also returned
+data, or `extra_read_after_data_at_max_empty` when it found the burst boundary.
+These extra probes are not stacked on top of an already budget-extending
+empty-grace retry.
 This only changes opportunistic extra local reads; it does not drop data or
 change the foreground `READ_MSGS_RSP`, because later ECU frames remain in the
 real J2534 queue for the next GDS2 read. Cloud FIFO hit events include
