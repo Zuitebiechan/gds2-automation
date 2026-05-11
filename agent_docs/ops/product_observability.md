@@ -315,12 +315,14 @@ Latest known interpretation:
   - `sweep.shadow.*` comparison events now include `sweep_shadow_clean_match_streak` and `sweep_replay_min_clean_matches`; `proxy.request.active_replay_armed` / `proxy.request.active_replay_served` include the same replay-quality gate fields when replay is actually permitted
 - `vci_proxy/reverse_client.py`
   - emits reverse tunnel connection lifecycle, request receipt, and J2534 call events
-  - local read-ahead collection emits `read_ahead.collection_finished` with attempted/data/empty read counts, collected message counts, effective budgets including `local_max_reads`, whether one-empty tail stop was enabled, whether the after-data empty-read grace was used, whether it consumed the one extra local read attempt (`empty_after_data_grace_extra_read_used`), whether data-at-budget continuation probes were used (`extra_read_after_data_at_max_used`), their `extra_read_after_data_at_max_attempts` / `extra_read_after_data_at_max_limit`, `empty_after_data_grace_sleep_ms`, and the stop reason
+  - local read-ahead collection emits `read_ahead.collection_finished` with attempted/data/empty read counts, collected message counts, effective budgets including `local_max_reads`, whether one-empty tail stop was enabled, whether the after-data empty-read grace was used, whether it consumed the one extra local read attempt (`empty_after_data_grace_extra_read_used`), whether that grace read then used a one-probe data boundary confirmation (`empty_after_data_grace_data_extra_read_used`, `empty_after_data_grace_data_extra_read_attempts`, `empty_after_data_grace_data_extra_read_limit`), whether data-at-budget continuation probes were used (`extra_read_after_data_at_max_used`), their `extra_read_after_data_at_max_attempts` / `extra_read_after_data_at_max_limit`, `empty_after_data_grace_sleep_ms`, and the stop reason
   - after-data empty-read stop reasons distinguish a real grace retry
     (`empty_after_data_grace_empty`) from ordinary budget/window termination;
     when normal read-tail `max_reads` is exhausted after tail data was already
     collected, the client can spend one extra local read attempt before
-    stopping
+    stopping. If that extra grace read returns data, one narrower boundary
+    confirmation can stop with `empty_after_data_grace_data_extra_empty` or
+    `empty_after_data_grace_data_extra_limit`.
   - data-at-budget stop reasons distinguish the bounded extra
     data-continuation probes, currently capped at `2`, that still found data
     (`extra_read_after_data_at_max_limit`) from one that found the burst

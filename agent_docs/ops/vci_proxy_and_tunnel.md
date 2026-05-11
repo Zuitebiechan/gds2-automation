@@ -423,18 +423,25 @@ collection deadline and message limit. The client can wait briefly, capped at
 returning to an unconditional three-read drain. Observability reports
 `empty_after_data_grace_extra_read_used=true` when this extra attempt was needed.
 `empty_after_data_grace_empty` means the grace retry was actually attempted and
-also returned empty.
+also returned empty. If that extra grace read returns data instead, the client
+may spend one more boundary-confirmation probe before stopping. Observability
+reports this as `empty_after_data_grace_data_extra_read_used=true` with
+`empty_after_data_grace_data_extra_read_attempts` and
+`empty_after_data_grace_data_extra_read_limit`; collection stops with
+`empty_after_data_grace_data_extra_empty` when the confirmation probe finds the
+burst boundary, or `empty_after_data_grace_data_extra_limit` when that bounded
+probe also returns data.
 If the read-tail probe reaches its normal `max_reads` budget while the latest
 local read still returned data, the client may spend a small fixed number
-(currently `2`) of
-additional data-continuation probes before stopping. This is reported as
+(currently `2`) of additional data-continuation probes before stopping. This is reported as
 `extra_read_after_data_at_max_used=true` with
 `extra_read_after_data_at_max_attempts` and
 `extra_read_after_data_at_max_limit`; collection stops with
 `extra_read_after_data_at_max_limit` when the bounded final probe also returned
 data, or `extra_read_after_data_at_max_empty` when it found the burst boundary.
-These extra probes are not stacked on top of an already budget-extending
-empty-grace retry.
+The full data-at-budget continuation budget is not stacked on top of an already
+budget-extending empty-grace retry; the grace-data path gets only the single
+boundary-confirmation probe described above.
 This only changes opportunistic extra local reads; it does not drop data or
 change the foreground `READ_MSGS_RSP`, because later ECU frames remain in the
 real J2534 queue for the next GDS2 read. Cloud FIFO hit events include

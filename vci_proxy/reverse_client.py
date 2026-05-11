@@ -54,6 +54,7 @@ logger = logging.getLogger(__name__)
 
 READ_COLLECT_MIN_DRAIN_CAP_MS = 8
 READ_COLLECT_DATA_AT_MAX_EXTRA_READS = 2
+READ_COLLECT_EMPTY_GRACE_DATA_EXTRA_READS = 1
 
 
 class ReverseProxyClient:
@@ -1298,6 +1299,14 @@ class ReverseProxyClient:
         empty_after_data_grace_extra_read_pending = False
         empty_after_data_grace_skipped_reason: str | None = None
         empty_after_data_grace_sleep_ms = 0.0
+        empty_after_data_grace_data_extra_read_used = False
+        empty_after_data_grace_data_extra_read_attempts = 0
+        empty_after_data_grace_data_extra_read_limit = (
+            READ_COLLECT_EMPTY_GRACE_DATA_EXTRA_READS
+            if extra_read_after_data_at_max
+            else 0
+        )
+        empty_after_data_grace_data_extra_read_pending = False
         extra_read_after_data_at_max_used = False
         extra_read_after_data_at_max_attempts = 0
         extra_read_after_data_at_max_limit = (
@@ -1314,23 +1323,30 @@ class ReverseProxyClient:
                 break
 
             current_read_is_extra_grace = False
+            current_read_is_extra_grace_data = False
             current_read_is_extra_data_at_max = False
             if read_index >= effective_max_reads:
                 if empty_after_data_grace_extra_read_pending:
                     empty_after_data_grace_extra_read_pending = False
                     empty_after_data_grace_extra_read_used = True
                     current_read_is_extra_grace = True
+                elif empty_after_data_grace_data_extra_read_pending:
+                    empty_after_data_grace_data_extra_read_pending = False
+                    empty_after_data_grace_data_extra_read_used = True
+                    empty_after_data_grace_data_extra_read_attempts += 1
+                    current_read_is_extra_grace_data = True
                 elif extra_read_after_data_at_max_pending:
                     extra_read_after_data_at_max_pending = False
                     extra_read_after_data_at_max_used = True
                     extra_read_after_data_at_max_attempts += 1
                     current_read_is_extra_data_at_max = True
                 else:
-                    stop_reason = (
-                        "extra_read_after_data_at_max_limit"
-                        if extra_read_after_data_at_max_attempts > 0
-                        else "max_reads"
-                    )
+                    if empty_after_data_grace_data_extra_read_attempts > 0:
+                        stop_reason = "empty_after_data_grace_data_extra_limit"
+                    elif extra_read_after_data_at_max_attempts > 0:
+                        stop_reason = "extra_read_after_data_at_max_limit"
+                    else:
+                        stop_reason = "max_reads"
                     break
 
             remaining = effective_max_messages - collected_messages
@@ -1356,6 +1372,9 @@ class ReverseProxyClient:
                         "read_ahead_index": current_read_index,
                         "read_ahead_extra_after_data_grace": (
                             current_read_is_extra_grace
+                        ),
+                        "read_ahead_extra_after_data_grace_data": (
+                            current_read_is_extra_grace_data
                         ),
                         "read_ahead_extra_after_data_at_max": (
                             current_read_is_extra_data_at_max
@@ -1414,6 +1433,9 @@ class ReverseProxyClient:
                             empty_after_data_grace_sleep_ms += sleep_s * 1000.0
                         empty_after_data_grace_used = True
                         continue
+                    if empty_after_data_grace_data_extra_read_used:
+                        stop_reason = "empty_after_data_grace_data_extra_empty"
+                        break
                     stop_reason = "empty_after_data_grace_empty"
                     break
                 if (
@@ -1459,6 +1481,18 @@ class ReverseProxyClient:
             ):
                 extra_read_after_data_at_max_pending = True
                 continue
+            if (
+                extra_read_after_data_at_max
+                and stop_after_empty_once_min_drain_elapsed
+                and empty_after_data_grace_used
+                and empty_after_data_grace_extra_read_used
+                and empty_after_data_grace_data_extra_read_attempts
+                < empty_after_data_grace_data_extra_read_limit
+                and read_index >= effective_max_reads
+                and time.monotonic() < deadline
+            ):
+                empty_after_data_grace_data_extra_read_pending = True
+                continue
 
         if collected:
             logger.debug(
@@ -1499,6 +1533,15 @@ class ReverseProxyClient:
             empty_after_data_grace_sleep_ms=round(
                 empty_after_data_grace_sleep_ms,
                 3,
+            ),
+            empty_after_data_grace_data_extra_read_used=(
+                empty_after_data_grace_data_extra_read_used
+            ),
+            empty_after_data_grace_data_extra_read_attempts=(
+                empty_after_data_grace_data_extra_read_attempts
+            ),
+            empty_after_data_grace_data_extra_read_limit=(
+                empty_after_data_grace_data_extra_read_limit
             ),
             extra_read_after_data_at_max_enabled=extra_read_after_data_at_max,
             extra_read_after_data_at_max_used=extra_read_after_data_at_max_used,
