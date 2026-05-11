@@ -54,6 +54,7 @@ def _import_client_gui(monkeypatch, tmp_path):
         "VCI_PROXY_READ_AHEAD",
         "VCI_PROXY_READ_AHEAD_WINDOW_MS",
         "VCI_PROXY_READ_AHEAD_MAX_READS",
+        "VCI_PROXY_READ_AHEAD_WRITE_COLLECT_MAX_READS",
         "VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS",
         "VCI_PROXY_READ_AHEAD_MAX_MESSAGES",
         "VCI_PROXY_READ_AHEAD_MAX_EMPTY_READS",
@@ -95,6 +96,7 @@ def test_load_config_merges_saved_values_with_defaults(monkeypatch, tmp_path) ->
         "read_ahead_enabled": False,
         "read_ahead_window_ms": 200,
         "read_ahead_max_reads": 3,
+        "read_ahead_write_collect_max_reads": 6,
         "read_ahead_read_timeout_ms": 0,
         "read_ahead_max_messages": 16,
         "read_ahead_max_empty_reads": 0,
@@ -120,6 +122,7 @@ def test_save_config_persists_json(monkeypatch, tmp_path) -> None:
         "read_ahead_enabled": False,
         "read_ahead_window_ms": 200,
         "read_ahead_max_reads": 3,
+        "read_ahead_write_collect_max_reads": 6,
         "read_ahead_read_timeout_ms": 0,
         "read_ahead_max_messages": 16,
         "read_ahead_max_empty_reads": 0,
@@ -147,6 +150,7 @@ def test_apply_read_ahead_env_overrides_uses_shared_env_names(monkeypatch, tmp_p
     monkeypatch.setenv("VCI_PROXY_READ_AHEAD", "1")
     monkeypatch.setenv("VCI_PROXY_READ_AHEAD_WINDOW_MS", "250")
     monkeypatch.setenv("VCI_PROXY_READ_AHEAD_MAX_READS", "4")
+    monkeypatch.setenv("VCI_PROXY_READ_AHEAD_WRITE_COLLECT_MAX_READS", "9")
     monkeypatch.setenv("VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS", "1")
     monkeypatch.setenv("VCI_PROXY_READ_AHEAD_MAX_MESSAGES", "10")
     monkeypatch.setenv("VCI_PROXY_READ_AHEAD_MAX_EMPTY_READS", "6")
@@ -159,6 +163,7 @@ def test_apply_read_ahead_env_overrides_uses_shared_env_names(monkeypatch, tmp_p
             "read_ahead_enabled": False,
             "read_ahead_window_ms": 200,
             "read_ahead_max_reads": 3,
+            "read_ahead_write_collect_max_reads": 6,
             "read_ahead_read_timeout_ms": 0,
             "read_ahead_max_messages": 16,
             "read_ahead_max_empty_reads": 0,
@@ -173,6 +178,7 @@ def test_apply_read_ahead_env_overrides_uses_shared_env_names(monkeypatch, tmp_p
         "read_ahead_enabled": True,
         "read_ahead_window_ms": 250,
         "read_ahead_max_reads": 4,
+        "read_ahead_write_collect_max_reads": 9,
         "read_ahead_read_timeout_ms": 1,
         "read_ahead_max_messages": 10,
         "read_ahead_max_empty_reads": 6,
@@ -203,6 +209,7 @@ def test_effective_runtime_config_applies_read_ahead_env_overrides(monkeypatch, 
         "read_ahead_enabled": False,
         "read_ahead_window_ms": 200,
         "read_ahead_max_reads": 3,
+        "read_ahead_write_collect_max_reads": 6,
         "read_ahead_read_timeout_ms": 0,
         "read_ahead_max_messages": 16,
         "read_ahead_max_empty_reads": 0,
@@ -341,6 +348,7 @@ def test_start_client_builds_reverse_proxy_client_and_starts_thread(monkeypatch,
         "read_ahead_enabled": False,
         "read_ahead_window_ms": 200,
         "read_ahead_max_reads": 3,
+        "read_ahead_write_collect_max_reads": 6,
         "read_ahead_read_timeout_ms": 0,
         "read_ahead_max_messages": 16,
         "read_ahead_max_empty_reads": 0,
@@ -1092,6 +1100,7 @@ def test_run_settings_dialog_defers_restart_when_active_session_exists(monkeypat
         "read_ahead_enabled": False,
         "read_ahead_window_ms": 200,
         "read_ahead_max_reads": 3,
+        "read_ahead_write_collect_max_reads": 6,
         "read_ahead_read_timeout_ms": 0,
         "read_ahead_max_messages": 16,
         "read_ahead_max_empty_reads": 0,

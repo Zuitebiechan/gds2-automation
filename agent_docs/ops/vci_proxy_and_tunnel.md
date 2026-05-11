@@ -294,6 +294,7 @@ Unified runtime config:
   reverse client processes when present in their environment.
 - `VCI_PROXY_READ_AHEAD_WINDOW_MS=200`
 - `VCI_PROXY_READ_AHEAD_MAX_READS=3`
+- `VCI_PROXY_READ_AHEAD_WRITE_COLLECT_MAX_READS=6`
 - `VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS=0`
 - `VCI_PROXY_READ_AHEAD_MAX_MESSAGES=16`
 - `VCI_PROXY_READ_AHEAD_MAX_EMPTY_READS=0`
@@ -323,7 +324,8 @@ After startup, verify configuration from observability rather than assuming the
 environment was inherited correctly. The cloud `process.lifecycle.started` event
 should show the read-ahead/transaction flags, and the local
 `reverse_client.lifecycle.auth_succeeded` reason should include
-`read_ahead=1` and `write_collect=1` when both sides are enabled.
+`read_ahead=1`, `read_collect=1`, and `write_collect=1` when both sides are
+enabled.
 
 Reverse server and reverse client CLI overrides:
 
@@ -331,7 +333,10 @@ Reverse server and reverse client CLI overrides:
 - `--no-read-ahead`; disables read-ahead even if `VCI_PROXY_READ_AHEAD` is set
 - `--read-ahead-window-ms <milliseconds>`; default `200`, `0` disables local
   read collection
-- `--read-ahead-max-reads <count>`; default `3`
+- `--read-ahead-max-reads <count>`; default `3`, used as the generic and
+  read-tail collection cap
+- `--read-ahead-write-collect-max-reads <count>`; default `6`, used for
+  post-write transaction collection without raising the read-tail cap
 - `--read-ahead-read-timeout-ms <milliseconds>`; default `0`
 - `--read-ahead-max-messages <count>`; default `16`
 - `--read-ahead-max-empty-reads <count>`; default `0`, disabled unless
@@ -369,6 +374,16 @@ Compatibility guardrails:
   request/response frames
 - prefetched data remains consume-once FIFO data and is stripped before the
   write response reaches the DLL
+- write-collect uses the separate
+  `VCI_PROXY_READ_AHEAD_WRITE_COLLECT_MAX_READS` budget so post-write bursts can
+  drain more deeply while `READ_AND_COLLECT_READS_REQ` remains capped by the
+  tighter `VCI_PROXY_READ_AHEAD_MAX_READS`/server-side read-tail guard
+- the write-collect budget is a hard cap, not an unconditional loop: after local
+  collection has captured data, the local client treats
+  `VCI_PROXY_READ_AHEAD_MAX_READS` as a soft stop so continuous response streams
+  do not make every foreground `WRITE_MSGS_REQ` pay the full deeper
+  write-collect budget; this soft stop also wins over the minimum drain window
+  after data has already been collected
 - if a tunnel response reaches
   `VCI_PROXY_READ_AHEAD_TRANSACTION_MAX_NETWORK_MS`, the cloud server arms a
   temporary no-collect guard for
@@ -378,6 +393,42 @@ Compatibility guardrails:
   `proxy.request.forwarded_to_tunnel` then records reason
   `write_collect_guarded_no_collect`, and
   `read_ahead.transaction.guard_armed` records the triggering slow response.
+
+The same transaction capability now also supports a narrower
+`READ_AND_COLLECT_READS_REQ` path for Data Display tail bursts. When both sides
+advertise `read_collect=1`, a DLL-facing non-blocking `READ_MSGS_REQ`
+(`timeout=0`) can be wrapped so the local client performs the real foreground
+read first, returns that exact foreground result to GDS2, then uses a bounded
+zero-min-drain collection budget to consume any immediately queued tail frames
+into the same consume-once FIFO. This tail collection now runs even when the
+foreground read itself returns `BUFFER_EMPTY`: GDS2 still receives that real
+empty foreground result, while any frame that arrives during the immediate local
+tail probe can be served to the next serial `READ_MSGS_REQ` from FIFO. When
+`VCI_PROXY_READ_AHEAD_MIN_DRAIN_MS` is configured, read-tail collection uses a
+separate hard cap of `8ms` so a `40ms` post-write drain setting does not make
+every foreground read wait the full write-collect window. The read-tail budget
+is intentionally tighter than write collection: at most `40ms`, `3` extra local
+read calls, `16` messages, and `read_timeout_ms=0`. Blocking reads are not
+wrapped, and the slow transaction guard falls back to ordinary `READ_MSGS_REQ`
+forwarding while active. This reduces later serial `ReadMsgs` tunnel trips
+without replaying or decoding GM A9 payloads.
+
+The read-tail drain stops after the first `BUFFER_EMPTY` when no tail data has
+been collected after the capped minimum-drain window. If tail data was already
+collected, one empty-read grace attempt is allowed before stopping when local
+read budget remains; the client can wait briefly, capped at `8ms`, before that
+grace retry so short burst gaps can still be captured without returning to an
+unconditional three-read drain. Observability separates the two terminal cases:
+`empty_after_data_grace_empty` means the grace retry was actually attempted and
+also returned empty, while `empty_after_data_no_grace_budget` means there was no
+remaining local read budget to attempt that retry.
+This only changes opportunistic extra local reads; it does not drop data or
+change the foreground `READ_MSGS_RSP`, because later ECU frames remain in the
+real J2534 queue for the next GDS2 read. Cloud FIFO hit events include
+`prefetch_source_counts` and `prefetch_age_*_ms` fields so local
+simulated-cloud tests can separate `read_collect` and `write_collect`
+usefulness and measure how long prefetched frames waited before DLL
+consumption.
 
 Operational validation as of `2026-05-06`:
 

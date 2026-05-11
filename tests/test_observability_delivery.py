@@ -96,6 +96,34 @@ def test_atomic_write_json_uses_unique_temp_path_per_write(tmp_path: Path, monke
     assert len(temp_names) == 2
     assert temp_names[0] != temp_names[1]
     assert json.loads(target.read_text(encoding="utf-8")) == {"value": 2}
+    assert not list(target.parent.glob(f"{target.name}.*.tmp"))
+
+
+def test_cleanup_recovers_complete_session_trace_temp_json(tmp_path: Path) -> None:
+    cloud_root = tmp_path / "ProgramData" / "RPA_Diagnostic" / "observability" / "cloud"
+    trace_dir = cloud_root / "session_traces"
+    trace_dir.mkdir(parents=True)
+    trace_path = trace_dir / "epoch-atomic.json"
+    temp_path = trace_path.with_name(
+        f"{trace_path.name}.1234.0123456789abcdef0123456789abcdef.tmp"
+    )
+    temp_path.write_text(
+        json.dumps(
+            {
+                "trace_id": None,
+                "session_id": None,
+                "connection_epoch": "epoch-atomic",
+                "status": "partial",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cleanup_product_observability(programdata=cloud_root, now=time.time())
+
+    assert trace_path.exists()
+    assert not temp_path.exists()
+    assert json.loads(trace_path.read_text(encoding="utf-8"))["connection_epoch"] == "epoch-atomic"
 
 
 def test_atomic_write_text_uses_unique_temp_path_per_write(tmp_path: Path, monkeypatch) -> None:

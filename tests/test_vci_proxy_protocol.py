@@ -169,6 +169,52 @@ def test_read_msgs_prefetch_bundle_round_trips_inside_write_response() -> None:
     assert ProtocolDecoder.decode_read_msgs_rsp(bundle.read_rsp_bodies[0]) == (0, messages)
 
 
+def test_read_msgs_prefetch_bundle_round_trips_inside_read_response() -> None:
+    messages = [
+        {
+            "protocol_id": 6,
+            "rx_status": 0,
+            "tx_flags": 0,
+            "timestamp": 123,
+            "data": b"\x62\xf4\x0c",
+        }
+    ]
+    prefetched = [
+        {
+            "protocol_id": 6,
+            "rx_status": 0,
+            "tx_flags": 0,
+            "timestamp": 124,
+            "data": b"\x62\x13\x08",
+        }
+    ]
+    read_rsp = ProtocolEncoder.encode_read_msgs_rsp(0, messages, sequence=17)
+    prefetch_body = ProtocolEncoder.encode_read_msgs_rsp(0, prefetched, sequence=0)[HEADER_SIZE:]
+
+    bundled = attach_read_msgs_prefetch_bundle(
+        read_rsp,
+        channel_id=99,
+        read_rsp_bodies=[prefetch_body],
+    )
+
+    magic, length, msg_type, sequence = Message.decode_header(bundled[:HEADER_SIZE])
+    assert magic == MAGIC
+    assert length == len(bundled)
+    assert msg_type == MsgType.READ_MSGS_RSP
+    assert sequence == 17
+
+    clean_body, bundle = strip_read_msgs_prefetch_bundle(bundled[HEADER_SIZE:])
+    assert clean_body == read_rsp[HEADER_SIZE:]
+    assert bundle is not None
+    assert bundle.channel_id == 99
+    assert bundle.read_rsp_bodies == (prefetch_body,)
+    assert ProtocolDecoder.decode_read_msgs_rsp(clean_body) == (0, messages)
+    assert ProtocolDecoder.decode_read_msgs_rsp(bundle.read_rsp_bodies[0]) == (
+        0,
+        prefetched,
+    )
+
+
 def test_read_msgs_prefetch_bundle_rejects_truncated_bundle() -> None:
     write_rsp = ProtocolEncoder.encode_write_msgs_rsp(0, 1, sequence=17)
     bundled = attach_read_msgs_prefetch_bundle(
@@ -235,3 +281,50 @@ def test_write_and_collect_reads_request_rejects_truncated_write_body() -> None:
     )
     with pytest.raises(ValueError, match="WriteMsgsReq: body too short"):
         ProtocolDecoder.decode_write_and_collect_reads_req(encoded[HEADER_SIZE:])
+
+
+def test_read_and_collect_reads_request_wraps_read_body_and_limits() -> None:
+    read_req_body = ProtocolEncoder.encode_read_msgs_req(
+        44,
+        num_msgs=300,
+        timeout=0,
+        sequence=7,
+    )[HEADER_SIZE:]
+
+    encoded = ProtocolEncoder.encode_read_and_collect_reads_req(
+        read_req_body,
+        collect_window_ms=40,
+        max_reads=2,
+        read_timeout_ms=0,
+        max_messages=8,
+        sequence=99,
+    )
+    magic, length, msg_type, sequence = Message.decode_header(encoded[:HEADER_SIZE])
+    request = ProtocolDecoder.decode_read_and_collect_reads_req(encoded[HEADER_SIZE:])
+
+    assert magic == MAGIC
+    assert length == len(encoded)
+    assert msg_type == MsgType.READ_AND_COLLECT_READS_REQ
+    assert sequence == 99
+    assert request.collect_window_ms == 40
+    assert request.max_reads == 2
+    assert request.read_timeout_ms == 0
+    assert request.max_messages == 8
+    assert request.read_req_body == read_req_body
+    assert ProtocolDecoder.decode_read_msgs_req(request.read_req_body) == (44, 300, 0)
+
+
+def test_read_and_collect_reads_request_rejects_truncated_read_body() -> None:
+    with pytest.raises(ValueError, match="ReadAndCollectReadsReq: body too short"):
+        ProtocolDecoder.decode_read_and_collect_reads_req(b"\x00" * 15)
+
+    encoded = ProtocolEncoder.encode_read_and_collect_reads_req(
+        b"\x00\x00\x00\x01",
+        collect_window_ms=40,
+        max_reads=2,
+        read_timeout_ms=0,
+        max_messages=8,
+        sequence=99,
+    )
+    with pytest.raises(ValueError, match="ReadMsgsReq: body too short"):
+        ProtocolDecoder.decode_read_and_collect_reads_req(encoded[HEADER_SIZE:])

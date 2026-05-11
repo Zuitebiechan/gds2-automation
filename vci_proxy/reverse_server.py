@@ -223,11 +223,13 @@ class ReverseProxyServer:
         self._process_started_emitted = False
         self._process_shutdown_started_emitted = False
         self._process_shutdown_finished_emitted = False
+        self._vci_read_collect_supported = False
         self._vci_write_collect_supported = False
         self._vci_sweep_shadow_supported = False
         self._read_ahead_transaction_guard_until_mono = 0.0
         self._read_ahead_transaction_guard_reason: str | None = None
         self._read_ahead_transaction_guard_network_ms: float | None = None
+        self._prefetch_bundle_source_by_proxy_seq: dict[int, str] = {}
 
         # P1-1: ReadMsgs BUFFER_EMPTY cache
         self._read_cache = ReadMsgsCache(self.config.read_msgs_cache)
@@ -1333,6 +1335,7 @@ class ReverseProxyServer:
         if self.config.read_ahead.enabled:
             capabilities.append("read_ahead=1")
             if self.config.read_ahead.transaction_enabled:
+                capabilities.append("read_collect=1")
                 capabilities.append("write_collect=1")
         if self.config.local_sweep.shadow_transport_enabled:
             capabilities.append("sweep_shadow=1")
@@ -1388,9 +1391,10 @@ class ReverseProxyServer:
             )
         if self.config.read_ahead.enabled:
             logger.info(
-                "Read-ahead enabled (window=%sms, max_reads=%s, timeout=%sms, max_messages=%s, max_empty_reads=%s, max_consecutive_empty_reads=%s, min_drain=%sms, transaction=%s, transaction_guard=%sms/%sms)",
+                "Read-ahead enabled (window=%sms, max_reads=%s, write_collect_max_reads=%s, timeout=%sms, max_messages=%s, max_empty_reads=%s, max_consecutive_empty_reads=%s, min_drain=%sms, transaction=%s, transaction_guard=%sms/%sms)",
                 self.config.read_ahead.window_ms,
                 self.config.read_ahead.max_reads,
+                self.config.read_ahead.write_collect_max_reads,
                 self.config.read_ahead.read_timeout_ms,
                 self.config.read_ahead.max_messages,
                 self.config.read_ahead.max_empty_reads,
@@ -1425,6 +1429,9 @@ class ReverseProxyServer:
                 tls_enabled=self.config.tls.enabled,
                 read_ahead_enabled=self.config.read_ahead.enabled,
                 read_ahead_transaction_enabled=self.config.read_ahead.transaction_enabled,
+                read_ahead_write_collect_max_reads=(
+                    self.config.read_ahead.write_collect_max_reads
+                ),
                 read_ahead_max_empty_reads=self.config.read_ahead.max_empty_reads,
                 read_ahead_max_consecutive_empty_reads=(
                     self.config.read_ahead.max_consecutive_empty_reads
@@ -1508,6 +1515,7 @@ class ReverseProxyServer:
         """取消所有挂起的 Future（VCI 断开时调用）"""
         pending = list(self.response_futures.items())
         self.response_futures.clear()
+        self._prefetch_bundle_source_by_proxy_seq.clear()
         self._read_cache.clear()
         self._filter_cache.clear()
         self._ioctl_cache.invalidate()
@@ -1547,6 +1555,7 @@ class ReverseProxyServer:
         Returns True if authenticated, False otherwise.
         """
         peer = writer.get_extra_info("peername")
+        self._vci_read_collect_supported = False
         self._vci_write_collect_supported = False
         self._vci_sweep_shadow_supported = False
         try:
@@ -1598,6 +1607,10 @@ class ReverseProxyServer:
                 # Auth not required, but client sent AUTH_REQ -- accept it
                 logger.info("Auth not required, accepting AUTH_REQ")
                 capabilities = ProtocolDecoder.decode_auth_req_capabilities(body)
+                self._vci_read_collect_supported = self._capability_enabled(
+                    capabilities,
+                    "read_collect",
+                )
                 self._vci_write_collect_supported = self._capability_enabled(
                     capabilities,
                     "write_collect",
@@ -1637,6 +1650,10 @@ class ReverseProxyServer:
                 reason = self._auth_success_message(
                     connection_epoch=connection_epoch_hint,
                 )
+                self._vci_read_collect_supported = self._capability_enabled(
+                    capabilities,
+                    "read_collect",
+                )
                 self._vci_write_collect_supported = self._capability_enabled(
                     capabilities,
                     "write_collect",
@@ -1664,6 +1681,7 @@ class ReverseProxyServer:
             return success
 
         if msg_type == MsgType.HEARTBEAT:
+            self._vci_read_collect_supported = False
             self._vci_write_collect_supported = False
             self._vci_sweep_shadow_supported = False
             if self.config.auth.enabled:
@@ -1932,8 +1950,12 @@ class ReverseProxyServer:
                 # 查找对应的 Future（响应消息）
                 if sequence in self.response_futures:
                     future = self.response_futures.pop(sequence)
+                    prefetch_source = self._prefetch_bundle_source_by_proxy_seq.pop(
+                        sequence,
+                        None,
+                    )
                     clean_body, hw_ms = strip_timing_trailer(body)
-                    if msg_type == MsgType.WRITE_MSGS_RSP:
+                    if msg_type in (MsgType.READ_MSGS_RSP, MsgType.WRITE_MSGS_RSP):
                         try:
                             clean_body, prefetch_bundle = strip_read_msgs_prefetch_bundle(
                                 clean_body
@@ -1944,7 +1966,20 @@ class ReverseProxyServer:
                                 sequence,
                                 exc_info=True,
                             )
-                            clean_body = clean_body[:8]
+                            if msg_type == MsgType.READ_MSGS_RSP:
+                                try:
+                                    return_code, messages = ProtocolDecoder.decode_read_msgs_rsp(
+                                        clean_body
+                                    )
+                                    clean_body = ProtocolEncoder.encode_read_msgs_rsp(
+                                        return_code,
+                                        messages,
+                                        sequence,
+                                    )[HEADER_SIZE:]
+                                except Exception:
+                                    clean_body = clean_body[:8]
+                            else:
+                                clean_body = clean_body[:8]
                         else:
                             if (
                                 prefetch_bundle is not None
@@ -1953,6 +1988,7 @@ class ReverseProxyServer:
                                 recorded = self._prefetch_read_msgs.record_read_rsp_bodies(
                                     prefetch_bundle.channel_id,
                                     prefetch_bundle.read_rsp_bodies,
+                                    source=prefetch_source,
                                 )
                                 if recorded:
                                     logger.debug(
@@ -1979,6 +2015,7 @@ class ReverseProxyServer:
             owns_current_tunnel = self.vci_writer is writer
             if owns_current_tunnel:
                 self._vci_write_collect_supported = False
+                self._vci_read_collect_supported = False
                 self._vci_sweep_shadow_supported = False
                 self._cancel_sweep_plan("connection_epoch_changed")
                 self.vci_connected.clear()
@@ -2032,13 +2069,24 @@ class ReverseProxyServer:
 
     @staticmethod
     def _prefetch_drain_fields(drain: PrefetchReadMsgsDrain) -> dict[str, object]:
-        return {
+        fields: dict[str, object] = {
             "prefetch_fifo_pending_before": drain.pending_before,
             "prefetch_fifo_pending_after": drain.pending_after,
             "prefetch_requested_count": drain.requested_count,
             "prefetch_served_count": drain.served_count,
             "prefetch_underfill_count": drain.underfill_count,
         }
+        if drain.served_count > 0:
+            fields["prefetch_source_counts"] = dict(drain.source_counts)
+            if drain.age_min_ms is not None:
+                fields.update(
+                    {
+                        "prefetch_age_min_ms": drain.age_min_ms,
+                        "prefetch_age_avg_ms": drain.age_avg_ms,
+                        "prefetch_age_max_ms": drain.age_max_ms,
+                    }
+                )
+        return fields
 
     def _should_serve_partial_prefetch_without_tunnel(
         self,
@@ -2204,6 +2252,7 @@ class ReverseProxyServer:
         except Exception as exc:
             logger.error("Failed to forward reduced ReadMsgs request: %s", exc)
             self.response_futures.pop(new_seq, None)
+            self._prefetch_bundle_source_by_proxy_seq.pop(new_seq, None)
             restored = self._prefetch_read_msgs.restore_front(
                 drain.channel_id,
                 drain.messages,
@@ -2226,6 +2275,7 @@ class ReverseProxyServer:
             resp_type, resp_body, hw_ms = await asyncio.wait_for(future, timeout=30.0)
         except (asyncio.TimeoutError, ConnectionError) as exc:
             self.response_futures.pop(new_seq, None)
+            self._prefetch_bundle_source_by_proxy_seq.pop(new_seq, None)
             fwd_ms = (time.monotonic() - fwd_start) * 1000
             restored = self._prefetch_read_msgs.restore_front(
                 drain.channel_id,
@@ -2470,7 +2520,7 @@ class ReverseProxyServer:
             and read_ahead.transaction_enabled
             and self._vci_write_collect_supported
             and read_ahead.window_ms > 0
-            and read_ahead.max_reads > 0
+            and read_ahead.write_collect_max_reads > 0
             and read_ahead.max_messages > 0
         ):
             return False
@@ -2479,6 +2529,25 @@ class ReverseProxyServer:
         except Exception:
             return False
         return True
+
+    def _read_collect_transaction_base_allowed(self, msg_type: int, body: bytes) -> bool:
+        if msg_type != MsgType.READ_MSGS_REQ:
+            return False
+        read_ahead = self.config.read_ahead
+        if not (
+            read_ahead.enabled
+            and read_ahead.transaction_enabled
+            and self._vci_read_collect_supported
+            and read_ahead.window_ms > 0
+            and read_ahead.max_reads > 0
+            and read_ahead.max_messages > 0
+        ):
+            return False
+        try:
+            _channel_id, num_msgs, timeout = ProtocolDecoder.decode_read_msgs_req(body)
+        except Exception:
+            return False
+        return timeout <= 0 and num_msgs > 0
 
     def _read_ahead_transaction_guard_active(self, now: float | None = None) -> bool:
         now = time.monotonic() if now is None else now
@@ -2575,12 +2644,35 @@ class ReverseProxyServer:
             body,
         ) and not self._read_ahead_transaction_guard_active()
 
+    def _should_use_read_collect_transaction(self, msg_type: int, body: bytes) -> bool:
+        return self._read_collect_transaction_base_allowed(
+            msg_type,
+            body,
+        ) and not self._read_ahead_transaction_guard_active()
+
     def _build_tunnel_request(
         self,
         msg_type: int,
         body: bytes,
         sequence: int,
     ) -> tuple[bytes, int, bytes, str | None]:
+        if self._should_use_read_collect_transaction(msg_type, body):
+            read_ahead = self.config.read_ahead
+            encoded = ProtocolEncoder.encode_read_and_collect_reads_req(
+                body,
+                collect_window_ms=min(read_ahead.window_ms, 40),
+                max_reads=min(read_ahead.max_reads, 3),
+                read_timeout_ms=0,
+                max_messages=min(read_ahead.max_messages, 16),
+                sequence=sequence,
+            )
+            return (
+                encoded,
+                MsgType.READ_AND_COLLECT_READS_REQ,
+                encoded[HEADER_SIZE:],
+                "read_collect_transaction",
+            )
+
         if self._write_collect_transaction_base_allowed(msg_type, body):
             read_ahead = self.config.read_ahead
             if self._read_ahead_transaction_guard_active():
@@ -2601,7 +2693,7 @@ class ReverseProxyServer:
             encoded = ProtocolEncoder.encode_write_and_collect_reads_req(
                 body,
                 collect_window_ms=read_ahead.window_ms,
-                max_reads=read_ahead.max_reads,
+                max_reads=read_ahead.write_collect_max_reads,
                 read_timeout_ms=read_ahead.read_timeout_ms,
                 max_messages=read_ahead.max_messages,
                 sequence=sequence,
@@ -3156,6 +3248,15 @@ class ReverseProxyServer:
                         body,
                         new_seq,
                     )
+                    if transaction_reason in {
+                        "read_collect_transaction",
+                        "write_collect_transaction",
+                    }:
+                        self._prefetch_bundle_source_by_proxy_seq[new_seq] = (
+                            "read_collect"
+                            if transaction_reason == "read_collect_transaction"
+                            else "write_collect"
+                        )
                     async with self.vci_lock:
                         if self.vci_writer is None:
                             raise ConnectionError("VCI 连接已断开")
@@ -3175,6 +3276,7 @@ class ReverseProxyServer:
                 except Exception as e:
                     logger.error(f"转发请求失败: {e}")
                     self.response_futures.pop(new_seq, None)
+                    self._prefetch_bundle_source_by_proxy_seq.pop(new_seq, None)
                     self._clear_prefetch_after_failed_write(msg_type, body)
                     self._emit_proxy_request_event(
                         "proxy.request.failed",
@@ -3281,6 +3383,7 @@ class ReverseProxyServer:
 
                 except (asyncio.TimeoutError, ConnectionError) as e:
                     self.response_futures.pop(new_seq, None)
+                    self._prefetch_bundle_source_by_proxy_seq.pop(new_seq, None)
                     fwd_ms = (time.monotonic() - fwd_start) * 1000
                     reason = "VCI_DISCONNECTED" if isinstance(e, ConnectionError) else "TIMEOUT"
                     self._clear_prefetch_after_failed_write(msg_type, body)
@@ -3408,7 +3511,9 @@ def main():
     parser.add_argument('--read-ahead-window-ms', type=int, default=None,
                        help='Read-ahead collection window in ms (default: 200 or VCI_PROXY_READ_AHEAD_WINDOW_MS)')
     parser.add_argument('--read-ahead-max-reads', type=int, default=None,
-                       help='Maximum local ReadMsgs calls after one successful write (default: 3 or VCI_PROXY_READ_AHEAD_MAX_READS)')
+                       help='Maximum local ReadMsgs calls for generic/read-tail collection (default: 3 or VCI_PROXY_READ_AHEAD_MAX_READS)')
+    parser.add_argument('--read-ahead-write-collect-max-reads', type=int, default=None,
+                       help='Maximum local ReadMsgs calls after write-collect transactions (default: 6 or VCI_PROXY_READ_AHEAD_WRITE_COLLECT_MAX_READS)')
     parser.add_argument('--read-ahead-read-timeout-ms', type=int, default=None,
                        help='Timeout passed to local read-ahead ReadMsgs calls in ms (default: 0 or VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS)')
     parser.add_argument('--read-ahead-max-messages', type=int, default=None,
@@ -3483,6 +3588,9 @@ def main():
         read_ahead_enabled=args.read_ahead,
         read_ahead_window_ms=args.read_ahead_window_ms,
         read_ahead_max_reads=args.read_ahead_max_reads,
+        read_ahead_write_collect_max_reads=(
+            args.read_ahead_write_collect_max_reads
+        ),
         read_ahead_read_timeout_ms=args.read_ahead_read_timeout_ms,
         read_ahead_max_messages=args.read_ahead_max_messages,
         read_ahead_max_empty_reads=args.read_ahead_max_empty_reads,
@@ -3538,10 +3646,11 @@ def main():
         config.read_msgs_cache.max_cacheable_timeout_ms,
     )
     logger.info(
-        "Read-ahead: %s (window=%sms, max_reads=%s, timeout=%sms, max_messages=%s, max_empty_reads=%s, max_consecutive_empty_reads=%s, min_drain=%sms, transaction=%s, transaction_guard=%sms/%sms)",
+        "Read-ahead: %s (window=%sms, max_reads=%s, write_collect_max_reads=%s, timeout=%sms, max_messages=%s, max_empty_reads=%s, max_consecutive_empty_reads=%s, min_drain=%sms, transaction=%s, transaction_guard=%sms/%sms)",
         "enabled" if config.read_ahead.enabled else "disabled",
         config.read_ahead.window_ms,
         config.read_ahead.max_reads,
+        config.read_ahead.write_collect_max_reads,
         config.read_ahead.read_timeout_ms,
         config.read_ahead.max_messages,
         config.read_ahead.max_empty_reads,

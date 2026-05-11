@@ -191,6 +191,10 @@ Default env-backed settings:
 Current runtime behavior:
 
 - cloud-side startup runs best-effort retention cleanup for raw/session-trace/incident/uploaded artifacts
+- cloud-side cleanup also recovers complete JSON artifacts left under atomic
+  write `.tmp` names when a process exits after writing the temp file but
+  before the final rename; incomplete temp files remain for retention cleanup
+  instead of being promoted
 - tray client startup runs best-effort cleanup for uploaded outbox entries
 - tray client runs a background uploader loop that stages local artifacts into the outbox and uploads them to the cloud ingest API
 - local outbox staging scans artifact contents for the first non-placeholder `session_id` and `connection_epoch`; leading lifecycle events without session context do not force the upload into `no-epoch`
@@ -213,6 +217,7 @@ actually active:
 
 - cloud `reverse_server` `process.lifecycle.started`:
   `read_ahead_enabled`, `read_ahead_transaction_enabled`,
+  `read_ahead_write_collect_max_reads`,
   `read_ahead_max_empty_reads`,
   `read_ahead_max_consecutive_empty_reads`,
   `read_ahead_min_drain_ms`,
@@ -220,10 +225,16 @@ actually active:
   `read_ahead_transaction_cooldown_ms`, `local_sweep_enabled`,
   `local_sweep_mode`, and `local_sweep_shadow_allow_gm_a9_packet`;
 - local `reverse_client.lifecycle.auth_succeeded` reason:
-  `read_ahead=1`, `write_collect=1`, and `sweep_shadow=1`;
+  `read_ahead=1`, `read_collect=1`, `write_collect=1`, and `sweep_shadow=1`;
 - transaction activity:
   `proxy.request.forwarded_to_tunnel` with
-  `reason=write_collect_transaction`;
+  `reason=write_collect_transaction` or, for non-blocking foreground reads with
+  tail collection enabled, `reason=read_collect_transaction`;
+- local read-ahead collection completion:
+  `read_ahead.collection_finished` includes `attempted_reads`,
+  `collected_messages`, `soft_max_reads_after_data`, and stop reasons such as
+  `soft_max_reads_after_data`, which indicate that adaptive write-collect ended
+  before the deeper hard cap after capturing data;
 - slow-link guard activity:
   `read_ahead.transaction.guard_armed` plus forwarded writes with
   `reason=write_collect_guarded_no_collect`;
@@ -289,8 +300,9 @@ Latest known interpretation:
   - emits tunnel lifecycle, probe, tunnel-quality, proxy-request staged events, and reverse-server process lifecycle events
   - reverse-server process lifecycle events include local sweep mode, `local_sweep_allow_gm_a9_packet`, `local_sweep_shadow_allow_gm_a9_packet`, and `local_sweep_min_item_interval_ms` when reporting startup configuration
   - proxy-request events for `READ_MSGS_REQ` include decoded request metadata (`channel_id`, `num_msgs`, `timeout`) and, when applicable, `last_write_seq` plus `post_write_age_ms`
-  - read-ahead FIFO decisions add `prefetch_fifo_pending_before`, `prefetch_fifo_pending_after`, `prefetch_requested_count`, `prefetch_served_count`, and `prefetch_underfill_count`; partial FIFO fallback uses `reason=prefetch_underfill_forwarded`, then response/reply events use `prefetch_merge_tunnel_data`, `prefetch_merge_tunnel_empty`, or `prefetch_underfill_tunnel_error`
+  - read-ahead FIFO decisions add `prefetch_fifo_pending_before`, `prefetch_fifo_pending_after`, `prefetch_requested_count`, `prefetch_served_count`, and `prefetch_underfill_count`; when FIFO data is served they also include `prefetch_source_counts` plus `prefetch_age_min_ms`, `prefetch_age_avg_ms`, and `prefetch_age_max_ms` so local-simulated-cloud runs can show whether hits came from `read_collect` or `write_collect` and how long frames waited before DLL consumption; partial FIFO fallback uses `reason=prefetch_underfill_forwarded`, then response/reply events use `prefetch_merge_tunnel_data`, `prefetch_merge_tunnel_empty`, or `prefetch_underfill_tunnel_error`
   - oversized non-blocking FIFO hits use `reason=prefetch_partial_hit` plus `prefetch_partial_direct=true` when `READ_MSGS_REQ(timeout=0)` asks for more messages than the FIFO capacity and the server returns available prefetched frames without a reduced tunnel read
+  - transaction-wrapped non-blocking read collection uses `reason=read_collect_transaction` on the forwarded `READ_MSGS_REQ`, strips the internal prefetch bundle before replying to the DLL, and records any extra local tail frames into the same consume-once FIFO; this tail probe also runs after a foreground `BUFFER_EMPTY`, so the DLL still receives the real empty response while immediately-following frames can be consumed once from FIFO by the next serial read; when `VCI_PROXY_READ_AHEAD_MIN_DRAIN_MS` is configured, read-tail collection reports a capped `min_drain_ms` of at most `8` so logs can separate short foreground read-tail probing from the deeper post-write drain window
   - proxy-request response events for `READ_MSGS_RSP` include `return_code`, `message_count`, `payload_bytes`, `read_result` (`empty` or `data`), redacted payload digest/prefix samples, and read-payload change markers
   - `WRITE_MSGS_REQ` request events include `channel_id`, `write_message_count`, `timeout`, `write_payload_bytes`, and redacted payload digest/prefix samples without logging full raw payload data
   - read-ahead transaction guard events include `read_ahead.transaction.guard_armed`; while active, forwarded write events record `reason=write_collect_guarded_no_collect` plus guard fields such as `read_ahead_transaction_guard_active`, `read_ahead_transaction_guard_reason`, `read_ahead_transaction_guard_remaining_ms`, `read_ahead_transaction_max_network_ms`, and `read_ahead_transaction_cooldown_ms`
@@ -303,7 +315,11 @@ Latest known interpretation:
   - `sweep.shadow.*` comparison events now include `sweep_shadow_clean_match_streak` and `sweep_replay_min_clean_matches`; `proxy.request.active_replay_armed` / `proxy.request.active_replay_served` include the same replay-quality gate fields when replay is actually permitted
 - `vci_proxy/reverse_client.py`
   - emits reverse tunnel connection lifecycle, request receipt, and J2534 call events
-  - local read-ahead collection emits `read_ahead.collection_finished` with attempted/data/empty read counts, collected message counts, effective budgets, and the stop reason
+  - local read-ahead collection emits `read_ahead.collection_finished` with attempted/data/empty read counts, collected message counts, effective budgets including `local_max_reads`, whether one-empty tail stop was enabled, whether the after-data empty-read grace was used, `empty_after_data_grace_sleep_ms`, and the stop reason
+  - after-data empty-read stop reasons distinguish a real grace retry
+    (`empty_after_data_grace_empty`) from a skipped retry caused by no
+    remaining local read budget (`empty_after_data_no_grace_budget` plus
+    `empty_after_data_grace_skipped_reason=max_reads`)
   - local sweep executor logs distinguish plan start/stop, shadow item execution, foreground invalidation, configured/effective shadow item interval, and error count; cacheable/read-only IOCTL foreground calls pause through the shared driver lock without emitting a shadow stop
 - `vci_proxy/j2534_worker.py`
   - emits worker lifecycle, spawn status, RPC receipt/return/failure, and propagates `worker_request_id`

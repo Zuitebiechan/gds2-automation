@@ -29,6 +29,7 @@ class MsgType(IntEnum):
     PING_REQ = 0x00FC
     AUTH_REQ = 0x00FE
     HEARTBEAT = 0x00FF
+    READ_AND_COLLECT_READS_REQ = 0x0105
     WRITE_AND_COLLECT_READS_REQ = 0x0106
     SWEEP_PLAN_START_REQ = 0x0200
     SWEEP_PLAN_STOP_REQ = 0x0201
@@ -94,13 +95,23 @@ class WriteAndCollectReadsRequest:
     write_req_body: bytes
 
 
+@dataclass(frozen=True)
+class ReadAndCollectReadsRequest:
+    """Internal read transaction plus bounded local ReadMsgs collection."""
+    collect_window_ms: int
+    max_reads: int
+    read_timeout_ms: int
+    max_messages: int
+    read_req_body: bytes
+
+
 def attach_read_msgs_prefetch_bundle(
     encoded_response: bytes,
     *,
     channel_id: int,
     read_rsp_bodies: List[bytes] | Tuple[bytes, ...],
 ) -> bytes:
-    """Append an internal read-ahead bundle to a WRITE_MSGS_RSP frame.
+    """Append an internal read-ahead bundle to a J2534 response frame.
 
     The bundle lives inside the response body and is stripped by the reverse
     server before replying to the virtual DLL. It is not part of the public
@@ -112,7 +123,10 @@ def attach_read_msgs_prefetch_bundle(
     magic, old_length, msg_type, _sequence = Message.decode_header(
         encoded_response[:HEADER_SIZE]
     )
-    if magic != MAGIC or msg_type != MsgType.WRITE_MSGS_RSP:
+    if magic != MAGIC or msg_type not in {
+        MsgType.READ_MSGS_RSP,
+        MsgType.WRITE_MSGS_RSP,
+    }:
         return encoded_response
 
     bundle = struct.pack(">III", PREFETCH_MAGIC, channel_id, len(read_rsp_bodies))
@@ -128,37 +142,62 @@ def attach_read_msgs_prefetch_bundle(
     )
 
 
-def strip_read_msgs_prefetch_bundle(
-    write_rsp_body: bytes,
-) -> Tuple[bytes, Optional[ReadMsgsPrefetchBundle]]:
-    """Strip an internal read-ahead bundle from a WRITE_MSGS_RSP body."""
-    base_len = 8
-    if len(write_rsp_body) < base_len + 12:
-        return write_rsp_body, None
+def _read_msgs_rsp_body_length(read_rsp_body: bytes) -> int | None:
+    if len(read_rsp_body) < 8:
+        return None
+    _return_code, num_msgs = struct.unpack(">II", read_rsp_body[:8])
+    offset = 8
+    for _ in range(num_msgs):
+        if offset + 20 > len(read_rsp_body):
+            return None
+        _protocol_id, _rx_status, _tx_flags, _timestamp, data_size = struct.unpack(
+            ">IIIII",
+            read_rsp_body[offset:offset + 20],
+        )
+        offset += 20
+        if offset + data_size > len(read_rsp_body):
+            return None
+        offset += data_size
+    return offset
 
-    marker = struct.unpack(">I", write_rsp_body[base_len:base_len + 4])[0]
+
+def strip_read_msgs_prefetch_bundle(
+    rsp_body: bytes,
+) -> Tuple[bytes, Optional[ReadMsgsPrefetchBundle]]:
+    """Strip an internal read-ahead bundle from a READ/WRITE response body."""
+    base_len = 8
+    read_base_len = _read_msgs_rsp_body_length(rsp_body)
+    if read_base_len is not None and read_base_len + 12 <= len(rsp_body):
+        marker = struct.unpack(">I", rsp_body[read_base_len:read_base_len + 4])[0]
+        if marker == PREFETCH_MAGIC:
+            base_len = read_base_len
+
+    if len(rsp_body) < base_len + 12:
+        return rsp_body, None
+
+    marker = struct.unpack(">I", rsp_body[base_len:base_len + 4])[0]
     if marker != PREFETCH_MAGIC:
-        return write_rsp_body, None
+        return rsp_body, None
 
     channel_id, response_count = struct.unpack(
-        ">II", write_rsp_body[base_len + 4:base_len + 12]
+        ">II", rsp_body[base_len + 4:base_len + 12]
     )
     offset = base_len + 12
     read_rsp_bodies: list[bytes] = []
     for _ in range(response_count):
-        if offset + 4 > len(write_rsp_body):
+        if offset + 4 > len(rsp_body):
             raise ValueError("ReadMsgs prefetch bundle truncated before response length")
-        rsp_len = struct.unpack(">I", write_rsp_body[offset:offset + 4])[0]
+        rsp_len = struct.unpack(">I", rsp_body[offset:offset + 4])[0]
         offset += 4
-        if offset + rsp_len > len(write_rsp_body):
+        if offset + rsp_len > len(rsp_body):
             raise ValueError("ReadMsgs prefetch bundle truncated before response body")
-        read_rsp_bodies.append(write_rsp_body[offset:offset + rsp_len])
+        read_rsp_bodies.append(rsp_body[offset:offset + rsp_len])
         offset += rsp_len
 
-    if offset != len(write_rsp_body):
+    if offset != len(rsp_body):
         raise ValueError("ReadMsgs prefetch bundle has trailing bytes")
 
-    return write_rsp_body[:base_len], ReadMsgsPrefetchBundle(
+    return rsp_body[:base_len], ReadMsgsPrefetchBundle(
         channel_id=channel_id,
         read_rsp_bodies=tuple(read_rsp_bodies),
     )
@@ -405,6 +444,26 @@ class ProtocolEncoder:
         body += write_req_body
         return Message(MsgType.WRITE_AND_COLLECT_READS_REQ, sequence, body).encode()
 
+    @staticmethod
+    def encode_read_and_collect_reads_req(
+        read_req_body: bytes,
+        *,
+        collect_window_ms: int,
+        max_reads: int,
+        read_timeout_ms: int,
+        max_messages: int,
+        sequence: int = 0,
+    ) -> bytes:
+        body = struct.pack(
+            ">IIII",
+            max(0, int(collect_window_ms)),
+            max(0, int(max_reads)),
+            max(0, int(read_timeout_ms)),
+            max(0, int(max_messages)),
+        )
+        body += read_req_body
+        return Message(MsgType.READ_AND_COLLECT_READS_REQ, sequence, body).encode()
+
 
 class ProtocolDecoder:
     @staticmethod
@@ -634,4 +693,21 @@ class ProtocolDecoder:
             read_timeout_ms=read_timeout_ms,
             max_messages=max_messages,
             write_req_body=write_req_body,
+        )
+
+    @staticmethod
+    def decode_read_and_collect_reads_req(body: bytes) -> ReadAndCollectReadsRequest:
+        ProtocolDecoder._check_min_len(body, 16, "ReadAndCollectReadsReq")
+        collect_window_ms, max_reads, read_timeout_ms, max_messages = struct.unpack(
+            ">IIII",
+            body[:16],
+        )
+        read_req_body = body[16:]
+        ProtocolDecoder.decode_read_msgs_req(read_req_body)
+        return ReadAndCollectReadsRequest(
+            collect_window_ms=collect_window_ms,
+            max_reads=max_reads,
+            read_timeout_ms=read_timeout_ms,
+            max_messages=max_messages,
+            read_req_body=read_req_body,
         )

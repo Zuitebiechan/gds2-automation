@@ -445,6 +445,7 @@ def test_reverse_tunnel_read_ahead_serves_following_read_from_prefetch_fifo(monk
         config = ProxyConfig.from_args(
             auth_token="shared-secret",
             read_ahead_enabled=True,
+            read_ahead_transaction_enabled=False,
             read_ahead_max_reads=2,
             read_ahead_max_messages=4,
             read_ahead_read_timeout_ms=0,
@@ -529,6 +530,7 @@ def test_reverse_tunnel_read_ahead_merges_partial_fifo_with_tunnel_data(monkeypa
         config = ProxyConfig.from_args(
             auth_token="shared-secret",
             read_ahead_enabled=True,
+            read_ahead_transaction_enabled=False,
             read_ahead_max_reads=1,
             read_ahead_max_messages=4,
             read_ahead_read_timeout_ms=0,
@@ -591,6 +593,7 @@ def test_reverse_tunnel_read_ahead_serves_oversized_nonblocking_read_without_mer
         config = ProxyConfig.from_args(
             auth_token="shared-secret",
             read_ahead_enabled=True,
+            read_ahead_transaction_enabled=False,
             read_ahead_max_reads=1,
             read_ahead_max_messages=4,
             read_ahead_read_timeout_ms=0,
@@ -659,6 +662,7 @@ def test_reverse_tunnel_read_ahead_preserves_fifo_order_across_writes(monkeypatc
         config = ProxyConfig.from_args(
             auth_token="shared-secret",
             read_ahead_enabled=True,
+            read_ahead_transaction_enabled=False,
             read_ahead_max_reads=1,
             read_ahead_max_messages=4,
             read_ahead_read_timeout_ms=0,
@@ -732,6 +736,7 @@ def test_reverse_tunnel_write_collect_transaction_serves_following_read(monkeypa
             read_ahead_enabled=True,
             read_ahead_transaction_enabled=True,
             read_ahead_max_reads=2,
+            read_ahead_write_collect_max_reads=2,
             read_ahead_max_messages=4,
             read_ahead_read_timeout_ms=0,
         )
@@ -763,6 +768,70 @@ def test_reverse_tunnel_write_collect_transaction_serves_following_read(monkeypa
                 "read_msgs",
                 "read_msgs",
                 "read_msgs",
+            ]
+        finally:
+            await _stop_reverse_tunnel(bundle)
+
+    asyncio.run(_run())
+
+
+def test_reverse_tunnel_read_collect_prefetches_tail_after_foreground_empty(monkeypatch) -> None:
+    async def _run() -> None:
+        observed: list[tuple[str, object]] = []
+        prefetched_message = {
+            "protocol_id": 6,
+            "rx_status": 0,
+            "tx_flags": 0,
+            "timestamp": 321,
+            "data": b"\x62\x13\x08",
+        }
+        read_results = iter(
+            [
+                (BUFFER_EMPTY, []),
+                (0, [prefetched_message]),
+                (BUFFER_EMPTY, []),
+            ]
+        )
+
+        fake_driver = types.SimpleNamespace(
+            dll_path="C:/fake/j2534.dll",
+            read_msgs=lambda channel_id, num_msgs, timeout: (
+                observed.append(("read_msgs", (channel_id, num_msgs, timeout)))
+                or next(read_results)
+            ),
+        )
+        config = ProxyConfig.from_args(
+            auth_token="shared-secret",
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+            read_ahead_max_reads=2,
+            read_ahead_max_messages=4,
+            read_ahead_read_timeout_ms=0,
+        )
+        bundle = await _start_reverse_tunnel(monkeypatch, fake_driver, config=config)
+        try:
+            assert bundle["server"]._vci_read_collect_supported is True
+
+            first_read = await _proxy_round_trip(
+                bundle["proxy_port"],
+                ProtocolEncoder.encode_read_msgs_req(9001, num_msgs=4, timeout=0, sequence=102),
+            )
+            second_read = await _proxy_round_trip(
+                bundle["proxy_port"],
+                ProtocolEncoder.encode_read_msgs_req(9001, num_msgs=1, timeout=0, sequence=103),
+            )
+
+            assert first_read[1] == MsgType.READ_MSGS_RSP
+            assert ProtocolDecoder.decode_read_msgs_rsp(first_read[3]) == (BUFFER_EMPTY, [])
+            assert second_read[1] == MsgType.READ_MSGS_RSP
+            assert ProtocolDecoder.decode_read_msgs_rsp(second_read[3]) == (
+                0,
+                [prefetched_message],
+            )
+            assert observed == [
+                ("read_msgs", (9001, 4, 0)),
+                ("read_msgs", (9001, 4, 0)),
+                ("read_msgs", (9001, 3, 0)),
             ]
         finally:
             await _stop_reverse_tunnel(bundle)

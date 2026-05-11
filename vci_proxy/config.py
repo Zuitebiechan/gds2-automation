@@ -12,6 +12,9 @@ from typing import Mapping, Optional
 READ_AHEAD_ENABLED_ENV = "VCI_PROXY_READ_AHEAD"
 READ_AHEAD_WINDOW_MS_ENV = "VCI_PROXY_READ_AHEAD_WINDOW_MS"
 READ_AHEAD_MAX_READS_ENV = "VCI_PROXY_READ_AHEAD_MAX_READS"
+READ_AHEAD_WRITE_COLLECT_MAX_READS_ENV = (
+    "VCI_PROXY_READ_AHEAD_WRITE_COLLECT_MAX_READS"
+)
 READ_AHEAD_READ_TIMEOUT_MS_ENV = "VCI_PROXY_READ_AHEAD_READ_TIMEOUT_MS"
 READ_AHEAD_MAX_MESSAGES_ENV = "VCI_PROXY_READ_AHEAD_MAX_MESSAGES"
 READ_AHEAD_MAX_EMPTY_READS_ENV = "VCI_PROXY_READ_AHEAD_MAX_EMPTY_READS"
@@ -48,6 +51,7 @@ READ_AHEAD_ENV_NAMES = (
     READ_AHEAD_ENABLED_ENV,
     READ_AHEAD_WINDOW_MS_ENV,
     READ_AHEAD_MAX_READS_ENV,
+    READ_AHEAD_WRITE_COLLECT_MAX_READS_ENV,
     READ_AHEAD_READ_TIMEOUT_MS_ENV,
     READ_AHEAD_MAX_MESSAGES_ENV,
     READ_AHEAD_MAX_EMPTY_READS_ENV,
@@ -182,6 +186,7 @@ class ReadAheadConfig:
     enabled: bool = False
     window_ms: int = 200
     max_reads: int = 3
+    write_collect_max_reads: int = 6
     read_timeout_ms: int = 0
     max_messages: int = 16
     max_empty_reads: int = 0
@@ -246,6 +251,14 @@ def read_ahead_config_from_env(
         enabled=env_bool(READ_AHEAD_ENABLED_ENV, base.enabled, environ=environ),
         window_ms=env_int(READ_AHEAD_WINDOW_MS_ENV, base.window_ms, environ=environ),
         max_reads=env_int(READ_AHEAD_MAX_READS_ENV, base.max_reads, environ=environ),
+        write_collect_max_reads=max(
+            0,
+            env_int(
+                READ_AHEAD_WRITE_COLLECT_MAX_READS_ENV,
+                base.write_collect_max_reads,
+                environ=environ,
+            ),
+        ),
         read_timeout_ms=env_int(
             READ_AHEAD_READ_TIMEOUT_MS_ENV,
             base.read_timeout_ms,
@@ -467,6 +480,12 @@ class ProxyConfig:
                 read_ahead_defaults.max_reads
                 if kwargs.get("read_ahead_max_reads") is None
                 else kwargs.get("read_ahead_max_reads")
+            ),
+            write_collect_max_reads=max(
+                0,
+                read_ahead_defaults.write_collect_max_reads
+                if kwargs.get("read_ahead_write_collect_max_reads") is None
+                else int(kwargs.get("read_ahead_write_collect_max_reads")),
             ),
             read_timeout_ms=(
                 read_ahead_defaults.read_timeout_ms

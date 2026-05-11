@@ -75,7 +75,7 @@ Validated active configuration in raw observability:
   `local_sweep_enabled=true`, `local_sweep_mode=shadow_local`, and
   `local_sweep_shadow_allow_gm_a9_packet=false`.
 - local reverse client authentication succeeded with
-  `ok;read_ahead=1;write_collect=1;sweep_shadow=1`.
+  `ok;read_ahead=1;read_collect=1;write_collect=1;sweep_shadow=1`.
 - session `1edb8e1caf7f4def`, connection epoch
   `epoch-1778052452268-001`, Data Display window
   `2026-05-06T07:28:23Z` to `2026-05-06T07:36:23Z`.
@@ -416,6 +416,14 @@ Important behavior rules:
   its local config flag is set.
 - If channel state changes, clear prefetch FIFO.
 - If `STOP_FILTER_REQ`, mutating `IOCTL_REQ`, `DISCONNECT_REQ`, or `CLOSE_REQ` occurs, clear affected FIFO.
+- Transaction-wrapped non-blocking `READ_MSGS_REQ` calls keep the foreground
+  response unchanged, including `BUFFER_EMPTY`, but still run the bounded local
+  tail probe so immediately-following frames can be queued for the next serial
+  read. If `VCI_PROXY_READ_AHEAD_MIN_DRAIN_MS` is configured, this read-tail
+  probe clamps the drain window to `8ms` rather than using the full post-write
+  drain setting. If tail data has already been collected and a following tail
+  read is empty, the one empty-read grace retry may also wait briefly within the
+  same `8ms` cap before trying once more.
 - If GDS2 requests more messages than prefetched, the server now forwards one
   reduced `READ_MSGS_REQ` for the remaining count and merges prefetched frames
   first, then tunnel frames. If the reduced tunnel read returns `BUFFER_EMPTY`,
@@ -482,9 +490,25 @@ Implementation note:
   automatically fall back to Phase 3/normal write behavior.
 - The transaction request carries the bounded collection parameters
   `collect_window_ms`, `max_reads`, `read_timeout_ms`, and `max_messages`.
+  Post-write collection uses `VCI_PROXY_READ_AHEAD_WRITE_COLLECT_MAX_READS`
+  (default `6`) so it can drain deeper than the stricter read-tail collection
+  cap without widening every non-blocking `READ_MSGS_REQ`.
+- `VCI_PROXY_READ_AHEAD_WRITE_COLLECT_MAX_READS` is only the hard cap. Once a
+  post-write collection has captured data, the local client stops at the softer
+  `VCI_PROXY_READ_AHEAD_MAX_READS` budget when that value is lower, so the write
+  path does not always pay all six local reads during continuous GM A9 response
+  streams. The soft stop is checked before minimum-drain empty retry behavior
+  after data has already been collected.
 - The local client still returns a standard `WRITE_MSGS_RSP` plus the same
   internal consume-once `PRF0` prefetch bundle used by Phase 3. The server strips
   the bundle before replying to GDS2 and records the frames in the existing FIFO.
+- The same transaction transport also supports `READ_AND_COLLECT_READS_REQ` for
+  non-blocking foreground reads. The local client returns the exact foreground
+  `READ_MSGS_RSP` to GDS2 and attaches only extra tail data in the `PRF0` bundle;
+  this includes the case where the foreground response is `BUFFER_EMPTY`. When
+  `VCI_PROXY_READ_AHEAD_MIN_DRAIN_MS` is configured, read-tail collection uses a
+  hard cap of `8ms` so a `40ms` write-collect drain setting does not stall every
+  foreground read.
 - The cloud server now has a transaction slow-link guard. When any forwarded
   request response reaches `VCI_PROXY_READ_AHEAD_TRANSACTION_MAX_NETWORK_MS`
   (default `750ms`), the server arms a cooldown

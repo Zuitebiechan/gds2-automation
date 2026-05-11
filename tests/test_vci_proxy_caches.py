@@ -244,6 +244,30 @@ def test_prefetch_read_msgs_buffer_serves_data_once_in_fifo_order() -> None:
     assert buffer.try_serve(44, num_msgs=1, sequence=12) is None
 
 
+def test_prefetch_read_msgs_buffer_reports_source_and_age(monkeypatch) -> None:
+    buffer = PrefetchReadMsgsBuffer(enabled=True, max_messages=3)
+    read_rsp_body = ProtocolEncoder.encode_read_msgs_rsp(
+        0,
+        [{"protocol_id": 6, "data": b"\x62"}],
+        sequence=0,
+    )[HEADER_SIZE:]
+
+    monotonic_values = iter([100.0, 100.025])
+    monkeypatch.setattr(
+        "vci_proxy.prefetch_read_msgs.time.monotonic",
+        lambda: next(monotonic_values),
+    )
+
+    assert buffer.record_read_rsp_body(44, read_rsp_body, source="read_collect") == 1
+    drain = buffer.drain(44, 1)
+
+    assert drain.served_count == 1
+    assert dict(drain.source_counts) == {"read_collect": 1}
+    assert drain.age_min_ms == 25.0
+    assert drain.age_avg_ms == 25.0
+    assert drain.age_max_ms == 25.0
+
+
 def test_prefetch_read_msgs_buffer_ignores_empty_and_clears_channel() -> None:
     buffer = PrefetchReadMsgsBuffer(enabled=True, max_messages=3)
     empty_body = ProtocolEncoder.encode_read_msgs_rsp(BUFFER_EMPTY, [], sequence=0)[HEADER_SIZE:]

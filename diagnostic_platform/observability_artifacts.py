@@ -109,12 +109,91 @@ def get_cloud_uploads_dir(programdata: str | Path | None = None) -> Path:
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
+    _recover_atomic_json_temp_siblings(path)
     temp_path = path.with_name(
         f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
     )
     temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(temp_path, path)
+    _cleanup_atomic_json_temp_siblings(path)
     return path
+
+
+def _atomic_json_temp_target_name(path: Path) -> str | None:
+    target_name, pid, unique_id, suffix = (path.name.rsplit(".", 3) + [None] * 4)[:4]
+    if suffix != "tmp" or not str(pid).isdigit():
+        return None
+    if len(str(unique_id)) != 32:
+        return None
+    try:
+        int(str(unique_id), 16)
+    except ValueError:
+        return None
+    return target_name or None
+
+
+def _json_file_is_complete(path: Path) -> bool:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            json.load(handle)
+        return True
+    except Exception:
+        return False
+
+
+def _cleanup_atomic_json_temp_siblings(path: Path) -> None:
+    for candidate in path.parent.glob(f"{path.name}.*.tmp"):
+        try:
+            candidate.unlink(missing_ok=True)
+        except OSError:
+            continue
+
+
+def _recover_atomic_json_temp_siblings(path: Path) -> int:
+    candidates = sorted(
+        path.parent.glob(f"{path.name}.*.tmp"),
+        key=lambda candidate: candidate.stat().st_mtime if candidate.exists() else 0.0,
+        reverse=True,
+    )
+    if not candidates:
+        return 0
+    if path.exists():
+        _cleanup_atomic_json_temp_siblings(path)
+        return 0
+
+    recovered = 0
+    for candidate in candidates:
+        if _atomic_json_temp_target_name(candidate) != path.name:
+            continue
+        if not _json_file_is_complete(candidate):
+            continue
+        try:
+            os.replace(candidate, path)
+            recovered = 1
+            break
+        except OSError:
+            continue
+    if path.exists():
+        _cleanup_atomic_json_temp_siblings(path)
+    return recovered
+
+
+def _recover_atomic_json_temp_files(directory: Path, *, recursive: bool = False) -> int:
+    if not directory.exists():
+        return 0
+    recovered = 0
+    pattern = "**/*.tmp" if recursive else "*.tmp"
+    targets: set[Path] = set()
+    for candidate in directory.glob(pattern):
+        if not candidate.is_file():
+            continue
+        target_name = _atomic_json_temp_target_name(candidate)
+        if target_name is None:
+            continue
+        targets.add(candidate.with_name(target_name))
+    for target in targets:
+        recovered += _recover_atomic_json_temp_siblings(target)
+    return recovered
 
 
 def _safe_name(text: str) -> str:
@@ -624,6 +703,10 @@ def cleanup_product_observability(
     current_time = time.time() if now is None else float(now)
     cloud_root = _resolve_cloud_root(programdata)
     local_root = Path(appdata) / "VCI_Proxy" / "observability" if appdata is not None else None
+
+    _recover_atomic_json_temp_files(cloud_root / "session_traces")
+    _recover_atomic_json_temp_files(cloud_root / "incidents")
+    _recover_atomic_json_temp_files(cloud_root / "uploads", recursive=True)
 
     _delete_older_than(cloud_root / "raw", max_age_days=retention_days_raw, now=current_time)
     _delete_older_than(cloud_root / "session_traces", max_age_days=retention_days_session_trace, now=current_time)

@@ -52,6 +52,8 @@ from vci_proxy.tls_utils import harden_tls_context
 
 logger = logging.getLogger(__name__)
 
+READ_COLLECT_MIN_DRAIN_CAP_MS = 8
+
 
 class ReverseProxyClient:
     """Local-side reverse tunnel client that executes J2534 requests."""
@@ -88,6 +90,7 @@ class ReverseProxyClient:
             root=get_local_observability_root() / "raw",
         )
         self._server_read_ahead_enabled = False
+        self._server_read_collect_enabled = False
         self._server_write_collect_enabled = False
         self._server_sweep_shadow_enabled = False
         self._server_connection_epoch: str | None = None
@@ -273,6 +276,13 @@ class ReverseProxyClient:
         )
 
     @staticmethod
+    def _auth_message_enables_read_collect(message: str) -> bool:
+        return any(
+            token.strip().lower() == "read_collect=1"
+            for token in message.replace(",", ";").split(";")
+        )
+
+    @staticmethod
     def _auth_message_enables_sweep_shadow(message: str) -> bool:
         return any(
             token.strip().lower() == "sweep_shadow=1"
@@ -297,6 +307,7 @@ class ReverseProxyClient:
         if read_ahead.enabled:
             capabilities.append("read_ahead=1")
             if read_ahead.transaction_enabled:
+                capabilities.append("read_collect=1")
                 capabilities.append("write_collect=1")
         if self.config.local_sweep.shadow_transport_enabled:
             capabilities.append("sweep_shadow=1")
@@ -735,6 +746,7 @@ class ReverseProxyClient:
     ) -> bool:
         """Register with the server using auth or the legacy heartbeat path."""
         self._server_read_ahead_enabled = False
+        self._server_read_collect_enabled = False
         self._server_write_collect_enabled = False
         self._server_sweep_shadow_enabled = False
         self._server_connection_epoch = None
@@ -764,6 +776,7 @@ class ReverseProxyClient:
                 magic, length, msg_type, _sequence = Message.decode_header(header)
                 if magic != MAGIC:
                     self._server_read_ahead_enabled = False
+                    self._server_read_collect_enabled = False
                     self._server_write_collect_enabled = False
                     self._server_sweep_shadow_enabled = False
                     logger.error("Invalid magic in auth response: %#x", magic)
@@ -776,6 +789,9 @@ class ReverseProxyClient:
                     success, message = ProtocolDecoder.decode_auth_rsp(body)
                     self._server_read_ahead_enabled = (
                         success and self._auth_message_enables_read_ahead(message)
+                    )
+                    self._server_read_collect_enabled = (
+                        success and self._auth_message_enables_read_collect(message)
                     )
                     self._server_write_collect_enabled = (
                         success and self._auth_message_enables_write_collect(message)
@@ -817,6 +833,7 @@ class ReverseProxyClient:
 
                 if msg_type == MsgType.HEARTBEAT_ACK:
                     self._server_read_ahead_enabled = False
+                    self._server_read_collect_enabled = False
                     self._server_write_collect_enabled = False
                     self._server_sweep_shadow_enabled = False
                     self._server_connection_epoch = None
@@ -840,6 +857,7 @@ class ReverseProxyClient:
                     msg_type,
                 )
                 self._server_read_ahead_enabled = False
+                self._server_read_collect_enabled = False
                 self._server_write_collect_enabled = False
                 self._server_sweep_shadow_enabled = False
                 self._emit_client_event(
@@ -854,6 +872,7 @@ class ReverseProxyClient:
                 return False
             except asyncio.TimeoutError:
                 self._server_read_ahead_enabled = False
+                self._server_read_collect_enabled = False
                 self._server_write_collect_enabled = False
                 self._server_sweep_shadow_enabled = False
                 self._server_connection_epoch = None
@@ -1113,7 +1132,20 @@ class ReverseProxyClient:
         self._ioctl_cache.invalidate()
         return ProtocolEncoder.encode_disconnect_rsp(ret, sequence)
 
-    async def _handle_read_msgs(self, body: bytes, sequence: int, request_context: LogContext | None = None) -> bytes:
+    async def _handle_read_msgs_common(
+        self,
+        body: bytes,
+        sequence: int,
+        request_context: LogContext | None = None,
+        *,
+        collect_window_ms: int | None = None,
+        max_reads: int | None = None,
+        read_timeout_ms: int | None = None,
+        max_messages: int | None = None,
+        min_drain_ms: int | None = None,
+        local_max_reads: int | None = None,
+        stop_after_empty_once_min_drain_elapsed: bool = False,
+    ) -> bytes:
         channel_id, num_msgs, timeout = ProtocolDecoder.decode_read_msgs_req(body)
         request_context = self._ensure_request_context(
             request_context,
@@ -1135,7 +1167,54 @@ class ReverseProxyClient:
             detail=f" channel_id={channel_id} count={len(messages)}",
             ok_codes=(0, BUFFER_EMPTY),
         )
-        return ProtocolEncoder.encode_read_msgs_rsp(ret, messages, sequence)
+        response = ProtocolEncoder.encode_read_msgs_rsp(ret, messages, sequence)
+        if ret not in (0, BUFFER_EMPTY):
+            return response
+
+        collect_requested = any(
+            value is not None
+            for value in (
+                collect_window_ms,
+                max_reads,
+                read_timeout_ms,
+                max_messages,
+                min_drain_ms,
+            )
+        )
+        if not collect_requested:
+            return response
+
+        read_rsp_bodies = await self._collect_read_ahead_bodies(
+            channel_id,
+            request_context,
+            collect_window_ms=collect_window_ms,
+            max_reads=max_reads,
+            read_timeout_ms=read_timeout_ms,
+            max_messages=max_messages,
+            min_drain_ms=min_drain_ms,
+            local_max_reads=local_max_reads,
+            stop_after_empty_once_min_drain_elapsed=(
+                stop_after_empty_once_min_drain_elapsed
+            ),
+        )
+        return attach_read_msgs_prefetch_bundle(
+            response,
+            channel_id=channel_id,
+            read_rsp_bodies=read_rsp_bodies,
+        )
+
+    async def _handle_read_msgs(self, body: bytes, sequence: int, request_context: LogContext | None = None) -> bytes:
+        return await self._handle_read_msgs_common(body, sequence, request_context)
+
+    def _read_collect_min_drain_ms(self, collect_window_ms: int) -> int:
+        configured_ms = max(0, int(self.config.read_ahead.min_drain_ms))
+        if configured_ms <= 0:
+            return 0
+        return min(
+            configured_ms,
+            READ_COLLECT_MIN_DRAIN_CAP_MS,
+            max(0, int(collect_window_ms)),
+        )
 
     async def _collect_read_ahead_bodies(
         self,
@@ -1146,6 +1225,10 @@ class ReverseProxyClient:
         max_reads: int | None = None,
         read_timeout_ms: int | None = None,
         max_messages: int | None = None,
+        min_drain_ms: int | None = None,
+        local_max_reads: int | None = None,
+        stop_after_empty_once_min_drain_elapsed: bool = False,
+        soft_max_reads_after_data: int | None = None,
     ) -> list[bytes]:
         read_ahead = self.config.read_ahead
         if (
@@ -1158,8 +1241,11 @@ class ReverseProxyClient:
             read_ahead.window_ms,
             read_ahead.window_ms if collect_window_ms is None else int(collect_window_ms),
         )
+        local_max_reads_limit = (
+            read_ahead.max_reads if local_max_reads is None else int(local_max_reads)
+        )
         effective_max_reads = min(
-            read_ahead.max_reads,
+            local_max_reads_limit,
             read_ahead.max_reads if max_reads is None else int(max_reads),
         )
         effective_timeout_ms = min(
@@ -1176,8 +1262,17 @@ class ReverseProxyClient:
         )
         effective_min_drain_ms = min(
             effective_window_ms,
-            max(0, int(read_ahead.min_drain_ms)),
+            max(
+                0,
+                int(read_ahead.min_drain_ms if min_drain_ms is None else min_drain_ms),
+            ),
         )
+        effective_soft_max_reads_after_data = 0
+        if soft_max_reads_after_data is not None:
+            effective_soft_max_reads_after_data = min(
+                effective_max_reads,
+                max(0, int(soft_max_reads_after_data)),
+            )
         if (
             effective_window_ms <= 0
             or effective_max_reads <= 0
@@ -1194,6 +1289,9 @@ class ReverseProxyClient:
         data_reads = 0
         empty_reads = 0
         consecutive_empty_reads = 0
+        empty_after_data_grace_used = False
+        empty_after_data_grace_skipped_reason: str | None = None
+        empty_after_data_grace_sleep_ms = 0.0
         stop_reason = "max_reads"
         for read_index in range(effective_max_reads):
             if time.monotonic() > deadline:
@@ -1222,11 +1320,7 @@ class ReverseProxyClient:
                     },
                 )
             except Exception:
-                logger.warning(
-                    "Read-ahead failed after WRITE_MSGS_REQ on channel_id=%s",
-                    channel_id,
-                    exc_info=True,
-                )
+                logger.warning("Read-ahead failed on channel_id=%s", channel_id, exc_info=True)
                 stop_reason = "driver_exception"
                 break
 
@@ -1238,6 +1332,14 @@ class ReverseProxyClient:
                 empty_reads += 1
                 consecutive_empty_reads += 1
                 now = time.monotonic()
+                if (
+                    collected_messages > 0
+                    and effective_soft_max_reads_after_data > 0
+                    and effective_soft_max_reads_after_data < effective_max_reads
+                    and attempted_reads >= effective_soft_max_reads_after_data
+                ):
+                    stop_reason = "soft_max_reads_after_data"
+                    break
                 if now < min_drain_until and read_index + 1 < effective_max_reads:
                     sleep_s = min(
                         0.005,
@@ -1246,6 +1348,26 @@ class ReverseProxyClient:
                     if sleep_s > 0:
                         await asyncio.sleep(sleep_s)
                     continue
+                if stop_after_empty_once_min_drain_elapsed:
+                    if collected_messages <= 0:
+                        stop_reason = "empty_after_min_drain"
+                        break
+                    if not empty_after_data_grace_used:
+                        if read_index + 1 >= effective_max_reads:
+                            empty_after_data_grace_skipped_reason = "max_reads"
+                            stop_reason = "empty_after_data_no_grace_budget"
+                            break
+                        sleep_s = min(
+                            READ_COLLECT_MIN_DRAIN_CAP_MS / 1000.0,
+                            max(0.0, min(min_drain_until, deadline) - now),
+                        )
+                        if sleep_s > 0:
+                            await asyncio.sleep(sleep_s)
+                            empty_after_data_grace_sleep_ms += sleep_s * 1000.0
+                        empty_after_data_grace_used = True
+                        continue
+                    stop_reason = "empty_after_data_grace_empty"
+                    break
                 if (
                     effective_max_empty_reads > 0
                     and empty_reads >= effective_max_empty_reads
@@ -1270,10 +1392,17 @@ class ReverseProxyClient:
             if collected_messages >= effective_max_messages:
                 stop_reason = "max_messages"
                 break
+            if (
+                effective_soft_max_reads_after_data > 0
+                and effective_soft_max_reads_after_data < effective_max_reads
+                and attempted_reads >= effective_soft_max_reads_after_data
+            ):
+                stop_reason = "soft_max_reads_after_data"
+                break
 
         if collected:
             logger.debug(
-                "Collected %s read-ahead ReadMsgs response(s) after write on channel_id=%s",
+                "Collected %s read-ahead ReadMsgs response(s) on channel_id=%s",
                 len(collected),
                 channel_id,
             )
@@ -1290,11 +1419,24 @@ class ReverseProxyClient:
             collected_messages=collected_messages,
             collect_window_ms=effective_window_ms,
             max_reads=effective_max_reads,
+            local_max_reads=local_max_reads_limit,
             read_timeout_ms=effective_timeout_ms,
             max_messages=effective_max_messages,
             max_empty_reads=effective_max_empty_reads,
             max_consecutive_empty_reads=effective_max_consecutive_empty_reads,
             min_drain_ms=effective_min_drain_ms,
+            soft_max_reads_after_data=effective_soft_max_reads_after_data,
+            stop_after_empty_once_min_drain_elapsed=(
+                stop_after_empty_once_min_drain_elapsed
+            ),
+            empty_after_data_grace_used=empty_after_data_grace_used,
+            empty_after_data_grace_skipped_reason=(
+                empty_after_data_grace_skipped_reason
+            ),
+            empty_after_data_grace_sleep_ms=round(
+                empty_after_data_grace_sleep_ms,
+                3,
+            ),
         )
         return collected
 
@@ -1308,6 +1450,7 @@ class ReverseProxyClient:
         max_reads: int | None = None,
         read_timeout_ms: int | None = None,
         max_messages: int | None = None,
+        stop_after_empty_once_min_drain_elapsed: bool | None = None,
     ) -> bytes:
         channel_id, messages, timeout = ProtocolDecoder.decode_write_msgs_req(body)
         request_context = self._ensure_request_context(
@@ -1332,6 +1475,13 @@ class ReverseProxyClient:
         if ret != 0:
             return response
 
+        soft_max_reads_after_data = None
+        if (
+            self.config.read_ahead.write_collect_max_reads
+            > self.config.read_ahead.max_reads
+        ):
+            soft_max_reads_after_data = self.config.read_ahead.max_reads
+
         read_rsp_bodies = await self._collect_read_ahead_bodies(
             channel_id,
             request_context,
@@ -1339,6 +1489,13 @@ class ReverseProxyClient:
             max_reads=max_reads,
             read_timeout_ms=read_timeout_ms,
             max_messages=max_messages,
+            local_max_reads=self.config.read_ahead.write_collect_max_reads,
+            soft_max_reads_after_data=soft_max_reads_after_data,
+            stop_after_empty_once_min_drain_elapsed=(
+                self.config.read_ahead.min_drain_ms > 0
+                if stop_after_empty_once_min_drain_elapsed is None
+                else stop_after_empty_once_min_drain_elapsed
+            ),
         )
         return attach_read_msgs_prefetch_bundle(
             response,
@@ -1375,6 +1532,38 @@ class ReverseProxyClient:
             max_reads=request.max_reads,
             read_timeout_ms=request.read_timeout_ms,
             max_messages=request.max_messages,
+        )
+
+    async def _handle_read_and_collect_reads(
+        self,
+        body: bytes,
+        sequence: int,
+        request_context: LogContext | None = None,
+    ) -> bytes:
+        request = ProtocolDecoder.decode_read_and_collect_reads_req(body)
+        if not (
+            self.config.read_ahead.enabled
+            and self.config.read_ahead.transaction_enabled
+            and self._server_read_ahead_enabled
+            and self._server_read_collect_enabled
+        ):
+            return await self._handle_read_msgs_common(
+                request.read_req_body,
+                sequence,
+                request_context,
+            )
+        return await self._handle_read_msgs_common(
+            request.read_req_body,
+            sequence,
+            request_context,
+            collect_window_ms=request.collect_window_ms,
+            max_reads=request.max_reads,
+            read_timeout_ms=request.read_timeout_ms,
+            max_messages=request.max_messages,
+            min_drain_ms=self._read_collect_min_drain_ms(
+                request.collect_window_ms,
+            ),
+            stop_after_empty_once_min_drain_elapsed=True,
         )
 
     async def _handle_read_version(self, body: bytes, sequence: int, request_context: LogContext | None = None) -> bytes:
@@ -1530,6 +1719,7 @@ class ReverseProxyClient:
         MsgType.CONNECT_REQ: _handle_connect,
         MsgType.DISCONNECT_REQ: _handle_disconnect,
         MsgType.READ_MSGS_REQ: _handle_read_msgs,
+        MsgType.READ_AND_COLLECT_READS_REQ: _handle_read_and_collect_reads,
         MsgType.WRITE_MSGS_REQ: _handle_write_msgs,
         MsgType.WRITE_AND_COLLECT_READS_REQ: _handle_write_and_collect_reads,
         MsgType.READ_VERSION_REQ: _handle_read_version,
@@ -1668,7 +1858,13 @@ def main() -> None:
         "--read-ahead-max-reads",
         type=int,
         default=None,
-        help="Maximum local ReadMsgs calls after one successful write (default: 3 or VCI_PROXY_READ_AHEAD_MAX_READS)",
+        help="Maximum local ReadMsgs calls for generic/read-tail collection (default: 3 or VCI_PROXY_READ_AHEAD_MAX_READS)",
+    )
+    parser.add_argument(
+        "--read-ahead-write-collect-max-reads",
+        type=int,
+        default=None,
+        help="Maximum local ReadMsgs calls after write-collect transactions (default: 6 or VCI_PROXY_READ_AHEAD_WRITE_COLLECT_MAX_READS)",
     )
     parser.add_argument(
         "--read-ahead-read-timeout-ms",
@@ -1789,6 +1985,9 @@ def main() -> None:
         read_ahead_enabled=args.read_ahead,
         read_ahead_window_ms=args.read_ahead_window_ms,
         read_ahead_max_reads=args.read_ahead_max_reads,
+        read_ahead_write_collect_max_reads=(
+            args.read_ahead_write_collect_max_reads
+        ),
         read_ahead_read_timeout_ms=args.read_ahead_read_timeout_ms,
         read_ahead_max_messages=args.read_ahead_max_messages,
         read_ahead_max_empty_reads=args.read_ahead_max_empty_reads,
@@ -1824,6 +2023,7 @@ def main() -> None:
     print(
         f"Read-ahead: {'enabled' if config.read_ahead.enabled else 'disabled'} "
         f"(window={config.read_ahead.window_ms}ms, max_reads={config.read_ahead.max_reads}, "
+        f"write_collect_max_reads={config.read_ahead.write_collect_max_reads}, "
         f"timeout={config.read_ahead.read_timeout_ms}ms, max_messages={config.read_ahead.max_messages}, "
         f"max_empty_reads={config.read_ahead.max_empty_reads}, "
         f"max_consecutive_empty_reads={config.read_ahead.max_consecutive_empty_reads}, "

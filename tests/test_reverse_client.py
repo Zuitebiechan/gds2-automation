@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from diagnostic_platform.observability import flush_product_log_writers
+from diagnostic_platform.observability import LogContext, flush_product_log_writers
 from vci_proxy.cache_read_msgs import BUFFER_EMPTY
 from vci_proxy.config import LOCAL_SWEEP_MIN_ITEM_INTERVAL_FLOOR_MS, ProxyConfig
 from vci_proxy.protocol import (
@@ -187,14 +187,20 @@ def test_send_registration_auth_mode_records_connection_epoch(monkeypatch) -> No
     assert client._server_connection_epoch == "epoch-rc-1"
 
 
-def test_send_registration_auth_mode_advertises_write_collect_capability(monkeypatch) -> None:
+def test_send_registration_auth_mode_advertises_read_and_write_collect_capabilities(monkeypatch) -> None:
     config = ProxyConfig.from_args(
         auth_token="shared-secret",
         read_ahead_enabled=True,
         read_ahead_transaction_enabled=True,
     )
     client = ReverseProxyClient("example.com", 9000, config=config)
-    reader = _FakeReader(ProtocolEncoder.encode_auth_rsp(True, "ok;read_ahead=1;write_collect=1", sequence=0))
+    reader = _FakeReader(
+        ProtocolEncoder.encode_auth_rsp(
+            True,
+            "ok;read_ahead=1;read_collect=1;write_collect=1",
+            sequence=0,
+        )
+    )
     writer = _FakeWriter()
 
     monkeypatch.setattr("vci_proxy.reverse_client.time.time", lambda: 1_700_000_000)
@@ -204,9 +210,12 @@ def test_send_registration_auth_mode_advertises_write_collect_capability(monkeyp
 
     assert result is True
     assert client._server_read_ahead_enabled is True
+    assert client._server_read_collect_enabled is True
     assert client._server_write_collect_enabled is True
     body = writer.writes[0][HEADER_SIZE:]
-    assert ProtocolDecoder.decode_auth_req_capabilities(body) == "read_ahead=1;write_collect=1"
+    assert ProtocolDecoder.decode_auth_req_capabilities(body) == (
+        "read_ahead=1;read_collect=1;write_collect=1"
+    )
 
 
 def test_send_registration_auth_mode_advertises_sweep_shadow_capability(monkeypatch) -> None:
@@ -814,6 +823,761 @@ def test_handle_write_and_collect_reads_uses_transaction_limits(monkeypatch, tmp
         ("read_msgs", 44, 4, 5),
         ("read_msgs", 44, 3, 5),
     ]
+
+
+def test_handle_write_and_collect_reads_uses_write_collect_read_budget(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    observed: list[tuple[str, int, int, int]] = []
+    read_results = iter(
+        [
+            (0, [{"protocol_id": 6, "data": bytes([index])}])
+            for index in range(6)
+        ]
+    )
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+            read_ahead_max_reads=6,
+            read_ahead_write_collect_max_reads=6,
+            read_ahead_max_messages=8,
+            read_ahead_read_timeout_ms=0,
+        ),
+    )
+    client._server_read_ahead_enabled = True
+    client._server_write_collect_enabled = True
+    client.driver = types.SimpleNamespace(
+        write_msgs=lambda channel_id, messages, timeout: (
+            observed.append(("write_msgs", channel_id, len(messages), timeout))
+            or (0, len(messages))
+        ),
+        read_msgs=lambda channel_id, num_msgs, timeout: (
+            observed.append(("read_msgs", channel_id, num_msgs, timeout))
+            or next(read_results)
+        ),
+    )
+    write_body = ProtocolEncoder.encode_write_msgs_req(
+        44,
+        [{"protocol_id": 6, "data": b"\x22"}],
+        timeout=25,
+        sequence=7,
+    )[HEADER_SIZE:]
+    transaction_body = ProtocolEncoder.encode_write_and_collect_reads_req(
+        write_body,
+        collect_window_ms=150,
+        max_reads=6,
+        read_timeout_ms=0,
+        max_messages=8,
+        sequence=7,
+    )[HEADER_SIZE:]
+
+    response = asyncio.run(
+        client._handle_message(MsgType.WRITE_AND_COLLECT_READS_REQ, transaction_body, sequence=7)
+    )
+    _clean_body, bundle = strip_read_msgs_prefetch_bundle(response[HEADER_SIZE:])
+
+    assert bundle is not None
+    assert len(bundle.read_rsp_bodies) == 6
+    assert observed == [
+        ("write_msgs", 44, 1, 25),
+        ("read_msgs", 44, 8, 0),
+        ("read_msgs", 44, 7, 0),
+        ("read_msgs", 44, 6, 0),
+        ("read_msgs", 44, 5, 0),
+        ("read_msgs", 44, 4, 0),
+        ("read_msgs", 44, 3, 0),
+    ]
+
+
+def test_handle_write_and_collect_reads_stops_at_soft_read_budget_after_data(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    observed: list[tuple[str, int, int, int]] = []
+    read_results = iter(
+        [
+            (0, [{"protocol_id": 6, "data": bytes([index])}])
+            for index in range(6)
+        ]
+    )
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+            read_ahead_max_reads=3,
+            read_ahead_write_collect_max_reads=6,
+            read_ahead_max_messages=8,
+            read_ahead_read_timeout_ms=0,
+        ),
+    )
+    client._server_read_ahead_enabled = True
+    client._server_write_collect_enabled = True
+    client.driver = types.SimpleNamespace(
+        write_msgs=lambda channel_id, messages, timeout: (
+            observed.append(("write_msgs", channel_id, len(messages), timeout))
+            or (0, len(messages))
+        ),
+        read_msgs=lambda channel_id, num_msgs, timeout: (
+            observed.append(("read_msgs", channel_id, num_msgs, timeout))
+            or next(read_results)
+        ),
+    )
+    write_body = ProtocolEncoder.encode_write_msgs_req(
+        44,
+        [{"protocol_id": 6, "data": b"\x22"}],
+        timeout=25,
+        sequence=7,
+    )[HEADER_SIZE:]
+    transaction_body = ProtocolEncoder.encode_write_and_collect_reads_req(
+        write_body,
+        collect_window_ms=150,
+        max_reads=6,
+        read_timeout_ms=0,
+        max_messages=8,
+        sequence=7,
+    )[HEADER_SIZE:]
+
+    response = asyncio.run(
+        client._handle_message(MsgType.WRITE_AND_COLLECT_READS_REQ, transaction_body, sequence=7)
+    )
+    _clean_body, bundle = strip_read_msgs_prefetch_bundle(response[HEADER_SIZE:])
+
+    assert bundle is not None
+    assert len(bundle.read_rsp_bodies) == 3
+    assert observed == [
+        ("write_msgs", 44, 1, 25),
+        ("read_msgs", 44, 8, 0),
+        ("read_msgs", 44, 7, 0),
+        ("read_msgs", 44, 6, 0),
+    ]
+    collection_events = [
+        event
+        for event in _read_local_events(tmp_path)
+        if event.get("event_type") == "read_ahead.collection_finished"
+    ]
+    assert collection_events[-1]["reason"] == "soft_max_reads_after_data"
+    assert collection_events[-1]["attempted_reads"] == 3
+    assert collection_events[-1]["max_reads"] == 6
+    assert collection_events[-1]["soft_max_reads_after_data"] == 3
+
+
+def test_write_collect_soft_budget_stops_empty_drain_after_data(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    observed: list[tuple[str, int, int, int]] = []
+    first_message = {"protocol_id": 6, "data": b"\x62\x01"}
+    read_results = iter(
+        [
+            (0, [first_message]),
+            (BUFFER_EMPTY, []),
+            (BUFFER_EMPTY, []),
+            (0, [{"protocol_id": 6, "data": b"\x62\x02"}]),
+        ]
+    )
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+            read_ahead_max_reads=3,
+            read_ahead_write_collect_max_reads=6,
+            read_ahead_max_messages=8,
+            read_ahead_read_timeout_ms=0,
+            read_ahead_min_drain_ms=40,
+        ),
+    )
+    client._server_read_ahead_enabled = True
+    client._server_write_collect_enabled = True
+    client.driver = types.SimpleNamespace(
+        write_msgs=lambda channel_id, messages, timeout: (
+            observed.append(("write_msgs", channel_id, len(messages), timeout))
+            or (0, len(messages))
+        ),
+        read_msgs=lambda channel_id, num_msgs, timeout: (
+            observed.append(("read_msgs", channel_id, num_msgs, timeout))
+            or next(read_results)
+        ),
+    )
+    write_body = ProtocolEncoder.encode_write_msgs_req(
+        44,
+        [{"protocol_id": 6, "data": b"\x22"}],
+        timeout=25,
+        sequence=7,
+    )[HEADER_SIZE:]
+    transaction_body = ProtocolEncoder.encode_write_and_collect_reads_req(
+        write_body,
+        collect_window_ms=150,
+        max_reads=6,
+        read_timeout_ms=0,
+        max_messages=8,
+        sequence=7,
+    )[HEADER_SIZE:]
+
+    response = asyncio.run(
+        client._handle_message(MsgType.WRITE_AND_COLLECT_READS_REQ, transaction_body, sequence=7)
+    )
+    _clean_body, bundle = strip_read_msgs_prefetch_bundle(response[HEADER_SIZE:])
+
+    assert bundle is not None
+    assert [
+        ProtocolDecoder.decode_read_msgs_rsp(read_rsp_body)[1][0]["data"]
+        for read_rsp_body in bundle.read_rsp_bodies
+    ] == [b"\x62\x01"]
+    assert observed == [
+        ("write_msgs", 44, 1, 25),
+        ("read_msgs", 44, 8, 0),
+        ("read_msgs", 44, 7, 0),
+        ("read_msgs", 44, 7, 0),
+    ]
+    collection_events = [
+        event
+        for event in _read_local_events(tmp_path)
+        if event.get("event_type") == "read_ahead.collection_finished"
+    ]
+    assert collection_events[-1]["reason"] == "soft_max_reads_after_data"
+    assert collection_events[-1]["attempted_reads"] == 3
+    assert collection_events[-1]["empty_reads"] == 2
+    assert collection_events[-1]["empty_after_data_grace_used"] is False
+
+
+def test_handle_read_and_collect_reads_returns_foreground_read_and_prefetches_tail(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    observed: list[tuple[str, int, int, int]] = []
+    foreground_message = {"protocol_id": 6, "data": b"\x62\xf4\x0c"}
+    prefetched_message = {"protocol_id": 6, "data": b"\x62\x13\x08"}
+    read_results = iter(
+        [
+            (0, [foreground_message]),
+            (0, [prefetched_message]),
+            (BUFFER_EMPTY, []),
+        ]
+    )
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+            read_ahead_window_ms=200,
+            read_ahead_max_reads=3,
+            read_ahead_max_messages=8,
+            read_ahead_read_timeout_ms=0,
+            read_ahead_min_drain_ms=40,
+        ),
+    )
+    client._server_read_ahead_enabled = True
+    client._server_read_collect_enabled = True
+    client.driver = types.SimpleNamespace(
+        read_msgs=lambda channel_id, num_msgs, timeout: (
+            observed.append(("read_msgs", channel_id, num_msgs, timeout))
+            or next(read_results)
+        ),
+    )
+    read_body = ProtocolEncoder.encode_read_msgs_req(
+        44,
+        num_msgs=300,
+        timeout=0,
+        sequence=7,
+    )[HEADER_SIZE:]
+    transaction_body = ProtocolEncoder.encode_read_and_collect_reads_req(
+        read_body,
+        collect_window_ms=150,
+        max_reads=2,
+        read_timeout_ms=0,
+        max_messages=4,
+        sequence=7,
+    )[HEADER_SIZE:]
+
+    response = asyncio.run(
+        client._handle_message(MsgType.READ_AND_COLLECT_READS_REQ, transaction_body, sequence=7)
+    )
+    clean_body, bundle = strip_read_msgs_prefetch_bundle(response[HEADER_SIZE:])
+
+    assert ProtocolDecoder.decode_read_msgs_rsp(clean_body) == (
+        0,
+        [
+            {
+                "protocol_id": 6,
+                "rx_status": 0,
+                "tx_flags": 0,
+                "timestamp": 0,
+                "data": b"\x62\xf4\x0c",
+            }
+        ],
+    )
+    assert bundle is not None
+    assert bundle.channel_id == 44
+    assert ProtocolDecoder.decode_read_msgs_rsp(bundle.read_rsp_bodies[0]) == (
+        0,
+        [
+            {
+                "protocol_id": 6,
+                "rx_status": 0,
+                "tx_flags": 0,
+                "timestamp": 0,
+                "data": b"\x62\x13\x08",
+            }
+        ],
+    )
+    assert observed == [
+        ("read_msgs", 44, 300, 0),
+        ("read_msgs", 44, 4, 0),
+        ("read_msgs", 44, 3, 0),
+    ]
+
+
+def test_handle_read_and_collect_reads_prefetches_tail_after_foreground_empty(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    observed: list[tuple[str, int, int, int]] = []
+    prefetched_message = {"protocol_id": 6, "data": b"\x62\x13\x08"}
+    read_results = iter(
+        [
+            (BUFFER_EMPTY, []),
+            (0, [prefetched_message]),
+            (BUFFER_EMPTY, []),
+        ]
+    )
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+            read_ahead_window_ms=200,
+            read_ahead_max_reads=3,
+            read_ahead_max_messages=8,
+            read_ahead_read_timeout_ms=0,
+        ),
+    )
+    client._server_read_ahead_enabled = True
+    client._server_read_collect_enabled = True
+    client.driver = types.SimpleNamespace(
+        read_msgs=lambda channel_id, num_msgs, timeout: (
+            observed.append(("read_msgs", channel_id, num_msgs, timeout))
+            or next(read_results)
+        ),
+    )
+    read_body = ProtocolEncoder.encode_read_msgs_req(
+        44,
+        num_msgs=300,
+        timeout=0,
+        sequence=7,
+    )[HEADER_SIZE:]
+    transaction_body = ProtocolEncoder.encode_read_and_collect_reads_req(
+        read_body,
+        collect_window_ms=40,
+        max_reads=2,
+        read_timeout_ms=0,
+        max_messages=4,
+        sequence=7,
+    )[HEADER_SIZE:]
+
+    response = asyncio.run(
+        client._handle_message(MsgType.READ_AND_COLLECT_READS_REQ, transaction_body, sequence=7)
+    )
+    clean_body, bundle = strip_read_msgs_prefetch_bundle(response[HEADER_SIZE:])
+
+    assert ProtocolDecoder.decode_read_msgs_rsp(clean_body) == (BUFFER_EMPTY, [])
+    assert bundle is not None
+    assert bundle.channel_id == 44
+    assert ProtocolDecoder.decode_read_msgs_rsp(bundle.read_rsp_bodies[0]) == (
+        0,
+        [
+            {
+                "protocol_id": 6,
+                "rx_status": 0,
+                "tx_flags": 0,
+                "timestamp": 0,
+                "data": b"\x62\x13\x08",
+            }
+        ],
+    )
+    assert observed == [
+        ("read_msgs", 44, 300, 0),
+        ("read_msgs", 44, 4, 0),
+        ("read_msgs", 44, 3, 0),
+    ]
+
+
+def test_handle_read_and_collect_reads_caps_configured_min_drain(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+            read_ahead_window_ms=200,
+            read_ahead_max_reads=3,
+            read_ahead_max_messages=8,
+            read_ahead_read_timeout_ms=0,
+            read_ahead_min_drain_ms=40,
+        ),
+    )
+    captured: dict[str, object] = {}
+    client._server_read_ahead_enabled = True
+    client._server_read_collect_enabled = True
+    client.driver = types.SimpleNamespace(
+        read_msgs=lambda _channel_id, _num_msgs, _timeout: (BUFFER_EMPTY, []),
+    )
+
+    async def _fake_collect_read_ahead_bodies(*_args, **kwargs) -> list[bytes]:
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(
+        client,
+        "_collect_read_ahead_bodies",
+        _fake_collect_read_ahead_bodies,
+    )
+    read_body = ProtocolEncoder.encode_read_msgs_req(
+        44,
+        num_msgs=300,
+        timeout=0,
+        sequence=7,
+    )[HEADER_SIZE:]
+    transaction_body = ProtocolEncoder.encode_read_and_collect_reads_req(
+        read_body,
+        collect_window_ms=40,
+        max_reads=3,
+        read_timeout_ms=0,
+        max_messages=4,
+        sequence=7,
+    )[HEADER_SIZE:]
+
+    response = asyncio.run(
+        client._handle_message(MsgType.READ_AND_COLLECT_READS_REQ, transaction_body, sequence=7)
+    )
+    clean_body, bundle = strip_read_msgs_prefetch_bundle(response[HEADER_SIZE:])
+
+    assert ProtocolDecoder.decode_read_msgs_rsp(clean_body) == (BUFFER_EMPTY, [])
+    assert bundle is None
+    assert captured["min_drain_ms"] == 8
+    assert captured["stop_after_empty_once_min_drain_elapsed"] is True
+
+
+def test_read_collect_min_drain_uses_zero_when_not_configured() -> None:
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+            read_ahead_min_drain_ms=0,
+        ),
+    )
+
+    assert client._read_collect_min_drain_ms(40) == 0
+
+
+def test_handle_read_and_collect_reads_stops_tail_after_first_empty(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    observed: list[tuple[str, int, int, int]] = []
+    foreground_message = {"protocol_id": 6, "data": b"\x62\xf4\x0c"}
+    late_tail_message = {"protocol_id": 6, "data": b"\x62\x13\x08"}
+    read_results = iter(
+        [
+            (0, [foreground_message]),
+            (BUFFER_EMPTY, []),
+            (0, [late_tail_message]),
+        ]
+    )
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+            read_ahead_window_ms=200,
+            read_ahead_max_reads=3,
+            read_ahead_max_messages=8,
+            read_ahead_read_timeout_ms=0,
+        ),
+    )
+    client._server_read_ahead_enabled = True
+    client._server_read_collect_enabled = True
+    client.driver = types.SimpleNamespace(
+        read_msgs=lambda channel_id, num_msgs, timeout: (
+            observed.append(("read_msgs", channel_id, num_msgs, timeout))
+            or next(read_results)
+        ),
+    )
+    read_body = ProtocolEncoder.encode_read_msgs_req(
+        44,
+        num_msgs=300,
+        timeout=0,
+        sequence=7,
+    )[HEADER_SIZE:]
+    transaction_body = ProtocolEncoder.encode_read_and_collect_reads_req(
+        read_body,
+        collect_window_ms=40,
+        max_reads=3,
+        read_timeout_ms=0,
+        max_messages=4,
+        sequence=7,
+    )[HEADER_SIZE:]
+
+    response = asyncio.run(
+        client._handle_message(MsgType.READ_AND_COLLECT_READS_REQ, transaction_body, sequence=7)
+    )
+    clean_body, bundle = strip_read_msgs_prefetch_bundle(response[HEADER_SIZE:])
+
+    assert ProtocolDecoder.decode_read_msgs_rsp(clean_body)[0] == 0
+    assert bundle is None
+    assert observed == [
+        ("read_msgs", 44, 300, 0),
+        ("read_msgs", 44, 4, 0),
+    ]
+
+
+def test_handle_read_and_collect_reads_allows_one_empty_grace_after_tail_data(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    observed: list[tuple[str, int, int, int]] = []
+    foreground_message = {"protocol_id": 6, "data": b"\x62\xf4\x0c"}
+    first_tail_message = {"protocol_id": 6, "data": b"\x62\x13\x08"}
+    second_tail_message = {"protocol_id": 6, "data": b"\x62\x13\x09"}
+    read_results = iter(
+        [
+            (0, [foreground_message]),
+            (0, [first_tail_message]),
+            (BUFFER_EMPTY, []),
+            (0, [second_tail_message]),
+        ]
+    )
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+            read_ahead_window_ms=200,
+            read_ahead_max_reads=3,
+            read_ahead_max_messages=8,
+            read_ahead_read_timeout_ms=0,
+        ),
+    )
+    client._server_read_ahead_enabled = True
+    client._server_read_collect_enabled = True
+    client.driver = types.SimpleNamespace(
+        read_msgs=lambda channel_id, num_msgs, timeout: (
+            observed.append(("read_msgs", channel_id, num_msgs, timeout))
+            or next(read_results)
+        ),
+    )
+    read_body = ProtocolEncoder.encode_read_msgs_req(
+        44,
+        num_msgs=300,
+        timeout=0,
+        sequence=7,
+    )[HEADER_SIZE:]
+    transaction_body = ProtocolEncoder.encode_read_and_collect_reads_req(
+        read_body,
+        collect_window_ms=40,
+        max_reads=3,
+        read_timeout_ms=0,
+        max_messages=4,
+        sequence=7,
+    )[HEADER_SIZE:]
+
+    response = asyncio.run(
+        client._handle_message(MsgType.READ_AND_COLLECT_READS_REQ, transaction_body, sequence=7)
+    )
+    _clean_body, bundle = strip_read_msgs_prefetch_bundle(response[HEADER_SIZE:])
+
+    assert bundle is not None
+    assert [
+        ProtocolDecoder.decode_read_msgs_rsp(read_rsp_body)[1][0]["data"]
+        for read_rsp_body in bundle.read_rsp_bodies
+    ] == [b"\x62\x13\x08", b"\x62\x13\x09"]
+    assert observed == [
+        ("read_msgs", 44, 300, 0),
+        ("read_msgs", 44, 4, 0),
+        ("read_msgs", 44, 3, 0),
+        ("read_msgs", 44, 3, 0),
+    ]
+
+
+def test_read_collect_empty_after_data_grace_waits_briefly_before_retry(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    first_tail_message = {"protocol_id": 6, "data": b"\x62\x13\x08"}
+    second_tail_message = {"protocol_id": 6, "data": b"\x62\x13\x09"}
+    read_results = iter(
+        [
+            (0, [first_tail_message]),
+            (BUFFER_EMPTY, []),
+            (0, [second_tail_message]),
+        ]
+    )
+    sleeps: list[float] = []
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+            read_ahead_window_ms=200,
+            read_ahead_max_reads=3,
+            read_ahead_max_messages=8,
+            read_ahead_read_timeout_ms=0,
+            read_ahead_min_drain_ms=40,
+        ),
+    )
+    client._server_read_ahead_enabled = True
+
+    async def _fake_run_driver_call(*_args, **_kwargs):
+        return next(read_results)
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(client, "_run_driver_call", _fake_run_driver_call)
+    monkeypatch.setattr("vci_proxy.reverse_client.asyncio.sleep", _fake_sleep)
+
+    bodies = asyncio.run(
+        client._collect_read_ahead_bodies(
+            44,
+            LogContext(operation_kind="j2534:READ_AND_COLLECT_READS_REQ"),
+            collect_window_ms=40,
+            max_reads=3,
+            read_timeout_ms=0,
+            max_messages=4,
+            min_drain_ms=8,
+            stop_after_empty_once_min_drain_elapsed=True,
+        )
+    )
+
+    assert sleeps
+    assert sleeps[0] <= 0.008
+    assert [
+        ProtocolDecoder.decode_read_msgs_rsp(read_rsp_body)[1][0]["data"]
+        for read_rsp_body in bodies
+    ] == [b"\x62\x13\x08", b"\x62\x13\x09"]
+
+
+def test_read_collect_empty_after_data_without_retry_budget_logs_skipped_grace(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    tail_message = {"protocol_id": 6, "data": b"\x62\x13\x08"}
+    read_results = iter(
+        [
+            (0, [tail_message]),
+            (BUFFER_EMPTY, []),
+        ]
+    )
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+            read_ahead_window_ms=200,
+            read_ahead_max_reads=3,
+            read_ahead_max_messages=8,
+            read_ahead_read_timeout_ms=0,
+        ),
+    )
+    client._server_read_ahead_enabled = True
+
+    async def _fake_run_driver_call(*_args, **_kwargs):
+        return next(read_results)
+
+    monkeypatch.setattr(client, "_run_driver_call", _fake_run_driver_call)
+
+    bodies = asyncio.run(
+        client._collect_read_ahead_bodies(
+            44,
+            LogContext(operation_kind="j2534:READ_AND_COLLECT_READS_REQ"),
+            collect_window_ms=40,
+            max_reads=2,
+            read_timeout_ms=0,
+            max_messages=4,
+            min_drain_ms=0,
+            stop_after_empty_once_min_drain_elapsed=True,
+        )
+    )
+
+    assert [
+        ProtocolDecoder.decode_read_msgs_rsp(read_rsp_body)[1][0]["data"]
+        for read_rsp_body in bodies
+    ] == [b"\x62\x13\x08"]
+    collection_events = [
+        event
+        for event in _read_local_events(tmp_path)
+        if event.get("event_type") == "read_ahead.collection_finished"
+    ]
+    assert collection_events[-1]["reason"] == "empty_after_data_no_grace_budget"
+    assert collection_events[-1]["empty_after_data_grace_used"] is False
+    assert collection_events[-1]["empty_after_data_grace_skipped_reason"] == "max_reads"
+
+
+def test_handle_read_and_collect_reads_falls_back_without_negotiated_capability() -> None:
+    observed: list[tuple[str, int, int, int]] = []
+    foreground_message = {"protocol_id": 6, "data": b"\x62\xf4\x0c"}
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+        ),
+    )
+    client._server_read_ahead_enabled = True
+    client._server_read_collect_enabled = False
+    client.driver = types.SimpleNamespace(
+        read_msgs=lambda channel_id, num_msgs, timeout: (
+            observed.append(("read_msgs", channel_id, num_msgs, timeout))
+            or (0, [foreground_message])
+        ),
+    )
+    read_body = ProtocolEncoder.encode_read_msgs_req(44, 300, 0, sequence=7)[HEADER_SIZE:]
+    transaction_body = ProtocolEncoder.encode_read_and_collect_reads_req(
+        read_body,
+        collect_window_ms=150,
+        max_reads=2,
+        read_timeout_ms=0,
+        max_messages=4,
+        sequence=7,
+    )[HEADER_SIZE:]
+
+    response = asyncio.run(
+        client._handle_message(MsgType.READ_AND_COLLECT_READS_REQ, transaction_body, sequence=7)
+    )
+    clean_body, bundle = strip_read_msgs_prefetch_bundle(response[HEADER_SIZE:])
+
+    assert ProtocolDecoder.decode_read_msgs_rsp(clean_body)[0] == 0
+    assert bundle is None
+    assert observed == [("read_msgs", 44, 300, 0)]
 
 
 def test_handle_message_returns_ping_response() -> None:

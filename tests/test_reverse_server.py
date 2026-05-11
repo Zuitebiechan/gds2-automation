@@ -174,7 +174,7 @@ def test_authenticate_vci_advertises_connection_epoch_hint(monkeypatch) -> None:
     assert "connection_epoch=epoch-test-001" in message
 
 
-def test_authenticate_vci_negotiates_write_collect_capability(monkeypatch) -> None:
+def test_authenticate_vci_negotiates_read_and_write_collect_capabilities(monkeypatch) -> None:
     server = ReverseProxyServer(
         config=ProxyConfig.from_args(
             auth_token="secret",
@@ -187,7 +187,7 @@ def test_authenticate_vci_negotiates_write_collect_capability(monkeypatch) -> No
             123,
             b"x" * 32,
             sequence=7,
-            capabilities="read_ahead=1;write_collect=1",
+            capabilities="read_ahead=1;read_collect=1;write_collect=1",
         )
     )
     writer = _FakeWriter()
@@ -197,12 +197,14 @@ def test_authenticate_vci_negotiates_write_collect_capability(monkeypatch) -> No
     accepted = asyncio.run(server._authenticate_vci(reader, writer))
 
     assert accepted is True
+    assert server._vci_read_collect_supported is True
     assert server._vci_write_collect_supported is True
     _magic, length, msg_type, _sequence = Message.decode_header(writer.writes[0][:HEADER_SIZE])
     assert msg_type == MsgType.AUTH_RSP
     success, message = ProtocolDecoder.decode_auth_rsp(writer.writes[0][HEADER_SIZE:length])
     assert success is True
     assert "read_ahead=1" in message
+    assert "read_collect=1" in message
     assert "write_collect=1" in message
 
 
@@ -966,10 +968,11 @@ def test_main_disables_windows_quick_edit_before_starting_server(monkeypatch) ->
             read_cache_active_ttl_ms=25,
             read_cache_active_window_ms=500,
             read_cache_max_timeout_ms=25,
-            read_ahead=False,
-            read_ahead_window_ms=200,
-            read_ahead_max_reads=3,
-            read_ahead_read_timeout_ms=0,
+                read_ahead=False,
+                read_ahead_window_ms=200,
+                read_ahead_max_reads=3,
+                read_ahead_write_collect_max_reads=None,
+                read_ahead_read_timeout_ms=0,
             read_ahead_max_messages=16,
             read_ahead_max_empty_reads=0,
             read_ahead_max_consecutive_empty_reads=0,
@@ -1357,6 +1360,7 @@ def test_handle_proxy_connection_serves_prefetched_read_msgs_before_empty_cache(
         server._prefetch_read_msgs.record_read_rsp_body(
             77,
             ProtocolEncoder.encode_read_msgs_rsp(0, [message], sequence=0)[HEADER_SIZE:],
+            source="read_collect",
         )
 
         proxy_reader = _FakeReader(
@@ -1390,6 +1394,10 @@ def test_handle_proxy_connection_serves_prefetched_read_msgs_before_empty_cache(
 
     assert cache_decision["cache_hit"] is True
     assert cache_decision["reason"] == "prefetch_hit"
+    assert cache_decision["prefetch_source_counts"] == {"read_collect": 1}
+    assert cache_decision["prefetch_age_min_ms"] >= 0.0
+    assert cache_decision["prefetch_age_avg_ms"] >= 0.0
+    assert cache_decision["prefetch_age_max_ms"] >= 0.0
     assert replied["cache_hit"] is True
     assert replied["return_code"] == 0
     assert replied["message_count"] == 1
@@ -1899,6 +1907,7 @@ def test_build_tunnel_request_wraps_write_when_transaction_enabled_and_supported
             read_ahead_transaction_enabled=True,
             read_ahead_window_ms=180,
             read_ahead_max_reads=2,
+            read_ahead_write_collect_max_reads=2,
             read_ahead_read_timeout_ms=5,
             read_ahead_max_messages=8,
         )
@@ -1930,6 +1939,35 @@ def test_build_tunnel_request_wraps_write_when_transaction_enabled_and_supported
     assert request.write_req_body == write_body
 
 
+def test_build_tunnel_request_uses_write_collect_specific_read_budget() -> None:
+    server = ReverseProxyServer(
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+            read_ahead_max_reads=3,
+            read_ahead_write_collect_max_reads=6,
+            read_ahead_max_messages=16,
+        )
+    )
+    server._vci_write_collect_supported = True
+    write_body = ProtocolEncoder.encode_write_msgs_req(
+        44,
+        [{"protocol_id": 6, "data": b"\x22"}],
+        timeout=25,
+    )[HEADER_SIZE:]
+
+    _encoded, _fwd_type, fwd_body, reason = server._build_tunnel_request(
+        MsgType.WRITE_MSGS_REQ,
+        write_body,
+        sequence=77,
+    )
+    request = ProtocolDecoder.decode_write_and_collect_reads_req(fwd_body)
+
+    assert reason == "write_collect_transaction"
+    assert request.max_reads == 6
+    assert request.write_req_body == write_body
+
+
 def test_build_tunnel_request_uses_no_collect_transaction_when_guarded() -> None:
     server = ReverseProxyServer(
         config=ProxyConfig.from_args(
@@ -1937,6 +1975,7 @@ def test_build_tunnel_request_uses_no_collect_transaction_when_guarded() -> None
             read_ahead_transaction_enabled=True,
             read_ahead_window_ms=180,
             read_ahead_max_reads=2,
+            read_ahead_write_collect_max_reads=2,
             read_ahead_read_timeout_ms=5,
             read_ahead_max_messages=8,
         )
@@ -2035,6 +2074,7 @@ def test_handle_proxy_connection_uses_no_collect_transaction_after_slow_response
                 read_ahead_transaction_enabled=True,
                 read_ahead_window_ms=180,
                 read_ahead_max_reads=2,
+                read_ahead_write_collect_max_reads=2,
                 read_ahead_read_timeout_ms=5,
                 read_ahead_max_messages=8,
                 read_ahead_transaction_max_network_ms=1,
@@ -2166,6 +2206,76 @@ def test_build_tunnel_request_falls_back_without_client_write_collect_support() 
     assert fwd_type == MsgType.WRITE_MSGS_REQ
     assert sequence == 77
     assert fwd_body == write_body
+    assert reason is None
+
+
+def test_build_tunnel_request_wraps_nonblocking_read_when_client_supports_read_collect() -> None:
+    server = ReverseProxyServer(
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+            read_ahead_window_ms=120,
+            read_ahead_max_reads=4,
+            read_ahead_read_timeout_ms=0,
+            read_ahead_max_messages=16,
+        )
+    )
+    server._vci_read_collect_supported = True
+    read_body = ProtocolEncoder.encode_read_msgs_req(
+        44,
+        num_msgs=300,
+        timeout=0,
+        sequence=11,
+    )[HEADER_SIZE:]
+
+    encoded, fwd_type, fwd_body, reason = server._build_tunnel_request(
+        MsgType.READ_MSGS_REQ,
+        read_body,
+        sequence=77,
+    )
+    _magic, length, msg_type, sequence = Message.decode_header(encoded[:HEADER_SIZE])
+    request = ProtocolDecoder.decode_read_and_collect_reads_req(encoded[HEADER_SIZE:])
+
+    assert length == len(encoded)
+    assert msg_type == MsgType.READ_AND_COLLECT_READS_REQ
+    assert fwd_type == MsgType.READ_AND_COLLECT_READS_REQ
+    assert sequence == 77
+    assert fwd_body == encoded[HEADER_SIZE:]
+    assert reason == "read_collect_transaction"
+    assert request.collect_window_ms == 40
+    assert request.max_reads == 3
+    assert request.read_timeout_ms == 0
+    assert request.max_messages == 16
+    assert request.read_req_body == read_body
+
+
+def test_build_tunnel_request_does_not_wrap_blocking_read_collect_request() -> None:
+    server = ReverseProxyServer(
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+        )
+    )
+    server._vci_read_collect_supported = True
+    read_body = ProtocolEncoder.encode_read_msgs_req(
+        44,
+        num_msgs=300,
+        timeout=25,
+        sequence=11,
+    )[HEADER_SIZE:]
+
+    encoded, fwd_type, fwd_body, reason = server._build_tunnel_request(
+        MsgType.READ_MSGS_REQ,
+        read_body,
+        sequence=77,
+    )
+    _magic, length, msg_type, sequence = Message.decode_header(encoded[:HEADER_SIZE])
+
+    assert length == len(encoded)
+    assert msg_type == MsgType.READ_MSGS_REQ
+    assert fwd_type == MsgType.READ_MSGS_REQ
+    assert sequence == 77
+    assert fwd_body == read_body
     assert reason is None
 
 

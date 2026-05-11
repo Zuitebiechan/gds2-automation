@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
-from collections import defaultdict, deque
+import time
+from collections import Counter, defaultdict, deque
 from dataclasses import dataclass
 from typing import Deque
 
 from .protocol import ProtocolDecoder, ProtocolEncoder
+
+_PREFETCH_RECORDED_MONO_KEY = "_prefetch_recorded_mono"
+_PREFETCH_SOURCE_KEY = "_prefetch_source"
+_PREFETCH_UNKNOWN_SOURCE = "unknown"
 
 
 @dataclass(frozen=True)
@@ -18,6 +23,10 @@ class PrefetchReadMsgsDrain:
     pending_before: int
     messages: tuple[dict, ...]
     pending_after: int
+    source_counts: tuple[tuple[str, int], ...] = ()
+    age_min_ms: float | None = None
+    age_avg_ms: float | None = None
+    age_max_ms: float | None = None
 
     @property
     def served_count(self) -> int:
@@ -60,7 +69,27 @@ class PrefetchReadMsgsBuffer:
     def pending_count(self, channel_id: int) -> int:
         return len(self._messages_by_channel.get(channel_id, ()))
 
-    def record_read_rsp_body(self, channel_id: int, read_rsp_body: bytes) -> int:
+    @staticmethod
+    def _stored_message(message: dict, *, source: str | None, recorded_mono: float) -> dict:
+        stored = {
+            "protocol_id": message.get("protocol_id", 0),
+            "rx_status": message.get("rx_status", 0),
+            "tx_flags": message.get("tx_flags", 0),
+            "timestamp": message.get("timestamp", 0),
+            "data": bytes(message.get("data", b"")),
+        }
+        stored[_PREFETCH_SOURCE_KEY] = str(source or _PREFETCH_UNKNOWN_SOURCE)
+        stored[_PREFETCH_RECORDED_MONO_KEY] = float(recorded_mono)
+        return stored
+
+    def record_read_rsp_body(
+        self,
+        channel_id: int,
+        read_rsp_body: bytes,
+        *,
+        source: str | None = None,
+        now_mono: float | None = None,
+    ) -> int:
         if not self.enabled or self.max_messages <= 0:
             return 0
 
@@ -74,23 +103,34 @@ class PrefetchReadMsgsBuffer:
             return 0
 
         recorded = 0
+        recorded_mono = time.monotonic() if now_mono is None else float(now_mono)
         for message in messages[:available]:
             queue.append(
-                {
-                    "protocol_id": message.get("protocol_id", 0),
-                    "rx_status": message.get("rx_status", 0),
-                    "tx_flags": message.get("tx_flags", 0),
-                    "timestamp": message.get("timestamp", 0),
-                    "data": bytes(message.get("data", b"")),
-                }
+                self._stored_message(
+                    message,
+                    source=source,
+                    recorded_mono=recorded_mono,
+                )
             )
             recorded += 1
         return recorded
 
-    def record_read_rsp_bodies(self, channel_id: int, read_rsp_bodies: tuple[bytes, ...]) -> int:
+    def record_read_rsp_bodies(
+        self,
+        channel_id: int,
+        read_rsp_bodies: tuple[bytes, ...],
+        *,
+        source: str | None = None,
+    ) -> int:
         recorded = 0
+        now_mono = time.monotonic()
         for read_rsp_body in read_rsp_bodies:
-            recorded += self.record_read_rsp_body(channel_id, read_rsp_body)
+            recorded += self.record_read_rsp_body(
+                channel_id,
+                read_rsp_body,
+                source=source,
+                now_mono=now_mono,
+            )
         return recorded
 
     def drain(self, channel_id: int, num_msgs: int) -> PrefetchReadMsgsDrain:
@@ -122,12 +162,27 @@ class PrefetchReadMsgsBuffer:
         if not queue:
             self._messages_by_channel.pop(channel_id, None)
 
+        source_counts: Counter[str] = Counter()
+        ages_ms: list[float] = []
+        now_mono = time.monotonic()
+        for message in messages:
+            source_counts[
+                str(message.get(_PREFETCH_SOURCE_KEY) or _PREFETCH_UNKNOWN_SOURCE)
+            ] += 1
+            recorded_mono = message.get(_PREFETCH_RECORDED_MONO_KEY)
+            if isinstance(recorded_mono, (int, float)):
+                ages_ms.append(max(0.0, (now_mono - float(recorded_mono)) * 1000.0))
+
         return PrefetchReadMsgsDrain(
             channel_id=channel_id,
             requested_count=requested_count,
             pending_before=pending_before,
             messages=tuple(messages),
             pending_after=pending_after,
+            source_counts=tuple(sorted(source_counts.items())),
+            age_min_ms=round(min(ages_ms), 3) if ages_ms else None,
+            age_avg_ms=round(sum(ages_ms) / len(ages_ms), 3) if ages_ms else None,
+            age_max_ms=round(max(ages_ms), 3) if ages_ms else None,
         )
 
     def restore_front(self, channel_id: int, messages: tuple[dict, ...] | list[dict]) -> int:
@@ -136,15 +191,17 @@ class PrefetchReadMsgsBuffer:
 
         queue = self._messages_by_channel[channel_id]
         restored = 0
+        now_mono = time.monotonic()
         for message in reversed(messages):
+            recorded_mono = message.get(_PREFETCH_RECORDED_MONO_KEY)
+            if not isinstance(recorded_mono, (int, float)):
+                recorded_mono = now_mono
             queue.appendleft(
-                {
-                    "protocol_id": message.get("protocol_id", 0),
-                    "rx_status": message.get("rx_status", 0),
-                    "tx_flags": message.get("tx_flags", 0),
-                    "timestamp": message.get("timestamp", 0),
-                    "data": bytes(message.get("data", b"")),
-                }
+                self._stored_message(
+                    message,
+                    source=message.get(_PREFETCH_SOURCE_KEY),
+                    recorded_mono=float(recorded_mono),
+                )
             )
             restored += 1
         return restored
