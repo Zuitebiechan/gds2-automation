@@ -205,6 +205,10 @@ Current runtime behavior:
   and read: if a discovered `*.jsonl` raw file has already been compressed to
   `*.jsonl.gz`, analysis falls back to the compressed sibling and records that
   resolved artifact path as the source
+- trace/incident JSON artifacts are only promoted after the temporary file can
+  be parsed as complete JSON; if an existing target artifact is incomplete, the
+  writer quarantines it with a `.corrupt-*` suffix before publishing a fresh
+  valid artifact
 - transient upload/API failures leave pending manifests in place for the next uploader pass instead of crashing the tray background loop
 - the cloud-side agent collector emits `agent.collector.focus_value_changed` for primary focused value transitions such as `battery_voltage`, with previous/current values plus collector timing context for direct freshness analysis; noisy numeric signals may apply a key-specific significance threshold before a change event is emitted
 

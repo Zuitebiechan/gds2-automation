@@ -111,12 +111,29 @@ def get_cloud_uploads_dir(programdata: str | Path | None = None) -> Path:
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     _recover_atomic_json_temp_siblings(path)
+    if path.exists() and not _json_file_is_complete(path):
+        corrupt_path = path.with_name(
+            f"{path.name}.corrupt-{int(time.time())}-{uuid.uuid4().hex[:8]}"
+        )
+        try:
+            os.replace(path, corrupt_path)
+            logger.warning("quarantined incomplete observability JSON artifact: %s", corrupt_path)
+        except OSError:
+            logger.warning("failed to quarantine incomplete observability JSON artifact: %s", path)
     temp_path = path.with_name(
         f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
     )
-    temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(temp_path, path)
-    _cleanup_atomic_json_temp_siblings(path)
+    try:
+        temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        if not _json_file_is_complete(temp_path):
+            raise ValueError(f"incomplete JSON artifact temp file: {temp_path}")
+        os.replace(temp_path, path)
+        _cleanup_atomic_json_temp_siblings(path)
+    finally:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
     return path
 
 

@@ -299,6 +299,7 @@ class ReverseProxyServer:
         self._last_read_payload_by_channel: dict[int, tuple[str, float]] = {}
         self._last_prefetch_record_by_channel: dict[int, _PrefetchRecordObservation] = {}
         self._last_prefetch_drain_by_channel: dict[int, _PrefetchDrainObservation] = {}
+        self._confirmed_empty_deepened_drain_mono_by_channel: dict[int, float] = {}
         self._last_read_result_by_channel: dict[int, _ReadResultObservation] = {}
         self._sweep_learner = SweepPatternLearner(self.config.local_sweep)
         self._sweep_shadow_store = SweepShadowStore()
@@ -2218,6 +2219,7 @@ class ReverseProxyServer:
             pending_after=drain.pending_after,
             observed_mono=time.monotonic(),
         )
+        self._confirmed_empty_deepened_drain_mono_by_channel.pop(drain.channel_id, None)
 
     def _record_read_result_observation(
         self,
@@ -3064,18 +3066,24 @@ class ReverseProxyServer:
         )
 
         deep_reason: str | None = None
+        deepened_drain_mono: float | None = None
         last_drain = self._last_prefetch_drain_by_channel.get(channel_id)
         if last_empty_mono is not None and last_drain is not None:
             empty_age_ms = self._observation_age_ms(last_empty_mono, ts)
             drain_age_ms = self._observation_age_ms(last_drain.observed_mono, ts)
+            already_deepened_drain_mono = (
+                self._confirmed_empty_deepened_drain_mono_by_channel.get(channel_id)
+            )
             if (
                 last_drain.served_count > 0
                 and last_drain.pending_after == 0
                 and last_drain.observed_mono <= last_empty_mono
+                and already_deepened_drain_mono != last_drain.observed_mono
                 and empty_age_ms <= READ_COLLECT_DEEP_CONFIRMED_EMPTY_AFTER_PREFETCH_MS
                 and drain_age_ms <= READ_COLLECT_DEEP_RECENT_PREFETCH_MS
             ):
                 deep_reason = "after_confirmed_empty_following_prefetch_drain"
+                deepened_drain_mono = last_drain.observed_mono
 
         if (
             deep_reason is None
@@ -3117,6 +3125,11 @@ class ReverseProxyServer:
         )
         if deep_max_reads <= max_reads:
             return budget
+
+        if deepened_drain_mono is not None:
+            self._confirmed_empty_deepened_drain_mono_by_channel[channel_id] = (
+                deepened_drain_mono
+            )
 
         return _ReadCollectTransactionBudget(
             collect_window_ms=min(

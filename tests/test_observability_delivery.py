@@ -9,6 +9,8 @@ import urllib.error
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from diagnostic_platform.observability import JsonlWriter, close_product_log_writers, emit_event
 import diagnostic_platform.observability as observability_module
 import diagnostic_platform.observability_artifacts as observability_artifacts
@@ -96,6 +98,44 @@ def test_atomic_write_json_uses_unique_temp_path_per_write(tmp_path: Path, monke
     assert len(temp_names) == 2
     assert temp_names[0] != temp_names[1]
     assert json.loads(target.read_text(encoding="utf-8")) == {"value": 2}
+    assert not list(target.parent.glob(f"{target.name}.*.tmp"))
+
+
+def test_atomic_write_json_quarantines_existing_incomplete_target(tmp_path: Path) -> None:
+    target = tmp_path / "cloud" / "trace.json"
+    target.parent.mkdir(parents=True)
+    target.write_text('{"trace_id": "trace-1", "timeline": [', encoding="utf-8")
+
+    observability_artifacts._atomic_write_json(target, {"trace_id": "trace-1", "timeline": []})
+
+    assert json.loads(target.read_text(encoding="utf-8")) == {
+        "trace_id": "trace-1",
+        "timeline": [],
+    }
+    corrupt_files = list(target.parent.glob(f"{target.name}.corrupt-*"))
+    assert len(corrupt_files) == 1
+    assert "timeline" in corrupt_files[0].read_text(encoding="utf-8")
+
+
+def test_atomic_write_json_keeps_existing_target_when_temp_is_incomplete(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    target = tmp_path / "cloud" / "trace.json"
+    observability_artifacts._atomic_write_json(target, {"value": "old"})
+    original_write_text = Path.write_text
+
+    def _write_incomplete_json(self: Path, *args, **kwargs):
+        if self.suffix == ".tmp":
+            return original_write_text(self, '{"value": ', encoding="utf-8")
+        return original_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", _write_incomplete_json)
+
+    with pytest.raises(ValueError):
+        observability_artifacts._atomic_write_json(target, {"value": "new"})
+
+    assert json.loads(target.read_text(encoding="utf-8")) == {"value": "old"}
     assert not list(target.parent.glob(f"{target.name}.*.tmp"))
 
 
