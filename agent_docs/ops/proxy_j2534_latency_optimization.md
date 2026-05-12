@@ -291,7 +291,7 @@ Example configuration:
 ```text
 read_cache_idle_ttl_ms = 150
 read_cache_active_ttl_ms = 25
-read_cache_active_adaptive_ttl_max_ms = 50
+read_cache_active_adaptive_ttl_max_ms = 70
 read_cache_active_adaptive_ttl_margin_ms = 8
 read_cache_active_window_ms = 500
 ```
@@ -387,7 +387,7 @@ VCI_PROXY_READ_AHEAD_MAX_EMPTY_READS=0
 VCI_PROXY_READ_AHEAD_MAX_CONSECUTIVE_EMPTY_READS=0
 VCI_PROXY_READ_AHEAD_MIN_DRAIN_MS=0
 VCI_PROXY_READ_AHEAD_TRANSACTION=0
-VCI_PROXY_READ_AHEAD_TRANSACTION_MAX_NETWORK_MS=750
+VCI_PROXY_READ_AHEAD_TRANSACTION_MAX_NETWORK_MS=400
 VCI_PROXY_READ_AHEAD_TRANSACTION_COOLDOWN_MS=10000
 ```
 
@@ -529,7 +529,7 @@ Implementation note:
   foreground read.
 - The cloud server now has a transaction slow-link guard. When any forwarded
   request response reaches `VCI_PROXY_READ_AHEAD_TRANSACTION_MAX_NETWORK_MS`
-  (default `750ms`), the server arms a cooldown
+  (default `400ms`), the server arms a cooldown
   (`VCI_PROXY_READ_AHEAD_TRANSACTION_COOLDOWN_MS`, default `10000ms`). While the
   guard is active, transaction-capable clients receive
   `WRITE_AND_COLLECT_READS_REQ` with `collect_window_ms=0`, `max_reads=0`, and
@@ -758,7 +758,7 @@ Current status against these criteria:
 - stability criterion is partially met for the latest ECU run: no Data Display
   disconnect and no structured cadence/timeout/probe failures were observed;
 - slow-link guard behavior remains unproven because no request reached the
-  `750ms` guard threshold in the latest run;
+  previous `750ms` guard threshold used in the latest run;
 - user-visible freshness remains unproven because the focused `Engine Speed`
   and `Accelerator Pedal Position` values did not change during the latest run;
 - RTT-count reduction for the full page is not solved until a future

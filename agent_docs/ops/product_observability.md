@@ -252,8 +252,9 @@ actually active:
 Latest known interpretation:
 
 - absence of `read_ahead.transaction.guard_armed` is expected when no
-  non-cache-hit tunnel response reaches the configured threshold, currently
-  `750ms`; it does not mean the feature was missing;
+  non-cache-hit tunnel response reaches the startup-configured threshold for
+  that run; new builds default that guard to `400ms`, but older logs may show
+  the previous `750ms` threshold;
 - a GM A9-only plan skipped by `gm_a9_packet_observe_only` means local shadow
   execution did not run and therefore could not improve or harm the run through
   extra local polling;

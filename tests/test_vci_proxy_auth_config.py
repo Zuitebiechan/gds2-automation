@@ -298,7 +298,7 @@ def test_proxy_config_defaults_are_enabled_and_frozen() -> None:
         ttl_ms=150,
         post_write_bypass_ms=150,
         active_ttl_ms=25,
-        active_adaptive_ttl_max_ms=50,
+        active_adaptive_ttl_max_ms=70,
         active_adaptive_ttl_margin_ms=8,
         active_window_ms=500,
         max_cacheable_timeout_ms=25,

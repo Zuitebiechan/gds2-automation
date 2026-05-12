@@ -966,7 +966,7 @@ def test_main_disables_windows_quick_edit_before_starting_server(monkeypatch) ->
             read_cache_ttl=150,
             read_cache_post_write_bypass_ms=150,
             read_cache_active_ttl_ms=25,
-            read_cache_active_adaptive_ttl_max_ms=50,
+            read_cache_active_adaptive_ttl_max_ms=70,
             read_cache_active_adaptive_ttl_margin_ms=8,
             read_cache_active_window_ms=500,
             read_cache_max_timeout_ms=25,

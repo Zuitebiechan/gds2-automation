@@ -82,7 +82,7 @@ class ReadMsgsCache:
         if existing is None:
             self._empty_gap_ema_s[channel_id] = gap_s
         else:
-            # React fast enough to a stable 30-50ms polling cadence without
+            # React fast enough to a stable 30-70ms polling cadence without
             # letting one long quiet interval dominate subsequent freshness.
             self._empty_gap_ema_s[channel_id] = (existing * 0.75) + (gap_s * 0.25)
         self._empty_gap_samples[channel_id] = (

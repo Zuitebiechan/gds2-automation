@@ -250,7 +250,7 @@ The empty-read cache is adaptive:
 
 - quiet channels use the idle TTL, default `150ms`
 - active channels use the active TTL, default `25ms`
-- active channels can temporarily raise the effective TTL up to `50ms` when
+- active channels can temporarily raise the effective TTL up to `70ms` when
   repeated real `ReadMsgs(BUFFER_EMPTY)` replies show a stable empty polling
   cadence; the estimate resets after real data or cache invalidation
 - active mode lasts for `500ms` after writes, data reads, filter mutations, or
@@ -264,7 +264,7 @@ Reverse server flags:
 - `--read-cache-post-write-bypass-ms <milliseconds>`; default `150`, `0` disables
   the post-write invalidation/bypass behavior
 - `--read-cache-active-ttl-ms <milliseconds>`; default `25`
-- `--read-cache-active-adaptive-ttl-max-ms <milliseconds>`; default `50`, caps
+- `--read-cache-active-adaptive-ttl-max-ms <milliseconds>`; default `70`, caps
   the learned active empty-cache TTL
 - `--read-cache-active-adaptive-ttl-margin-ms <milliseconds>`; default `8`, added
   to the observed confirmed-empty polling gap
@@ -315,7 +315,7 @@ Unified runtime config:
 - `VCI_PROXY_READ_AHEAD_MAX_CONSECUTIVE_EMPTY_READS=0`
 - `VCI_PROXY_READ_AHEAD_MIN_DRAIN_MS=0`
 - `VCI_PROXY_READ_AHEAD_TRANSACTION=0`
-- `VCI_PROXY_READ_AHEAD_TRANSACTION_MAX_NETWORK_MS=750`
+- `VCI_PROXY_READ_AHEAD_TRANSACTION_MAX_NETWORK_MS=400`
 - `VCI_PROXY_READ_AHEAD_TRANSACTION_COOLDOWN_MS=10000`
 
 The reverse server also loads the repo `.env` file when `python-dotenv` is
@@ -365,7 +365,7 @@ Reverse server and reverse client CLI overrides:
   `WRITE_AND_COLLECT_READS_REQ` RPC when both sides advertise support
 - `--no-read-ahead-transaction`; disables that internal transaction path even if
   `VCI_PROXY_READ_AHEAD_TRANSACTION` is set
-- `--read-ahead-transaction-max-network-ms <milliseconds>`; default `750`,
+- `--read-ahead-transaction-max-network-ms <milliseconds>`; default `400`,
   `0` disables the slow-link guard
 - `--read-ahead-transaction-cooldown-ms <milliseconds>`; default `10000`,
   `0` disables the slow-link guard cooldown
@@ -473,7 +473,7 @@ Operational validation as of `2026-05-06`:
 - latest ECU Data Display run confirmed transaction capability was active:
   local auth reason included `write_collect=1`, and forwarded write events used
   `reason=write_collect_transaction`;
-- no request reached the default `750ms` slow-link threshold in that run, so
+- no request reached the then-default `750ms` slow-link threshold in that run, so
   `read_ahead.transaction.guard_armed` and
   `write_collect_guarded_no_collect` correctly remained absent;
 - a future slow-link or throttled-network run is still required before claiming

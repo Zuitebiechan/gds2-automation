@@ -3814,8 +3814,8 @@ def main():
                        help='Bypass ReadMsgs empty cache after same-channel writes in ms (default: 150; 0 disables)')
     parser.add_argument('--read-cache-active-ttl-ms', type=int, default=25,
                        help='ReadMsgs empty cache TTL while a channel is active in ms (default: 25)')
-    parser.add_argument('--read-cache-active-adaptive-ttl-max-ms', type=int, default=50,
-                       help='Maximum adaptive active ReadMsgs empty-cache TTL in ms after repeated confirmed empty reads (default: 50)')
+    parser.add_argument('--read-cache-active-adaptive-ttl-max-ms', type=int, default=70,
+                       help='Maximum adaptive active ReadMsgs empty-cache TTL in ms after repeated confirmed empty reads (default: 70)')
     parser.add_argument('--read-cache-active-adaptive-ttl-margin-ms', type=int, default=8,
                        help='Margin added to the observed confirmed-empty polling gap for adaptive active TTL in ms (default: 8)')
     parser.add_argument('--read-cache-active-window-ms', type=int, default=500,
@@ -3847,7 +3847,7 @@ def main():
     parser.add_argument('--no-read-ahead-transaction', dest='read_ahead_transaction', action='store_false',
                        help='Disable internal read-ahead transaction RPC even if VCI_PROXY_READ_AHEAD_TRANSACTION is set')
     parser.add_argument('--read-ahead-transaction-max-network-ms', type=int, default=None,
-                       help='Arm no-collect transaction guard when a tunnel response reaches this network_ms (default: 750; 0 disables)')
+                       help='Arm no-collect transaction guard when a tunnel response reaches this network_ms (default: 400; 0 disables)')
     parser.add_argument('--read-ahead-transaction-cooldown-ms', type=int, default=None,
                        help='How long no-collect transaction guard remains active after a slow response (default: 10000; 0 disables)')
     parser.add_argument('--local-sweep', dest='local_sweep', action='store_true', default=None,
