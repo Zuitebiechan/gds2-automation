@@ -761,14 +761,20 @@ A successful optimization should meet all of these:
 
 Current status against these criteria:
 
-- stability criterion is partially met for the latest ECU run: no Data Display
-  disconnect and no structured cadence/timeout/probe failures were observed;
-- slow-link guard behavior remains unproven because no request reached the
-  previous `750ms` guard threshold used in the latest run;
-- user-visible freshness remains unproven because the focused `Engine Speed`
-  and `Accelerator Pedal Position` values did not change during the latest run;
-- RTT-count reduction for the full page is not solved until a future
-  `active_replay` design safely serves fresh local sweep results to GDS2.
+- stability criterion is partially met for recent ECU runs: Data Display
+  refreshed under the safe transport path, and no active replay or local shadow
+  execution was involved;
+- value-level page refresh is now proven through changing battery-voltage rows
+  (`Ignition 1 Signal` and
+  `Engine Controls Ignition Relay Feedback 2 Signal`), but `Engine Speed` and
+  `Accelerator Pedal Position` still remained `0` in the inspected run and are
+  not valid freshness proof for that run;
+- RTT-count reduction for the full page is still incomplete: logs continue to
+  show high-rate non-blocking `ReadMsgs` with oversized counts and partial FIFO
+  underfill, so the current safe lane focuses on read-ahead/read-collect merge
+  behavior rather than GM A9 replay;
+- slow-link guard behavior remains unproven unless a future WAN/degraded-link
+  run crosses the configured guard threshold.
 
 ## Open Questions
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import atexit
+import hashlib
 import json
 import logging
 import os
@@ -119,9 +120,27 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> Path:
     return path
 
 
+def _atomic_write_bytes(path: Path, payload: bytes) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(
+        f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.artifact.tmp"
+    )
+    try:
+        temp_path.write_bytes(payload)
+        os.replace(temp_path, path)
+    finally:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return path
+
+
 def _atomic_json_temp_target_name(path: Path) -> str | None:
     target_name, pid, unique_id, suffix = (path.name.rsplit(".", 3) + [None] * 4)[:4]
     if suffix != "tmp" or not str(pid).isdigit():
+        return None
+    if not str(target_name or "").endswith(".json"):
         return None
     if len(str(unique_id)) != 32:
         return None
@@ -593,16 +612,28 @@ def ingest_uploaded_artifact(
     if not (client_instance_id and connection_epoch and artifact_id and artifact_name and content_base64):
         raise ValueError("client_instance_id, connection_epoch, artifact_id, artifact_name, and content_base64 are required")
 
+    artifact_bytes = base64.b64decode(content_base64.encode("ascii"))
+    if len(artifact_bytes) > max(1, int(max_artifact_mb)) * 1024 * 1024:
+        raise ValueError("artifact exceeds PRODUCT_LOG_MAX_ARTIFACT_MB")
+    artifact_sha256 = hashlib.sha256(artifact_bytes).hexdigest()
+
     target_dir = get_cloud_uploads_dir(cloud_root_path) / _safe_name(client_instance_id) / _safe_name(connection_epoch)
     target_dir.mkdir(parents=True, exist_ok=True)
     artifact_path = target_dir / f"{_safe_name(artifact_id)}-{_safe_name(artifact_name)}"
     manifest_path = target_dir / f"{_safe_name(artifact_id)}.manifest.json"
-    deduped = artifact_path.exists()
+    existing_bytes_match = False
+    if artifact_path.exists():
+        try:
+            existing_bytes_match = (
+                artifact_path.stat().st_size == len(artifact_bytes)
+                and hashlib.sha256(artifact_path.read_bytes()).hexdigest() == artifact_sha256
+            )
+        except OSError:
+            existing_bytes_match = False
+    manifest_valid = manifest_path.exists() and _json_file_is_complete(manifest_path)
+    deduped = existing_bytes_match and manifest_valid
     if not deduped:
-        artifact_bytes = base64.b64decode(content_base64.encode("ascii"))
-        if len(artifact_bytes) > max(1, int(max_artifact_mb)) * 1024 * 1024:
-            raise ValueError("artifact exceeds PRODUCT_LOG_MAX_ARTIFACT_MB")
-        artifact_path.write_bytes(artifact_bytes)
+        _atomic_write_bytes(artifact_path, artifact_bytes)
     session_id = _normalize_context_value(payload.get("session_id"), placeholder="no-session")
     if session_id is None or payload_connection_epoch is None:
         try:
@@ -630,6 +661,8 @@ def ingest_uploaded_artifact(
                 "artifact_name": artifact_name,
                 "artifact_type": payload.get("artifact_type"),
                 "session_id": session_id,
+                "artifact_size_bytes": len(artifact_bytes),
+                "artifact_sha256": artifact_sha256,
                 "ingested_at": time.time(),
             },
         )

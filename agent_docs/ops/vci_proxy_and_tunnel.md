@@ -437,6 +437,17 @@ confirmed-empty foreground reads on the lighter standard path. Cloud events add
 `read_collect_read_timeout_ms`, and `read_collect_max_messages` to show which
 budget was used.
 
+Oversized non-blocking `ReadMsgs` calls can request far more frames than the
+FIFO is allowed to hold, for example `num_msgs=300` against a 16-frame FIFO.
+When such a request partially drains FIFO data and the local client advertises
+read-collect support, the cloud now performs a reduced
+`READ_AND_COLLECT_READS_REQ` for the underfilled remainder and merges those
+tunnel frames with the FIFO frames before replying to the DLL. This preserves
+the foreground J2534 response shape while avoiding the older pattern where a
+small partial FIFO hit was returned immediately and the next serial read paid
+another tunnel RTT. If read-collect is unavailable, the server falls back to the
+legacy direct partial response rather than blocking the DLL.
+
 The read-tail drain stops after the first `BUFFER_EMPTY` when no tail data has
 been collected after the capped minimum-drain window. If tail data was already
 collected, one empty-read grace attempt is allowed before stopping. When the

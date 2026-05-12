@@ -126,6 +126,22 @@ def test_cleanup_recovers_complete_session_trace_temp_json(tmp_path: Path) -> No
     assert json.loads(trace_path.read_text(encoding="utf-8"))["connection_epoch"] == "epoch-atomic"
 
 
+def test_cleanup_does_not_recover_non_json_upload_temp_as_manifest(tmp_path: Path) -> None:
+    cloud_root = tmp_path / "ProgramData" / "RPA_Diagnostic" / "observability" / "cloud"
+    upload_dir = cloud_root / "uploads" / "client" / "epoch-1"
+    upload_dir.mkdir(parents=True)
+    manifest_path = upload_dir / "artifact-1.manifest.json"
+    temp_path = manifest_path.with_name(
+        f"{manifest_path.name}.1234.0123456789abcdef0123456789abcdef.tmp"
+    )
+    temp_path.write_bytes(b"\x1f\x8bnot-json-artifact")
+
+    cleanup_product_observability(programdata=cloud_root, now=time.time())
+
+    assert not manifest_path.exists()
+    assert temp_path.exists()
+
+
 def test_atomic_write_text_uses_unique_temp_path_per_write(tmp_path: Path, monkeypatch) -> None:
     target = tmp_path / "cloud" / "snapshot.json"
     original_write_text = Path.write_text
@@ -331,6 +347,44 @@ def test_ingest_uploaded_artifact_stores_file_dedupes_and_refreshes_trace(tmp_pa
     assert first["artifact_path"].exists()
     assert second["deduped"] is True
     assert list(get_cloud_session_traces_dir(cloud_root).glob("*.json"))
+
+
+def test_ingest_uploaded_artifact_rewrites_corrupt_manifest_without_touching_artifact(
+    tmp_path: Path,
+) -> None:
+    cloud_root = tmp_path / "ProgramData" / "RPA_Diagnostic" / "observability" / "cloud"
+    payload_bytes = (
+        json.dumps(
+            _event(
+                "2026-04-22T00:00:00Z",
+                "reverse_client",
+                "proxy.request.client_received",
+                session_id="session-corrupt-manifest",
+                connection_epoch="epoch-corrupt-manifest",
+            )
+        )
+        + "\n"
+    ).encode("utf-8")
+    payload = {
+        "client_instance_id": "client-corrupt",
+        "connection_epoch": "epoch-corrupt-manifest",
+        "artifact_id": "artifact-corrupt",
+        "artifact_name": "local.jsonl",
+        "artifact_type": "raw",
+        "session_id": "session-corrupt-manifest",
+        "content_base64": base64.b64encode(payload_bytes).decode("ascii"),
+    }
+
+    first = ingest_uploaded_artifact(payload, cloud_root=cloud_root)
+    first["manifest_path"].write_bytes(b"\x1f\x8bwrong-manifest")
+    second = ingest_uploaded_artifact(payload, cloud_root=cloud_root)
+
+    assert second["deduped"] is False
+    assert first["artifact_path"].read_bytes() == payload_bytes
+    manifest = json.loads(first["manifest_path"].read_text(encoding="utf-8"))
+    assert manifest["artifact_size_bytes"] == len(payload_bytes)
+    assert len(manifest["artifact_sha256"]) == 64
+    assert manifest["session_id"] == "session-corrupt-manifest"
 
 
 def test_ingest_uploaded_artifact_discovers_context_after_initial_empty_event(tmp_path: Path) -> None:

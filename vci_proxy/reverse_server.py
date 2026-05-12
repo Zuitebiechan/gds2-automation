@@ -139,6 +139,7 @@ READ_COLLECT_BASE_WINDOW_CAP_MS = 40
 READ_COLLECT_BASE_MAX_READS_CAP = 3
 READ_COLLECT_DEEP_MAX_READS_CAP = 6
 READ_COLLECT_DEEP_RECENT_PREFETCH_MS = 120.0
+OVERSIZED_PARTIAL_MERGE_COUNT_CAP = 300
 
 
 def _disable_windows_quick_edit() -> None:
@@ -2363,6 +2364,23 @@ class ReverseProxyServer:
             and drain.requested_count > max(0, int(self.config.read_ahead.max_messages))
         )
 
+    def _should_merge_partial_prefetch_with_tunnel(
+        self,
+        msg_type: int,
+        body: bytes,
+        drain: PrefetchReadMsgsDrain,
+        *,
+        timeout_ms: int,
+    ) -> bool:
+        if not drain.is_partial or timeout_ms > 0:
+            return False
+        if self._read_collect_blocked_reason(msg_type, body) is None:
+            return True
+        return not self._should_serve_partial_prefetch_without_tunnel(
+            drain,
+            timeout_ms=timeout_ms,
+        )
+
     def _prefetch_read_lock(self, channel_id: int) -> asyncio.Lock:
         lock = self._prefetch_read_locks.get(channel_id)
         if lock is None:
@@ -2492,6 +2510,35 @@ class ReverseProxyServer:
             timeout=int(request_fields.get("timeout", 0)),
             sequence=new_seq,
         )
+        fwd_msg_type = MsgType.READ_MSGS_REQ
+        fwd_reason = "prefetch_underfill_forwarded"
+        transaction_fields: dict[str, object] = {}
+        should_collect_underfill_tail = (
+            drain.requested_count > max(0, int(self.config.read_ahead.max_messages))
+            and self._read_collect_transaction_base_allowed(MsgType.READ_MSGS_REQ, body)
+        )
+        if should_collect_underfill_tail:
+            tunnel_request, fwd_msg_type, _fwd_body, transaction_reason = (
+                self._build_tunnel_request(
+                    MsgType.READ_MSGS_REQ,
+                    ProtocolEncoder.encode_read_msgs_req(
+                        drain.channel_id,
+                        num_msgs=min(
+                            remaining,
+                            OVERSIZED_PARTIAL_MERGE_COUNT_CAP,
+                        ),
+                        timeout=int(request_fields.get("timeout", 0)),
+                        sequence=sequence,
+                    )[HEADER_SIZE:],
+                    new_seq,
+                    transaction_fields=transaction_fields,
+                )
+            )
+            if transaction_reason is not None:
+                fwd_reason = f"prefetch_underfill_{transaction_reason}"
+            if fwd_msg_type == MsgType.READ_AND_COLLECT_READS_REQ:
+                self._prefetch_bundle_source_by_proxy_seq[new_seq] = "read_collect"
+                event_fields.update(transaction_fields)
 
         try:
             async with self.vci_lock:
@@ -2504,9 +2551,9 @@ class ReverseProxyServer:
                 dll_seq=sequence,
                 proxy_seq=new_seq,
                 msg_name=msg_name,
-                reason="prefetch_underfill_forwarded",
-                forwarded_msg_type=int(MsgType.READ_MSGS_REQ),
-                forwarded_msg_name=MSG_NAMES.get(MsgType.READ_MSGS_REQ),
+                reason=fwd_reason,
+                forwarded_msg_type=int(fwd_msg_type),
+                forwarded_msg_name=MSG_NAMES.get(fwd_msg_type),
                 reduced_num_msgs=remaining,
                 original_num_msgs=drain.requested_count,
                 **event_fields,
@@ -3559,6 +3606,28 @@ class ReverseProxyServer:
                                 drain,
                                 reason=cache_reason,
                             )
+                        elif self._should_merge_partial_prefetch_with_tunnel(
+                            msg_type,
+                            body,
+                            drain,
+                            timeout_ms=timeout_ms,
+                        ):
+                            self._record_prefetch_drain_observation(
+                                drain,
+                                reason="prefetch_underfill_forwarded",
+                            )
+                            served = await self._serve_prefetch_underfill(
+                                writer=writer,
+                                body=body,
+                                sequence=sequence,
+                                msg_name=msg_name,
+                                started_at_s=started_at_s,
+                                request_fields=request_fields,
+                                drain=drain,
+                            )
+                            if served:
+                                continue
+                            break
                         elif self._should_serve_partial_prefetch_without_tunnel(
                             drain,
                             timeout_ms=timeout_ms,

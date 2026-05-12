@@ -1621,6 +1621,116 @@ def test_handle_proxy_connection_serves_oversized_nonblocking_prefetch_without_t
     assert replied["read_result"] == "data"
 
 
+def test_handle_proxy_connection_merges_oversized_nonblocking_prefetch_with_read_collect(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    async def _run() -> None:
+        monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+        server = ReverseProxyServer(
+            config=ProxyConfig.from_args(
+                read_ahead_enabled=True,
+                read_ahead_transaction_enabled=True,
+                read_ahead_max_messages=4,
+                read_ahead_window_ms=200,
+                read_ahead_max_reads=3,
+                read_ahead_write_collect_max_reads=6,
+                read_ahead_min_drain_ms=40,
+            )
+        )
+        server._vci_read_collect_supported = True
+        server.vci_connected.set()
+        server.vci_writer = _FakeWriter(peername=("10.0.0.9", 9000))
+        server._connection_epoch = "epoch-prefetch-partial-merge"
+        server._next_sequence = lambda: 88
+        prefetched = {
+            "protocol_id": 6,
+            "rx_status": 0,
+            "tx_flags": 0,
+            "timestamp": 123,
+            "data": b"\x62\x01",
+        }
+        tunnel_one = {
+            "protocol_id": 6,
+            "rx_status": 0,
+            "tx_flags": 0,
+            "timestamp": 124,
+            "data": b"\x62\x02",
+        }
+        tunnel_two = {
+            "protocol_id": 6,
+            "rx_status": 0,
+            "tx_flags": 0,
+            "timestamp": 125,
+            "data": b"\x62\x03",
+        }
+        server._prefetch_read_msgs.record_read_rsp_body(
+            77,
+            ProtocolEncoder.encode_read_msgs_rsp(0, [prefetched], sequence=0)[HEADER_SIZE:],
+        )
+
+        proxy_reader = _FakeReader(
+            ProtocolEncoder.encode_read_msgs_req(77, num_msgs=300, timeout=0, sequence=21)
+        )
+        proxy_writer = _FakeWriter(peername=("127.0.0.1", 50002))
+
+        async def _success_wait_for(awaitable, timeout):
+            if isinstance(awaitable, asyncio.Future):
+                return (
+                    MsgType.READ_MSGS_RSP,
+                    ProtocolEncoder.encode_read_msgs_rsp(
+                        0,
+                        [tunnel_one, tunnel_two],
+                        sequence=0,
+                    )[HEADER_SIZE:],
+                    2.0,
+                )
+            return await awaitable
+
+        monkeypatch.setattr("vci_proxy.reverse_server.asyncio.wait_for", _success_wait_for)
+
+        await server._handle_proxy_connection(proxy_reader, proxy_writer)
+
+        assert len(server.vci_writer.writes) == 1
+        _magic, _length, msg_type, sequence = Message.decode_header(
+            server.vci_writer.writes[0][:HEADER_SIZE]
+        )
+        assert (msg_type, sequence) == (MsgType.READ_AND_COLLECT_READS_REQ, 88)
+        request = ProtocolDecoder.decode_read_and_collect_reads_req(
+            server.vci_writer.writes[0][HEADER_SIZE:]
+        )
+        assert ProtocolDecoder.decode_read_msgs_req(request.read_req_body) == (
+            77,
+            299,
+            0,
+        )
+        assert request.max_reads == 6
+        assert ProtocolDecoder.decode_read_msgs_rsp(proxy_writer.writes[0][HEADER_SIZE:]) == (
+            0,
+            [prefetched, tunnel_one, tunnel_two],
+        )
+        assert server._prefetch_read_msgs.try_serve(77, 1, 22) is None
+
+    asyncio.run(_run())
+
+    records = _read_product_log_events(tmp_path)
+    cache_decision = next(record for record in records if record["event_type"] == "proxy.request.cache_decision")
+    forwarded = next(record for record in records if record["event_type"] == "proxy.request.forwarded_to_tunnel")
+    response = next(record for record in records if record["event_type"] == "proxy.request.response_received")
+
+    assert cache_decision["reason"] == "prefetch_underfill_forwarded"
+    assert cache_decision["cache_hit"] is False
+    assert cache_decision["prefetch_served_count"] == 1
+    assert cache_decision["prefetch_underfill_count"] == 299
+    assert forwarded["reason"] == "prefetch_underfill_read_collect_transaction"
+    assert forwarded["forwarded_msg_name"] == "READ_AND_COLLECT_READS_REQ"
+    assert forwarded["read_collect_budget_reason"] == "after_prefetch_underfill_forwarded"
+    assert forwarded["read_collect_budget_deepened"] is True
+    assert response["reason"] == "prefetch_merge_tunnel_data"
+    assert response["prefetch_merge_tunnel_message_count"] == 2
+    assert response["message_count"] == 3
+
+
 def test_handle_proxy_connection_merges_partial_prefetch_with_tunnel_data(monkeypatch, tmp_path) -> None:
     async def _run() -> None:
         monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
