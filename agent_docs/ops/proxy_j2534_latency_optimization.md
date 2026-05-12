@@ -436,6 +436,12 @@ Important behavior rules:
   spend one more boundary-confirmation probe; this captures the next short burst
   segment without granting the full data-at-budget continuation budget to the
   empty-grace path.
+- The cloud server keeps ordinary read-tail collection light, but can deepen the
+  next `READ_AND_COLLECT_READS_REQ` up to the existing write-collect read budget
+  when recent same-channel FIFO data was just recorded or just exhausted. This
+  targets the observed `prefetch_partial_hit` followed immediately by
+  `fifo_empty_after_prefetch_exhausted` misses while avoiding extra work after a
+  confirmed empty foreground read.
 - If the read-tail probe reaches its normal `max_reads` budget while the latest
   local read still returned data, it may also spend a small fixed number
   (currently `2`) of data-continuation probes to capture the next short burst

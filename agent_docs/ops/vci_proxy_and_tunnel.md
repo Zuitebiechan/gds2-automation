@@ -427,6 +427,16 @@ wrapped, and the slow transaction guard falls back to ordinary `READ_MSGS_REQ`
 forwarding while active. This reduces later serial `ReadMsgs` tunnel trips
 without replaying or decoding GM A9 payloads.
 
+When recent evidence shows the FIFO just received data or was just exhausted by
+an oversized non-blocking `ReadMsgs`, the next read-tail transaction can
+temporarily deepen its local read budget up to the existing write-collect cap.
+This targets the observed partial-hit-then-immediate-miss pattern while keeping
+confirmed-empty foreground reads on the lighter standard path. Cloud events add
+`read_collect_budget_reason`, `read_collect_budget_deepened`,
+`read_collect_collect_window_ms`, `read_collect_max_reads`,
+`read_collect_read_timeout_ms`, and `read_collect_max_messages` to show which
+budget was used.
+
 The read-tail drain stops after the first `BUFFER_EMPTY` when no tail data has
 been collected after the capped minimum-drain window. If tail data was already
 collected, one empty-read grace attempt is allowed before stopping. When the

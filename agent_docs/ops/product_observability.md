@@ -308,6 +308,13 @@ Latest known interpretation:
   - empty-cache state includes adaptive active-TTL fields such as `empty_cache_recent_empty_gap_ms`, `empty_cache_empty_gap_sample_count`, and `empty_cache_adaptive_ttl_applied` when repeated real `ReadMsgs(BUFFER_EMPTY)` replies have raised the effective active TTL above the configured base TTL
   - oversized non-blocking FIFO hits use `reason=prefetch_partial_hit` plus `prefetch_partial_direct=true` when `READ_MSGS_REQ(timeout=0)` asks for more messages than the FIFO capacity and the server returns available prefetched frames without a reduced tunnel read
   - transaction-wrapped non-blocking read collection uses `reason=read_collect_transaction` on the forwarded `READ_MSGS_REQ`, strips the internal prefetch bundle before replying to the DLL, and records any extra local tail frames into the same consume-once FIFO; this tail probe also runs after a foreground `BUFFER_EMPTY`, so the DLL still receives the real empty response while immediately-following frames can be consumed once from FIFO by the next serial read; when `VCI_PROXY_READ_AHEAD_MIN_DRAIN_MS` is configured, read-tail collection reports a capped `min_drain_ms` of at most `8` so logs can separate short foreground read-tail probing from the deeper post-write drain window
+  - read-collect transaction budget fields include `read_collect_budget_reason`,
+    `read_collect_budget_deepened`, `read_collect_collect_window_ms`,
+    `read_collect_max_reads`, `read_collect_read_timeout_ms`, and
+    `read_collect_max_messages`; the server keeps the standard foreground
+    read-tail path light, but can temporarily deepen it after a recent FIFO data
+    record or FIFO exhaustion so the next serial oversized non-blocking
+    `ReadMsgs` is less likely to immediately miss after a partial FIFO hit.
   - proxy-request response events for `READ_MSGS_RSP` include `return_code`, `message_count`, `payload_bytes`, `read_result` (`empty` or `data`), redacted payload digest/prefix samples, and read-payload change markers
   - `WRITE_MSGS_REQ` request events include `channel_id`, `write_message_count`, `timeout`, `write_payload_bytes`, and redacted payload digest/prefix samples without logging full raw payload data
   - read-ahead transaction guard events include `read_ahead.transaction.guard_armed`; while active, forwarded write events record `reason=write_collect_guarded_no_collect` plus guard fields such as `read_ahead_transaction_guard_active`, `read_ahead_transaction_guard_reason`, `read_ahead_transaction_guard_remaining_ms`, `read_ahead_transaction_max_network_ms`, and `read_ahead_transaction_cooldown_ms`

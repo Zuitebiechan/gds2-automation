@@ -135,6 +135,10 @@ LIVE_DATA_GAP_WARN_MS = 1000.0
 LIVE_DATA_GAP_STALL_MS = 3000.0
 PAYLOAD_SAMPLE_LIMIT = 3
 PAYLOAD_PREFIX_BYTES = 16
+READ_COLLECT_BASE_WINDOW_CAP_MS = 40
+READ_COLLECT_BASE_MAX_READS_CAP = 3
+READ_COLLECT_DEEP_MAX_READS_CAP = 6
+READ_COLLECT_DEEP_RECENT_PREFETCH_MS = 120.0
 
 
 def _disable_windows_quick_edit() -> None:
@@ -206,6 +210,19 @@ class _PrefetchDrainObservation:
     pending_before: int
     pending_after: int
     observed_mono: float
+
+
+@dataclass(frozen=True)
+class _ReadCollectTransactionBudget:
+    collect_window_ms: int
+    max_reads: int
+    read_timeout_ms: int
+    max_messages: int
+    reason: str
+
+    @property
+    def deepened(self) -> bool:
+        return self.reason != "standard_read_tail"
 
 
 @dataclass(frozen=True)
@@ -2915,20 +2932,120 @@ class ReverseProxyServer:
             body,
         ) and not self._read_ahead_transaction_guard_active()
 
+    def _read_collect_transaction_budget(
+        self,
+        channel_id: int,
+        *,
+        now: float | None = None,
+    ) -> _ReadCollectTransactionBudget:
+        read_ahead = self.config.read_ahead
+        collect_window_ms = min(
+            max(0, int(read_ahead.window_ms)),
+            READ_COLLECT_BASE_WINDOW_CAP_MS,
+        )
+        max_reads = min(
+            max(0, int(read_ahead.max_reads)),
+            READ_COLLECT_BASE_MAX_READS_CAP,
+        )
+        max_messages = min(max(0, int(read_ahead.max_messages)), 16)
+        budget = _ReadCollectTransactionBudget(
+            collect_window_ms=collect_window_ms,
+            max_reads=max_reads,
+            read_timeout_ms=0,
+            max_messages=max_messages,
+            reason="standard_read_tail",
+        )
+        if max_reads <= 0 or max_messages <= 0:
+            return budget
+
+        ts = time.monotonic() if now is None else now
+        last_read = self._last_read_result_by_channel.get(channel_id)
+        last_empty_mono = (
+            last_read.observed_mono
+            if last_read is not None and last_read.result == "empty"
+            else None
+        )
+
+        deep_reason: str | None = None
+        last_drain = self._last_prefetch_drain_by_channel.get(channel_id)
+        if (
+            last_drain is not None
+            and last_drain.served_count > 0
+            and last_drain.pending_after == 0
+            and (
+                last_empty_mono is None
+                or last_drain.observed_mono >= last_empty_mono
+            )
+            and self._observation_age_ms(last_drain.observed_mono, ts)
+            <= READ_COLLECT_DEEP_RECENT_PREFETCH_MS
+        ):
+            deep_reason = f"after_{last_drain.reason}"
+
+        if deep_reason is None:
+            last_record = self._last_prefetch_record_by_channel.get(channel_id)
+            if (
+                last_record is not None
+                and last_record.message_count > 0
+                and (
+                    last_empty_mono is None
+                    or last_record.observed_mono >= last_empty_mono
+                )
+                and self._observation_age_ms(last_record.observed_mono, ts)
+                <= READ_COLLECT_DEEP_RECENT_PREFETCH_MS
+            ):
+                deep_reason = "after_prefetch_record"
+
+        if deep_reason is None:
+            return budget
+
+        deep_max_reads = min(
+            max(
+                max_reads,
+                int(read_ahead.write_collect_max_reads),
+            ),
+            READ_COLLECT_DEEP_MAX_READS_CAP,
+        )
+        if deep_max_reads <= max_reads:
+            return budget
+
+        return _ReadCollectTransactionBudget(
+            collect_window_ms=min(
+                max(collect_window_ms, max(0, int(read_ahead.min_drain_ms))),
+                max(0, int(read_ahead.window_ms)),
+            ),
+            max_reads=deep_max_reads,
+            read_timeout_ms=0,
+            max_messages=max_messages,
+            reason=deep_reason,
+        )
+
     def _build_tunnel_request(
         self,
         msg_type: int,
         body: bytes,
         sequence: int,
+        transaction_fields: dict[str, object] | None = None,
     ) -> tuple[bytes, int, bytes, str | None]:
         if self._should_use_read_collect_transaction(msg_type, body):
-            read_ahead = self.config.read_ahead
+            channel_id, _num_msgs, _timeout = ProtocolDecoder.decode_read_msgs_req(body)
+            budget = self._read_collect_transaction_budget(channel_id)
+            if transaction_fields is not None:
+                transaction_fields.update(
+                    {
+                        "read_collect_budget_reason": budget.reason,
+                        "read_collect_budget_deepened": budget.deepened,
+                        "read_collect_collect_window_ms": budget.collect_window_ms,
+                        "read_collect_max_reads": budget.max_reads,
+                        "read_collect_read_timeout_ms": budget.read_timeout_ms,
+                        "read_collect_max_messages": budget.max_messages,
+                    }
+                )
             encoded = ProtocolEncoder.encode_read_and_collect_reads_req(
                 body,
-                collect_window_ms=min(read_ahead.window_ms, 40),
-                max_reads=min(read_ahead.max_reads, 3),
-                read_timeout_ms=0,
-                max_messages=min(read_ahead.max_messages, 16),
+                collect_window_ms=budget.collect_window_ms,
+                max_reads=budget.max_reads,
+                read_timeout_ms=budget.read_timeout_ms,
+                max_messages=budget.max_messages,
                 sequence=sequence,
             )
             return (
@@ -3549,11 +3666,15 @@ class ReverseProxyServer:
                 self.response_futures[new_seq] = future
 
                 try:
+                    transaction_fields: dict[str, object] = {}
                     tunnel_request, fwd_msg_type, _fwd_body, transaction_reason = self._build_tunnel_request(
                         msg_type,
                         body,
                         new_seq,
+                        transaction_fields=transaction_fields,
                     )
+                    if transaction_fields:
+                        request_fields.update(transaction_fields)
                     if transaction_reason in {
                         "read_collect_transaction",
                         "write_collect_transaction",

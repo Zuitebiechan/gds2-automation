@@ -1428,6 +1428,93 @@ def test_handle_read_and_collect_reads_allows_one_empty_grace_after_tail_data(
     ]
 
 
+def test_handle_read_and_collect_reads_honors_deep_server_budget(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    observed: list[tuple[str, int, int, int]] = []
+    foreground_message = {"protocol_id": 6, "data": b"\x62\xf4\x0c"}
+    tail_messages = [
+        {"protocol_id": 6, "data": bytes([0x62, 0x13, index])}
+        for index in range(1, 7)
+    ]
+    read_results = iter(
+        [(0, [foreground_message])]
+        + [(0, [message]) for message in tail_messages]
+        + [(BUFFER_EMPTY, [])]
+    )
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+            read_ahead_window_ms=200,
+            read_ahead_max_reads=3,
+            read_ahead_write_collect_max_reads=6,
+            read_ahead_max_messages=8,
+            read_ahead_read_timeout_ms=0,
+        ),
+    )
+    client._server_read_ahead_enabled = True
+    client._server_read_collect_enabled = True
+    client.driver = types.SimpleNamespace(
+        read_msgs=lambda channel_id, num_msgs, timeout: (
+            observed.append(("read_msgs", channel_id, num_msgs, timeout))
+            or next(read_results)
+        ),
+    )
+    read_body = ProtocolEncoder.encode_read_msgs_req(
+        44,
+        num_msgs=300,
+        timeout=0,
+        sequence=7,
+    )[HEADER_SIZE:]
+    transaction_body = ProtocolEncoder.encode_read_and_collect_reads_req(
+        read_body,
+        collect_window_ms=40,
+        max_reads=6,
+        read_timeout_ms=0,
+        max_messages=8,
+        sequence=7,
+    )[HEADER_SIZE:]
+
+    response = asyncio.run(
+        client._handle_message(
+            MsgType.READ_AND_COLLECT_READS_REQ,
+            transaction_body,
+            sequence=7,
+        )
+    )
+    _clean_body, bundle = strip_read_msgs_prefetch_bundle(response[HEADER_SIZE:])
+
+    assert bundle is not None
+    assert [
+        ProtocolDecoder.decode_read_msgs_rsp(read_rsp_body)[1][0]["data"]
+        for read_rsp_body in bundle.read_rsp_bodies
+    ] == [message["data"] for message in tail_messages]
+    assert observed == [
+        ("read_msgs", 44, 300, 0),
+        ("read_msgs", 44, 8, 0),
+        ("read_msgs", 44, 7, 0),
+        ("read_msgs", 44, 6, 0),
+        ("read_msgs", 44, 5, 0),
+        ("read_msgs", 44, 4, 0),
+        ("read_msgs", 44, 3, 0),
+        ("read_msgs", 44, 2, 0),
+    ]
+    collection_events = [
+        event
+        for event in _read_local_events(tmp_path)
+        if event.get("event_type") == "read_ahead.collection_finished"
+    ]
+    assert collection_events[-1]["reason"] == "extra_read_after_data_at_max_empty"
+    assert collection_events[-1]["attempted_reads"] == 7
+    assert collection_events[-1]["max_reads"] == 6
+    assert collection_events[-1]["local_max_reads"] == 6
+
+
 def test_read_collect_empty_after_data_grace_waits_briefly_before_retry(
     monkeypatch,
     tmp_path: Path,

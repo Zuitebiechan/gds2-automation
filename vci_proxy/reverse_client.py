@@ -1672,6 +1672,7 @@ class ReverseProxyClient:
             max_reads=request.max_reads,
             read_timeout_ms=request.read_timeout_ms,
             max_messages=request.max_messages,
+            local_max_reads=self.config.read_ahead.write_collect_max_reads,
             min_drain_ms=self._read_collect_min_drain_ms(
                 request.collect_window_ms,
             ),
