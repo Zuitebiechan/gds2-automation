@@ -139,6 +139,7 @@ READ_COLLECT_BASE_WINDOW_CAP_MS = 40
 READ_COLLECT_BASE_MAX_READS_CAP = 3
 READ_COLLECT_DEEP_MAX_READS_CAP = 6
 READ_COLLECT_DEEP_RECENT_PREFETCH_MS = 120.0
+READ_COLLECT_DEEP_CONFIRMED_EMPTY_AFTER_PREFETCH_MS = 80.0
 OVERSIZED_PARTIAL_MERGE_COUNT_CAP = 300
 
 
@@ -3064,8 +3065,21 @@ class ReverseProxyServer:
 
         deep_reason: str | None = None
         last_drain = self._last_prefetch_drain_by_channel.get(channel_id)
+        if last_empty_mono is not None and last_drain is not None:
+            empty_age_ms = self._observation_age_ms(last_empty_mono, ts)
+            drain_age_ms = self._observation_age_ms(last_drain.observed_mono, ts)
+            if (
+                last_drain.served_count > 0
+                and last_drain.pending_after == 0
+                and last_drain.observed_mono <= last_empty_mono
+                and empty_age_ms <= READ_COLLECT_DEEP_CONFIRMED_EMPTY_AFTER_PREFETCH_MS
+                and drain_age_ms <= READ_COLLECT_DEEP_RECENT_PREFETCH_MS
+            ):
+                deep_reason = "after_confirmed_empty_following_prefetch_drain"
+
         if (
-            last_drain is not None
+            deep_reason is None
+            and last_drain is not None
             and last_drain.served_count > 0
             and last_drain.pending_after == 0
             and (

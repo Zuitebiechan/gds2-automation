@@ -2707,6 +2707,106 @@ def test_build_tunnel_request_keeps_read_collect_light_after_confirmed_empty() -
     assert transaction_fields["read_collect_budget_deepened"] is False
 
 
+def test_build_tunnel_request_deepens_after_confirmed_empty_following_fifo_drain() -> None:
+    server = ReverseProxyServer(
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+            read_ahead_window_ms=200,
+            read_ahead_max_reads=3,
+            read_ahead_write_collect_max_reads=6,
+            read_ahead_read_timeout_ms=0,
+            read_ahead_max_messages=16,
+            read_ahead_min_drain_ms=40,
+        )
+    )
+    server._vci_read_collect_supported = True
+    messages = [
+        {"protocol_id": 6, "data": bytes([0x62, 0x13, index])}
+        for index in range(2)
+    ]
+    server._prefetch_read_msgs.record_read_rsp_body(
+        44,
+        ProtocolEncoder.encode_read_msgs_rsp(0, messages, sequence=0)[HEADER_SIZE:],
+        source="read_collect",
+    )
+    drain = server._prefetch_read_msgs.drain(44, 300)
+    server._record_prefetch_drain_observation(
+        drain,
+        reason="prefetch_underfill_forwarded",
+    )
+    server._record_read_result_observation(
+        44,
+        return_code=BUFFER_EMPTY,
+        message_count=0,
+        dll_seq=11,
+        proxy_seq=22,
+    )
+    read_body = ProtocolEncoder.encode_read_msgs_req(
+        44,
+        num_msgs=300,
+        timeout=0,
+        sequence=11,
+    )[HEADER_SIZE:]
+    transaction_fields: dict[str, object] = {}
+
+    encoded, _fwd_type, _fwd_body, reason = server._build_tunnel_request(
+        MsgType.READ_MSGS_REQ,
+        read_body,
+        sequence=77,
+        transaction_fields=transaction_fields,
+    )
+    request = ProtocolDecoder.decode_read_and_collect_reads_req(encoded[HEADER_SIZE:])
+
+    assert reason == "read_collect_transaction"
+    assert request.max_reads == 6
+    assert transaction_fields["read_collect_budget_reason"] == (
+        "after_confirmed_empty_following_prefetch_drain"
+    )
+    assert transaction_fields["read_collect_budget_deepened"] is True
+
+
+def test_read_collect_budget_keeps_confirmed_empty_after_fifo_drain_timeboxed() -> None:
+    server = ReverseProxyServer(
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+            read_ahead_window_ms=200,
+            read_ahead_max_reads=3,
+            read_ahead_write_collect_max_reads=6,
+            read_ahead_read_timeout_ms=0,
+            read_ahead_max_messages=16,
+        )
+    )
+    messages = [
+        {"protocol_id": 6, "data": bytes([0x62, 0x13, index])}
+        for index in range(2)
+    ]
+    server._prefetch_read_msgs.record_read_rsp_body(
+        44,
+        ProtocolEncoder.encode_read_msgs_rsp(0, messages, sequence=0)[HEADER_SIZE:],
+        source="read_collect",
+    )
+    drain = server._prefetch_read_msgs.drain(44, 300)
+    server._record_prefetch_drain_observation(
+        drain,
+        reason="prefetch_underfill_forwarded",
+    )
+    server._record_read_result_observation(
+        44,
+        return_code=BUFFER_EMPTY,
+        message_count=0,
+        dll_seq=11,
+        proxy_seq=22,
+    )
+
+    budget = server._read_collect_transaction_budget(44, now=time.monotonic() + 0.2)
+
+    assert budget.reason == "standard_read_tail"
+    assert budget.deepened is False
+    assert budget.max_reads == 3
+
+
 def test_read_collect_budget_ignores_prefetch_history_before_confirmed_empty() -> None:
     server = ReverseProxyServer(
         config=ProxyConfig.from_args(

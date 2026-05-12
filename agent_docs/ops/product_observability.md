@@ -201,6 +201,10 @@ Current runtime behavior:
 - cloud materialization may backfill uploaded artifact manifests with a resolved `session_id` when the artifact initially arrived with only `connection_epoch` and its event window overlaps the assembled session trace
 - trace assembly treats `no-session` and `no-epoch` as missing selectors and falls back to the active snapshot or raw-event context before materializing a trace
 - runtime-triggered trace/incident materialization runs on a background queue; terminal session events and uploaded local artifacts must not block the API request path while large traces are assembled
+- trace/incident materialization tolerates raw-file rotation between discovery
+  and read: if a discovered `*.jsonl` raw file has already been compressed to
+  `*.jsonl.gz`, analysis falls back to the compressed sibling and records that
+  resolved artifact path as the source
 - transient upload/API failures leave pending manifests in place for the next uploader pass instead of crashing the tray background loop
 - the cloud-side agent collector emits `agent.collector.focus_value_changed` for primary focused value transitions such as `battery_voltage`, with previous/current values plus collector timing context for direct freshness analysis; noisy numeric signals may apply a key-specific significance threshold before a change event is emitted
 

@@ -444,6 +444,11 @@ confirmed-empty foreground reads on the lighter standard path. Cloud events add
 `read_collect_collect_window_ms`, `read_collect_max_reads`,
 `read_collect_read_timeout_ms`, and `read_collect_max_messages` to show which
 budget was used.
+If a short-lived confirmed empty follows immediately after a FIFO drain that
+served data, the next read-tail probe may also deepen once under
+`read_collect_budget_reason=after_confirmed_empty_following_prefetch_drain`.
+Pure confirmed-empty polling remains on the standard light read-tail budget, so
+this does not turn idle empty loops into deeper local polling.
 
 Oversized non-blocking `ReadMsgs` calls can request far more frames than the
 FIFO is allowed to hold, for example `num_msgs=300` against a 16-frame FIFO.

@@ -304,14 +304,28 @@ def _discover_artifacts(cloud_root: Path | None, local_root: Path | None) -> tup
     return raw_paths, aux_paths
 
 
+def _existing_raw_path(path: Path) -> Path | None:
+    if path.exists():
+        return path
+    if path.suffix == ".jsonl":
+        gz_path = path.with_name(f"{path.name}.gz")
+        if gz_path.exists():
+            return gz_path
+    return None
+
+
 def _iter_text_lines(path: Path) -> Iterable[tuple[int, str]]:
-    if path.suffix == ".gz":
-        with gzip.open(path, "rt", encoding="utf-8") as handle:
+    resolved_path = _existing_raw_path(path)
+    if resolved_path is None:
+        return
+
+    if resolved_path.suffix == ".gz":
+        with gzip.open(resolved_path, "rt", encoding="utf-8") as handle:
             for line_number, line in enumerate(handle, start=1):
                 yield line_number, line
         return
 
-    with path.open("rt", encoding="utf-8") as handle:
+    with resolved_path.open("rt", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
             yield line_number, line
 
@@ -342,9 +356,15 @@ def _load_upload_manifest_context(path: Path) -> tuple[str | None, str | None]:
 
 
 def _iter_event_file(path: Path) -> Iterable[dict[str, Any]]:
-    resolved_path = str(path.resolve())
-    manifest_session_id, manifest_connection_epoch = _load_upload_manifest_context(path)
-    for line_number, line in _iter_text_lines(path):
+    resolved_path = _existing_raw_path(path)
+    if resolved_path is None:
+        return
+
+    source_path = str(resolved_path.resolve())
+    manifest_session_id, manifest_connection_epoch = _load_upload_manifest_context(
+        resolved_path,
+    )
+    for line_number, line in _iter_text_lines(resolved_path):
         if not line.strip():
             continue
         payload = json.loads(line)
@@ -366,7 +386,7 @@ def _iter_event_file(path: Path) -> Iterable[dict[str, Any]]:
             is None
         ):
             payload["connection_epoch"] = manifest_connection_epoch
-        payload["source_artifact"] = resolved_path
+        payload["source_artifact"] = source_path
         payload["source_line"] = line_number
         yield payload
 

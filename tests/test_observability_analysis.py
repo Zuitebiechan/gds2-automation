@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import gzip
 import json
 from pathlib import Path
 
 from diagnostic_platform.observability_analysis import (
+    _discover_artifacts,
+    _stream_related_events,
     assemble_session_trace,
     classify_incident,
     generate_incident_bundle,
@@ -251,6 +254,44 @@ def test_observability_analysis_assembles_session_trace_from_cloud_and_local_eve
     ]
     assert trace["page_context"]["page"] == "data_display"
     assert len(trace["source_artifacts"]) == 3
+
+
+def test_observability_analysis_falls_back_to_rotated_gzip_raw_file(tmp_path: Path) -> None:
+    cloud_root = tmp_path / "ProgramData" / "RPA_Diagnostic" / "observability" / "cloud"
+    raw_dir = cloud_root / "raw"
+    raw_dir.mkdir(parents=True)
+    raw_path = raw_dir / "reverse_server.jsonl"
+    gz_path = raw_dir / "reverse_server.jsonl.gz"
+    event = _event(
+        "2026-04-22T00:00:01Z",
+        "session_runtime",
+        "session.live_data.started",
+        session_id="session-gz",
+        connection_epoch="epoch-gz",
+        page="data_display",
+    )
+    raw_path.write_text(json.dumps(event), encoding="utf-8")
+
+    raw_paths, _aux_paths = _discover_artifacts(cloud_root, None)
+    with gzip.open(gz_path, "wt", encoding="utf-8") as handle:
+        handle.write(raw_path.read_text(encoding="utf-8"))
+    raw_path.unlink()
+
+    trace = assemble_session_trace(
+        events=list(
+            _stream_related_events(
+                raw_paths,
+                session_id="session-gz",
+                connection_epoch="epoch-gz",
+            )
+        ),
+        session_id="session-gz",
+    )
+
+    assert [event["event_type"] for event in trace["timeline"]] == [
+        "session.live_data.started",
+    ]
+    assert trace["timeline"][0]["source_artifact"] == str(gz_path.resolve())
 
 
 def test_observability_analysis_treats_placeholder_epoch_as_missing(tmp_path: Path) -> None:
