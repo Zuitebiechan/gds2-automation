@@ -276,6 +276,7 @@ class ReverseProxyServer:
         self._read_ahead_transaction_guard_reason: str | None = None
         self._read_ahead_transaction_guard_network_ms: float | None = None
         self._prefetch_bundle_source_by_proxy_seq: dict[int, str] = {}
+        self._prefetch_empty_confirmations_by_proxy_seq: dict[int, tuple[int, int]] = {}
 
         # P1-1: ReadMsgs BUFFER_EMPTY cache
         self._read_cache = ReadMsgsCache(self.config.read_msgs_cache)
@@ -1585,6 +1586,7 @@ class ReverseProxyServer:
         pending = list(self.response_futures.items())
         self.response_futures.clear()
         self._prefetch_bundle_source_by_proxy_seq.clear()
+        self._prefetch_empty_confirmations_by_proxy_seq.clear()
         self._read_cache.clear()
         self._filter_cache.clear()
         self._ioctl_cache.invalidate()
@@ -2054,6 +2056,25 @@ class ReverseProxyServer:
                                 prefetch_bundle is not None
                                 and self.config.read_ahead.enabled
                             ):
+                                empty_confirmations = 0
+                                for read_rsp_body in prefetch_bundle.read_rsp_bodies:
+                                    try:
+                                        return_code, messages = (
+                                            ProtocolDecoder.decode_read_msgs_rsp(
+                                                read_rsp_body
+                                            )
+                                        )
+                                    except Exception:
+                                        continue
+                                    if return_code == BUFFER_EMPTY and not messages:
+                                        empty_confirmations += 1
+                                if empty_confirmations:
+                                    self._prefetch_empty_confirmations_by_proxy_seq[
+                                        sequence
+                                    ] = (
+                                        prefetch_bundle.channel_id,
+                                        empty_confirmations,
+                                    )
                                 recorded = self._prefetch_read_msgs.record_read_rsp_bodies(
                                     prefetch_bundle.channel_id,
                                     prefetch_bundle.read_rsp_bodies,
@@ -2217,6 +2238,31 @@ class ReverseProxyServer:
             proxy_seq=proxy_seq,
             observed_mono=time.monotonic(),
         )
+
+    def _apply_prefetch_empty_confirmations(self, proxy_seq: int) -> dict[str, object]:
+        pending = self._prefetch_empty_confirmations_by_proxy_seq.pop(proxy_seq, None)
+        if pending is None:
+            return {}
+        channel_id, count = pending
+        fields: dict[str, object] = {
+            "prefetch_empty_confirmation_count": count,
+        }
+        if count <= 0:
+            return fields
+        self._read_cache.record_result(
+            channel_id,
+            BUFFER_EMPTY,
+            message_count=0,
+        )
+        self._record_read_result_observation(
+            channel_id,
+            return_code=BUFFER_EMPTY,
+            message_count=0,
+            dll_seq=None,
+            proxy_seq=proxy_seq,
+        )
+        fields["prefetch_empty_cache_recorded"] = True
+        return fields
 
     def _read_collect_blocked_reason(self, msg_type: int, body: bytes) -> str | None:
         if msg_type != MsgType.READ_MSGS_REQ:
@@ -2563,6 +2609,7 @@ class ReverseProxyServer:
             logger.error("Failed to forward reduced ReadMsgs request: %s", exc)
             self.response_futures.pop(new_seq, None)
             self._prefetch_bundle_source_by_proxy_seq.pop(new_seq, None)
+            self._prefetch_empty_confirmations_by_proxy_seq.pop(new_seq, None)
             restored = self._prefetch_read_msgs.restore_front(
                 drain.channel_id,
                 drain.messages,
@@ -2586,6 +2633,7 @@ class ReverseProxyServer:
         except (asyncio.TimeoutError, ConnectionError) as exc:
             self.response_futures.pop(new_seq, None)
             self._prefetch_bundle_source_by_proxy_seq.pop(new_seq, None)
+            self._prefetch_empty_confirmations_by_proxy_seq.pop(new_seq, None)
             fwd_ms = (time.monotonic() - fwd_start) * 1000
             restored = self._prefetch_read_msgs.restore_front(
                 drain.channel_id,
@@ -2663,6 +2711,7 @@ class ReverseProxyServer:
                 dll_seq=sequence,
                 proxy_seq=new_seq,
             )
+        final_fields.update(self._apply_prefetch_empty_confirmations(new_seq))
         response_fields = self._response_observability_fields(final_type, final_body)
         self._augment_read_payload_delta_fields(request_fields, response_fields)
         self._observe_sweep_read_response(
@@ -3773,6 +3822,7 @@ class ReverseProxyServer:
                     logger.error(f"转发请求失败: {e}")
                     self.response_futures.pop(new_seq, None)
                     self._prefetch_bundle_source_by_proxy_seq.pop(new_seq, None)
+                    self._prefetch_empty_confirmations_by_proxy_seq.pop(new_seq, None)
                     self._clear_prefetch_after_failed_write(msg_type, body)
                     self._emit_proxy_request_event(
                         "proxy.request.failed",
@@ -3819,6 +3869,9 @@ class ReverseProxyServer:
                         ioctl_id,
                         dll_seq=sequence,
                         proxy_seq=new_seq,
+                    )
+                    request_fields.update(
+                        self._apply_prefetch_empty_confirmations(new_seq)
                     )
                     response_fields = self._response_observability_fields(resp_type, resp_body)
                     self._augment_read_payload_delta_fields(request_fields, response_fields)
@@ -3888,6 +3941,7 @@ class ReverseProxyServer:
                 except (asyncio.TimeoutError, ConnectionError) as e:
                     self.response_futures.pop(new_seq, None)
                     self._prefetch_bundle_source_by_proxy_seq.pop(new_seq, None)
+                    self._prefetch_empty_confirmations_by_proxy_seq.pop(new_seq, None)
                     fwd_ms = (time.monotonic() - fwd_start) * 1000
                     reason = "VCI_DISCONNECTED" if isinstance(e, ConnectionError) else "TIMEOUT"
                     self._clear_prefetch_after_failed_write(msg_type, body)

@@ -1200,6 +1200,8 @@ class ReverseProxyClient:
                 stop_after_empty_once_min_drain_elapsed
             ),
             extra_read_after_data_at_max=extra_read_after_data_at_max,
+            include_empty_confirmations=True,
+            foreground_had_data=(ret == 0 and bool(messages)),
         )
         return attach_read_msgs_prefetch_bundle(
             response,
@@ -1234,6 +1236,8 @@ class ReverseProxyClient:
         stop_after_empty_once_min_drain_elapsed: bool = False,
         extra_read_after_data_at_max: bool = False,
         soft_max_reads_after_data: int | None = None,
+        include_empty_confirmations: bool = False,
+        foreground_had_data: bool = False,
     ) -> list[bytes]:
         read_ahead = self.config.read_ahead
         if (
@@ -1289,6 +1293,8 @@ class ReverseProxyClient:
         deadline = started_at_mono + max(0, effective_window_ms) / 1000.0
         min_drain_until = started_at_mono + effective_min_drain_ms / 1000.0
         collected: list[bytes] = []
+        empty_confirmation_body: bytes | None = None
+        empty_confirmation_after_drain = False
         collected_messages = 0
         attempted_reads = 0
         data_reads = 0
@@ -1391,6 +1397,12 @@ class ReverseProxyClient:
                 break
 
             if ret == BUFFER_EMPTY or not messages:
+                empty_confirmation_body = ProtocolEncoder.encode_read_msgs_rsp(
+                    BUFFER_EMPTY,
+                    [],
+                    0,
+                )[HEADER_SIZE:]
+                empty_confirmation_after_drain = False
                 empty_reads += 1
                 consecutive_empty_reads += 1
                 now = time.monotonic()
@@ -1410,6 +1422,10 @@ class ReverseProxyClient:
                     if sleep_s > 0:
                         await asyncio.sleep(sleep_s)
                     continue
+                empty_confirmation_after_drain = (
+                    effective_min_drain_ms > 0
+                    and now >= min_drain_until
+                )
                 if stop_after_empty_once_min_drain_elapsed:
                     if collected_messages <= 0:
                         stop_reason = "empty_after_min_drain"
@@ -1453,6 +1469,8 @@ class ReverseProxyClient:
                 continue
 
             limited_messages = messages[:remaining]
+            empty_confirmation_body = None
+            empty_confirmation_after_drain = False
             data_reads += 1
             consecutive_empty_reads = 0
             collected_messages += len(limited_messages)
@@ -1493,6 +1511,18 @@ class ReverseProxyClient:
             ):
                 empty_after_data_grace_data_extra_read_pending = True
                 continue
+
+        should_attach_empty_confirmation = (
+            include_empty_confirmations
+            and empty_confirmation_body is not None
+            and (
+                foreground_had_data
+                or collected_messages > 0
+                or empty_confirmation_after_drain
+            )
+        )
+        if should_attach_empty_confirmation:
+            collected.append(empty_confirmation_body)
 
         if collected:
             logger.debug(
@@ -1608,6 +1638,7 @@ class ReverseProxyClient:
                 if stop_after_empty_once_min_drain_elapsed is None
                 else stop_after_empty_once_min_drain_elapsed
             ),
+            include_empty_confirmations=True,
         )
         return attach_read_msgs_prefetch_bundle(
             response,

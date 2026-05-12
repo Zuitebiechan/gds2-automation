@@ -82,6 +82,16 @@ def _read_local_events(tmp_path: Path) -> list[dict[str, object]]:
     return rows
 
 
+def _read_rsp_data_payloads(read_rsp_bodies: tuple[bytes, ...]) -> list[bytes]:
+    payloads: list[bytes] = []
+    for read_rsp_body in read_rsp_bodies:
+        return_code, messages = ProtocolDecoder.decode_read_msgs_rsp(read_rsp_body)
+        if return_code == BUFFER_EMPTY and not messages:
+            continue
+        payloads.extend(message["data"] for message in messages)
+    return payloads
+
+
 def test_ensure_driver_notifies_error_when_driver_load_fails(monkeypatch) -> None:
     observed: list[tuple[str, str]] = []
     client = ReverseProxyClient(
@@ -625,11 +635,7 @@ def test_handle_write_msgs_attaches_prefetch_bundle_when_read_ahead_enabled(monk
     assert clean_body == ProtocolEncoder.encode_write_msgs_rsp(0, 1, sequence=7)[HEADER_SIZE:]
     assert bundle is not None
     assert bundle.channel_id == 44
-    assert len(bundle.read_rsp_bodies) == 1
-    assert ProtocolDecoder.decode_read_msgs_rsp(bundle.read_rsp_bodies[0]) == (
-        0,
-        [prefetched_message],
-    )
+    assert _read_rsp_data_payloads(bundle.read_rsp_bodies) == [b"\x62\xf4\x0c"]
     assert observed == [
         ("write_msgs", 44, 1, 25),
         ("read_msgs", 44, 2, 0),
@@ -1030,10 +1036,7 @@ def test_write_collect_soft_budget_stops_empty_drain_after_data(
     _clean_body, bundle = strip_read_msgs_prefetch_bundle(response[HEADER_SIZE:])
 
     assert bundle is not None
-    assert [
-        ProtocolDecoder.decode_read_msgs_rsp(read_rsp_body)[1][0]["data"]
-        for read_rsp_body in bundle.read_rsp_bodies
-    ] == [b"\x62\x01"]
+    assert _read_rsp_data_payloads(bundle.read_rsp_bodies) == [b"\x62\x01"]
     assert observed == [
         ("write_msgs", 44, 1, 25),
         ("read_msgs", 44, 8, 0),
@@ -1351,7 +1354,11 @@ def test_handle_read_and_collect_reads_stops_tail_after_first_empty(
     clean_body, bundle = strip_read_msgs_prefetch_bundle(response[HEADER_SIZE:])
 
     assert ProtocolDecoder.decode_read_msgs_rsp(clean_body)[0] == 0
-    assert bundle is None
+    assert bundle is not None
+    assert ProtocolDecoder.decode_read_msgs_rsp(bundle.read_rsp_bodies[0]) == (
+        BUFFER_EMPTY,
+        [],
+    )
     assert observed == [
         ("read_msgs", 44, 300, 0),
         ("read_msgs", 44, 4, 0),
@@ -1490,10 +1497,9 @@ def test_handle_read_and_collect_reads_honors_deep_server_budget(
     _clean_body, bundle = strip_read_msgs_prefetch_bundle(response[HEADER_SIZE:])
 
     assert bundle is not None
-    assert [
-        ProtocolDecoder.decode_read_msgs_rsp(read_rsp_body)[1][0]["data"]
-        for read_rsp_body in bundle.read_rsp_bodies
-    ] == [message["data"] for message in tail_messages]
+    assert _read_rsp_data_payloads(bundle.read_rsp_bodies) == [
+        message["data"] for message in tail_messages
+    ]
     assert observed == [
         ("read_msgs", 44, 300, 0),
         ("read_msgs", 44, 8, 0),
@@ -1868,6 +1874,110 @@ def test_read_collect_data_at_max_extra_empty_stops_without_grace_stack(
     assert collection_events[-1]["extra_read_after_data_at_max_attempts"] == 1
     assert collection_events[-1]["extra_read_after_data_at_max_limit"] == 2
     assert collection_events[-1]["empty_after_data_grace_used"] is False
+
+
+def test_read_collect_can_attach_tail_empty_confirmation(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    tail_message = {"protocol_id": 6, "data": b"\x62\x13\x08"}
+    read_results = iter(
+        [
+            (0, [tail_message]),
+            (BUFFER_EMPTY, []),
+            (BUFFER_EMPTY, []),
+        ]
+    )
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+            read_ahead_window_ms=200,
+            read_ahead_max_reads=3,
+            read_ahead_max_messages=8,
+            read_ahead_read_timeout_ms=0,
+        ),
+    )
+    client._server_read_ahead_enabled = True
+
+    async def _fake_run_driver_call(*_args, **_kwargs):
+        return next(read_results)
+
+    monkeypatch.setattr(client, "_run_driver_call", _fake_run_driver_call)
+
+    bodies = asyncio.run(
+        client._collect_read_ahead_bodies(
+            44,
+            LogContext(operation_kind="j2534:READ_AND_COLLECT_READS_REQ"),
+            collect_window_ms=40,
+            max_reads=2,
+            read_timeout_ms=0,
+            max_messages=4,
+            min_drain_ms=0,
+            stop_after_empty_once_min_drain_elapsed=True,
+            include_empty_confirmations=True,
+        )
+    )
+
+    assert [ProtocolDecoder.decode_read_msgs_rsp(body) for body in bodies] == [
+        (
+            0,
+            [
+                {
+                    "protocol_id": 6,
+                    "rx_status": 0,
+                    "tx_flags": 0,
+                    "timestamp": 0,
+                    "data": b"\x62\x13\x08",
+                }
+            ],
+        ),
+        (BUFFER_EMPTY, []),
+    ]
+
+
+def test_read_collect_does_not_attach_immediate_empty_without_drain(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+            read_ahead_window_ms=200,
+            read_ahead_max_reads=3,
+            read_ahead_max_messages=8,
+            read_ahead_read_timeout_ms=0,
+        ),
+    )
+    client._server_read_ahead_enabled = True
+
+    async def _fake_run_driver_call(*_args, **_kwargs):
+        return BUFFER_EMPTY, []
+
+    monkeypatch.setattr(client, "_run_driver_call", _fake_run_driver_call)
+
+    bodies = asyncio.run(
+        client._collect_read_ahead_bodies(
+            44,
+            LogContext(operation_kind="j2534:READ_AND_COLLECT_READS_REQ"),
+            collect_window_ms=40,
+            max_reads=1,
+            read_timeout_ms=0,
+            max_messages=4,
+            min_drain_ms=0,
+            stop_after_empty_once_min_drain_elapsed=True,
+            include_empty_confirmations=True,
+        )
+    )
+
+    assert bodies == []
 
 
 def test_handle_read_and_collect_reads_falls_back_without_negotiated_capability() -> None:

@@ -427,6 +427,14 @@ wrapped, and the slow transaction guard falls back to ordinary `READ_MSGS_REQ`
 forwarding while active. This reduces later serial `ReadMsgs` tunnel trips
 without replaying or decoding GM A9 payloads.
 
+When read-tail or write-tail collection reaches a real local
+`ReadMsgs(BUFFER_EMPTY)` boundary, the local client can append that empty
+confirmation to the internal `PRF0` bundle. The cloud server strips it before
+replying to the DLL, does not put it in the consume-once data FIFO, and records
+it only in the short-lived `ReadMsgsCache` after the foreground response has
+already been recorded. This suppresses the next immediate serial empty poll
+without caching, duplicating, or decoding any real ECU data frame.
+
 When recent evidence shows the FIFO just received data or was just exhausted by
 an oversized non-blocking `ReadMsgs`, the next read-tail transaction can
 temporarily deepen its local read budget up to the existing write-collect cap.
@@ -488,6 +496,9 @@ eligibility/block reason, empty-cache state, and last prefetch record/drain/read
 result ages so analysis can distinguish no prior local collection, a
 just-exhausted FIFO, a recently confirmed empty read, or a temporarily
 unavailable read-collect path.
+Response events include `prefetch_empty_confirmation_count` and
+`prefetch_empty_cache_recorded` when a tail empty boundary was converted into a
+short-lived empty-cache entry.
 
 Operational validation as of `2026-05-06`:
 

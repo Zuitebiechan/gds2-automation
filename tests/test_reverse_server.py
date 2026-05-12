@@ -2741,6 +2741,94 @@ def test_read_collect_budget_ignores_prefetch_history_before_confirmed_empty() -
     assert budget.max_reads == 3
 
 
+def test_handle_proxy_connection_records_read_collect_tail_empty_confirmation(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    async def _run() -> None:
+        monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+        server = ReverseProxyServer(
+            config=ProxyConfig.from_args(
+                read_ahead_enabled=True,
+                read_ahead_transaction_enabled=True,
+                read_ahead_max_reads=3,
+                read_ahead_max_messages=8,
+            )
+        )
+        server.vci_connected.set()
+        server.vci_writer = _FakeWriter(peername=("10.0.0.9", 9000))
+        server._connection_epoch = "epoch-tail-empty"
+        server._vci_read_collect_supported = True
+        server._next_sequence = lambda: 501
+
+        foreground = {
+            "protocol_id": 6,
+            "rx_status": 0,
+            "tx_flags": 0,
+            "timestamp": 11,
+            "data": b"\x62\x13\x08",
+        }
+        proxy_reader = _FakeReader(
+            ProtocolEncoder.encode_read_msgs_req(44, 1, 0, sequence=31),
+            ProtocolEncoder.encode_read_msgs_req(44, 1, 0, sequence=32),
+        )
+        proxy_writer = _FakeWriter(peername=("127.0.0.1", 50002))
+
+        responses = iter(
+            [
+                (
+                    MsgType.READ_MSGS_RSP,
+                    ProtocolEncoder.encode_read_msgs_rsp(
+                        0,
+                        [foreground],
+                        sequence=501,
+                    )[HEADER_SIZE:],
+                    0.0,
+                ),
+            ]
+        )
+
+        async def _wait_for(awaitable, timeout):
+            if isinstance(awaitable, asyncio.Future):
+                server._prefetch_empty_confirmations_by_proxy_seq[501] = (44, 1)
+                return next(responses)
+            return await awaitable
+
+        monkeypatch.setattr("vci_proxy.reverse_server.asyncio.wait_for", _wait_for)
+
+        await server._handle_proxy_connection(proxy_reader, proxy_writer)
+
+        assert len(server.vci_writer.writes) == 1
+        assert len(proxy_writer.writes) == 2
+        assert ProtocolDecoder.decode_read_msgs_rsp(
+            proxy_writer.writes[0][HEADER_SIZE:]
+        ) == (0, [foreground])
+        assert ProtocolDecoder.decode_read_msgs_rsp(
+            proxy_writer.writes[1][HEADER_SIZE:]
+        ) == (BUFFER_EMPTY, [])
+        assert server._prefetch_read_msgs.try_serve(44, 1, 33) is None
+
+    asyncio.run(_run())
+
+    records = _read_product_log_events(tmp_path)
+    responses = [
+        record
+        for record in records
+        if record["event_type"] == "proxy.request.response_received"
+    ]
+    cache_hits = [
+        record
+        for record in records
+        if record["event_type"] == "proxy.request.cache_decision"
+        and record.get("cache_hit") is True
+    ]
+
+    assert responses[0]["prefetch_empty_confirmation_count"] == 1
+    assert responses[0]["prefetch_empty_cache_recorded"] is True
+    assert cache_hits[-1]["reason"] == "empty_cache_hit"
+    assert cache_hits[-1]["dll_seq"] == 32
+
+
 def test_build_tunnel_request_does_not_wrap_blocking_read_collect_request() -> None:
     server = ReverseProxyServer(
         config=ProxyConfig.from_args(

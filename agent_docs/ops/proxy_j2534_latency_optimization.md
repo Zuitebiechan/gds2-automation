@@ -528,11 +528,14 @@ Implementation note:
   the bundle before replying to GDS2 and records the frames in the existing FIFO.
 - The same transaction transport also supports `READ_AND_COLLECT_READS_REQ` for
   non-blocking foreground reads. The local client returns the exact foreground
-  `READ_MSGS_RSP` to GDS2 and attaches only extra tail data in the `PRF0` bundle;
-  this includes the case where the foreground response is `BUFFER_EMPTY`. When
-  `VCI_PROXY_READ_AHEAD_MIN_DRAIN_MS` is configured, read-tail collection uses a
-  hard cap of `8ms` so a `40ms` write-collect drain setting does not stall every
-  foreground read.
+  `READ_MSGS_RSP` to GDS2 and attaches extra tail data in the `PRF0` bundle;
+  this includes the case where the foreground response is `BUFFER_EMPTY`. Tail
+  collection can also attach a `BUFFER_EMPTY` boundary confirmation. The cloud
+  server strips that confirmation, records it only as a short-lived empty-cache
+  entry after the foreground response is recorded, and never stores it in the
+  consume-once data FIFO. When `VCI_PROXY_READ_AHEAD_MIN_DRAIN_MS` is
+  configured, read-tail collection uses a hard cap of `8ms` so a `40ms`
+  write-collect drain setting does not stall every foreground read.
 - The cloud server now has a transaction slow-link guard. When any forwarded
   request response reaches `VCI_PROXY_READ_AHEAD_TRANSACTION_MAX_NETWORK_MS`
   (default `400ms`), the server arms a cooldown
@@ -772,7 +775,7 @@ Current status against these criteria:
 - RTT-count reduction for the full page is still incomplete: logs continue to
   show high-rate non-blocking `ReadMsgs` with oversized counts and partial FIFO
   underfill, so the current safe lane focuses on read-ahead/read-collect merge
-  behavior rather than GM A9 replay;
+  behavior plus tail empty-boundary confirmation rather than GM A9 replay;
 - slow-link guard behavior remains unproven unless a future WAN/degraded-link
   run crosses the configured guard threshold.
 
