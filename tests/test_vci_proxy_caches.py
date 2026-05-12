@@ -158,6 +158,64 @@ def test_read_msgs_cache_uses_short_active_ttl_after_write(monkeypatch) -> None:
     assert cache.stats == (0, 1)
 
 
+def test_read_msgs_cache_adapts_active_ttl_to_confirmed_empty_cadence(monkeypatch) -> None:
+    cache = ReadMsgsCache(
+        ReadMsgsCacheConfig(
+            enabled=True,
+            ttl_ms=150,
+            post_write_bypass_ms=0,
+            active_ttl_ms=25,
+            active_adaptive_ttl_max_ms=50,
+            active_adaptive_ttl_margin_ms=8,
+            active_window_ms=500,
+        )
+    )
+    monotonic_values = iter([45.0, 45.0, 45.031, 45.062])
+    monkeypatch.setattr("vci_proxy.cache_read_msgs.time.monotonic", lambda: next(monotonic_values))
+
+    cache.record_write(55)
+    cache.record_result(55, BUFFER_EMPTY)
+    cache.record_result(55, BUFFER_EMPTY)
+
+    response = cache.try_serve_from_cache(55, 1, 1, 9)
+
+    assert response is not None
+    assert ProtocolDecoder.decode_read_msgs_rsp(response[HEADER_SIZE:]) == (BUFFER_EMPTY, [])
+    assert cache.stats == (1, 0)
+    state = cache.observability_state(55, 1, now=45.062)
+    assert state["empty_cache_recent_empty_gap_ms"] == 31.0
+    assert state["empty_cache_effective_ttl_ms"] == 39.0
+    assert state["empty_cache_adaptive_ttl_applied"] is True
+
+
+def test_read_msgs_cache_resets_adaptive_empty_cadence_after_data(monkeypatch) -> None:
+    cache = ReadMsgsCache(
+        ReadMsgsCacheConfig(
+            enabled=True,
+            ttl_ms=150,
+            post_write_bypass_ms=0,
+            active_ttl_ms=25,
+            active_adaptive_ttl_max_ms=50,
+            active_adaptive_ttl_margin_ms=8,
+            active_window_ms=500,
+        )
+    )
+    monotonic_values = iter([46.0, 46.0, 46.031, 46.05, 46.06, 46.091])
+    monkeypatch.setattr("vci_proxy.cache_read_msgs.time.monotonic", lambda: next(monotonic_values))
+
+    cache.record_write(55)
+    cache.record_result(55, BUFFER_EMPTY)
+    cache.record_result(55, BUFFER_EMPTY)
+    cache.record_result(55, 0, message_count=1)
+    cache.record_result(55, BUFFER_EMPTY)
+
+    assert cache.try_serve_from_cache(55, 1, 1, 9) is None
+    assert cache.stats == (0, 1)
+    state = cache.observability_state(55, 1, now=46.091)
+    assert "empty_cache_recent_empty_gap_ms" not in state
+    assert state["empty_cache_effective_ttl_ms"] == 25.0
+
+
 def test_read_msgs_cache_uses_idle_ttl_when_channel_is_quiet(monkeypatch) -> None:
     cache = ReadMsgsCache(
         ReadMsgsCacheConfig(

@@ -291,6 +291,8 @@ Example configuration:
 ```text
 read_cache_idle_ttl_ms = 150
 read_cache_active_ttl_ms = 25
+read_cache_active_adaptive_ttl_max_ms = 50
+read_cache_active_adaptive_ttl_margin_ms = 8
 read_cache_active_window_ms = 500
 ```
 
@@ -298,6 +300,10 @@ Implementation note:
 
 - The reverse server keeps the existing `--read-cache-ttl` flag as the idle TTL.
 - Active TTL is exposed as `--read-cache-active-ttl-ms`.
+- Active TTL can adapt upward after repeated real `BUFFER_EMPTY` confirmations;
+  `--read-cache-active-adaptive-ttl-max-ms` caps that learned TTL and
+  `--read-cache-active-adaptive-ttl-margin-ms` controls the margin over the
+  observed empty polling cadence.
 - Active mode duration is exposed as `--read-cache-active-window-ms`.
 - `--read-cache-max-timeout-ms` limits empty-cache hits to zero or very small
   `ReadMsgs` polls; the default is `25`, and `-1` allows all timeouts.

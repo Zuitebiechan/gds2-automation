@@ -242,11 +242,17 @@ the rest of the bypass window.
 When Phase 2 adaptive TTL is enabled, writes may still put the channel into active
 TTL mode. To fully approximate the older fixed-TTL behavior, also set
 `--read-cache-active-window-ms 0` and `--read-cache-max-timeout-ms -1`.
+To keep active mode enabled but disable the learned active-TTL raise, set
+`--read-cache-active-adaptive-ttl-max-ms` to the same value as
+`--read-cache-active-ttl-ms`.
 
 The empty-read cache is adaptive:
 
 - quiet channels use the idle TTL, default `150ms`
 - active channels use the active TTL, default `25ms`
+- active channels can temporarily raise the effective TTL up to `50ms` when
+  repeated real `ReadMsgs(BUFFER_EMPTY)` replies show a stable empty polling
+  cadence; the estimate resets after real data or cache invalidation
 - active mode lasts for `500ms` after writes, data reads, filter mutations, or
   mutating IOCTLs
 - only `ReadMsgs` polls with timeout at or below `25ms` are cacheable by default
@@ -258,6 +264,10 @@ Reverse server flags:
 - `--read-cache-post-write-bypass-ms <milliseconds>`; default `150`, `0` disables
   the post-write invalidation/bypass behavior
 - `--read-cache-active-ttl-ms <milliseconds>`; default `25`
+- `--read-cache-active-adaptive-ttl-max-ms <milliseconds>`; default `50`, caps
+  the learned active empty-cache TTL
+- `--read-cache-active-adaptive-ttl-margin-ms <milliseconds>`; default `8`, added
+  to the observed confirmed-empty polling gap
 - `--read-cache-active-window-ms <milliseconds>`; default `500`
 - `--read-cache-max-timeout-ms <milliseconds>`; default `25`, `-1` allows all
   `ReadMsgs` timeouts to use empty-cache hits

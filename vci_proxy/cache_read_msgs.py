@@ -26,6 +26,14 @@ class ReadMsgsCache:
         self._enabled = config.enabled
         self._idle_ttl_s = config.ttl_ms / 1000.0
         self._active_ttl_s = max(config.active_ttl_ms, 0) / 1000.0
+        self._active_adaptive_ttl_max_s = max(
+            config.active_adaptive_ttl_max_ms,
+            0,
+        ) / 1000.0
+        self._active_adaptive_ttl_margin_s = max(
+            config.active_adaptive_ttl_margin_ms,
+            0,
+        ) / 1000.0
         self._active_window_s = max(config.active_window_ms, 0) / 1000.0
         self._post_write_bypass_s = max(config.post_write_bypass_ms, 0) / 1000.0
         self._max_cacheable_timeout_ms = config.max_cacheable_timeout_ms
@@ -33,14 +41,58 @@ class ReadMsgsCache:
         self._channels: dict[int, Tuple[float, int]] = {}
         self._last_write_at: dict[int, float] = {}
         self._active_until: dict[int, float] = {}
+        self._last_empty_at: dict[int, float] = {}
+        self._empty_gap_ema_s: dict[int, float] = {}
+        self._empty_gap_samples: dict[int, int] = {}
         self._hits = 0
         self._misses = 0
+
+    def _active_ttl_for_channel_s(self, channel_id: int) -> float:
+        ttl_s = self._active_ttl_s
+        if self._active_adaptive_ttl_max_s <= ttl_s:
+            return ttl_s
+
+        gap_s = self._empty_gap_ema_s.get(channel_id)
+        if gap_s is None or self._empty_gap_samples.get(channel_id, 0) <= 0:
+            return ttl_s
+
+        adaptive_ttl_s = min(
+            self._active_adaptive_ttl_max_s,
+            gap_s + self._active_adaptive_ttl_margin_s,
+        )
+        return max(ttl_s, adaptive_ttl_s)
 
     def _current_ttl_s(self, channel_id: int, now: float) -> float:
         active_until = self._active_until.get(channel_id)
         if active_until is not None and now <= active_until:
-            return self._active_ttl_s
+            return self._active_ttl_for_channel_s(channel_id)
         return self._idle_ttl_s
+
+    def _record_empty_gap(self, channel_id: int, ts: float) -> None:
+        previous = self._last_empty_at.get(channel_id)
+        self._last_empty_at[channel_id] = ts
+        if previous is None:
+            return
+
+        gap_s = ts - previous
+        if gap_s <= 0:
+            return
+
+        existing = self._empty_gap_ema_s.get(channel_id)
+        if existing is None:
+            self._empty_gap_ema_s[channel_id] = gap_s
+        else:
+            # React fast enough to a stable 30-50ms polling cadence without
+            # letting one long quiet interval dominate subsequent freshness.
+            self._empty_gap_ema_s[channel_id] = (existing * 0.75) + (gap_s * 0.25)
+        self._empty_gap_samples[channel_id] = (
+            self._empty_gap_samples.get(channel_id, 0) + 1
+        )
+
+    def _reset_empty_gap(self, channel_id: int) -> None:
+        self._last_empty_at.pop(channel_id, None)
+        self._empty_gap_ema_s.pop(channel_id, None)
+        self._empty_gap_samples.pop(channel_id, None)
 
     def mark_channel_active(
         self,
@@ -55,6 +107,7 @@ class ReadMsgsCache:
         ts = time.monotonic() if now is None else now
         if invalidate_empty:
             self._channels.pop(channel_id, None)
+            self._reset_empty_gap(channel_id)
         if self._active_window_s > 0:
             self._active_until[channel_id] = ts + self._active_window_s
 
@@ -186,6 +239,28 @@ class ReadMsgsCache:
                 "empty_cache_entry_expired": age_ms > ttl_s * 1000.0,
             }
         )
+        empty_gap_s = self._empty_gap_ema_s.get(channel_id)
+        if empty_gap_s is not None:
+            fields.update(
+                {
+                    "empty_cache_recent_empty_gap_ms": round(empty_gap_s * 1000.0, 3),
+                    "empty_cache_empty_gap_sample_count": self._empty_gap_samples.get(
+                        channel_id,
+                        0,
+                    ),
+                    "empty_cache_active_adaptive_ttl_max_ms": round(
+                        self._active_adaptive_ttl_max_s * 1000.0,
+                        3,
+                    ),
+                    "empty_cache_active_adaptive_ttl_margin_ms": round(
+                        self._active_adaptive_ttl_margin_s * 1000.0,
+                        3,
+                    ),
+                    "empty_cache_adaptive_ttl_applied": (
+                        active and ttl_s > self._active_ttl_s
+                    ),
+                }
+            )
         return fields
 
     def record_result(
@@ -205,8 +280,10 @@ class ReadMsgsCache:
         self._last_write_at.pop(channel_id, None)
         if return_code == BUFFER_EMPTY and message_count == 0:
             self._channels[channel_id] = (ts, return_code)
+            self._record_empty_gap(channel_id, ts)
             return
         self._channels.pop(channel_id, None)
+        self._reset_empty_gap(channel_id)
         if message_count > 0:
             self.mark_channel_active(channel_id, now=ts, invalidate_empty=False)
 
@@ -229,12 +306,16 @@ class ReadMsgsCache:
         self._channels.pop(channel_id, None)
         self._last_write_at.pop(channel_id, None)
         self._active_until.pop(channel_id, None)
+        self._reset_empty_gap(channel_id)
 
     def clear(self) -> None:
         """Clear entire cache (on VCI disconnect)."""
         self._channels.clear()
         self._last_write_at.clear()
         self._active_until.clear()
+        self._last_empty_at.clear()
+        self._empty_gap_ema_s.clear()
+        self._empty_gap_samples.clear()
         logger.debug("[ReadMsgsCache] cleared")
 
     @property

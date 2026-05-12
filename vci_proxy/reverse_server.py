@@ -1405,6 +1405,8 @@ class ReverseProxyServer:
             logger.info(
                 f"ReadMsgs cache enabled (idle TTL={self.config.read_msgs_cache.ttl_ms}ms, "
                 f"active TTL={self.config.read_msgs_cache.active_ttl_ms}ms, "
+                f"adaptive active max={self.config.read_msgs_cache.active_adaptive_ttl_max_ms}ms, "
+                f"adaptive margin={self.config.read_msgs_cache.active_adaptive_ttl_margin_ms}ms, "
                 f"active window={self.config.read_msgs_cache.active_window_ms}ms, "
                 f"post-write bypass={self.config.read_msgs_cache.post_write_bypass_ms}ms, "
                 f"max timeout={self.config.read_msgs_cache.max_cacheable_timeout_ms}ms)"
@@ -1460,6 +1462,24 @@ class ReverseProxyServer:
                 tls_enabled=self.config.tls.enabled,
                 read_ahead_enabled=self.config.read_ahead.enabled,
                 read_ahead_transaction_enabled=self.config.read_ahead.transaction_enabled,
+                read_cache_enabled=self.config.read_msgs_cache.enabled,
+                read_cache_ttl_ms=self.config.read_msgs_cache.ttl_ms,
+                read_cache_active_ttl_ms=self.config.read_msgs_cache.active_ttl_ms,
+                read_cache_active_adaptive_ttl_max_ms=(
+                    self.config.read_msgs_cache.active_adaptive_ttl_max_ms
+                ),
+                read_cache_active_adaptive_ttl_margin_ms=(
+                    self.config.read_msgs_cache.active_adaptive_ttl_margin_ms
+                ),
+                read_cache_active_window_ms=(
+                    self.config.read_msgs_cache.active_window_ms
+                ),
+                read_cache_post_write_bypass_ms=(
+                    self.config.read_msgs_cache.post_write_bypass_ms
+                ),
+                read_cache_max_timeout_ms=(
+                    self.config.read_msgs_cache.max_cacheable_timeout_ms
+                ),
                 read_ahead_write_collect_max_reads=(
                     self.config.read_ahead.write_collect_max_reads
                 ),
@@ -3794,6 +3814,10 @@ def main():
                        help='Bypass ReadMsgs empty cache after same-channel writes in ms (default: 150; 0 disables)')
     parser.add_argument('--read-cache-active-ttl-ms', type=int, default=25,
                        help='ReadMsgs empty cache TTL while a channel is active in ms (default: 25)')
+    parser.add_argument('--read-cache-active-adaptive-ttl-max-ms', type=int, default=50,
+                       help='Maximum adaptive active ReadMsgs empty-cache TTL in ms after repeated confirmed empty reads (default: 50)')
+    parser.add_argument('--read-cache-active-adaptive-ttl-margin-ms', type=int, default=8,
+                       help='Margin added to the observed confirmed-empty polling gap for adaptive active TTL in ms (default: 8)')
     parser.add_argument('--read-cache-active-window-ms', type=int, default=500,
                        help='Window after writes/data/filter mutations that uses active TTL in ms (default: 500)')
     parser.add_argument('--read-cache-max-timeout-ms', type=int, default=25,
@@ -3877,6 +3901,12 @@ def main():
         read_cache_ttl=args.read_cache_ttl,
         read_cache_post_write_bypass_ms=args.read_cache_post_write_bypass_ms,
         read_cache_active_ttl_ms=args.read_cache_active_ttl_ms,
+        read_cache_active_adaptive_ttl_max_ms=(
+            args.read_cache_active_adaptive_ttl_max_ms
+        ),
+        read_cache_active_adaptive_ttl_margin_ms=(
+            args.read_cache_active_adaptive_ttl_margin_ms
+        ),
         read_cache_active_window_ms=args.read_cache_active_window_ms,
         read_cache_max_timeout_ms=args.read_cache_max_timeout_ms,
         read_ahead_enabled=args.read_ahead,
@@ -3931,10 +3961,12 @@ def main():
     logger.info("Auth: %s", "enabled" if config.auth.enabled else "disabled")
     logger.info("TLS: %s", "enabled" if config.tls.enabled else "disabled")
     logger.info(
-        "ReadMsgs cache: %s (idle TTL=%sms, active TTL=%sms, active window=%sms, post-write bypass=%sms, max timeout=%sms)",
+        "ReadMsgs cache: %s (idle TTL=%sms, active TTL=%sms, adaptive active max=%sms, adaptive margin=%sms, active window=%sms, post-write bypass=%sms, max timeout=%sms)",
         "enabled" if config.read_msgs_cache.enabled else "disabled",
         config.read_msgs_cache.ttl_ms,
         config.read_msgs_cache.active_ttl_ms,
+        config.read_msgs_cache.active_adaptive_ttl_max_ms,
+        config.read_msgs_cache.active_adaptive_ttl_margin_ms,
         config.read_msgs_cache.active_window_ms,
         config.read_msgs_cache.post_write_bypass_ms,
         config.read_msgs_cache.max_cacheable_timeout_ms,

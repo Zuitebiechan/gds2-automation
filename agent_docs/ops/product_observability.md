@@ -216,6 +216,9 @@ Use these event checks to decide whether the latest optimization build was
 actually active:
 
 - cloud `reverse_server` `process.lifecycle.started`:
+  `read_cache_enabled`, `read_cache_active_ttl_ms`,
+  `read_cache_active_adaptive_ttl_max_ms`,
+  `read_cache_active_adaptive_ttl_margin_ms`,
   `read_ahead_enabled`, `read_ahead_transaction_enabled`,
   `read_ahead_write_collect_max_reads`,
   `read_ahead_max_empty_reads`,
@@ -298,9 +301,10 @@ Latest known interpretation:
     primary value for each focused key
 - `vci_proxy/reverse_server.py`
   - emits tunnel lifecycle, probe, tunnel-quality, proxy-request staged events, and reverse-server process lifecycle events
-  - reverse-server process lifecycle events include local sweep mode, `local_sweep_allow_gm_a9_packet`, `local_sweep_shadow_allow_gm_a9_packet`, and `local_sweep_min_item_interval_ms` when reporting startup configuration
+  - reverse-server process lifecycle events include read-cache/read-ahead settings plus local sweep mode, `local_sweep_allow_gm_a9_packet`, `local_sweep_shadow_allow_gm_a9_packet`, and `local_sweep_min_item_interval_ms` when reporting startup configuration
   - proxy-request events for `READ_MSGS_REQ` include decoded request metadata (`channel_id`, `num_msgs`, `timeout`) and, when applicable, `last_write_seq` plus `post_write_age_ms`
   - read-ahead FIFO decisions add `prefetch_fifo_pending_before`, `prefetch_fifo_pending_after`, `prefetch_requested_count`, `prefetch_served_count`, and `prefetch_underfill_count`; when FIFO data is served they also include `prefetch_source_counts` plus `prefetch_age_min_ms`, `prefetch_age_avg_ms`, and `prefetch_age_max_ms` so local-simulated-cloud runs can show whether hits came from `read_collect` or `write_collect` and how long frames waited before DLL consumption; `prefetch_miss` decisions include `prefetch_miss_detail`, read-collect eligibility/block reason, empty-cache state, and last prefetch record/drain/real-read age fields so miss clusters can be separated into no prior prefetch, exhausted FIFO, recent confirmed empty, or unavailable read-collect cases; partial FIFO fallback uses `reason=prefetch_underfill_forwarded`, then response/reply events use `prefetch_merge_tunnel_data`, `prefetch_merge_tunnel_empty`, or `prefetch_underfill_tunnel_error`
+  - empty-cache state includes adaptive active-TTL fields such as `empty_cache_recent_empty_gap_ms`, `empty_cache_empty_gap_sample_count`, and `empty_cache_adaptive_ttl_applied` when repeated real `ReadMsgs(BUFFER_EMPTY)` replies have raised the effective active TTL above the configured base TTL
   - oversized non-blocking FIFO hits use `reason=prefetch_partial_hit` plus `prefetch_partial_direct=true` when `READ_MSGS_REQ(timeout=0)` asks for more messages than the FIFO capacity and the server returns available prefetched frames without a reduced tunnel read
   - transaction-wrapped non-blocking read collection uses `reason=read_collect_transaction` on the forwarded `READ_MSGS_REQ`, strips the internal prefetch bundle before replying to the DLL, and records any extra local tail frames into the same consume-once FIFO; this tail probe also runs after a foreground `BUFFER_EMPTY`, so the DLL still receives the real empty response while immediately-following frames can be consumed once from FIFO by the next serial read; when `VCI_PROXY_READ_AHEAD_MIN_DRAIN_MS` is configured, read-tail collection reports a capped `min_drain_ms` of at most `8` so logs can separate short foreground read-tail probing from the deeper post-write drain window
   - proxy-request response events for `READ_MSGS_RSP` include `return_code`, `message_count`, `payload_bytes`, `read_result` (`empty` or `data`), redacted payload digest/prefix samples, and read-payload change markers

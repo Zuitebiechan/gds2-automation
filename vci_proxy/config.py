@@ -148,6 +148,8 @@ class ReadMsgsCacheConfig:
     ttl_ms: int = 150
     post_write_bypass_ms: int = 150
     active_ttl_ms: int = 25
+    active_adaptive_ttl_max_ms: int = 50
+    active_adaptive_ttl_margin_ms: int = 8
     active_window_ms: int = 500
     max_cacheable_timeout_ms: int = 25
 
@@ -450,6 +452,14 @@ class ProxyConfig:
             ttl_ms=kwargs.get("read_cache_ttl", 150),
             post_write_bypass_ms=kwargs.get("read_cache_post_write_bypass_ms", 150),
             active_ttl_ms=kwargs.get("read_cache_active_ttl_ms", 25),
+            active_adaptive_ttl_max_ms=kwargs.get(
+                "read_cache_active_adaptive_ttl_max_ms",
+                50,
+            ),
+            active_adaptive_ttl_margin_ms=kwargs.get(
+                "read_cache_active_adaptive_ttl_margin_ms",
+                8,
+            ),
             active_window_ms=kwargs.get("read_cache_active_window_ms", 500),
             max_cacheable_timeout_ms=kwargs.get("read_cache_max_timeout_ms", 25),
         )
