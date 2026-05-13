@@ -407,6 +407,9 @@ Compatibility guardrails:
   `proxy.request.forwarded_to_tunnel` then records reason
   `write_collect_guarded_no_collect`, and
   `read_ahead.transaction.guard_armed` records the triggering slow response.
+  Lightweight `READ_AND_COLLECT_READS_REQ` read-tail collection remains enabled
+  during the guard on the standard non-deepened budget so a single slow read does
+  not make the following serial `ReadMsgs` loop lose FIFO tail collection.
 
 The same transaction capability now also supports a narrower
 `READ_AND_COLLECT_READS_REQ` path for Data Display tail bursts. When both sides
@@ -707,6 +710,42 @@ manual tests:
 - If a payload visibly matches standard `41 0C` or `62 F4 0C` Engine Speed
   response patterns, the event includes a best-effort
   `*_engine_speed_candidate_rpm` field for correlation only.
+
+### Real-vehicle Engine Speed validation handoff
+
+For the 2026-05-13 real-vehicle validation, analyze the run as a safe
+transport-layer test, not as a GM A9 replay test.
+
+Configuration expectations:
+
+- cloud and local should both advertise read-ahead and transaction support;
+- `VCI_PROXY_LOCAL_SWEEP_MODE` may be configured as `observe_only`, but GM
+  `A9 81 xx` must remain observe-only / inventory-only;
+- `VCI_PROXY_LOCAL_SWEEP_SHADOW_ALLOW_GM_A9_PACKET=0` is required for this
+  validation lane;
+- expected logs are under:
+  `C:\Users\shsww\projects\RPA_demo\vci_proxy\cloud_mirror` on cloud and
+  `C:\Users\shsww\AppData\Roaming\VCI_Proxy` locally.
+
+If the agent collector is active, use focused value freshness rather than
+payload guesses:
+
+```powershell
+python scripts/analyze_battery_voltage_freshness.py `
+  --cloud-root "C:\Users\shsww\projects\RPA_demo\vci_proxy\cloud_mirror" `
+  --focus-key engine_speed `
+  --min-delta 100 `
+  --json reports/engine_speed_freshness.json `
+  --report reports/engine_speed_freshness.md
+```
+
+If the collector is not active, fall back to proxy-layer evidence:
+
+- `live_inter_request_gap_ms` / `proxy.j2534.cadence_gap`;
+- `READ_MSGS_REQ(data)` vs `READ_MSGS_REQ(empty)` response events;
+- FIFO `cache_decision` reasons and underfill merge outcomes;
+- best-effort `*_engine_speed_candidate_rpm` only when standard OBD/UDS engine
+  speed response shapes are visible.
 
 ### Filter deduplication
 

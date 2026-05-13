@@ -14,6 +14,52 @@
 
 Cloud GDS2 live data lag is mainly amplified by `J2534 serial request count x tunnel round-trip cost`. The current optimization stack preserves the synchronous J2534 behavior visible to GDS2 while adding safer cache invalidation, adaptive empty-read handling, local-side read-ahead, transaction RPCs, and a first local sweep observe/inventory stage. A narrow `active_replay` path now exists, but latest ECU evidence shows that GM `A9 81 xx` local execution can regress Data Display semantics before replay ever serves, so GM `A9 81 xx` is now forced back to observe-only / inventory-only and replay advances only on safer signatures whose latest shadow generations are comparison-clean.
 
+## Handoff For Real-Vehicle Engine Speed Validation - 2026-05-13
+
+The next validation run is a real-vehicle Engine Data / Data Display test where
+the operator will use `Engine Speed` changes, not bench voltage, as the primary
+freshness signal. Do not assume `active_replay` has succeeded or is safe.
+
+Run interpretation should start from these assumptions:
+
+- the optimization lane under test is the safe transport layer:
+  `ReadMsgs` empty-cache behavior, read-ahead FIFO, read-collect / write-collect
+  transactions, FIFO underfill merge, and slow-link guard behavior;
+- GM `A9 81 xx` remains observe-only / inventory-only. It must not be treated
+  as shadow-execution or replay evidence unless raw logs explicitly show a
+  non-GM-A9 safe signature with fresh, success-coded, comparison-clean shadow
+  results;
+- a useful real-vehicle run must contain actual `Engine Speed` value changes.
+  Constant `0 RPM` or near-idle-only samples cannot prove user-visible
+  freshness improvement;
+- after the run, analyze focused value freshness with:
+
+```powershell
+python scripts/analyze_battery_voltage_freshness.py `
+  --cloud-root "C:\Users\shsww\projects\RPA_demo\vci_proxy\cloud_mirror" `
+  --focus-key engine_speed `
+  --min-delta 100 `
+  --json reports/engine_speed_freshness.json `
+  --report reports/engine_speed_freshness.md
+```
+
+Primary evidence to correlate:
+
+- `agent.collector.focus_value_changed` with `focus_key=engine_speed`;
+- `collector_lag_ms`, `previous_value_number`, `current_value_number`, and
+  `delta_value_number` for meaningful RPM changes;
+- nearby `proxy.request.cache_decision`, `proxy.request.forwarded_to_tunnel`,
+  `proxy.request.response_received`, `read_collect_transaction`,
+  `write_collect_transaction`, and `read_ahead.transaction.guard_armed`;
+- absence of `proxy.request.active_replay_armed` /
+  `proxy.request.active_replay_served` is acceptable and expected for GM A9
+  current-state validation.
+
+Use the user's standard log paths for cross-run analysis:
+
+- cloud: `C:\Users\shsww\projects\RPA_demo\vci_proxy\cloud_mirror`
+- local: `C:\Users\shsww\AppData\Roaming\VCI_Proxy`
+
 ## Current Progress Snapshot - 2026-05-08
 
 Latest ECU Data Display validation showed a regression mode that is more
@@ -208,6 +254,11 @@ Existing focused value observability should be used when analyzing real vehicle 
 - use `parameter_value_sources` to verify which OEM parameter name supplied the
   primary focused voltage value during a run
 - session/page context: `data_display`, selected data category, live-data active state
+- for real-vehicle `Engine Speed` validation, run the focused freshness script
+  with `--focus-key engine_speed --min-delta 100` so idle jitter is filtered and
+  each meaningful RPM change is correlated with nearby tunnel RTT, FIFO, and
+  read-collect behavior; the same script defaults to battery voltage for ECU
+  bench runs
 
 ## Optimization Roadmap
 

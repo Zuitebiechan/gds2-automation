@@ -131,6 +131,38 @@ Current interpretation:
 
 Do not implement or enable GM A9 shadow execution or replay from this evidence alone.
 
+## Real-Vehicle Engine Speed Validation Handoff - 2026-05-13
+
+The next planned run is a real-vehicle Engine Data / Data Display test using
+`Engine Speed` changes as the value-level freshness proof. This run should not
+be interpreted as a reason to re-open GM A9 shadow execution.
+
+Validation posture:
+
+- local sweep may remain configured only in the safe observe/inventory lane;
+- GM `A9 81 xx` plans should be skipped or inventoried, not executed locally;
+- `VCI_PROXY_LOCAL_SWEEP_SHADOW_ALLOW_GM_A9_PACKET=0` must remain in effect;
+- a successful run should show meaningful `Engine Speed` changes, preferably
+  filtered with `--focus-key engine_speed --min-delta 100`, and correlate those
+  changes with read-ahead/read-collect/FIFO behavior;
+- if `Engine Speed` remains constant, the run is inconclusive for freshness
+  even if the tunnel appears stable.
+
+Use this focused analysis command after collecting the logs:
+
+```powershell
+python scripts/analyze_battery_voltage_freshness.py `
+  --cloud-root "C:\Users\shsww\projects\RPA_demo\vci_proxy\cloud_mirror" `
+  --focus-key engine_speed `
+  --min-delta 100 `
+  --json reports/engine_speed_freshness.json `
+  --report reports/engine_speed_freshness.md
+```
+
+When analyzing a new conversation, preserve the current conclusion: GM A9
+active replay is not the current optimization lane; the working lane is
+transport-layer reduction of serial `ReadMsgs` tunnel cost.
+
 ## Background
 
 GDS2 Data Display does not let this project choose a tiny parameter subset from outside the application. Once the operator enters a Data Display page, GDS2 polls the parameters on that page. For Engine Data this can mean many DIDs in a stable loop.

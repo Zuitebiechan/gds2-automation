@@ -362,6 +362,50 @@ def test_emit_event_queues_materialization_without_blocking_request_thread(
         writer.close()
 
 
+def test_terminal_event_uses_direct_materialization_thread(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    writer_path = (
+        tmp_path
+        / "ProgramData"
+        / "RPA_Diagnostic"
+        / "observability"
+        / "cloud"
+        / "raw"
+        / "session.jsonl"
+    )
+    calls: list[dict[str, object]] = []
+
+    def _capture_start(**kwargs):
+        calls.append(kwargs)
+        return True
+
+    monkeypatch.setattr(
+        observability_artifacts,
+        "start_session_artifact_materialization",
+        _capture_start,
+    )
+
+    observability_artifacts.maybe_materialize_cloud_artifacts(
+        {
+            "event_type": "session.lifecycle.aborted",
+            "session_id": "session-direct",
+            "connection_epoch": "epoch-direct",
+        },
+        writer_path=writer_path,
+        flush_callback=lambda: None,
+        materialize_async=True,
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["cloud_root"] == writer_path.parent.parent
+    assert calls[0]["session_id"] == "session-direct"
+    assert calls[0]["connection_epoch"] == "epoch-direct"
+    assert calls[0]["triggering_event_type"] is None
+    assert callable(calls[0]["flush_callback"])
+
+
 def test_ingest_uploaded_artifact_stores_file_dedupes_and_refreshes_trace(tmp_path: Path) -> None:
     cloud_root = tmp_path / "ProgramData" / "RPA_Diagnostic" / "observability" / "cloud"
     payload_bytes = "\n".join(

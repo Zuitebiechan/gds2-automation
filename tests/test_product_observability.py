@@ -236,3 +236,22 @@ def test_install_observability_log_handler_writes_runtime_log_event(
     assert mirrored[-1]["component"] == "server.runtime"
     assert mirrored[-1]["log_level"] == "INFO"
     assert mirrored[-1]["log_message"] == "runtime mirror works"
+
+
+def test_observability_log_handler_does_not_raise_when_writer_is_closed(
+    tmp_path: Path,
+) -> None:
+    writer = JsonlWriter(tmp_path / "closed-runtime.jsonl")
+    writer.close()
+    handler = ObservabilityLogHandler(component="server.runtime", writer=writer)
+    record = logging.LogRecord(
+        name="tests.runtime-log",
+        level=logging.WARNING,
+        pathname=__file__,
+        lineno=1,
+        msg="writer closed",
+        args=(),
+        exc_info=None,
+    )
+
+    handler.handle(record)

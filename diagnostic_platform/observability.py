@@ -465,18 +465,21 @@ class ObservabilityLogHandler(logging.Handler):
 
         try:
             self._emit_guard.active = True
-            emit_event(
-                self.writer,
-                component=self.component,
-                event_type=self.event_type,
-                context=context,
-                status=status,
-                failure_code=failure_code,
-                failure_domain="unknown",
-                reason=message or rendered.strip() or None,
-                impact_scope="runtime_log",
-                **extra,
-            )
+            try:
+                emit_event(
+                    self.writer,
+                    component=self.component,
+                    event_type=self.event_type,
+                    context=context,
+                    status=status,
+                    failure_code=failure_code,
+                    failure_domain="unknown",
+                    reason=message or rendered.strip() or None,
+                    impact_scope="runtime_log",
+                    **extra,
+                )
+            except Exception:
+                self.handleError(record)
         finally:
             self._emit_guard.active = False
 

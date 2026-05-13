@@ -201,6 +201,10 @@ Current runtime behavior:
 - cloud materialization may backfill uploaded artifact manifests with a resolved `session_id` when the artifact initially arrived with only `connection_epoch` and its event window overlaps the assembled session trace
 - trace assembly treats `no-session` and `no-epoch` as missing selectors and falls back to the active snapshot or raw-event context before materializing a trace
 - runtime-triggered trace/incident materialization runs on a background queue; terminal session events and uploaded local artifacts must not block the API request path while large traces are assembled
+- terminal session events also start a direct non-daemon materialization worker
+  with the event's session/epoch selectors so session-named traces are refreshed
+  even when an earlier epoch-only materialization already produced a partial
+  trace
 - trace/incident materialization tolerates raw-file rotation between discovery
   and read: if a discovered `*.jsonl` raw file has already been compressed to
   `*.jsonl.gz`, analysis falls back to the compressed sibling and records that
@@ -274,6 +278,44 @@ Latest known interpretation:
   value-level freshness improvement. A changing-value run is required
   before judging visible lag.
 
+## Real-Vehicle Engine Speed Freshness Handoff - 2026-05-13
+
+For the next real-vehicle test, `Engine Speed` is the primary freshness signal.
+The battery-voltage rows remain useful for ECU bench validation, but they are
+not the primary real-vehicle proof for this run.
+
+Required analysis posture:
+
+- prefer raw observability and assembled session traces over legacy text logs;
+- confirm the build was running with read-ahead / read-collect / write-collect
+  enabled before interpreting latency;
+- treat GM `A9 81 xx` as observe-only / inventory-only. Do not infer that
+  `active_replay` helped unless raw logs contain
+  `proxy.request.active_replay_armed` and
+  `proxy.request.active_replay_served` for a safe, non-GM-A9 path;
+- if `Engine Speed` does not change by a meaningful amount, report the run as
+  inconclusive for value freshness rather than claiming success or failure.
+
+Focused report command:
+
+```powershell
+python scripts/analyze_battery_voltage_freshness.py `
+  --cloud-root "C:\Users\shsww\projects\RPA_demo\vci_proxy\cloud_mirror" `
+  --focus-key engine_speed `
+  --min-delta 100 `
+  --json reports/engine_speed_freshness.json `
+  --report reports/engine_speed_freshness.md
+```
+
+Expected evidence in a useful run:
+
+- `agent.collector.focus_value_changed` events where
+  `focus_key=engine_speed`;
+- nearby tunnel and FIFO events showing whether RPM changes followed FIFO hits,
+  underfill merges, tunnel reads, read-collect, write-collect, or guard activity;
+- complete or at least raw-backed session trace artifacts under the cloud
+  observability root.
+
 ## Current Component Usage
 
 - `server/app.py`
@@ -304,6 +346,10 @@ Latest known interpretation:
     `Accelerator Pedal Position`, and `Battery Voltage`; when
     `Battery Voltage` is present, same-module voltage rows with the same
     value/unit are emitted under the same focus key for correlation
+  - focused freshness analysis can target any emitted focus key; use
+    `scripts/analyze_battery_voltage_freshness.py --focus-key engine_speed
+    --min-delta 100` for real-vehicle Engine Speed validation and the default
+    `battery_voltage` mode for ECU bench voltage validation
   - current explicit `battery_voltage` aliases include OEM-specific names such
     as `Ignition 1 Signal` and `Engine Controls Ignition Relay Feedback 2 Signal`
   - `parameter_value_sources` identifies which parameter name supplied the

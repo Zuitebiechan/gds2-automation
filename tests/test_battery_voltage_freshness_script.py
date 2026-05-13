@@ -221,3 +221,147 @@ def test_battery_voltage_freshness_script_reports_significant_changes(tmp_path: 
     }
     assert "# Battery Voltage Freshness Report" in report_path.read_text(encoding="utf-8")
     assert "fifo_empty_after_prefetch_exhausted:1" in report_path.read_text(encoding="utf-8")
+
+
+def test_focus_value_freshness_script_reports_engine_speed_changes(tmp_path: Path) -> None:
+    cloud_root = tmp_path / "cloud"
+    raw_dir = cloud_root / "raw"
+    raw_dir.mkdir(parents=True)
+
+    events = [
+        _event(
+            "2026-05-12T00:00:00Z",
+            "session_runtime",
+            "session.lifecycle.started",
+            session_id="session-engine-1",
+            connection_epoch="epoch-engine-1",
+        ),
+        _event(
+            "2026-05-12T00:00:05Z",
+            "session_runtime",
+            "session.live_data.started",
+            session_id="session-engine-1",
+            connection_epoch="epoch-engine-1",
+            page="data_display",
+            module="Engine Control Module",
+            data_category="Engine Data",
+        ),
+        _event(
+            "2026-05-12T00:00:09.800000Z",
+            "reverse_server",
+            "proxy.request.response_received",
+            session_id="session-engine-1",
+            connection_epoch="epoch-engine-1",
+            network_ms=18.0,
+            msg_name="READ_MSGS_REQ",
+        ),
+        _event(
+            "2026-05-12T00:00:09.900000Z",
+            "reverse_server",
+            "proxy.request.cache_decision",
+            session_id="session-engine-1",
+            connection_epoch="epoch-engine-1",
+            reason="prefetch_miss",
+            prefetch_miss_detail="fifo_empty_after_confirmed_empty",
+        ),
+        _event(
+            "2026-05-12T00:00:10Z",
+            "agent_data_collector",
+            "agent.collector.focus_value_changed",
+            session_id="session-engine-1",
+            connection_epoch="epoch-engine-1",
+            page="data_display",
+            module="Engine Control Module",
+            data_category="Engine Data",
+            focus_key="engine_speed",
+            source_parameter_name="Engine Speed",
+            source_parameter_unit="RPM",
+            previous_value="700",
+            current_value="760",
+            previous_value_number=700.0,
+            current_value_number=760.0,
+            delta_value_number=60.0,
+            collector_lag_ms=42.0,
+        ),
+        _event(
+            "2026-05-12T00:00:11Z",
+            "agent_data_collector",
+            "agent.collector.focus_value_changed",
+            session_id="session-engine-1",
+            connection_epoch="epoch-engine-1",
+            page="data_display",
+            module="Engine Control Module",
+            data_category="Engine Data",
+            focus_key="engine_speed",
+            source_parameter_name="Engine Speed",
+            source_parameter_unit="RPM",
+            previous_value="760",
+            current_value="1500",
+            previous_value_number=760.0,
+            current_value_number=1500.0,
+            delta_value_number=740.0,
+            collector_lag_ms=35.0,
+        ),
+        _event(
+            "2026-05-12T00:00:11.100000Z",
+            "reverse_server",
+            "proxy.request.forwarded_to_tunnel",
+            session_id="session-engine-1",
+            connection_epoch="epoch-engine-1",
+            reason="read_collect_transaction",
+        ),
+        _event(
+            "2026-05-12T00:00:11.200000Z",
+            "reverse_server",
+            "proxy.request.response_received",
+            session_id="session-engine-1",
+            connection_epoch="epoch-engine-1",
+            network_ms=55.0,
+            msg_name="READ_MSGS_REQ",
+        ),
+    ]
+    (raw_dir / "cloud.jsonl").write_text(
+        "\n".join(json.dumps(event, ensure_ascii=False) for event in events),
+        encoding="utf-8",
+    )
+
+    report_path = tmp_path / "engine_freshness.md"
+    json_path = tmp_path / "engine_freshness.json"
+    _run(
+        str(SCRIPT),
+        "--cloud-root",
+        str(cloud_root),
+        "--focus-key",
+        "engine_speed",
+        "--min-delta",
+        "100",
+        "--json",
+        str(json_path),
+        "--report",
+        str(report_path),
+    )
+
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    assert payload["focus_key"] == "engine_speed"
+    assert payload["focus_label"] == "Engine Speed"
+    assert payload["focus_unit"] == "RPM"
+    assert payload["min_delta"] == 100.0
+    assert payload["session_count_scanned"] == 1
+    assert payload["session_count_reported"] == 1
+    session = payload["sessions"][0]
+    assert session["session_id"] == "session-engine-1"
+    assert "battery_voltage_changes" not in session
+    assert len(session["focus_value_changes"]) == 1
+    assert len(session["engine_speed_changes"]) == 1
+    change = session["focus_value_changes"][0]
+    assert change["source_parameter_name"] == "Engine Speed"
+    assert change["previous_value_number"] == 760.0
+    assert change["current_value_number"] == 1500.0
+    assert change["delta_value_number"] == 740.0
+    assert change["window"]["network_ms"]["p95"] == 55.0
+    assert change["window"]["forwarded_to_tunnel_count"] == 1
+
+    report = report_path.read_text(encoding="utf-8")
+    assert "# Engine Speed Freshness Report" in report
+    assert "Significant Engine Speed changes: `1`" in report
+    assert "Engine Speed" in report

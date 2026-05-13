@@ -1,4 +1,4 @@
-"""Analyze battery-voltage freshness markers from cloud observability artifacts."""
+"""Analyze focused Data Display value freshness from cloud observability artifacts."""
 
 from __future__ import annotations
 
@@ -20,6 +20,19 @@ from diagnostic_platform.observability_analysis import assemble_session_trace
 
 DEFAULT_WINDOW_MS = 1000
 DEFAULT_MIN_DELTA_V = 1.0
+DEFAULT_MIN_DELTA_BY_FOCUS_KEY: dict[str, float] = {
+    "battery_voltage": DEFAULT_MIN_DELTA_V,
+}
+FOCUS_KEY_REPORT_LABELS: dict[str, str] = {
+    "battery_voltage": "Battery Voltage",
+    "engine_speed": "Engine Speed",
+    "accelerator_pedal_position": "Accelerator Pedal Position",
+}
+FOCUS_KEY_REPORT_UNITS: dict[str, str] = {
+    "battery_voltage": "V",
+    "engine_speed": "RPM",
+    "accelerator_pedal_position": "%",
+}
 
 
 def _normalize_cloud_root(path_like: str | Path | None) -> Path:
@@ -28,6 +41,8 @@ def _normalize_cloud_root(path_like: str | Path | None) -> Path:
     path = Path(path_like)
     if path.name == "cloud":
         return path
+    if (path / "observability" / "cloud").exists():
+        return path / "observability" / "cloud"
     if (path / "cloud").exists():
         return path / "cloud"
     if (path / "raw").exists():
@@ -192,23 +207,36 @@ def _summarize_change_window(
     }
 
 
-def _extract_voltage_changes(
+def _focus_key_label(focus_key: str) -> str:
+    return FOCUS_KEY_REPORT_LABELS.get(focus_key, focus_key.replace("_", " ").title())
+
+
+def _focus_key_unit(focus_key: str) -> str:
+    return FOCUS_KEY_REPORT_UNITS.get(focus_key, "")
+
+
+def _focus_key_changes_key(focus_key: str) -> str:
+    return f"{focus_key}_changes"
+
+
+def _extract_focus_value_changes(
     timeline: list[dict[str, Any]],
     *,
-    min_delta_v: float,
+    focus_key: str,
+    min_delta: float,
     window_ms: int,
 ) -> list[dict[str, Any]]:
     changes: list[dict[str, Any]] = []
     for event in timeline:
         if event.get("event_type") != "agent.collector.focus_value_changed":
             continue
-        if str(event.get("focus_key") or "") != "battery_voltage":
+        if str(event.get("focus_key") or "") != focus_key:
             continue
         delta = event.get("delta_value_number")
         if not isinstance(delta, (int, float)):
             continue
         abs_delta = abs(float(delta))
-        if abs_delta < float(min_delta_v):
+        if abs_delta < float(min_delta):
             continue
         ts = _parse_ts(event.get("ts"))
         if ts is None:
@@ -216,6 +244,11 @@ def _extract_voltage_changes(
         changes.append(
             {
                 "ts": event.get("ts"),
+                "focus_key": focus_key,
+                "source_parameter_name": event.get("source_parameter_name"),
+                "source_parameter_unit": event.get("source_parameter_unit"),
+                "previous_value": event.get("previous_value"),
+                "current_value": event.get("current_value"),
                 "previous_value_number": event.get("previous_value_number"),
                 "current_value_number": event.get("current_value_number"),
                 "delta_value_number": round(float(delta), 3),
@@ -236,17 +269,19 @@ def _summarize_session(
     cloud_root: Path,
     *,
     session_id: str,
-    min_delta_v: float,
+    focus_key: str,
+    min_delta: float,
     window_ms: int,
 ) -> dict[str, Any]:
     trace = assemble_session_trace(cloud_root=cloud_root, session_id=session_id)
     timeline = list(trace.get("timeline") or [])
-    changes = _extract_voltage_changes(
+    changes = _extract_focus_value_changes(
         timeline,
-        min_delta_v=min_delta_v,
+        focus_key=focus_key,
+        min_delta=min_delta,
         window_ms=window_ms,
     )
-    return {
+    report = {
         "session_id": trace.get("session_id"),
         "connection_epoch": trace.get("connection_epoch"),
         "status": trace.get("status"),
@@ -254,17 +289,28 @@ def _summarize_session(
         "network_context": trace.get("network_context"),
         "key_metrics": trace.get("key_metrics"),
         "source_artifact_count": len(trace.get("source_artifacts") or []),
-        "battery_voltage_changes": changes,
+        "focus_value_changes": changes,
+        _focus_key_changes_key(focus_key): changes,
     }
+    if focus_key == "battery_voltage":
+        report["battery_voltage_changes"] = changes
+    return report
 
 
-def analyze_battery_voltage_freshness(
+def analyze_focus_value_freshness(
     cloud_root: str | Path | None,
     *,
     session_id: str | None = None,
-    min_delta_v: float = DEFAULT_MIN_DELTA_V,
+    focus_key: str = "battery_voltage",
+    min_delta: float | None = None,
     window_ms: int = DEFAULT_WINDOW_MS,
 ) -> dict[str, Any]:
+    normalized_focus_key = str(focus_key or "battery_voltage").strip() or "battery_voltage"
+    resolved_min_delta = (
+        float(DEFAULT_MIN_DELTA_BY_FOCUS_KEY.get(normalized_focus_key, 0.0))
+        if min_delta is None
+        else float(min_delta)
+    )
     resolved_cloud_root = _normalize_cloud_root(cloud_root)
     if session_id:
         session_ids = [session_id]
@@ -276,20 +322,43 @@ def analyze_battery_voltage_freshness(
         report = _summarize_session(
             resolved_cloud_root,
             session_id=discovered_session_id,
-            min_delta_v=min_delta_v,
+            focus_key=normalized_focus_key,
+            min_delta=resolved_min_delta,
             window_ms=window_ms,
         )
-        if session_id or report["battery_voltage_changes"]:
+        if session_id or report["focus_value_changes"]:
             sessions.append(report)
 
-    return {
+    payload: dict[str, Any] = {
         "cloud_root": str(resolved_cloud_root),
-        "min_delta_v": float(min_delta_v),
+        "focus_key": normalized_focus_key,
+        "focus_label": _focus_key_label(normalized_focus_key),
+        "focus_unit": _focus_key_unit(normalized_focus_key),
+        "min_delta": resolved_min_delta,
         "window_ms": int(window_ms),
         "session_count_scanned": len(session_ids),
         "session_count_reported": len(sessions),
         "sessions": sessions,
     }
+    if normalized_focus_key == "battery_voltage":
+        payload["min_delta_v"] = resolved_min_delta
+    return payload
+
+
+def analyze_battery_voltage_freshness(
+    cloud_root: str | Path | None,
+    *,
+    session_id: str | None = None,
+    min_delta_v: float = DEFAULT_MIN_DELTA_V,
+    window_ms: int = DEFAULT_WINDOW_MS,
+) -> dict[str, Any]:
+    return analyze_focus_value_freshness(
+        cloud_root,
+        session_id=session_id,
+        focus_key="battery_voltage",
+        min_delta=min_delta_v,
+        window_ms=window_ms,
+    )
 
 
 def _format_counts(counts: dict[str, int] | None) -> str:
@@ -299,11 +368,18 @@ def _format_counts(counts: dict[str, int] | None) -> str:
 
 
 def generate_markdown_report(payload: dict[str, Any]) -> str:
+    focus_key = str(payload.get("focus_key") or "battery_voltage")
+    focus_label = str(payload.get("focus_label") or _focus_key_label(focus_key))
+    focus_unit = str(payload.get("focus_unit") or _focus_key_unit(focus_key))
+    min_delta = float(payload.get("min_delta") or 0.0)
+    unit_suffix = focus_unit if focus_unit else ""
+    value_column_unit = f" {focus_unit}" if focus_unit else ""
     lines = [
-        "# Battery Voltage Freshness Report",
+        f"# {focus_label} Freshness Report",
         "",
         f"- Cloud root: `{payload['cloud_root']}`",
-        f"- Significant delta threshold: `{payload['min_delta_v']:.1f}V`",
+        f"- Focus key: `{focus_key}`",
+        f"- Significant delta threshold: `{min_delta:.1f}{unit_suffix}`",
         f"- Context window: `{payload['window_ms']}ms`",
         f"- Sessions scanned: `{payload['session_count_scanned']}`",
         f"- Sessions reported: `{payload['session_count_reported']}`",
@@ -319,15 +395,16 @@ def generate_markdown_report(payload: dict[str, Any]) -> str:
                 f"- Page: `{(session.get('page_context') or {}).get('page')}`",
                 f"- Module: `{(session.get('page_context') or {}).get('module')}`",
                 f"- Data category: `{(session.get('page_context') or {}).get('data_category')}`",
-                f"- Significant battery changes: `{len(session.get('battery_voltage_changes') or [])}`",
+                f"- Significant {focus_label} changes: `{len(session.get('focus_value_changes') or [])}`",
                 "",
-                "| TS | Prev V | Curr V | Delta V | Lag ms | RTT p95 ms | Write-collect txns | Replay armed | Replay served | Forwarded | Prefetch miss details |",
-                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+                f"| TS | Source | Prev{value_column_unit} | Curr{value_column_unit} | Delta{value_column_unit} | Lag ms | RTT p95 ms | Write-collect txns | Replay armed | Replay served | Forwarded | Prefetch miss details |",
+                "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
             ]
         )
-        for change in session.get("battery_voltage_changes") or []:
+        for change in session.get("focus_value_changes") or []:
             lines.append(
-                f"| {change.get('ts')} | {change.get('previous_value_number')} | {change.get('current_value_number')} | "
+                f"| {change.get('ts')} | {change.get('source_parameter_name') or '-'} | "
+                f"{change.get('previous_value_number')} | {change.get('current_value_number')} | "
                 f"{change.get('delta_value_number')} | {change.get('collector_lag_ms')} | "
                 f"{(change.get('window') or {}).get('network_ms', {}).get('p95')} | "
                 f"{(change.get('window') or {}).get('write_collect_transaction_count')} | "
@@ -338,13 +415,13 @@ def generate_markdown_report(payload: dict[str, Any]) -> str:
             )
         lines.append("")
     if not payload.get("sessions"):
-        lines.append("No sessions with significant battery-voltage changes were found.\n")
+        lines.append(f"No sessions with significant {focus_label} changes were found.\n")
     return "\n".join(lines).rstrip() + "\n"
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Analyze battery-voltage freshness markers from cloud observability artifacts."
+        description="Analyze focused Data Display value freshness markers from cloud observability artifacts."
     )
     parser.add_argument(
         "--cloud-root",
@@ -357,10 +434,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Analyze one specific session id instead of auto-discovering sessions.",
     )
     parser.add_argument(
+        "--focus-key",
+        default="battery_voltage",
+        help=(
+            "Focused collector key to analyze, for example battery_voltage or "
+            "engine_speed. Defaults to battery_voltage for compatibility."
+        ),
+    )
+    parser.add_argument(
+        "--min-delta",
+        type=float,
+        default=None,
+        help=(
+            "Minimum absolute numeric delta to include. Defaults to 1.0 for "
+            "battery_voltage and 0.0 for other focus keys."
+        ),
+    )
+    parser.add_argument(
         "--min-delta-v",
         type=float,
-        default=DEFAULT_MIN_DELTA_V,
-        help="Minimum absolute battery-voltage delta to include in the report.",
+        default=None,
+        help="Compatibility alias for --min-delta when analyzing battery_voltage.",
     )
     parser.add_argument(
         "--window-ms",
@@ -388,10 +482,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
-    payload = analyze_battery_voltage_freshness(
+    min_delta = args.min_delta
+    if min_delta is None and args.min_delta_v is not None:
+        min_delta = args.min_delta_v
+    payload = analyze_focus_value_freshness(
         args.cloud_root,
         session_id=args.session_id,
-        min_delta_v=args.min_delta_v,
+        focus_key=args.focus_key,
+        min_delta=min_delta,
         window_ms=args.window_ms,
     )
     if args.json:

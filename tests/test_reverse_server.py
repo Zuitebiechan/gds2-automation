@@ -2362,6 +2362,73 @@ def test_build_tunnel_request_uses_no_collect_transaction_when_guarded() -> None
     assert request.write_req_body == write_body
 
 
+def test_build_tunnel_request_keeps_light_read_collect_when_guarded() -> None:
+    server = ReverseProxyServer(
+        config=ProxyConfig.from_args(
+            read_ahead_enabled=True,
+            read_ahead_transaction_enabled=True,
+            read_ahead_window_ms=200,
+            read_ahead_max_reads=3,
+            read_ahead_write_collect_max_reads=6,
+            read_ahead_read_timeout_ms=0,
+            read_ahead_max_messages=16,
+            read_ahead_min_drain_ms=40,
+        )
+    )
+    server._vci_read_collect_supported = True
+    server._read_ahead_transaction_guard_until_mono = time.monotonic() + 5.0
+    server._read_ahead_transaction_guard_reason = "slow_tunnel_response"
+    server._read_ahead_transaction_guard_network_ms = 650.0
+    messages = [
+        {"protocol_id": 6, "data": bytes([0x62, 0x13, index])}
+        for index in range(4)
+    ]
+    server._prefetch_read_msgs.record_read_rsp_body(
+        44,
+        ProtocolEncoder.encode_read_msgs_rsp(0, messages, sequence=0)[HEADER_SIZE:],
+        source="read_collect",
+    )
+    drain = server._prefetch_read_msgs.drain(44, 300)
+    server._record_prefetch_drain_observation(
+        drain,
+        reason="prefetch_underfill_forwarded",
+    )
+    read_body = ProtocolEncoder.encode_read_msgs_req(
+        44,
+        num_msgs=300,
+        timeout=0,
+        sequence=11,
+    )[HEADER_SIZE:]
+    transaction_fields: dict[str, object] = {}
+
+    encoded, fwd_type, fwd_body, reason = server._build_tunnel_request(
+        MsgType.READ_MSGS_REQ,
+        read_body,
+        sequence=77,
+        transaction_fields=transaction_fields,
+    )
+    _magic, _length, msg_type, sequence = Message.decode_header(encoded[:HEADER_SIZE])
+    request = ProtocolDecoder.decode_read_and_collect_reads_req(encoded[HEADER_SIZE:])
+
+    assert msg_type == MsgType.READ_AND_COLLECT_READS_REQ
+    assert fwd_type == MsgType.READ_AND_COLLECT_READS_REQ
+    assert fwd_body == encoded[HEADER_SIZE:]
+    assert sequence == 77
+    assert reason == "read_collect_transaction"
+    assert request.collect_window_ms == 40
+    assert request.max_reads == 3
+    assert request.read_timeout_ms == 0
+    assert request.max_messages == 16
+    assert transaction_fields == {
+        "read_collect_budget_reason": "standard_read_tail",
+        "read_collect_budget_deepened": False,
+        "read_collect_collect_window_ms": 40,
+        "read_collect_max_reads": 3,
+        "read_collect_read_timeout_ms": 0,
+        "read_collect_max_messages": 16,
+    }
+
+
 def test_read_ahead_transaction_guard_arms_after_slow_tunnel_response(
     monkeypatch,
     tmp_path,

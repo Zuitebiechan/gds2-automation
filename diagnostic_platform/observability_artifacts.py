@@ -57,6 +57,7 @@ _MATERIALIZATION_WORKER_LOCK = threading.Lock()
 _MATERIALIZATION_WORKER: threading.Thread | None = None
 _DIRECT_MATERIALIZATION_THREADS: set[threading.Thread] = set()
 _DIRECT_MATERIALIZATION_THREADS_LOCK = threading.Lock()
+_ARTIFACT_WRITE_LOCK = threading.RLock()
 
 
 @dataclass(frozen=True)
@@ -109,31 +110,32 @@ def get_cloud_uploads_dir(programdata: str | Path | None = None) -> Path:
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _recover_atomic_json_temp_siblings(path)
-    if path.exists() and not _json_file_is_complete(path):
-        corrupt_path = path.with_name(
-            f"{path.name}.corrupt-{int(time.time())}-{uuid.uuid4().hex[:8]}"
+    with _ARTIFACT_WRITE_LOCK:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _recover_atomic_json_temp_siblings(path)
+        if path.exists() and not _json_file_is_complete(path):
+            corrupt_path = path.with_name(
+                f"{path.name}.corrupt-{int(time.time())}-{uuid.uuid4().hex[:8]}"
+            )
+            try:
+                os.replace(path, corrupt_path)
+                logger.warning("quarantined incomplete observability JSON artifact: %s", corrupt_path)
+            except OSError:
+                logger.warning("failed to quarantine incomplete observability JSON artifact: %s", path)
+        temp_path = path.with_name(
+            f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
         )
         try:
-            os.replace(path, corrupt_path)
-            logger.warning("quarantined incomplete observability JSON artifact: %s", corrupt_path)
-        except OSError:
-            logger.warning("failed to quarantine incomplete observability JSON artifact: %s", path)
-    temp_path = path.with_name(
-        f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
-    )
-    try:
-        temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        if not _json_file_is_complete(temp_path):
-            raise ValueError(f"incomplete JSON artifact temp file: {temp_path}")
-        os.replace(temp_path, path)
-        _cleanup_atomic_json_temp_siblings(path)
-    finally:
-        try:
-            temp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+            temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            if not _json_file_is_complete(temp_path):
+                raise ValueError(f"incomplete JSON artifact temp file: {temp_path}")
+            os.replace(temp_path, path)
+            _cleanup_atomic_json_temp_siblings(path)
+        finally:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
     return path
 
 
@@ -803,6 +805,12 @@ def maybe_materialize_cloud_artifacts(
         "triggering_event_type": event_type if event_type in INCIDENT_TRIGGER_EVENT_TYPES else None,
     }
     if materialize_async:
+        if event_type in SESSION_TERMINAL_EVENT_TYPES:
+            start_session_artifact_materialization(
+                **materialize_kwargs,
+                flush_callback=flush_callback if callable(flush_callback) else None,
+            )
+            return
         queue_session_artifact_materialization(
             **materialize_kwargs,
             flush_callback=flush_callback if callable(flush_callback) else None,

@@ -2291,8 +2291,6 @@ class ReverseProxyServer:
             return "blocking_read"
         if num_msgs <= 0:
             return "zero_requested_messages"
-        if self._read_ahead_transaction_guard_active():
-            return "transaction_guard_active"
         return None
 
     def _prefetch_miss_detail(
@@ -3029,7 +3027,7 @@ class ReverseProxyServer:
         return self._read_collect_transaction_base_allowed(
             msg_type,
             body,
-        ) and not self._read_ahead_transaction_guard_active()
+        )
 
     def _read_collect_transaction_budget(
         self,
@@ -3055,6 +3053,8 @@ class ReverseProxyServer:
             reason="standard_read_tail",
         )
         if max_reads <= 0 or max_messages <= 0:
+            return budget
+        if self._read_ahead_transaction_guard_active(now=now):
             return budget
 
         ts = time.monotonic() if now is None else now
