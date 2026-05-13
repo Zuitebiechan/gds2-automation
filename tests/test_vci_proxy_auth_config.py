@@ -84,6 +84,8 @@ def test_proxy_config_from_args_maps_flat_cli_flags_to_nested_configs() -> None:
         local_sweep_min_item_interval_ms=500,
         local_sweep_shadow_max_seconds=30,
         local_sweep_plan_delay_ms=250,
+        local_sweep_include_uds_dids=(0x000C, 0x0031),
+        local_sweep_exclude_uds_dids=(0x0031,),
     )
 
     assert config == ProxyConfig(
@@ -123,6 +125,8 @@ def test_proxy_config_from_args_maps_flat_cli_flags_to_nested_configs() -> None:
             min_item_interval_ms=500,
             shadow_max_seconds=30,
             plan_delay_ms=250,
+            include_uds_dids=(0x000C, 0x0031),
+            exclude_uds_dids=(0x0031,),
         ),
     )
 
@@ -243,6 +247,8 @@ def test_proxy_config_uses_shared_local_sweep_env_defaults() -> None:
             "VCI_PROXY_LOCAL_SWEEP_PLAN_DELAY_MS": "450",
             "VCI_PROXY_LOCAL_SWEEP_MISMATCH_THRESHOLD": "2",
             "VCI_PROXY_LOCAL_SWEEP_ERROR_THRESHOLD": "5",
+            "VCI_PROXY_LOCAL_SWEEP_INCLUDE_UDS_DIDS": "0x000c,49",
+            "VCI_PROXY_LOCAL_SWEEP_EXCLUDE_UDS_DIDS": "0x0031",
         }
     )
 
@@ -262,6 +268,8 @@ def test_proxy_config_uses_shared_local_sweep_env_defaults() -> None:
         plan_delay_ms=450,
         mismatch_threshold=2,
         error_threshold=5,
+        include_uds_dids=(12, 49),
+        exclude_uds_dids=(49,),
     )
 
 

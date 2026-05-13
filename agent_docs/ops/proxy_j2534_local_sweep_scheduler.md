@@ -730,6 +730,16 @@ VCI_PROXY_LOCAL_SWEEP_MISMATCH_THRESHOLD=3
 VCI_PROXY_LOCAL_SWEEP_ERROR_THRESHOLD=3
 ```
 
+For narrow fidelity runs, the current implementation also accepts:
+
+- `VCI_PROXY_LOCAL_SWEEP_INCLUDE_UDS_DIDS`
+- `VCI_PROXY_LOCAL_SWEEP_EXCLUDE_UDS_DIDS`
+
+These are comma-separated `UDS 0x22` DID filters applied only to the local
+shadow plan, not to the foreground GDS2 page. Use them to prove one safe
+signature at a time, for example keeping only `0x000C` in `shadow_local`, or
+excluding a known-bad signature such as `0x0031` while investigating a mismatch.
+
 Modes:
 
 | Mode | Behavior |
@@ -789,6 +799,7 @@ Implemented scope:
 - defer plan start for the configured delay window so first plans can include multiple same-burst learned signatures
 - keep read-only/cacheable IOCTL foreground calls from cancelling local shadow execution; they still serialize through the shared driver lock
 - skip GM `A9 81 xx` signatures from local shadow execution by default and emit `sweep.plan.skipped` when that guard prevents a plan
+- allow optional `uds_did` include/exclude filtering so `shadow_local` can be narrowed to a diagnostically useful subset without changing the GDS2 page
 
 Risk:
 

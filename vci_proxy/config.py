@@ -46,6 +46,8 @@ LOCAL_SWEEP_SHADOW_MAX_SECONDS_ENV = "VCI_PROXY_LOCAL_SWEEP_SHADOW_MAX_SECONDS"
 LOCAL_SWEEP_PLAN_DELAY_MS_ENV = "VCI_PROXY_LOCAL_SWEEP_PLAN_DELAY_MS"
 LOCAL_SWEEP_MISMATCH_THRESHOLD_ENV = "VCI_PROXY_LOCAL_SWEEP_MISMATCH_THRESHOLD"
 LOCAL_SWEEP_ERROR_THRESHOLD_ENV = "VCI_PROXY_LOCAL_SWEEP_ERROR_THRESHOLD"
+LOCAL_SWEEP_INCLUDE_UDS_DIDS_ENV = "VCI_PROXY_LOCAL_SWEEP_INCLUDE_UDS_DIDS"
+LOCAL_SWEEP_EXCLUDE_UDS_DIDS_ENV = "VCI_PROXY_LOCAL_SWEEP_EXCLUDE_UDS_DIDS"
 
 READ_AHEAD_ENV_NAMES = (
     READ_AHEAD_ENABLED_ENV,
@@ -78,6 +80,8 @@ LOCAL_SWEEP_ENV_NAMES = (
     LOCAL_SWEEP_PLAN_DELAY_MS_ENV,
     LOCAL_SWEEP_MISMATCH_THRESHOLD_ENV,
     LOCAL_SWEEP_ERROR_THRESHOLD_ENV,
+    LOCAL_SWEEP_INCLUDE_UDS_DIDS_ENV,
+    LOCAL_SWEEP_EXCLUDE_UDS_DIDS_ENV,
 )
 
 _TRUE_VALUES = {"1", "true", "yes", "on", "enabled"}
@@ -121,6 +125,32 @@ def env_int(
         return int(str(raw).strip())
     except ValueError:
         return default
+
+
+def env_csv_ints(
+    name: str,
+    default: tuple[int, ...] = (),
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> tuple[int, ...]:
+    """Read a comma-separated integer list environment value."""
+    raw = _resolve_environ(environ).get(name)
+    if raw is None:
+        return default
+    text = str(raw).strip()
+    if not text:
+        return ()
+    values: list[int] = []
+    for part in text.split(","):
+        token = part.strip()
+        if not token:
+            continue
+        base = 16 if token.lower().startswith("0x") else 10
+        try:
+            values.append(int(token, base))
+        except ValueError:
+            continue
+    return tuple(values)
 
 
 def read_ahead_env_is_configured(
@@ -217,6 +247,8 @@ class LocalSweepConfig:
     plan_delay_ms: int = 300
     mismatch_threshold: int = 3
     error_threshold: int = 3
+    include_uds_dids: tuple[int, ...] = ()
+    exclude_uds_dids: tuple[int, ...] = ()
 
     @property
     def observe_only(self) -> bool:
@@ -406,6 +438,16 @@ def local_sweep_config_from_env(
                 base.error_threshold,
                 environ=env,
             ),
+        ),
+        include_uds_dids=env_csv_ints(
+            LOCAL_SWEEP_INCLUDE_UDS_DIDS_ENV,
+            base.include_uds_dids,
+            environ=env,
+        ),
+        exclude_uds_dids=env_csv_ints(
+            LOCAL_SWEEP_EXCLUDE_UDS_DIDS_ENV,
+            base.exclude_uds_dids,
+            environ=env,
         ),
     )
 
@@ -627,6 +669,16 @@ class ProxyConfig:
                 local_sweep_defaults.error_threshold
                 if kwargs.get("local_sweep_error_threshold") is None
                 else int(kwargs.get("local_sweep_error_threshold")),
+            ),
+            include_uds_dids=(
+                local_sweep_defaults.include_uds_dids
+                if kwargs.get("local_sweep_include_uds_dids") is None
+                else tuple(int(value) for value in kwargs.get("local_sweep_include_uds_dids"))
+            ),
+            exclude_uds_dids=(
+                local_sweep_defaults.exclude_uds_dids
+                if kwargs.get("local_sweep_exclude_uds_dids") is None
+                else tuple(int(value) for value in kwargs.get("local_sweep_exclude_uds_dids"))
             ),
         )
         tls = TlsConfig(

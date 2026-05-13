@@ -2116,6 +2116,18 @@ def main() -> None:
         default=None,
         help="Delay before cloud starts a shadow plan; accepted for shared env/CLI symmetry",
     )
+    parser.add_argument(
+        "--local-sweep-include-uds-dids",
+        type=str,
+        default=None,
+        help="Comma-separated UDS DID allowlist for shadow plans, for example 0x000c,0x0031",
+    )
+    parser.add_argument(
+        "--local-sweep-exclude-uds-dids",
+        type=str,
+        default=None,
+        help="Comma-separated UDS DID blocklist for shadow plans, for example 0x0031",
+    )
     args = parser.parse_args()
 
     config = ProxyConfig.from_args(
@@ -2153,6 +2165,24 @@ def main() -> None:
         ),
         local_sweep_shadow_max_seconds=getattr(args, "local_sweep_shadow_max_seconds", None),
         local_sweep_plan_delay_ms=getattr(args, "local_sweep_plan_delay_ms", None),
+        local_sweep_include_uds_dids=(
+            tuple(
+                int(token.strip(), 16 if token.strip().lower().startswith("0x") else 10)
+                for token in str(args.local_sweep_include_uds_dids or "").split(",")
+                if token.strip()
+            )
+            if args.local_sweep_include_uds_dids is not None
+            else None
+        ),
+        local_sweep_exclude_uds_dids=(
+            tuple(
+                int(token.strip(), 16 if token.strip().lower().startswith("0x") else 10)
+                for token in str(args.local_sweep_exclude_uds_dids or "").split(",")
+                if token.strip()
+            )
+            if args.local_sweep_exclude_uds_dids is not None
+            else None
+        ),
     )
 
     print("=" * 50)
@@ -2182,7 +2212,9 @@ def main() -> None:
         f"plan_delay_ms={config.local_sweep.plan_delay_ms}, "
         f"allow_gm_a9_packet={config.local_sweep.allow_gm_a9_packet}, "
         f"shadow_allow_gm_a9_packet={config.local_sweep.shadow_allow_gm_a9_packet}, "
-        f"min_item_interval_ms={config.local_sweep.min_item_interval_ms})"
+        f"min_item_interval_ms={config.local_sweep.min_item_interval_ms}, "
+        f"include_uds_dids={list(config.local_sweep.include_uds_dids)}, "
+        f"exclude_uds_dids={list(config.local_sweep.exclude_uds_dids)})"
     )
     print("Press Ctrl+C to stop")
     print("=" * 50)

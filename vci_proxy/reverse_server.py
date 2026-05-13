@@ -585,7 +585,22 @@ class ReverseProxyServer:
         )
 
     def _shadow_plan_request_allowed(self, observed: SweepObservedRequest) -> bool:
-        return not self._observe_inventory_only_request(observed)
+        if self._observe_inventory_only_request(observed):
+            return False
+        signature = observed.signature
+        if signature.identifier_kind != "uds_did":
+            return True
+        include_dids = {
+            int(value) for value in self.config.local_sweep.include_uds_dids
+        }
+        exclude_dids = {
+            int(value) for value in self.config.local_sweep.exclude_uds_dids
+        }
+        if include_dids and int(signature.identifier) not in include_dids:
+            return False
+        if int(signature.identifier) in exclude_dids:
+            return False
+        return True
 
     def _learned_for_shadow_plan(
         self,
@@ -635,6 +650,8 @@ class ReverseProxyServer:
             sweep_shadow_allow_gm_a9_packet=(
                 self.config.local_sweep.shadow_allow_gm_a9_packet
             ),
+            sweep_include_uds_dids=list(self.config.local_sweep.include_uds_dids),
+            sweep_exclude_uds_dids=list(self.config.local_sweep.exclude_uds_dids),
             **fields,
         )
 
@@ -691,6 +708,8 @@ class ReverseProxyServer:
             ),
             sweep_min_item_interval_ms=plan.min_item_interval_ms,
             sweep_plan_delay_ms=self.config.local_sweep.plan_delay_ms,
+            sweep_include_uds_dids=list(self.config.local_sweep.include_uds_dids),
+            sweep_exclude_uds_dids=list(self.config.local_sweep.exclude_uds_dids),
         )
         self._schedule_sweep_task(self._send_sweep_plan_start(plan))
 
@@ -738,6 +757,8 @@ class ReverseProxyServer:
             ),
             sweep_min_item_interval_ms=plan.min_item_interval_ms,
             sweep_plan_delay_ms=delay_ms,
+            sweep_include_uds_dids=list(self.config.local_sweep.include_uds_dids),
+            sweep_exclude_uds_dids=list(self.config.local_sweep.exclude_uds_dids),
         )
         try:
             loop = asyncio.get_running_loop()
@@ -1460,7 +1481,7 @@ class ReverseProxyServer:
             )
         if self.config.local_sweep.enabled:
             logger.info(
-                "Local sweep enabled (mode=%s, min_cycles=%s, max_items=%s, allow_gm_a9_packet=%s, shadow_allow_gm_a9_packet=%s, min_item_interval_ms=%s, shadow_max_seconds=%s, plan_delay_ms=%s)",
+                "Local sweep enabled (mode=%s, min_cycles=%s, max_items=%s, allow_gm_a9_packet=%s, shadow_allow_gm_a9_packet=%s, min_item_interval_ms=%s, shadow_max_seconds=%s, plan_delay_ms=%s, include_uds_dids=%s, exclude_uds_dids=%s)",
                 self.config.local_sweep.mode,
                 self.config.local_sweep.min_cycles,
                 self.config.local_sweep.max_items,
@@ -1469,6 +1490,8 @@ class ReverseProxyServer:
                 self.config.local_sweep.min_item_interval_ms,
                 self.config.local_sweep.shadow_max_seconds,
                 self.config.local_sweep.plan_delay_ms,
+                list(self.config.local_sweep.include_uds_dids),
+                list(self.config.local_sweep.exclude_uds_dids),
             )
         if self.benchmark_writer is not None:
             logger.info("Proxy benchmark logging enabled: %s", self.benchmark_writer.path)
@@ -1523,6 +1546,8 @@ class ReverseProxyServer:
                 ),
                 local_sweep_min_item_interval_ms=self.config.local_sweep.min_item_interval_ms,
                 local_sweep_plan_delay_ms=self.config.local_sweep.plan_delay_ms,
+                local_sweep_include_uds_dids=list(self.config.local_sweep.include_uds_dids),
+                local_sweep_exclude_uds_dids=list(self.config.local_sweep.exclude_uds_dids),
             )
 
         try:
@@ -4145,6 +4170,10 @@ def main():
                        help='Maximum duration for one shadow plan')
     parser.add_argument('--local-sweep-plan-delay-ms', type=int, default=None,
                        help='Delay before starting a shadow plan so newly learned signatures can join it')
+    parser.add_argument('--local-sweep-include-uds-dids', type=str, default=None,
+                       help='Comma-separated UDS DID allowlist for shadow plans, for example 0x000c,0x0031')
+    parser.add_argument('--local-sweep-exclude-uds-dids', type=str, default=None,
+                       help='Comma-separated UDS DID blocklist for shadow plans, for example 0x0031')
     parser.add_argument('--no-filter-dedup', action='store_true',
                        help='Disable StartFilter deduplication')
     parser.add_argument('--no-vbatt-cache', action='store_true',
@@ -4208,6 +4237,24 @@ def main():
         ),
         local_sweep_shadow_max_seconds=getattr(args, "local_sweep_shadow_max_seconds", None),
         local_sweep_plan_delay_ms=getattr(args, "local_sweep_plan_delay_ms", None),
+        local_sweep_include_uds_dids=(
+            tuple(
+                int(token.strip(), 16 if token.strip().lower().startswith("0x") else 10)
+                for token in str(args.local_sweep_include_uds_dids or "").split(",")
+                if token.strip()
+            )
+            if args.local_sweep_include_uds_dids is not None
+            else None
+        ),
+        local_sweep_exclude_uds_dids=(
+            tuple(
+                int(token.strip(), 16 if token.strip().lower().startswith("0x") else 10)
+                for token in str(args.local_sweep_exclude_uds_dids or "").split(",")
+                if token.strip()
+            )
+            if args.local_sweep_exclude_uds_dids is not None
+            else None
+        ),
         no_filter_dedup=args.no_filter_dedup,
         no_vbatt_cache=args.no_vbatt_cache,
         vbatt_ttl=args.vbatt_ttl,

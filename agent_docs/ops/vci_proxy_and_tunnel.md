@@ -569,6 +569,8 @@ and reverse client:
 - `VCI_PROXY_LOCAL_SWEEP_PLAN_DELAY_MS=300`
 - `VCI_PROXY_LOCAL_SWEEP_MISMATCH_THRESHOLD=3`
 - `VCI_PROXY_LOCAL_SWEEP_ERROR_THRESHOLD=3`
+- `VCI_PROXY_LOCAL_SWEEP_INCLUDE_UDS_DIDS=` optional comma-separated UDS DID allowlist such as `0x000c,0x0031`
+- `VCI_PROXY_LOCAL_SWEEP_EXCLUDE_UDS_DIDS=` optional comma-separated UDS DID blocklist such as `0x0031`
 
 `observe_only` is cloud-side only. It observes normal `WRITE_MSGS_REQ` and later
 `READ_MSGS_RSP(data)` pairs, learns stable allowlisted UDS `0x22`, OBD Mode 01
@@ -588,6 +590,14 @@ sends internal `SWEEP_PLAN_START_REQ/RSP`, `SWEEP_PLAN_STOP_REQ/RSP`,
 `SWEEP_STATUS_REQ/RSP`, and `SWEEP_DRAIN_RESULTS_REQ/RSP` frames. These are
 internal server-to-client control frames; the virtual DLL and GDS2 never see
 them.
+
+For focused fidelity debugging, `shadow_local` can now filter only the shadow
+plan without changing what GDS2 requests on the page. `VCI_PROXY_LOCAL_SWEEP_INCLUDE_UDS_DIDS`
+keeps only listed `UDS 0x22` DIDs in the local shadow plan, and
+`VCI_PROXY_LOCAL_SWEEP_EXCLUDE_UDS_DIDS` removes listed DIDs from that plan.
+These filters apply only to `uds_did` signatures and are intended for narrow
+comparison runs such as "shadow only `0x000C`" or "exclude known-bad `0x0031`"
+while the page still exercises the full foreground request stream.
 
 GM `A9 81 xx` signatures remain observable, but in the current implementation
 they are forced back to observe-only / inventory-only across both

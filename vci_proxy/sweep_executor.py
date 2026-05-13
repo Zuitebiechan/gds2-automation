@@ -247,6 +247,14 @@ class LocalSweepExecutor:
                 sweep_signature_digest=request.signature_digest,
                 return_code=int(read_ret),
                 message_count=len(read_messages),
+                message_lengths=[
+                    len(bytes(message.get("data", b"") or b""))
+                    for message in read_messages
+                ],
+                message_prefixes=[
+                    bytes(message.get("data", b"") or b"")[:16].hex()
+                    for message in read_messages
+                ],
             )
         except Exception as exc:
             if not self._plan_is_active(plan):
