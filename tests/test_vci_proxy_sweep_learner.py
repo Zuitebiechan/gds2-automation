@@ -17,6 +17,10 @@ def _read_req_body() -> bytes:
     return ProtocolEncoder.encode_read_msgs_req(44, 1, 0)[HEADER_SIZE:]
 
 
+def _read_req_body_with(num_msgs: int, timeout: int = 0) -> bytes:
+    return ProtocolEncoder.encode_read_msgs_req(44, num_msgs, timeout)[HEADER_SIZE:]
+
+
 def _read_rsp_body(data: bytes = b"\x62\xf4\x0c\x12\x34") -> bytes:
     return ProtocolEncoder.encode_read_msgs_rsp(
         0,
@@ -66,6 +70,23 @@ def test_learner_requires_configured_cycles_before_candidate_is_learned() -> Non
     assert learned_event.fields["sweep_candidate_count"] == 1
     assert learned_event.fields["sweep_confidence"] == 1.0
     assert learner.candidate_count == 1
+
+
+def test_learner_carries_real_read_request_shape_into_learned_candidate() -> None:
+    learner = SweepPatternLearner(LocalSweepConfig(enabled=True, min_cycles=1))
+
+    learner.observe_write(_write_body(), connection_epoch="epoch-1")
+    observed, _events = learner.observe_read_response(
+        _read_req_body_with(300, 0),
+        _read_rsp_body(),
+        connection_epoch="epoch-1",
+    )
+
+    assert observed is not None
+    learned = learner.learned_for_channel(44, connection_epoch="epoch-1")
+    assert len(learned) == 1
+    assert learned[0].read_num_msgs == 300
+    assert learned[0].read_timeout_ms == 0
 
 
 def test_learner_estimates_would_have_shadow_hits_after_learning() -> None:

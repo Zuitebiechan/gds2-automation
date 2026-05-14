@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 
@@ -84,6 +84,18 @@ class SweepObservedRequest:
     write_req_body: bytes
     read_num_msgs: int = 1
     read_timeout_ms: int = 0
+
+    def with_read_request(
+        self,
+        *,
+        read_num_msgs: int,
+        read_timeout_ms: int,
+    ) -> "SweepObservedRequest":
+        return replace(
+            self,
+            read_num_msgs=max(1, int(read_num_msgs)),
+            read_timeout_ms=max(0, int(read_timeout_ms)),
+        )
 
 
 def payload_digest(data: bytes) -> str:

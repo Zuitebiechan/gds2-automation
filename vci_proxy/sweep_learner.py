@@ -205,6 +205,10 @@ class SweepPatternLearner:
         observed = self._pending_by_channel.pop(channel_id, None)
         if observed is None:
             return None, []
+        observed = observed.with_read_request(
+            read_num_msgs=_num_msgs,
+            read_timeout_ms=_timeout,
+        )
         if observed.signature.connection_epoch != connection_epoch:
             return observed, [
                 SweepLearnerEvent(

@@ -701,6 +701,12 @@ class ReverseProxyServer:
             sweep_plan_id=plan.plan_id,
             channel_id=plan.channel_id,
             sweep_item_count=len(plan.requests),
+            sweep_plan_read_num_msgs=[
+                int(request.read_num_msgs) for request in plan.requests
+            ],
+            sweep_plan_read_timeout_ms=[
+                int(request.read_timeout_ms) for request in plan.requests
+            ],
             sweep_skipped_item_count=skipped_count,
             sweep_skipped_gm_a9_count=skipped_gm_a9_count,
             sweep_shadow_allow_gm_a9_packet=(
@@ -750,6 +756,12 @@ class ReverseProxyServer:
             reason="shadow_plan_delay_window",
             channel_id=channel_id,
             sweep_item_count=len(plan.requests),
+            sweep_plan_read_num_msgs=[
+                int(request.read_num_msgs) for request in plan.requests
+            ],
+            sweep_plan_read_timeout_ms=[
+                int(request.read_timeout_ms) for request in plan.requests
+            ],
             sweep_skipped_item_count=skipped_count,
             sweep_skipped_gm_a9_count=skipped_gm_a9_count,
             sweep_shadow_allow_gm_a9_packet=(
