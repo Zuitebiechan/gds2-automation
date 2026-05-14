@@ -591,6 +591,15 @@ sends internal `SWEEP_PLAN_START_REQ/RSP`, `SWEEP_PLAN_STOP_REQ/RSP`,
 internal server-to-client control frames; the virtual DLL and GDS2 never see
 them.
 
+Shadow plans preserve the foreground `ReadMsgs` message count shape learned
+from GDS2, such as the observed `num_msgs=300` Data Display reads, but
+`VCI_PROXY_LOCAL_SWEEP_READ_TIMEOUT_MS` is treated as a minimum shadow-only read
+timeout. This lets focused fidelity runs test `timeout=1ms` without changing the
+foreground DLL-visible `ReadMsgs(timeout=0)` semantics. The cloud
+`sweep.plan.started` event reports the effective
+`sweep_plan_read_timeout_ms`, and `process.lifecycle.started` reports
+`local_sweep_read_timeout_ms`.
+
 For focused fidelity debugging, `shadow_local` can now filter only the shadow
 plan without changing what GDS2 requests on the page. `VCI_PROXY_LOCAL_SWEEP_INCLUDE_UDS_DIDS`
 keeps only listed `UDS 0x22` DIDs in the local shadow plan, and
@@ -622,6 +631,16 @@ still stop shadow work. `VCI_PROXY_LOCAL_SWEEP_MIN_ITEM_INTERVAL_MS` has a
 runtime floor of `250ms`; lower configured values are raised to that floor to
 avoid high-rate shadow loops competing with GDS2's foreground Data Display
 traffic.
+
+When a shadow read with a positive timeout returns only a single 4-byte
+CAN-ID/echo-like frame in the `0x7E0..0x7EF` range, the local executor performs
+up to two extra bounded local tail reads using the same shadow timeout and
+merges non-echo data frames into that shadow result. This is disabled for
+`read_timeout_ms=0` plans. Local `sweep.item.finished` events include
+`read_timeout_ms`, `tail_read_triggered`, `tail_read_attempts`,
+`tail_read_data_reads`, `tail_read_timeout_ms`, and per-attempt
+`read_attempts` so a real-vehicle run can prove whether `000007e862000c...`
+was captured locally after an initial `000007e0` frame.
 
 Shadow data is comparison-only:
 

@@ -698,6 +698,16 @@ Important metrics:
 | local executor error rate | protect vehicle/driver behavior |
 | Data Display value lag when collector is active | user-visible validation |
 
+For focused `shadow_local` fidelity runs, `sweep.plan.started` must be checked
+before interpreting results. It should show the expected DID filter and the
+effective `sweep_plan_read_timeout_ms`. A run with
+`VCI_PROXY_LOCAL_SWEEP_READ_TIMEOUT_MS=1` is not valid unless the plan reports
+`sweep_plan_read_timeout_ms=[1]` for the narrowed item. Local
+`sweep.item.finished` then shows whether the executor needed bounded tail reads
+after an initial 4-byte `0x7E0..0x7EF` echo-like frame through
+`tail_read_triggered`, `tail_read_attempts`, `tail_read_data_reads`,
+`tail_read_timeout_ms`, and `read_attempts`.
+
 Manual GDS2 tests must keep relying on proxy-layer payload evidence because Flask live-data collector samples may not exist.
 
 The Engine Speed detector should be expanded to recognize CAN-ID-prefixed UDS responses, for example:
@@ -739,6 +749,11 @@ These are comma-separated `UDS 0x22` DID filters applied only to the local
 shadow plan, not to the foreground GDS2 page. Use them to prove one safe
 signature at a time, for example keeping only `0x000C` in `shadow_local`, or
 excluding a known-bad signature such as `0x0031` while investigating a mismatch.
+For `shadow_local`, `VCI_PROXY_LOCAL_SWEEP_READ_TIMEOUT_MS` is a shadow-only
+minimum read timeout layered on top of the foreground read shape. The foreground
+GDS2 `ReadMsgs(timeout=0)` still passes through unchanged, while the local
+shadow plan can use `timeout=1ms` to test whether delayed positive UDS response
+frames are captured locally.
 
 Modes:
 

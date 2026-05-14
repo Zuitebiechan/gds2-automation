@@ -2368,6 +2368,111 @@ def test_cacheable_foreground_ioctl_pauses_shadow_without_cancelling_plan() -> N
     asyncio.run(_run())
 
 
+def test_shadow_executor_tail_reads_after_echo_only_result() -> None:
+    async def _run() -> None:
+        read_calls: list[tuple[int, int]] = []
+        emitted: list[tuple[str, dict[str, object]]] = []
+
+        client = ReverseProxyClient(
+            "example.com",
+            9000,
+            config=ProxyConfig.from_args(
+                local_sweep_enabled=True,
+                local_sweep_mode="shadow_local",
+                local_sweep_shadow_max_seconds=1,
+                local_sweep_min_item_interval_ms=1,
+            ),
+        )
+        client._server_sweep_shadow_enabled = True
+        client._sweep_executor._emit_event = (
+            lambda event_type, **fields: emitted.append((event_type, fields))
+        )
+
+        def _read_msgs(channel_id: int, num_msgs: int, timeout: int):
+            read_calls.append((num_msgs, timeout))
+            if len(read_calls) == 1:
+                return (
+                    0,
+                    [
+                        {
+                            "protocol_id": 6,
+                            "rx_status": 9,
+                            "tx_flags": 0,
+                            "timestamp": 1,
+                            "data": b"\x00\x00\x07\xe0",
+                        }
+                    ],
+                )
+            return (
+                0,
+                [
+                    {
+                        "protocol_id": 6,
+                        "rx_status": 0,
+                        "tx_flags": 0,
+                        "timestamp": 2,
+                        "data": b"\x00\x00\x07\xe8\x62\x00\x0c\x12\x34",
+                    }
+                ],
+            )
+
+        client.driver = types.SimpleNamespace(
+            write_msgs=lambda channel_id, messages, timeout: (0, len(messages)),
+            read_msgs=_read_msgs,
+        )
+        write_body = ProtocolEncoder.encode_write_msgs_req(
+            44,
+            [{"protocol_id": 6, "data": b"\x00\x00\x07\xe0\x22\x00\x0c"}],
+            timeout=25,
+        )[HEADER_SIZE:]
+        plan = SweepPlanStartRequest(
+            plan_id="plan-tail",
+            connection_epoch="epoch-1",
+            channel_id=44,
+            max_result_age_ms=1000,
+            min_item_interval_ms=1,
+            shadow_max_seconds=1,
+            requests=(SweepRequestSpec("sig", write_body, 300, 1),),
+        )
+
+        start_response = await client._handle_message(
+            MsgType.SWEEP_PLAN_START_REQ,
+            encode_sweep_plan_start_req(plan, sequence=41)[HEADER_SIZE:],
+            sequence=41,
+        )
+        await asyncio.sleep(0.05)
+        drain_response = await client._handle_message(
+            MsgType.SWEEP_DRAIN_RESULTS_REQ,
+            encode_sweep_drain_results_req(sequence=42)[HEADER_SIZE:],
+            sequence=42,
+        )
+        client._sweep_executor.stop("test_finished")
+
+        assert decode_sweep_plan_start_rsp(start_response[HEADER_SIZE:]).success is True
+        results = decode_sweep_drain_results_rsp(drain_response[HEADER_SIZE:])
+        assert results
+        return_code, messages = ProtocolDecoder.decode_read_msgs_rsp(results[0].read_rsp_body)
+        assert return_code == 0
+        assert [message["data"] for message in messages] == [
+            b"\x00\x00\x07\xe0",
+            b"\x00\x00\x07\xe8\x62\x00\x0c\x12\x34",
+        ]
+        assert read_calls[:2] == [(300, 1), (300, 1)]
+        finished = [
+            fields
+            for event_type, fields in emitted
+            if event_type == "sweep.item.finished"
+        ][0]
+        assert finished["message_lengths"] == [4, 9]
+        assert finished["tail_read_triggered"] is True
+        assert finished["tail_read_attempts"] == 1
+        assert finished["tail_read_data_reads"] == 1
+        assert finished["read_timeout_ms"] == 1
+        assert len(finished["read_attempts"]) == 2
+
+    asyncio.run(_run())
+
+
 def test_handle_requests_emits_proxy_and_j2534_events(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("APPDATA", str(tmp_path))
     client = ReverseProxyClient("example.com", 9000, config=ProxyConfig.from_args(auth_token="secret"))

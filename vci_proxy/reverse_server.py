@@ -676,7 +676,10 @@ class ReverseProxyServer:
                     signature_digest=item.signature.signature_digest,
                     write_req_body=item.write_req_body,
                     read_num_msgs=item.read_num_msgs,
-                    read_timeout_ms=item.read_timeout_ms,
+                    read_timeout_ms=max(
+                        int(item.read_timeout_ms),
+                        int(self.config.local_sweep.read_timeout_ms),
+                    ),
                 )
                 for item in learned
             ),
@@ -1557,6 +1560,7 @@ class ReverseProxyServer:
                     self.config.local_sweep.shadow_allow_gm_a9_packet
                 ),
                 local_sweep_min_item_interval_ms=self.config.local_sweep.min_item_interval_ms,
+                local_sweep_read_timeout_ms=self.config.local_sweep.read_timeout_ms,
                 local_sweep_plan_delay_ms=self.config.local_sweep.plan_delay_ms,
                 local_sweep_include_uds_dids=list(self.config.local_sweep.include_uds_dids),
                 local_sweep_exclude_uds_dids=list(self.config.local_sweep.exclude_uds_dids),
@@ -4170,6 +4174,8 @@ def main():
                        help='Maximum learned signatures in one shadow plan')
     parser.add_argument('--local-sweep-min-item-interval-ms', type=int, default=None,
                        help='Minimum delay between local shadow sweep items in ms')
+    parser.add_argument('--local-sweep-read-timeout-ms', type=int, default=None,
+                       help='Minimum timeout for local shadow ReadMsgs calls in ms')
     parser.add_argument('--local-sweep-shadow-allow-gm-a9-packet',
                        dest='local_sweep_shadow_allow_gm_a9_packet',
                        action='store_true', default=None,
@@ -4242,6 +4248,7 @@ def main():
         local_sweep_min_cycles=getattr(args, "local_sweep_min_cycles", None),
         local_sweep_max_items=getattr(args, "local_sweep_max_items", None),
         local_sweep_min_item_interval_ms=getattr(args, "local_sweep_min_item_interval_ms", None),
+        local_sweep_read_timeout_ms=getattr(args, "local_sweep_read_timeout_ms", None),
         local_sweep_shadow_allow_gm_a9_packet=getattr(
             args,
             "local_sweep_shadow_allow_gm_a9_packet",
@@ -4252,19 +4259,19 @@ def main():
         local_sweep_include_uds_dids=(
             tuple(
                 int(token.strip(), 16 if token.strip().lower().startswith("0x") else 10)
-                for token in str(args.local_sweep_include_uds_dids or "").split(",")
+                for token in str(getattr(args, "local_sweep_include_uds_dids", None) or "").split(",")
                 if token.strip()
             )
-            if args.local_sweep_include_uds_dids is not None
+            if getattr(args, "local_sweep_include_uds_dids", None) is not None
             else None
         ),
         local_sweep_exclude_uds_dids=(
             tuple(
                 int(token.strip(), 16 if token.strip().lower().startswith("0x") else 10)
-                for token in str(args.local_sweep_exclude_uds_dids or "").split(",")
+                for token in str(getattr(args, "local_sweep_exclude_uds_dids", None) or "").split(",")
                 if token.strip()
             )
-            if args.local_sweep_exclude_uds_dids is not None
+            if getattr(args, "local_sweep_exclude_uds_dids", None) is not None
             else None
         ),
         no_filter_dedup=args.no_filter_dedup,

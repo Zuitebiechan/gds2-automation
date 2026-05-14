@@ -3355,6 +3355,84 @@ def test_shadow_plan_uses_real_read_request_shape(monkeypatch, tmp_path) -> None
     asyncio.run(_run())
 
 
+def test_shadow_plan_read_timeout_can_override_foreground_nonblocking_read(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+
+    async def _run() -> None:
+        server = ReverseProxyServer(
+            config=ProxyConfig.from_args(
+                local_sweep_enabled=True,
+                local_sweep_mode="shadow_local",
+                local_sweep_min_cycles=1,
+                local_sweep_plan_delay_ms=0,
+                local_sweep_read_timeout_ms=1,
+                local_sweep_include_uds_dids=(0x000C,),
+            )
+        )
+        server._connection_epoch = "epoch-read-timeout"
+        server._vci_sweep_shadow_supported = True
+        sent_plans: list[SweepPlanStartRequest] = []
+
+        async def _record_plan_start(plan: SweepPlanStartRequest) -> None:
+            sent_plans.append(plan)
+
+        server._send_sweep_plan_start = _record_plan_start
+
+        write_body = ProtocolEncoder.encode_write_msgs_req(
+            44,
+            [
+                {
+                    "protocol_id": 6,
+                    "rx_status": 0,
+                    "tx_flags": 64,
+                    "timestamp": 1,
+                    "data": b"\x00\x00\x07\xe0\x22\x00\x0c",
+                }
+            ],
+            timeout=25,
+        )[HEADER_SIZE:]
+        read_body = ProtocolEncoder.encode_read_msgs_req(44, num_msgs=300, timeout=0)[
+            HEADER_SIZE:
+        ]
+        read_rsp_body = ProtocolEncoder.encode_read_msgs_rsp(
+            0,
+            [
+                {
+                    "protocol_id": 6,
+                    "rx_status": 0,
+                    "tx_flags": 0,
+                    "timestamp": 2,
+                    "data": b"\x00\x00\x07\xe8\x62\x00\x0c\x12\x34",
+                }
+            ],
+        )[HEADER_SIZE:]
+
+        server._observe_sweep_write(
+            MsgType.WRITE_MSGS_REQ,
+            write_body,
+            dll_seq=91,
+            msg_name="WRITE_MSGS_REQ",
+        )
+        server._observe_sweep_read_response(
+            MsgType.READ_MSGS_REQ,
+            read_body,
+            MsgType.READ_MSGS_RSP,
+            read_rsp_body,
+            dll_seq=92,
+            msg_name="READ_MSGS_REQ",
+        )
+        await asyncio.sleep(0)
+
+        assert sent_plans
+        assert sent_plans[0].requests[0].read_num_msgs == 300
+        assert sent_plans[0].requests[0].read_timeout_ms == 1
+
+    asyncio.run(_run())
+
+
 def test_shadow_plan_skips_gm_a9_by_default_but_keeps_observing(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
     server = ReverseProxyServer(

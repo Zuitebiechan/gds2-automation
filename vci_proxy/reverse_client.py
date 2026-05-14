@@ -2092,6 +2092,12 @@ def main() -> None:
         help="Minimum delay between local shadow sweep items in ms",
     )
     parser.add_argument(
+        "--local-sweep-read-timeout-ms",
+        type=int,
+        default=None,
+        help="Minimum timeout for local shadow ReadMsgs calls in ms",
+    )
+    parser.add_argument(
         "--local-sweep-shadow-allow-gm-a9-packet",
         dest="local_sweep_shadow_allow_gm_a9_packet",
         action="store_true",
@@ -2158,6 +2164,7 @@ def main() -> None:
         local_sweep_min_cycles=getattr(args, "local_sweep_min_cycles", None),
         local_sweep_max_items=getattr(args, "local_sweep_max_items", None),
         local_sweep_min_item_interval_ms=getattr(args, "local_sweep_min_item_interval_ms", None),
+        local_sweep_read_timeout_ms=getattr(args, "local_sweep_read_timeout_ms", None),
         local_sweep_shadow_allow_gm_a9_packet=getattr(
             args,
             "local_sweep_shadow_allow_gm_a9_packet",
@@ -2213,6 +2220,7 @@ def main() -> None:
         f"allow_gm_a9_packet={config.local_sweep.allow_gm_a9_packet}, "
         f"shadow_allow_gm_a9_packet={config.local_sweep.shadow_allow_gm_a9_packet}, "
         f"min_item_interval_ms={config.local_sweep.min_item_interval_ms}, "
+        f"read_timeout_ms={config.local_sweep.read_timeout_ms}, "
         f"include_uds_dids={list(config.local_sweep.include_uds_dids)}, "
         f"exclude_uds_dids={list(config.local_sweep.exclude_uds_dids)})"
     )

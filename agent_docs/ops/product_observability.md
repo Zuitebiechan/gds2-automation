@@ -404,7 +404,7 @@ Expected evidence in a useful run:
     data-continuation probes, currently capped at `2`, that still found data
     (`extra_read_after_data_at_max_limit`) from one that found the burst
     boundary (`extra_read_after_data_at_max_empty`)
-  - local sweep executor logs distinguish plan start/stop, shadow item execution, foreground invalidation, configured/effective shadow item interval, and error count; cacheable/read-only IOCTL foreground calls pause through the shared driver lock without emitting a shadow stop
+  - local sweep executor logs distinguish plan start/stop, shadow item execution, foreground invalidation, configured/effective shadow item interval, shadow read timeout, bounded echo-only tail-read attempts, and error count; cacheable/read-only IOCTL foreground calls pause through the shared driver lock without emitting a shadow stop
 - `vci_proxy/j2534_worker.py`
   - emits worker lifecycle, spawn status, RPC receipt/return/failure, and propagates `worker_request_id`
 - `vci_proxy/tunnel_quality.py`

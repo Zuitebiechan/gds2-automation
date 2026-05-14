@@ -128,6 +128,92 @@ class LocalSweepExecutor:
     def _plan_is_active(self, plan: SweepPlanStartRequest) -> bool:
         return self._active_plan is plan and not self._stop_requested
 
+    @staticmethod
+    def _message_data(message: dict) -> bytes:
+        return bytes(message.get("data", b"") or b"")
+
+    @classmethod
+    def _is_single_echo_only_read(cls, messages: list[dict]) -> bool:
+        if len(messages) != 1:
+            return False
+        data = cls._message_data(messages[0])
+        return len(data) == 4 and 0x000007E0 <= int.from_bytes(data, "big") <= 0x000007EF
+
+    async def _read_shadow_messages(
+        self,
+        plan: SweepPlanStartRequest,
+        channel_id: int,
+        request,
+        context: LogContext,
+    ) -> tuple[int, list[dict], dict[str, object]]:
+        read_attempts: list[dict[str, object]] = []
+
+        async def _read_once(timeout_ms: int, *, tail: bool = False) -> tuple[int, list[dict]]:
+            attempt_started = time.monotonic()
+            ret, messages = await self._run_driver_call(
+                "read_msgs",
+                channel_id,
+                request.read_num_msgs,
+                timeout_ms,
+                request_context=context,
+                ok_codes=(0, BUFFER_EMPTY),
+                result_metadata={
+                    "channel_id": channel_id,
+                    "local_sweep_shadow": True,
+                    "sweep_signature_digest": request.signature_digest,
+                    "sweep_tail_read": tail,
+                },
+            )
+            elapsed_ms = (time.monotonic() - attempt_started) * 1000.0
+            materialized = list(messages)
+            read_attempts.append(
+                {
+                    "timeout_ms": int(timeout_ms),
+                    "return_code": int(ret),
+                    "message_count": len(materialized),
+                    "duration_ms": round(elapsed_ms, 3),
+                    "tail": tail,
+                }
+            )
+            return int(ret), materialized
+
+        read_ret, read_messages = await _read_once(int(request.read_timeout_ms))
+        tail_attempts = 0
+        tail_data_reads = 0
+        tail_timeout_ms = max(1, int(request.read_timeout_ms))
+        if (
+            self._plan_is_active(plan)
+            and read_ret == 0
+            and int(request.read_timeout_ms) > 0
+            and self._is_single_echo_only_read(read_messages)
+        ):
+            while tail_attempts < 2:
+                if not await self._wait_for_foreground_idle(plan):
+                    break
+                tail_ret, tail_messages = await _read_once(tail_timeout_ms, tail=True)
+                tail_attempts += 1
+                if not self._plan_is_active(plan):
+                    break
+                if tail_ret == BUFFER_EMPTY or not tail_messages:
+                    break
+                if tail_ret != 0:
+                    break
+                if self._is_single_echo_only_read(tail_messages):
+                    continue
+                read_messages.extend(tail_messages)
+                tail_data_reads += 1
+                if not self._is_single_echo_only_read(read_messages):
+                    break
+
+        return read_ret, read_messages, {
+            "read_timeout_ms": int(request.read_timeout_ms),
+            "tail_read_timeout_ms": tail_timeout_ms,
+            "tail_read_attempts": tail_attempts,
+            "tail_read_data_reads": tail_data_reads,
+            "tail_read_triggered": bool(read_attempts and len(read_attempts) > 1),
+            "read_attempts": read_attempts,
+        }
+
     async def _run_loop(self) -> None:
         plan = self._active_plan
         if plan is None:
@@ -208,18 +294,11 @@ class LocalSweepExecutor:
 
             if not await self._wait_for_foreground_idle(plan):
                 return
-            read_ret, read_messages = await self._run_driver_call(
-                "read_msgs",
+            read_ret, read_messages, read_observability = await self._read_shadow_messages(
+                plan,
                 channel_id,
-                request.read_num_msgs,
-                request.read_timeout_ms,
-                request_context=context,
-                ok_codes=(0, BUFFER_EMPTY),
-                result_metadata={
-                    "channel_id": channel_id,
-                    "local_sweep_shadow": True,
-                    "sweep_signature_digest": request.signature_digest,
-                },
+                request,
+                context,
             )
             if not self._plan_is_active(plan):
                 return
@@ -248,13 +327,14 @@ class LocalSweepExecutor:
                 return_code=int(read_ret),
                 message_count=len(read_messages),
                 message_lengths=[
-                    len(bytes(message.get("data", b"") or b""))
+                    len(self._message_data(message))
                     for message in read_messages
                 ],
                 message_prefixes=[
-                    bytes(message.get("data", b"") or b"")[:16].hex()
+                    self._message_data(message)[:16].hex()
                     for message in read_messages
                 ],
+                **read_observability,
             )
         except Exception as exc:
             if not self._plan_is_active(plan):
