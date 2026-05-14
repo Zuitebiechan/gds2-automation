@@ -33,6 +33,10 @@ FOCUS_KEY_REPORT_UNITS: dict[str, str] = {
     "engine_speed": "RPM",
     "accelerator_pedal_position": "%",
 }
+FOCUS_KEY_SWEEP_IDENTIFIERS: dict[str, tuple[str, int]] = {
+    "engine_speed": ("uds_did", 0x000C),
+}
+SLOW_FOCUS_SWEEP_CADENCE_MS = 5000.0
 
 
 def _normalize_cloud_root(path_like: str | Path | None) -> Path:
@@ -90,6 +94,25 @@ def _latency_block(values: list[float]) -> dict[str, float | int | None]:
     }
 
 
+def _flatten_numbers(value: Any) -> list[float]:
+    if isinstance(value, (int, float)):
+        return [float(value)]
+    if isinstance(value, (list, tuple)):
+        values: list[float] = []
+        for item in value:
+            values.extend(_flatten_numbers(item))
+        return values
+    return []
+
+
+def _counter_block(values: Iterable[Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in values:
+        key = str(value if value not in (None, "") else "unknown")
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
 def _discover_session_ids(cloud_root: Path) -> list[str]:
     raw_dir = cloud_root / "raw"
     if not raw_dir.exists():
@@ -120,6 +143,97 @@ def _discover_session_ids(cloud_root: Path) -> list[str]:
         session_id
         for session_id, _ts in sorted(session_first_ts.items(), key=lambda item: item[1])
     ]
+
+
+def _iter_cloud_raw_events(cloud_root: Path) -> Iterable[dict[str, Any]]:
+    raw_dir = cloud_root / "raw"
+    if not raw_dir.exists():
+        return
+    for path in sorted(raw_dir.glob("*.jsonl")) + sorted(raw_dir.glob("*.jsonl.gz")):
+        opener = open
+        if path.suffix == ".gz":
+            import gzip
+
+            opener = gzip.open
+        with opener(path, "rt", encoding="utf-8", errors="replace") as handle:
+            for line_number, line in enumerate(handle, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                payload.setdefault("source_artifact", str(path))
+                payload.setdefault("source_line", line_number)
+                yield payload
+
+
+def _event_identity(event: dict[str, Any]) -> tuple[Any, ...]:
+    if event.get("source_artifact") and event.get("source_line"):
+        return (event.get("source_artifact"), event.get("source_line"))
+    return (
+        event.get("ts"),
+        event.get("component"),
+        event.get("event_type"),
+        event.get("session_id"),
+        event.get("connection_epoch"),
+        event.get("dll_seq"),
+        event.get("proxy_seq"),
+        event.get("worker_request_id"),
+        event.get("reason"),
+    )
+
+
+def _include_epoch_only_events(
+    cloud_root: Path,
+    timeline: list[dict[str, Any]],
+    *,
+    connection_epoch: str | None,
+) -> list[dict[str, Any]]:
+    epoch = str(connection_epoch or "").strip()
+    if not epoch:
+        return timeline
+    merged = list(timeline)
+    seen = {_event_identity(event) for event in merged}
+    raw_events = list(_iter_cloud_raw_events(cloud_root))
+    for event in raw_events:
+        if str(event.get("connection_epoch") or "") != epoch:
+            continue
+        identity = _event_identity(event)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        merged.append(event)
+    event_times = [
+        ts
+        for ts in (_parse_ts(event.get("ts")) for event in merged)
+        if ts is not None
+    ]
+    if event_times:
+        start_ts = min(event_times)
+        end_ts = max(event_times)
+        startup_candidates = [
+            event
+            for event in raw_events
+            if event.get("component") == "reverse_server"
+            and event.get("event_type")
+            in {"process.lifecycle.started", "sweep.config.warning"}
+            and event.get("connection_epoch") in (None, "", "no-epoch")
+            and (ts := _parse_ts(event.get("ts"))) is not None
+            and ts <= end_ts
+            and (start_ts - timedelta(minutes=10)) <= ts
+        ]
+        for event in startup_candidates:
+            identity = _event_identity(event)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            merged.append(event)
+    return sorted(
+        merged,
+        key=lambda event: _parse_ts(event.get("ts"))
+        or datetime.min.replace(tzinfo=timezone.utc),
+    )
 
 
 def _window_events(
@@ -219,6 +333,212 @@ def _focus_key_changes_key(focus_key: str) -> str:
     return f"{focus_key}_changes"
 
 
+def _focus_sweep_identifier(focus_key: str) -> tuple[str, int] | None:
+    return FOCUS_KEY_SWEEP_IDENTIFIERS.get(focus_key)
+
+
+def _matches_focus_sweep(event: dict[str, Any], focus_key: str) -> bool:
+    identifier = _focus_sweep_identifier(focus_key)
+    if identifier is None:
+        return False
+    expected_kind, expected_value = identifier
+    return (
+        str(event.get("sweep_identifier_kind") or "") == expected_kind
+        and int(event.get("sweep_identifier") or -1) == expected_value
+    )
+
+
+def _summarize_focus_sweep(
+    timeline: list[dict[str, Any]],
+    *,
+    focus_key: str,
+) -> dict[str, Any]:
+    identifier = _focus_sweep_identifier(focus_key)
+    if identifier is None:
+        return {
+            "supported": False,
+            "identifier_kind": None,
+            "identifier": None,
+            "cadence_event_count": 0,
+            "cadence_ms": _latency_block([]),
+        }
+    cadence_events = [
+        event
+        for event in timeline
+        if event.get("event_type") == "sweep.did.cadence"
+        and _matches_focus_sweep(event, focus_key)
+    ]
+    cadence_events.sort(key=lambda event: _parse_ts(event.get("ts")) or datetime.min.replace(tzinfo=timezone.utc))
+    observed_cadence_ms: list[float] = []
+    previous_ts: datetime | None = None
+    for event in cadence_events:
+        value = event.get("sweep_cadence_ms")
+        if isinstance(value, (int, float)):
+            observed_cadence_ms.append(float(value))
+        ts = _parse_ts(event.get("ts"))
+        if ts is not None and previous_ts is not None:
+            observed_cadence_ms.append((ts - previous_ts).total_seconds() * 1000.0)
+        if ts is not None:
+            previous_ts = ts
+    learned_count = sum(
+        1
+        for event in timeline
+        if event.get("event_type") == "sweep.pattern.learned"
+        and _matches_focus_sweep(event, focus_key)
+    )
+    inventory_events = [
+        event
+        for event in timeline
+        if event.get("event_type") == "sweep.inventory.signature"
+        and _matches_focus_sweep(event, focus_key)
+    ]
+    latest_inventory = inventory_events[-1] if inventory_events else {}
+    return {
+        "supported": True,
+        "identifier_kind": identifier[0],
+        "identifier": identifier[1],
+        "cadence_event_count": len(cadence_events),
+        "cadence_ms": _latency_block(observed_cadence_ms),
+        "learned_count": learned_count,
+        "latest_cycles": latest_inventory.get("sweep_inventory_write_observed_count"),
+        "latest_read_data_count": latest_inventory.get("sweep_inventory_read_data_count"),
+        "latest_shadow_eligible": latest_inventory.get("sweep_inventory_shadow_eligible"),
+        "latest_replay_candidate": latest_inventory.get("sweep_inventory_replay_candidate"),
+        "latest_eligibility_reason": latest_inventory.get("sweep_inventory_eligibility_reason"),
+        "projected_pair_rtt_savings_ms": latest_inventory.get(
+            "sweep_inventory_projected_pair_rtt_savings_ms"
+        ),
+    }
+
+
+def _summarize_shadow_and_config(timeline: list[dict[str, Any]]) -> dict[str, Any]:
+    startup_events = [
+        event
+        for event in timeline
+        if event.get("component") == "reverse_server"
+        and event.get("event_type") == "process.lifecycle.started"
+    ]
+    startup = startup_events[-1] if startup_events else {}
+    plan_started = [
+        event for event in timeline if event.get("event_type") == "sweep.plan.started"
+    ]
+    shadow_events = [
+        event
+        for event in timeline
+        if str(event.get("event_type") or "").startswith("sweep.shadow.")
+    ]
+    plan_read_timeouts: list[float] = []
+    for event in plan_started:
+        plan_read_timeouts.extend(_flatten_numbers(event.get("sweep_plan_read_timeout_ms")))
+    local_sweep_mode = startup.get("local_sweep_mode")
+    local_sweep_read_timeout_ms = startup.get("local_sweep_read_timeout_ms")
+    shadow_transport_enabled = bool(
+        startup.get("local_sweep_enabled")
+        and str(local_sweep_mode or "") in {"shadow_local", "active_replay"}
+    )
+    startup_timeout_zero = (
+        shadow_transport_enabled
+        and isinstance(local_sweep_read_timeout_ms, (int, float))
+        and int(local_sweep_read_timeout_ms) <= 0
+    )
+    plan_timeout_zero = bool(plan_read_timeouts) and max(plan_read_timeouts) <= 0
+    warning_events = [
+        event
+        for event in timeline
+        if event.get("event_type") == "sweep.config.warning"
+    ]
+    return {
+        "startup": {
+            "local_sweep_enabled": startup.get("local_sweep_enabled"),
+            "local_sweep_mode": local_sweep_mode,
+            "local_sweep_read_timeout_ms": local_sweep_read_timeout_ms,
+            "local_sweep_shadow_allow_gm_a9_packet": startup.get(
+                "local_sweep_shadow_allow_gm_a9_packet"
+            ),
+        },
+        "config_warning_count": len(warning_events),
+        "shadow_transport_enabled": shadow_transport_enabled,
+        "tail_read_validation_blocked": bool(startup_timeout_zero or plan_timeout_zero),
+        "plan_started_count": len(plan_started),
+        "plan_item_counts": [
+            int(event.get("sweep_item_count") or 0) for event in plan_started
+        ],
+        "plan_read_timeout_ms": [int(value) for value in plan_read_timeouts],
+        "shadow_event_counts": _counter_block(event.get("event_type") for event in shadow_events),
+        "shadow_missing_reasons": _counter_block(
+            event.get("sweep_shadow_missing_reason")
+            for event in shadow_events
+            if event.get("event_type") == "sweep.shadow.missing"
+        ),
+        "shadow_mismatch_count": sum(
+            1 for event in shadow_events if event.get("event_type") == "sweep.shadow.mismatch"
+        ),
+        "shadow_match_count": sum(
+            1 for event in shadow_events if event.get("event_type") == "sweep.shadow.match"
+        ),
+    }
+
+
+def _build_session_verdict(
+    timeline: list[dict[str, Any]],
+    *,
+    focus_key: str,
+    changes: list[dict[str, Any]],
+) -> dict[str, Any]:
+    focus_sweep = _summarize_focus_sweep(timeline, focus_key=focus_key)
+    shadow = _summarize_shadow_and_config(timeline)
+    forwarded_events = [
+        event for event in timeline if event.get("event_type") == "proxy.request.forwarded_to_tunnel"
+    ]
+    reasons: list[str] = []
+    next_checks: list[str] = []
+    if not changes:
+        reasons.append("no_significant_focus_value_changes")
+        next_checks.append("repeat the run with visible focus-value movement")
+    if shadow["tail_read_validation_blocked"]:
+        reasons.append("local_sweep_shadow_read_timeout_zero")
+        next_checks.append(
+            "restart the cloud reverse_server with VCI_PROXY_LOCAL_SWEEP_READ_TIMEOUT_MS=1"
+        )
+    cadence_p50 = (focus_sweep.get("cadence_ms") or {}).get("p50")
+    cadence_max = (focus_sweep.get("cadence_ms") or {}).get("max")
+    if isinstance(cadence_p50, (int, float)) and cadence_p50 > SLOW_FOCUS_SWEEP_CADENCE_MS:
+        reasons.append("focus_sweep_cadence_still_slow")
+        next_checks.append("reduce write-side tunnel crossings for the learned sweep")
+    if focus_sweep.get("supported") and focus_sweep.get("cadence_event_count") == 0:
+        reasons.append("no_focus_sweep_cadence_events")
+        next_checks.append("verify sweep inventory sees the focus DID")
+    if shadow.get("shadow_mismatch_count"):
+        reasons.append("shadow_results_not_comparison_clean")
+        next_checks.append("inspect shadow echo/positive-response frame shape before replay")
+    if not reasons:
+        reasons.append("no_blocking_issue_detected")
+    if "no_significant_focus_value_changes" in reasons:
+        status = "inconclusive_no_focus_changes"
+    elif "local_sweep_shadow_read_timeout_zero" in reasons:
+        status = "config_not_applied"
+    elif "focus_sweep_cadence_still_slow" in reasons:
+        status = "freshness_still_slow"
+    elif "shadow_results_not_comparison_clean" in reasons:
+        status = "shadow_not_replay_ready"
+    else:
+        status = "review"
+    return {
+        "status": status,
+        "confidence": "high" if len(timeline) and changes else "medium",
+        "reasons": reasons,
+        "next_checks": list(dict.fromkeys(next_checks)),
+        "focus_sweep": focus_sweep,
+        "shadow": shadow,
+        "foreground_forwarded_count": len(forwarded_events),
+        "foreground_forwarded_reasons": _counter_block(
+            event.get("reason") for event in forwarded_events
+        ),
+        "focus_sweep_cadence_p50_ms": cadence_p50,
+        "focus_sweep_cadence_max_ms": cadence_max,
+    }
+
+
 def _extract_focus_value_changes(
     timeline: list[dict[str, Any]],
     *,
@@ -274,7 +594,11 @@ def _summarize_session(
     window_ms: int,
 ) -> dict[str, Any]:
     trace = assemble_session_trace(cloud_root=cloud_root, session_id=session_id)
-    timeline = list(trace.get("timeline") or [])
+    timeline = _include_epoch_only_events(
+        cloud_root,
+        list(trace.get("timeline") or []),
+        connection_epoch=trace.get("connection_epoch"),
+    )
     changes = _extract_focus_value_changes(
         timeline,
         focus_key=focus_key,
@@ -290,6 +614,11 @@ def _summarize_session(
         "key_metrics": trace.get("key_metrics"),
         "source_artifact_count": len(trace.get("source_artifacts") or []),
         "focus_value_changes": changes,
+        "verdict": _build_session_verdict(
+            timeline,
+            focus_key=focus_key,
+            changes=changes,
+        ),
         _focus_key_changes_key(focus_key): changes,
     }
     if focus_key == "battery_voltage":
@@ -367,6 +696,12 @@ def _format_counts(counts: dict[str, int] | None) -> str:
     return ", ".join(f"{key}:{value}" for key, value in sorted(counts.items()))
 
 
+def _format_list(values: list[Any] | tuple[Any, ...] | None) -> str:
+    if not values:
+        return "-"
+    return ", ".join(str(value) for value in values)
+
+
 def generate_markdown_report(payload: dict[str, Any]) -> str:
     focus_key = str(payload.get("focus_key") or "battery_voltage")
     focus_label = str(payload.get("focus_label") or _focus_key_label(focus_key))
@@ -397,6 +732,48 @@ def generate_markdown_report(payload: dict[str, Any]) -> str:
                 f"- Data category: `{(session.get('page_context') or {}).get('data_category')}`",
                 f"- Significant {focus_label} changes: `{len(session.get('focus_value_changes') or [])}`",
                 "",
+            ]
+        )
+        verdict = session.get("verdict") or {}
+        shadow = verdict.get("shadow") or {}
+        focus_sweep = verdict.get("focus_sweep") or {}
+        startup = shadow.get("startup") or {}
+        if verdict:
+            lines.extend(
+                [
+                    "### Verdict",
+                    "",
+                    f"- Status: `{verdict.get('status')}`",
+                    f"- Reasons: `{_format_list(verdict.get('reasons'))}`",
+                    f"- Next checks: `{_format_list(verdict.get('next_checks'))}`",
+                    (
+                        "- Focus sweep cadence p50/max ms: "
+                        f"`{verdict.get('focus_sweep_cadence_p50_ms')}` / "
+                        f"`{verdict.get('focus_sweep_cadence_max_ms')}`"
+                    ),
+                    (
+                        "- Local sweep startup: "
+                        f"mode=`{startup.get('local_sweep_mode')}`, "
+                        f"read_timeout_ms=`{startup.get('local_sweep_read_timeout_ms')}`"
+                    ),
+                    (
+                        "- Shadow plans: "
+                        f"count=`{shadow.get('plan_started_count')}`, "
+                        f"item_counts=`{_format_list(shadow.get('plan_item_counts'))}`, "
+                        f"read_timeout_ms=`{_format_list(shadow.get('plan_read_timeout_ms'))}`"
+                    ),
+                    f"- Shadow events: `{_format_counts(shadow.get('shadow_event_counts'))}`",
+                    (
+                        "- Focus DID: "
+                        f"kind=`{focus_sweep.get('identifier_kind')}`, "
+                        f"id=`{focus_sweep.get('identifier')}`, "
+                        f"cadence_events=`{focus_sweep.get('cadence_event_count')}`"
+                    ),
+                    "",
+                ]
+            )
+        lines.extend(
+            [
                 f"| TS | Source | Prev{value_column_unit} | Curr{value_column_unit} | Delta{value_column_unit} | Lag ms | RTT p95 ms | Write-collect txns | Replay armed | Replay served | Forwarded | Prefetch miss details |",
                 "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
             ]

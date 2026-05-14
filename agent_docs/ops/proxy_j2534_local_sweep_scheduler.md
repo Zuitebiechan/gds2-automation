@@ -708,6 +708,15 @@ after an initial 4-byte `0x7E0..0x7EF` echo-like frame through
 `tail_read_triggered`, `tail_read_attempts`, `tail_read_data_reads`,
 `tail_read_timeout_ms`, and `read_attempts`.
 
+The focused freshness analyzer now emits a per-session verdict. For Engine
+Speed runs, `status=config_not_applied` with
+`local_sweep_shadow_read_timeout_zero` means the logs show shadow transport but
+not the intended positive shadow read timeout; do not use such a run to judge
+the bounded tail-read fix. `status=freshness_still_slow` means meaningful
+Engine Speed changes were present but the observed `0x000C` sweep cadence still
+exceeded the local-feel target, so the next optimization remains write-side
+tunnel crossing reduction rather than another read-cache/read-ahead tweak.
+
 Manual GDS2 tests must keep relying on proxy-layer payload evidence because Flask live-data collector samples may not exist.
 
 The Engine Speed detector should be expanded to recognize CAN-ID-prefixed UDS responses, for example:

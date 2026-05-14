@@ -365,3 +365,186 @@ def test_focus_value_freshness_script_reports_engine_speed_changes(tmp_path: Pat
     assert "# Engine Speed Freshness Report" in report
     assert "Significant Engine Speed changes: `1`" in report
     assert "Engine Speed" in report
+
+
+def test_engine_speed_freshness_verdict_flags_shadow_timeout_and_slow_cadence(
+    tmp_path: Path,
+) -> None:
+    cloud_root = tmp_path / "cloud"
+    raw_dir = cloud_root / "raw"
+    raw_dir.mkdir(parents=True)
+
+    events = [
+        _event(
+            "2026-05-14T08:00:00Z",
+            "session_runtime",
+            "session.lifecycle.started",
+            session_id="session-engine-verdict",
+            connection_epoch="epoch-engine-verdict",
+        ),
+        _event(
+            "2026-05-14T08:00:01Z",
+            "reverse_server",
+            "process.lifecycle.started",
+            session_id=None,
+            connection_epoch="epoch-engine-verdict",
+            local_sweep_enabled=True,
+            local_sweep_mode="shadow_local",
+            local_sweep_read_timeout_ms=0,
+            local_sweep_shadow_allow_gm_a9_packet=False,
+        ),
+        _event(
+            "2026-05-14T08:00:01.100000Z",
+            "reverse_server",
+            "sweep.config.warning",
+            session_id=None,
+            connection_epoch="epoch-engine-verdict",
+            failure_code="local_sweep_shadow_read_timeout_zero",
+            reason="shadow_read_timeout_zero",
+            local_sweep_read_timeout_ms=0,
+            local_sweep_validation_blocked=True,
+        ),
+        _event(
+            "2026-05-14T08:00:10Z",
+            "session_runtime",
+            "session.live_data.started",
+            session_id="session-engine-verdict",
+            connection_epoch="epoch-engine-verdict",
+            page="data_display",
+            module="Engine Control Module",
+            data_category="Engine Data",
+        ),
+        _event(
+            "2026-05-14T08:00:20Z",
+            "reverse_server",
+            "sweep.did.cadence",
+            session_id=None,
+            connection_epoch="epoch-engine-verdict",
+            sweep_identifier_kind="uds_did",
+            sweep_identifier=0x000C,
+            sweep_cadence_ms=None,
+        ),
+        _event(
+            "2026-05-14T08:00:28Z",
+            "reverse_server",
+            "sweep.did.cadence",
+            session_id=None,
+            connection_epoch="epoch-engine-verdict",
+            sweep_identifier_kind="uds_did",
+            sweep_identifier=0x000C,
+            sweep_cadence_ms=8000.0,
+        ),
+        _event(
+            "2026-05-14T08:00:28.001000Z",
+            "reverse_server",
+            "sweep.inventory.signature",
+            session_id=None,
+            connection_epoch="epoch-engine-verdict",
+            sweep_identifier_kind="uds_did",
+            sweep_identifier=0x000C,
+            sweep_inventory_write_observed_count=2,
+            sweep_inventory_read_data_count=2,
+            sweep_inventory_shadow_eligible=True,
+            sweep_inventory_replay_candidate=True,
+            sweep_inventory_eligibility_reason="learned_safe_signature",
+            sweep_inventory_projected_pair_rtt_savings_ms=140.0,
+        ),
+        _event(
+            "2026-05-14T08:00:28.100000Z",
+            "reverse_server",
+            "sweep.plan.started",
+            session_id=None,
+            connection_epoch="epoch-engine-verdict",
+            sweep_item_count=1,
+            sweep_plan_read_timeout_ms=[0],
+        ),
+        _event(
+            "2026-05-14T08:00:28.200000Z",
+            "reverse_server",
+            "sweep.shadow.mismatch",
+            session_id=None,
+            connection_epoch="epoch-engine-verdict",
+            sweep_identifier_kind="uds_did",
+            sweep_identifier=0x000C,
+            sweep_real_message_lengths=[4, 9],
+            sweep_shadow_message_lengths=[4],
+        ),
+        _event(
+            "2026-05-14T08:00:28.300000Z",
+            "reverse_server",
+            "proxy.request.forwarded_to_tunnel",
+            session_id=None,
+            connection_epoch="epoch-engine-verdict",
+            reason="write_collect_transaction",
+        ),
+        _event(
+            "2026-05-14T08:00:28.400000Z",
+            "agent_data_collector",
+            "agent.collector.focus_value_changed",
+            session_id="session-engine-verdict",
+            connection_epoch="epoch-engine-verdict",
+            page="data_display",
+            module="Engine Control Module",
+            data_category="Engine Data",
+            focus_key="engine_speed",
+            source_parameter_name="Engine Speed",
+            source_parameter_unit="RPM",
+            previous_value="850",
+            current_value="1650",
+            previous_value_number=850.0,
+            current_value_number=1650.0,
+            delta_value_number=800.0,
+            collector_lag_ms=40.0,
+        ),
+        _event(
+            "2026-05-14T08:00:40Z",
+            "session_runtime",
+            "session.lifecycle.aborted",
+            session_id="session-engine-verdict",
+            connection_epoch="epoch-engine-verdict",
+            status="error",
+            failure_code="aborted",
+            failure_domain="session_runtime",
+            reason="Aborted by user",
+        ),
+    ]
+    (raw_dir / "cloud.jsonl").write_text(
+        "\n".join(json.dumps(event, ensure_ascii=False) for event in events),
+        encoding="utf-8",
+    )
+
+    report_path = tmp_path / "engine_verdict.md"
+    json_path = tmp_path / "engine_verdict.json"
+    _run(
+        str(SCRIPT),
+        "--cloud-root",
+        str(cloud_root),
+        "--session-id",
+        "session-engine-verdict",
+        "--focus-key",
+        "engine_speed",
+        "--min-delta",
+        "100",
+        "--json",
+        str(json_path),
+        "--report",
+        str(report_path),
+    )
+
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    verdict = payload["sessions"][0]["verdict"]
+    assert verdict["status"] == "config_not_applied"
+    assert "local_sweep_shadow_read_timeout_zero" in verdict["reasons"]
+    assert "focus_sweep_cadence_still_slow" in verdict["reasons"]
+    assert "shadow_results_not_comparison_clean" in verdict["reasons"]
+    assert verdict["focus_sweep"]["cadence_event_count"] == 2
+    assert verdict["focus_sweep_cadence_p50_ms"] == 8000.0
+    assert verdict["shadow"]["tail_read_validation_blocked"] is True
+    assert verdict["shadow"]["plan_read_timeout_ms"] == [0]
+    assert verdict["shadow"]["shadow_mismatch_count"] == 1
+    assert verdict["foreground_forwarded_reasons"] == {"write_collect_transaction": 1}
+
+    report = report_path.read_text(encoding="utf-8")
+    assert "### Verdict" in report
+    assert "config_not_applied" in report
+    assert "VCI_PROXY_LOCAL_SWEEP_READ_TIMEOUT_MS=1" in report

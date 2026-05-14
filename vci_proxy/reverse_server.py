@@ -31,7 +31,7 @@ from diagnostic_platform.observability import (
     read_active_session_snapshot,
 )
 
-from .config import ProxyConfig
+from .config import LOCAL_SWEEP_READ_TIMEOUT_MS_ENV, ProxyConfig
 from .cache_read_msgs import BUFFER_EMPTY, ReadMsgsCache
 from .cache_filter_dedup import FilterDeduplicationCache
 from .cache_ioctl import IoctlCache
@@ -1396,6 +1396,31 @@ class ReverseProxyServer:
             **extra,
         )
 
+    def _emit_local_sweep_config_warnings(self) -> None:
+        if not self.config.local_sweep.shadow_transport_enabled:
+            return
+        if int(self.config.local_sweep.read_timeout_ms) > 0:
+            return
+        logger.warning(
+            "Local sweep shadow transport is enabled with read_timeout_ms=0; "
+            "focused shadow-tail validation requires %s=1 or another positive timeout",
+            LOCAL_SWEEP_READ_TIMEOUT_MS_ENV,
+        )
+        self._emit_tunnel_event(
+            "sweep.config.warning",
+            operation_kind="reverse_server_process",
+            impact_scope="reverse_server_process",
+            status="ok",
+            failure_code="local_sweep_shadow_read_timeout_zero",
+            failure_domain="cloud_proxy_tunnel",
+            reason="shadow_read_timeout_zero",
+            local_sweep_enabled=self.config.local_sweep.enabled,
+            local_sweep_mode=self.config.local_sweep.mode,
+            local_sweep_read_timeout_ms=self.config.local_sweep.read_timeout_ms,
+            local_sweep_expected_env=LOCAL_SWEEP_READ_TIMEOUT_MS_ENV,
+            local_sweep_validation_blocked=True,
+        )
+
     def _build_tls_server_context(self) -> ssl.SSLContext | None:
         """Build optional TLS listener context for inbound reverse clients."""
         if not self.config.tls.enabled:
@@ -1565,6 +1590,7 @@ class ReverseProxyServer:
                 local_sweep_include_uds_dids=list(self.config.local_sweep.include_uds_dids),
                 local_sweep_exclude_uds_dids=list(self.config.local_sweep.exclude_uds_dids),
             )
+            self._emit_local_sweep_config_warnings()
 
         try:
             await asyncio.gather(

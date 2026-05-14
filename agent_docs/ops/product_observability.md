@@ -238,7 +238,13 @@ actually active:
   `read_ahead_min_drain_ms`,
   `read_ahead_transaction_max_network_ms`,
   `read_ahead_transaction_cooldown_ms`, `local_sweep_enabled`,
-  `local_sweep_mode`, and `local_sweep_shadow_allow_gm_a9_packet`;
+  `local_sweep_mode`, `local_sweep_read_timeout_ms`, and
+  `local_sweep_shadow_allow_gm_a9_packet`;
+- cloud `reverse_server` `sweep.config.warning`:
+  `failure_code=local_sweep_shadow_read_timeout_zero` means
+  `shadow_local` / `active_replay` was enabled with
+  `local_sweep_read_timeout_ms=0`, so focused shadow-tail validation is not
+  active for that run;
 - local `reverse_client.lifecycle.auth_succeeded` reason:
   `read_ahead=1`, `read_collect=1`, `write_collect=1`, and `sweep_shadow=1`;
 - transaction activity:
@@ -363,6 +369,7 @@ Expected evidence in a useful run:
 - `vci_proxy/reverse_server.py`
   - emits tunnel lifecycle, probe, tunnel-quality, proxy-request staged events, and reverse-server process lifecycle events
   - reverse-server process lifecycle events include read-cache/read-ahead settings plus local sweep mode, `local_sweep_allow_gm_a9_packet`, `local_sweep_shadow_allow_gm_a9_packet`, and `local_sweep_min_item_interval_ms` when reporting startup configuration
+  - when shadow transport is enabled with `local_sweep_read_timeout_ms=0`, reverse server emits `sweep.config.warning` with `failure_code=local_sweep_shadow_read_timeout_zero` and `local_sweep_validation_blocked=true`; treat that run as unable to validate bounded shadow tail reads until the cloud reverse server is restarted with a positive `VCI_PROXY_LOCAL_SWEEP_READ_TIMEOUT_MS`
   - proxy-request events for `READ_MSGS_REQ` include decoded request metadata (`channel_id`, `num_msgs`, `timeout`) and, when applicable, `last_write_seq` plus `post_write_age_ms`
   - read-ahead FIFO decisions add `prefetch_fifo_pending_before`, `prefetch_fifo_pending_after`, `prefetch_requested_count`, `prefetch_served_count`, and `prefetch_underfill_count`; when FIFO data is served they also include `prefetch_source_counts` plus `prefetch_age_min_ms`, `prefetch_age_avg_ms`, and `prefetch_age_max_ms` so local-simulated-cloud runs can show whether hits came from `read_collect` or `write_collect` and how long frames waited before DLL consumption; `prefetch_miss` decisions include `prefetch_miss_detail`, read-collect eligibility/block reason, empty-cache state, and last prefetch record/drain/real-read age fields so miss clusters can be separated into no prior prefetch, exhausted FIFO, recent confirmed empty, or unavailable read-collect cases; partial FIFO fallback uses `reason=prefetch_underfill_forwarded`, then response/reply events use `prefetch_merge_tunnel_data`, `prefetch_merge_tunnel_empty`, or `prefetch_underfill_tunnel_error`
   - empty-cache state includes adaptive active-TTL fields such as `empty_cache_recent_empty_gap_ms`, `empty_cache_empty_gap_sample_count`, and `empty_cache_adaptive_ttl_applied` when repeated real `ReadMsgs(BUFFER_EMPTY)` replies have raised the effective active TTL above the configured base TTL

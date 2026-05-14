@@ -600,6 +600,14 @@ foreground DLL-visible `ReadMsgs(timeout=0)` semantics. The cloud
 `sweep_plan_read_timeout_ms`, and `process.lifecycle.started` reports
 `local_sweep_read_timeout_ms`.
 
+When shadow transport is enabled but the effective startup
+`local_sweep_read_timeout_ms` is still `0`, the cloud emits
+`sweep.config.warning` with
+`failure_code=local_sweep_shadow_read_timeout_zero`. Treat that as a test setup
+failure for focused shadow-tail validation: the local executor will not run the
+bounded echo-only tail-read path until the cloud reverse server is restarted
+with a positive `VCI_PROXY_LOCAL_SWEEP_READ_TIMEOUT_MS`.
+
 For focused fidelity debugging, `shadow_local` can now filter only the shadow
 plan without changing what GDS2 requests on the page. `VCI_PROXY_LOCAL_SWEEP_INCLUDE_UDS_DIDS`
 keeps only listed `UDS 0x22` DIDs in the local shadow plan, and

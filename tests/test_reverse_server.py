@@ -3433,6 +3433,29 @@ def test_shadow_plan_read_timeout_can_override_foreground_nonblocking_read(
     asyncio.run(_run())
 
 
+def test_shadow_local_zero_read_timeout_emits_config_warning(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+    server = ReverseProxyServer(
+        config=ProxyConfig.from_args(
+            local_sweep_enabled=True,
+            local_sweep_mode="shadow_local",
+            local_sweep_read_timeout_ms=0,
+        )
+    )
+
+    server._emit_local_sweep_config_warnings()
+
+    records = _read_product_log_events(tmp_path)
+    warning = next(
+        record for record in records if record["event_type"] == "sweep.config.warning"
+    )
+    assert warning["failure_code"] == "local_sweep_shadow_read_timeout_zero"
+    assert warning["reason"] == "shadow_read_timeout_zero"
+    assert warning["local_sweep_read_timeout_ms"] == 0
+    assert warning["local_sweep_expected_env"] == "VCI_PROXY_LOCAL_SWEEP_READ_TIMEOUT_MS"
+    assert warning["local_sweep_validation_blocked"] is True
+
+
 def test_shadow_plan_skips_gm_a9_by_default_but_keeps_observing(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
     server = ReverseProxyServer(
