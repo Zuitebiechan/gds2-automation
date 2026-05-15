@@ -340,6 +340,11 @@ should show the read-ahead/transaction flags, and the local
 `reverse_client.lifecycle.auth_succeeded` reason should include
 `read_ahead=1`, `read_collect=1`, and `write_collect=1` when both sides are
 enabled.
+The cloud now also emits `tunnel.auth.accepted` with parsed
+`client_capabilities`, `vci_capabilities`, and the booleans
+`read_ahead_enabled`, `read_collect_enabled`, `write_collect_enabled`, and
+`sweep_shadow_supported` so a real run can prove whether `sweep_shadow=1` was
+actually negotiated before any shadow plan was expected to start.
 
 Reverse server and reverse client CLI overrides:
 

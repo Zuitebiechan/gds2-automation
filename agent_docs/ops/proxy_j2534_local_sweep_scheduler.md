@@ -722,6 +722,19 @@ Engine Speed changes were present but the observed `0x000C` sweep cadence still
 exceeded the local-feel target, so the next optimization remains write-side
 tunnel crossing reduction rather than another read-cache/read-ahead tweak.
 
+Before the next real-vehicle run, verify this minimum evidence chain:
+
+- cloud `process.lifecycle.started` shows `local_sweep_mode=shadow_local` and
+  `local_sweep_read_timeout_ms=1`;
+- cloud `tunnel.auth.accepted` shows `client_capabilities` including
+  `sweep_shadow=1` and `sweep_shadow_supported=true`;
+- if no local shadow execution appears, check `sweep.plan.skipped` before
+  concluding the optimization failed;
+- a valid shadow-local execution run should show at least one
+  `sweep.plan.started`, and an expanded learned set should later show
+  `sweep.plan.superseded`;
+- keep GM A9 in observe-only / inventory-only mode throughout these checks.
+
 Manual GDS2 tests must keep relying on proxy-layer payload evidence because Flask live-data collector samples may not exist.
 
 The Engine Speed detector should be expanded to recognize CAN-ID-prefixed UDS responses, for example:

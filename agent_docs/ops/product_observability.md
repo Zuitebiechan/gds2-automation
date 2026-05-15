@@ -247,6 +247,12 @@ actually active:
   active for that run;
 - local `reverse_client.lifecycle.auth_succeeded` reason:
   `read_ahead=1`, `read_collect=1`, `write_collect=1`, and `sweep_shadow=1`;
+- cloud `tunnel.auth.accepted`:
+  parsed `client_capabilities`, returned `vci_capabilities`, and the booleans
+  `read_ahead_enabled`, `read_collect_enabled`, `write_collect_enabled`, and
+  `sweep_shadow_supported`; use this event to confirm the server actually
+  accepted `sweep_shadow=1` instead of inferring from the client-side auth
+  response string alone;
 - transaction activity:
   `proxy.request.forwarded_to_tunnel` with
   `reason=write_collect_transaction` or, for non-blocking foreground reads with
@@ -264,6 +270,10 @@ actually active:
   `sweep.inventory.signature`, and `sweep.inventory.summary`;
 - skipped GM A9 shadow plans:
   `sweep.plan.skipped` with `reason=gm_a9_packet_observe_only`;
+- other skipped shadow starts:
+  `sweep.plan.skipped` with `reason=shadow_transport_disabled`,
+  `vci_sweep_shadow_not_supported`, `shadow_plan_start_pending`, or
+  `no_learned_items`;
 - actual local shadow execution:
   `sweep.plan.started`, `sweep.batch.drained`, and `sweep.shadow.*`.
 

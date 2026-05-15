@@ -759,8 +759,18 @@ class ReverseProxyServer:
 
     def _maybe_start_shadow_plan(self, observed: SweepObservedRequest) -> None:
         if not self.config.local_sweep.shadow_transport_enabled:
+            self._emit_tunnel_event(
+                "sweep.plan.skipped",
+                reason="shadow_transport_disabled",
+                channel_id=observed.signature.channel_id,
+            )
             return
         if not self._vci_sweep_shadow_supported:
+            self._emit_tunnel_event(
+                "sweep.plan.skipped",
+                reason="vci_sweep_shadow_not_supported",
+                channel_id=observed.signature.channel_id,
+            )
             return
         if self._sweep_active_plan is not None:
             self._maybe_supersede_active_shadow_plan(
@@ -768,6 +778,11 @@ class ReverseProxyServer:
             )
             return
         if self._sweep_plan_start_pending():
+            self._emit_tunnel_event(
+                "sweep.plan.skipped",
+                reason="shadow_plan_start_pending",
+                channel_id=observed.signature.channel_id,
+            )
             return
         channel_id = observed.signature.channel_id
         plan = self._build_sweep_plan_for_channel(channel_id)
@@ -775,6 +790,12 @@ class ReverseProxyServer:
             _learned, skipped_count, skipped_gm_a9_count = self._learned_for_shadow_plan(
                 channel_id
             )
+            if skipped_count == 0 and skipped_gm_a9_count == 0:
+                self._emit_tunnel_event(
+                    "sweep.plan.skipped",
+                    reason="no_learned_items",
+                    channel_id=channel_id,
+                )
             if skipped_gm_a9_count:
                 self._emit_shadow_plan_skipped_once(
                     channel_id=channel_id,
@@ -1803,6 +1824,18 @@ class ReverseProxyServer:
                     capabilities,
                     "sweep_shadow",
                 )
+                self._emit_tunnel_event(
+                    "tunnel.auth.accepted",
+                    reason="auth_not_required",
+                    client_capabilities=capabilities,
+                    vci_capabilities=self._auth_success_message(
+                        connection_epoch=connection_epoch_hint,
+                    ),
+                    read_ahead_enabled=self._vci_read_collect_supported,
+                    read_collect_enabled=self._vci_read_collect_supported,
+                    write_collect_enabled=self._vci_write_collect_supported,
+                    sweep_shadow_supported=self._vci_sweep_shadow_supported,
+                )
                 rsp = ProtocolEncoder.encode_auth_rsp(
                     True,
                     self._auth_success_message(
@@ -1845,6 +1878,16 @@ class ReverseProxyServer:
                 self._vci_sweep_shadow_supported = self._capability_enabled(
                     capabilities,
                     "sweep_shadow",
+                )
+                self._emit_tunnel_event(
+                    "tunnel.auth.accepted",
+                    reason="auth_success",
+                    client_capabilities=capabilities,
+                    vci_capabilities=reason,
+                    read_ahead_enabled=self._vci_read_collect_supported,
+                    read_collect_enabled=self._vci_read_collect_supported,
+                    write_collect_enabled=self._vci_write_collect_supported,
+                    sweep_shadow_supported=self._vci_sweep_shadow_supported,
                 )
             rsp = ProtocolEncoder.encode_auth_rsp(success, reason, sequence)
             try:

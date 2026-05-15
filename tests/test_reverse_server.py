@@ -239,6 +239,36 @@ def test_authenticate_vci_negotiates_sweep_shadow_capability(monkeypatch) -> Non
     assert "sweep_shadow=1" in message
 
 
+def test_authenticate_vci_emits_structured_capability_accept_event(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+    server = ReverseProxyServer(
+        config=ProxyConfig.from_args(
+            auth_token="secret",
+            local_sweep_enabled=True,
+            local_sweep_mode="shadow_local",
+        )
+    )
+    reader = _FakeReader(
+        ProtocolEncoder.encode_auth_req(
+            123,
+            b"x" * 32,
+            sequence=7,
+            capabilities="read_ahead=1;read_collect=1;write_collect=1;sweep_shadow=1",
+        )
+    )
+    writer = _FakeWriter()
+    monkeypatch.setattr("vci_proxy.reverse_server.verify_signature", lambda token, timestamp, signature: (True, "ok"))
+
+    accepted = asyncio.run(server._authenticate_vci(reader, writer))
+
+    assert accepted is True
+    records = _read_product_log_events(tmp_path)
+    accepted_events = [record for record in records if record["event_type"] == "tunnel.auth.accepted"]
+    assert accepted_events
+    assert accepted_events[-1]["sweep_shadow_supported"] is True
+    assert accepted_events[-1]["client_capabilities"].endswith("sweep_shadow=1")
+
+
 def test_authenticate_vci_rejects_legacy_heartbeat_when_auth_is_required() -> None:
     server = ReverseProxyServer(config=ProxyConfig.from_args(auth_token="secret"))
     reader = _FakeReader(ProtocolEncoder.encode_heartbeat(sequence=3))
@@ -3336,6 +3366,53 @@ def test_shadow_plan_supersedes_active_plan_when_learned_set_expands(
     started = [record for record in records if record["event_type"] == "sweep.plan.started"]
     assert [record["sweep_item_count"] for record in started] == [1, 2]
     assert started[-1]["reason"] == "shadow_plan_expanded"
+
+
+def test_shadow_plan_skipped_logs_reason_when_disabled_or_unsupported() -> None:
+    server = ReverseProxyServer(
+        config=ProxyConfig.from_args(
+            local_sweep_enabled=False,
+            local_sweep_mode="shadow_local",
+        )
+    )
+    observed = type(
+        "Observed",
+        (),
+        {
+            "signature": type(
+                "Signature",
+                (),
+                {
+                    "channel_id": 1,
+                    "to_observability": staticmethod(lambda: {}),
+                },
+            )()
+        },
+    )()
+
+    emitted: list[tuple[str, dict[str, object]]] = []
+    server._emit_tunnel_event = lambda event_type, **fields: emitted.append((event_type, fields))
+
+    server._maybe_start_shadow_plan(observed)
+    assert any(
+        event_type == "sweep.plan.skipped"
+        and fields.get("reason") == "shadow_transport_disabled"
+        for event_type, fields in emitted
+    )
+
+    emitted.clear()
+    server.config = ProxyConfig.from_args(
+        local_sweep_enabled=True,
+        local_sweep_mode="shadow_local",
+    )
+    server._vci_sweep_shadow_supported = False
+
+    server._maybe_start_shadow_plan(observed)
+    assert any(
+        event_type == "sweep.plan.skipped"
+        and fields.get("reason") == "vci_sweep_shadow_not_supported"
+        for event_type, fields in emitted
+    )
 
 
 def test_sweep_poll_ignores_results_when_active_plan_changes_during_drain() -> None:
