@@ -22,6 +22,7 @@ from vci_proxy.protocol import (
     strip_read_msgs_prefetch_bundle,
 )
 from vci_proxy.reverse_client import ReverseProxyClient
+from vci_proxy.sweep_executor import LocalSweepExecutor
 from vci_proxy.sweep_protocol import (
     SweepPlanStartRequest,
     SweepRequestSpec,
@@ -2469,6 +2470,89 @@ def test_shadow_executor_tail_reads_after_echo_only_result() -> None:
         assert finished["tail_read_data_reads"] == 1
         assert finished["read_timeout_ms"] == 1
         assert len(finished["read_attempts"]) == 2
+
+    asyncio.run(_run())
+
+
+def test_shadow_executor_queues_replacement_plan_while_old_plan_stops() -> None:
+    async def _run() -> None:
+        reads: list[bytes] = []
+        release_first_read = asyncio.Event()
+
+        async def _run_driver_call(method_name: str, *args, **_kwargs):
+            if method_name == "write_msgs":
+                return 0, len(args[1])
+            if method_name == "read_msgs":
+                channel_id, _num_msgs, _timeout = args
+                assert channel_id == 44
+                if not reads:
+                    await release_first_read.wait()
+                data = b"\x62\x00\x31\x12\x34" if len(reads) else b"\x62\x00\x0c\x12\x34"
+                reads.append(data)
+                return 0, [{"protocol_id": 6, "data": data}]
+            raise AssertionError(method_name)
+
+        emitted: list[tuple[str, dict[str, object]]] = []
+        executor = LocalSweepExecutor(
+            config=ProxyConfig.from_args(
+                local_sweep_enabled=True,
+                local_sweep_mode="shadow_local",
+                local_sweep_min_item_interval_ms=1,
+            ).local_sweep,
+            run_driver_call=_run_driver_call,
+            context_factory=lambda msg_name: LogContext(operation_kind=f"j2534:{msg_name}"),
+            emit_event=lambda event_type, **fields: emitted.append((event_type, fields)),
+            foreground_idle=lambda: True,
+        )
+        write_000c = ProtocolEncoder.encode_write_msgs_req(
+            44,
+            [{"protocol_id": 6, "data": b"\x22\x00\x0c"}],
+            timeout=25,
+        )[HEADER_SIZE:]
+        write_0031 = ProtocolEncoder.encode_write_msgs_req(
+            44,
+            [{"protocol_id": 6, "data": b"\x22\x00\x31"}],
+            timeout=25,
+        )[HEADER_SIZE:]
+        plan1 = SweepPlanStartRequest(
+            plan_id="plan-1",
+            connection_epoch="epoch-1",
+            channel_id=44,
+            max_result_age_ms=1000,
+            min_item_interval_ms=1,
+            shadow_max_seconds=1,
+            requests=(SweepRequestSpec("sig-000c", write_000c, 1, 0),),
+        )
+        plan2 = SweepPlanStartRequest(
+            plan_id="plan-2",
+            connection_epoch="epoch-1",
+            channel_id=44,
+            max_result_age_ms=1000,
+            min_item_interval_ms=1,
+            shadow_max_seconds=1,
+            requests=(SweepRequestSpec("sig-0031", write_0031, 1, 0),),
+        )
+
+        assert executor.start(plan1) == (True, "started")
+        await asyncio.sleep(0)
+        assert executor.start(plan2) == (True, "pending_start_after_stop")
+        release_first_read.set()
+        for _ in range(50):
+            if executor.status().queued_results > 0:
+                break
+            await asyncio.sleep(0.01)
+        results = executor.drain()
+        executor.stop("test_finished")
+
+        assert results
+        assert results[-1].plan_id == "plan-2"
+        assert results[-1].signature_digest == "sig-0031"
+        assert any(
+            event_type == "sweep.executor.stopped"
+            and fields.get("sweep_plan_id") == "plan-1"
+            and fields.get("reason") == "superseded_by_new_plan"
+            for event_type, fields in emitted
+        )
 
     asyncio.run(_run())
 

@@ -42,6 +42,8 @@ class LocalSweepExecutor:
         self._emit_event = emit_event
         self._foreground_idle = foreground_idle
         self._active_plan: SweepPlanStartRequest | None = None
+        self._pending_plan: SweepPlanStartRequest | None = None
+        self._pending_plan_callback_registered = False
         self._task: asyncio.Task | None = None
         self._queue: deque[SweepResultRecord] = deque()
         self._stop_requested = False
@@ -61,9 +63,22 @@ class LocalSweepExecutor:
             if self._active_plan.plan_id == plan.plan_id:
                 return True, "already_running"
             self.stop("superseded_by_new_plan")
+            self._pending_plan = plan
+            return self._ensure_pending_plan_start()
         if self._task is not None and not self._task.done():
-            return False, "executor_busy_stopping"
+            if (
+                self._pending_plan is not None
+                and self._pending_plan.plan_id == plan.plan_id
+            ):
+                return True, "pending_start_after_stop"
+            self._pending_plan = plan
+            return self._ensure_pending_plan_start()
 
+        return self._activate_plan(plan)
+
+    def _activate_plan(self, plan: SweepPlanStartRequest) -> tuple[bool, str]:
+        self._pending_plan = None
+        self._pending_plan_callback_registered = False
         self._active_plan = plan
         self._stop_requested = False
         self._state = "running"
@@ -82,8 +97,28 @@ class LocalSweepExecutor:
             self._task = asyncio.create_task(self._run_loop())
         return True, "started"
 
+    def _ensure_pending_plan_start(self) -> tuple[bool, str]:
+        if self._pending_plan is None:
+            return False, "no_pending_plan"
+        if self._task is None or self._task.done():
+            self._activate_plan(self._pending_plan)
+            return True, "started"
+        if not self._pending_plan_callback_registered:
+            self._pending_plan_callback_registered = True
+            self._task.add_done_callback(self._start_pending_plan_after_stop)
+        return True, "pending_start_after_stop"
+
+    def _start_pending_plan_after_stop(self, _task: asyncio.Task) -> None:
+        self._pending_plan_callback_registered = False
+        pending = self._pending_plan
+        if pending is None:
+            return
+        self._activate_plan(pending)
+
     def stop(self, reason: str) -> None:
         self._stop_requested = True
+        self._pending_plan = None
+        self._pending_plan_callback_registered = False
         plan_id = self.active_plan_id
         self._active_plan = None
         self._state = "stopped"

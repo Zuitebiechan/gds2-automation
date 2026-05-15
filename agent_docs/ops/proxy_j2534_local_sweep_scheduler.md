@@ -20,6 +20,11 @@ The current code implements two disabled-by-default modes:
 
 - `observe_only`: cloud-side `reverse_server` classifies exact allowlisted UDS `0x22` ReadDataByIdentifier, OBD Mode 01 PID, and strict CAN-ID-prefixed GM `A9 81 xx` packet write requests, correlates them with later `READ_MSGS_RSP(data)`, and emits candidate count, confidence, cadence, rejection, request-inventory, coverage, and projected RTT-cost observability. It does not change protocol, reverse-client behavior, local runtime behavior, or local J2534 call counts.
 - `shadow_local`: after observe learning and capability negotiation, the cloud waits a short configurable delay window (`VCI_PROXY_LOCAL_SWEEP_PLAN_DELAY_MS`, default `300ms`) before sending an internal sweep plan to the local reverse client. The delay lets signatures learned milliseconds apart join the first plan instead of starting from a one-item plan. The local client executes the plan serially through the same J2534 driver-call path used by foreground requests, queues shadow read results, and returns them only through server-driven status/drain control frames. Real `WRITE_MSGS_REQ` and `READ_MSGS_REQ` from GDS2 continue through the existing normal proxy path; local sweep does not synthesize replies or skip forwarding.
+- if later observations learn additional safe signatures while a shadow plan is
+  already active, the cloud emits `sweep.plan.superseded` and starts a larger
+  replacement plan with `reason=shadow_plan_expanded` instead of leaving the
+  active plan frozen at the first learned DID. The replacement still uses the
+  same include/exclude filters and GM A9 observe-only guardrails.
 
 The v1 shadow transport is server-driven and request/response shaped:
 

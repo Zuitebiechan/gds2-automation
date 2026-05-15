@@ -591,6 +591,16 @@ sends internal `SWEEP_PLAN_START_REQ/RSP`, `SWEEP_PLAN_STOP_REQ/RSP`,
 internal server-to-client control frames; the virtual DLL and GDS2 never see
 them.
 
+If additional safe signatures are learned while a shadow plan is already
+active, the cloud can supersede the active plan with a larger plan instead of
+waiting for the old plan to expire. The cloud emits `sweep.plan.superseded`
+with previous/new item counts and then starts the replacement with
+`reason=shadow_plan_expanded`. The local executor treats the replacement
+`SWEEP_PLAN_START_REQ` as a supersede request, stops the old shadow plan, and
+starts the new plan after the old task exits. This keeps GDS2 foreground calls
+unchanged while preventing the first learned DID from freezing the whole
+shadow coverage set at one item.
+
 Shadow plans preserve the foreground `ReadMsgs` message count shape learned
 from GDS2, such as the observed `num_msgs=300` Data Display reads, but
 `VCI_PROXY_LOCAL_SWEEP_READ_TIMEOUT_MS` is treated as a minimum shadow-only read

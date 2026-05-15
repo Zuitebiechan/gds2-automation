@@ -20,6 +20,7 @@ from vci_proxy.sweep_protocol import (
     SweepPlanStartRequest,
     SweepRequestSpec,
     SweepResultRecord,
+    encode_sweep_drain_results_rsp,
 )
 
 
@@ -3225,6 +3226,179 @@ def test_shadow_plan_start_waits_for_delay_window_to_include_more_learned_items(
         assert sent_plans
         assert server._sweep_active_plan is sent_plans[0]
         assert len(sent_plans[0].requests) == 2
+
+    asyncio.run(_run())
+
+
+def test_shadow_plan_supersedes_active_plan_when_learned_set_expands(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+
+    async def _run() -> None:
+        server = ReverseProxyServer(
+            config=ProxyConfig.from_args(
+                local_sweep_enabled=True,
+                local_sweep_mode="shadow_local",
+                local_sweep_min_cycles=1,
+                local_sweep_plan_delay_ms=0,
+                local_sweep_read_timeout_ms=1,
+            )
+        )
+        server._connection_epoch = "epoch-expanded"
+        server._vci_sweep_shadow_supported = True
+        sent_plans: list[SweepPlanStartRequest] = []
+
+        async def _record_plan_start(plan: SweepPlanStartRequest) -> None:
+            sent_plans.append(plan)
+
+        server._send_sweep_plan_start = _record_plan_start
+
+        def _observe_pair(payload: bytes, response: bytes, dll_seq: int) -> None:
+            write_body = ProtocolEncoder.encode_write_msgs_req(
+                44,
+                [
+                    {
+                        "protocol_id": 6,
+                        "rx_status": 0,
+                        "tx_flags": 64,
+                        "timestamp": 1,
+                        "data": payload,
+                    }
+                ],
+                timeout=25,
+            )[HEADER_SIZE:]
+            read_body = ProtocolEncoder.encode_read_msgs_req(
+                44,
+                num_msgs=300,
+                timeout=0,
+            )[HEADER_SIZE:]
+            read_rsp_body = ProtocolEncoder.encode_read_msgs_rsp(
+                0,
+                [
+                    {
+                        "protocol_id": 6,
+                        "rx_status": 0,
+                        "tx_flags": 0,
+                        "timestamp": 2,
+                        "data": response,
+                    }
+                ],
+            )[HEADER_SIZE:]
+            server._observe_sweep_write(
+                MsgType.WRITE_MSGS_REQ,
+                write_body,
+                dll_seq=dll_seq,
+                msg_name="WRITE_MSGS_REQ",
+            )
+            server._observe_sweep_read_response(
+                MsgType.READ_MSGS_REQ,
+                read_body,
+                MsgType.READ_MSGS_RSP,
+                read_rsp_body,
+                dll_seq=dll_seq + 1,
+                msg_name="READ_MSGS_REQ",
+            )
+
+        _observe_pair(
+            b"\x00\x00\x07\xe0\x22\x00\x0c",
+            b"\x00\x00\x07\xe8\x62\x00\x0c\x12\x34",
+            91,
+        )
+        await asyncio.sleep(0)
+        assert len(sent_plans) == 1
+        assert len(sent_plans[-1].requests) == 1
+
+        _observe_pair(
+            b"\x00\x00\x07\xe0\x22\x00\x31",
+            b"\x00\x00\x07\xe8\x62\x00\x31\x56\x78",
+            93,
+        )
+        await asyncio.sleep(0)
+
+        assert len(sent_plans) == 2
+        assert len(sent_plans[-1].requests) == 2
+        assert sent_plans[-1].requests[0].read_num_msgs == 300
+        assert sent_plans[-1].requests[0].read_timeout_ms == 1
+        assert server._sweep_active_plan is sent_plans[-1]
+
+    asyncio.run(_run())
+
+    records = _read_product_log_events(tmp_path)
+    superseded = [
+        record for record in records if record["event_type"] == "sweep.plan.superseded"
+    ]
+    assert superseded
+    assert superseded[-1]["reason"] == "learned_signature_set_expanded"
+    assert superseded[-1]["sweep_previous_item_count"] == 1
+    assert superseded[-1]["sweep_item_count"] == 2
+    started = [record for record in records if record["event_type"] == "sweep.plan.started"]
+    assert [record["sweep_item_count"] for record in started] == [1, 2]
+    assert started[-1]["reason"] == "shadow_plan_expanded"
+
+
+def test_sweep_poll_ignores_results_when_active_plan_changes_during_drain() -> None:
+    async def _run() -> None:
+        server = ReverseProxyServer(
+            config=ProxyConfig.from_args(
+                local_sweep_enabled=True,
+                local_sweep_mode="shadow_local",
+            )
+        )
+        old_plan = SweepPlanStartRequest(
+            plan_id="plan-old",
+            connection_epoch="epoch-race",
+            channel_id=44,
+            max_result_age_ms=1000,
+            min_item_interval_ms=1,
+            shadow_max_seconds=5,
+            requests=(SweepRequestSpec("sig-old", b"", 1, 1),),
+        )
+        new_plan = SweepPlanStartRequest(
+            plan_id="plan-new",
+            connection_epoch="epoch-race",
+            channel_id=44,
+            max_result_age_ms=1000,
+            min_item_interval_ms=1,
+            shadow_max_seconds=5,
+            requests=(SweepRequestSpec("sig-new", b"", 1, 1),),
+        )
+        server._sweep_active_plan = old_plan
+        server._sweep_active_plan_started_mono = time.monotonic()
+
+        async def _send_sweep_frame(encoded: bytes, *, timeout_s: float = 1.0):
+            _magic, _length, msg_type, sequence = Message.decode_header(
+                encoded[:HEADER_SIZE]
+            )
+            if msg_type == MsgType.SWEEP_STATUS_REQ:
+                return MsgType.SWEEP_STATUS_RSP, b"", 0
+            if msg_type == MsgType.SWEEP_DRAIN_RESULTS_REQ:
+                server._sweep_active_plan = new_plan
+                result = SweepResultRecord(
+                    plan_id=old_plan.plan_id,
+                    signature_digest="sig-old",
+                    return_code=0,
+                    read_rsp_body=b"\x00",
+                    started_at_s=time.time(),
+                    finished_at_s=time.time(),
+                )
+                return (
+                    MsgType.SWEEP_DRAIN_RESULTS_RSP,
+                    encode_sweep_drain_results_rsp(
+                        (result,),
+                        sequence=sequence,
+                    )[HEADER_SIZE:],
+                    0,
+                )
+            raise AssertionError(f"unexpected sweep frame: {msg_type:#x}")
+
+        server._send_sweep_frame = _send_sweep_frame
+
+        await server._poll_sweep_once()
+
+        assert server._sweep_active_plan is new_plan
+        assert server._sweep_shadow_store.pending_count() == 0
 
     asyncio.run(_run())
 

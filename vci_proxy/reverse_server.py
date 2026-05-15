@@ -689,6 +689,41 @@ class ReverseProxyServer:
         task = self._sweep_plan_start_task
         return task is not None and not task.done()
 
+    @staticmethod
+    def _sweep_plan_signature_digests(plan: SweepPlanStartRequest) -> set[str]:
+        return {request.signature_digest for request in plan.requests}
+
+    def _maybe_supersede_active_shadow_plan(self, channel_id: int) -> bool:
+        active_plan = self._sweep_active_plan
+        if active_plan is None or active_plan.channel_id != channel_id:
+            return False
+        replacement = self._build_sweep_plan_for_channel(channel_id)
+        if replacement is None:
+            return False
+        active_digests = self._sweep_plan_signature_digests(active_plan)
+        replacement_digests = self._sweep_plan_signature_digests(replacement)
+        if not active_digests < replacement_digests:
+            return False
+        self._emit_tunnel_event(
+            "sweep.plan.superseded",
+            reason="learned_signature_set_expanded",
+            sweep_plan_id=active_plan.plan_id,
+            sweep_replacement_plan_id=replacement.plan_id,
+            channel_id=channel_id,
+            sweep_previous_item_count=len(active_plan.requests),
+            sweep_item_count=len(replacement.requests),
+            sweep_added_item_count=len(replacement_digests - active_digests),
+            sweep_plan_read_num_msgs=[
+                int(request.read_num_msgs) for request in replacement.requests
+            ],
+            sweep_plan_read_timeout_ms=[
+                int(request.read_timeout_ms) for request in replacement.requests
+            ],
+        )
+        self._sweep_shadow_store.clear_channel(channel_id)
+        self._start_shadow_plan(replacement, reason="shadow_plan_expanded")
+        return True
+
     def _start_shadow_plan(self, plan: SweepPlanStartRequest, *, reason: str) -> None:
         self._sweep_active_plan = plan
         self._sweep_active_plan_started_mono = time.monotonic()
@@ -728,6 +763,9 @@ class ReverseProxyServer:
         if not self._vci_sweep_shadow_supported:
             return
         if self._sweep_active_plan is not None:
+            self._maybe_supersede_active_shadow_plan(
+                observed.signature.channel_id
+            )
             return
         if self._sweep_plan_start_pending():
             return
@@ -904,15 +942,21 @@ class ReverseProxyServer:
                 encode_sweep_status_req(sequence=status_seq),
                 timeout_s=0.5,
             )
+            if self._sweep_active_plan is not plan:
+                return
             drain_seq = self._next_sequence()
             resp_type, resp_body, _hw_ms = await self._send_sweep_frame(
                 encode_sweep_drain_results_req(sequence=drain_seq),
                 timeout_s=0.5,
             )
+            if self._sweep_active_plan is not plan:
+                return
             if resp_type != MsgType.SWEEP_DRAIN_RESULTS_RSP:
                 return
             results = decode_sweep_drain_results_rsp(resp_body)
             for result in results:
+                if result.plan_id != plan.plan_id:
+                    continue
                 self._sweep_shadow_store.record_result(
                     result,
                     channel_id=plan.channel_id,
