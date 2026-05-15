@@ -15,6 +15,13 @@ def _read_rsp_body(data: bytes) -> bytes:
     )[HEADER_SIZE:]
 
 
+def _read_rsp_body_with_return_code(return_code: int, data: bytes) -> bytes:
+    return ProtocolEncoder.encode_read_msgs_rsp(
+        return_code,
+        [{"protocol_id": 6, "rx_status": 0, "tx_flags": 0, "timestamp": 1, "data": data}],
+    )[HEADER_SIZE:]
+
+
 def test_shadow_store_keeps_comparison_records_without_serving_api() -> None:
     store = SweepShadowStore(max_results_per_signature=1)
     first = SweepResultRecord(
@@ -127,3 +134,42 @@ def test_compare_shadow_results_reports_match_mismatch_stale_missing_and_error()
         shadow_result=error,
         max_result_age_ms=1000,
     ).outcome == "error"
+
+
+def test_timeout_with_data_can_validate_comparison_without_becoming_replay_ready() -> None:
+    now = time.time()
+    store = SweepShadowStore()
+    result = SweepResultRecord(
+        plan_id="plan-1",
+        signature_digest="sig",
+        return_code=9,
+        read_rsp_body=_read_rsp_body_with_return_code(9, b"\x62\x01"),
+        started_at_s=now,
+        finished_at_s=now,
+    )
+
+    comparison = compare_shadow_to_real(
+        signature_digest="sig",
+        real_read_rsp_body=_read_rsp_body(b"\x62\x01"),
+        shadow_result=result,
+        max_result_age_ms=1000,
+    )
+    assert comparison.outcome == "match"
+
+    store.record_result(result, channel_id=44)
+    store.record_comparison(
+        "sig",
+        result=result,
+        clean_match=True,
+        reset_streak=False,
+    )
+
+    assert store.replay_match_streak("sig") == 1
+    assert (
+        store.latest_replay_ready(
+            "sig",
+            max_result_age_ms=1000,
+            min_clean_matches=1,
+        )
+        is None
+    )

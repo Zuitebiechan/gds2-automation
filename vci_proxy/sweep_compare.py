@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from .protocol import ProtocolDecoder
 from .sweep_protocol import SweepResultRecord
 
+ERR_TIMEOUT = 0x09
+
 
 @dataclass(frozen=True)
 class SweepCompareResult:
@@ -38,6 +40,27 @@ def _read_response_shape(body: bytes) -> dict[str, object]:
     }
 
 
+def _effective_return_code(return_code: int | None, message_count: int | None) -> int | None:
+    if return_code is None or message_count is None:
+        return return_code
+    if int(return_code) == ERR_TIMEOUT and int(message_count) > 0:
+        return 0
+    return int(return_code)
+
+
+def is_structurally_clean_read_result(
+    return_code: int | None,
+    message_count: int | None,
+) -> bool:
+    effective_return_code = _effective_return_code(return_code, message_count)
+    return (
+        effective_return_code is not None
+        and int(effective_return_code) == 0
+        and message_count is not None
+        and int(message_count) > 0
+    )
+
+
 def compare_shadow_to_real(
     *,
     signature_digest: str,
@@ -49,6 +72,10 @@ def compare_shadow_to_real(
     common: dict[str, object] = {
         "sweep_signature_digest": signature_digest,
         "sweep_real_return_code": real_shape["return_code"],
+        "sweep_real_effective_return_code": _effective_return_code(
+            real_shape["return_code"],
+            real_shape["message_count"],
+        ),
         "sweep_real_message_count": real_shape["message_count"],
         "sweep_real_payload_digest": real_shape["payload_digest"],
         "sweep_real_message_lengths": list(real_shape["message_lengths"]),
@@ -75,12 +102,30 @@ def compare_shadow_to_real(
     shadow_shape = _read_response_shape(shadow_result.read_rsp_body)
     common.update(
         {
+            "sweep_shadow_effective_return_code": _effective_return_code(
+                shadow_shape["return_code"],
+                shadow_shape["message_count"],
+            ),
             "sweep_shadow_message_count": shadow_shape["message_count"],
             "sweep_shadow_payload_digest": shadow_shape["payload_digest"],
             "sweep_shadow_message_lengths": list(shadow_shape["message_lengths"]),
             "sweep_shadow_message_prefixes": list(shadow_shape["message_prefixes"]),
         }
     )
-    if shadow_shape == real_shape:
+    comparable_shadow_shape = {
+        **shadow_shape,
+        "return_code": _effective_return_code(
+            shadow_shape["return_code"],
+            shadow_shape["message_count"],
+        ),
+    }
+    comparable_real_shape = {
+        **real_shape,
+        "return_code": _effective_return_code(
+            real_shape["return_code"],
+            real_shape["message_count"],
+        ),
+    }
+    if comparable_shadow_shape == comparable_real_shape:
         return SweepCompareResult("match", common)
     return SweepCompareResult("mismatch", common)

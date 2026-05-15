@@ -53,7 +53,7 @@ from .protocol import (
     ProtocolEncoder,
     strip_read_msgs_prefetch_bundle,
 )
-from .sweep_compare import compare_shadow_to_real
+from .sweep_compare import compare_shadow_to_real, is_structurally_clean_read_result
 from .sweep_learner import SweepLearnerEvent, SweepPatternLearner
 from .sweep_protocol import (
     SweepPlanStartRequest,
@@ -1078,17 +1078,13 @@ class ReverseProxyServer:
             real_message_count = result.fields.get("sweep_real_message_count")
             shadow_return_code = result.fields.get("sweep_shadow_return_code")
             shadow_message_count = result.fields.get("sweep_shadow_message_count")
-            shadow_structurally_clean = (
-                shadow_return_code is not None
-                and int(shadow_return_code) == 0
-                and shadow_message_count is not None
-                and int(shadow_message_count) > 0
+            shadow_structurally_clean = is_structurally_clean_read_result(
+                shadow_return_code,
+                shadow_message_count,
             )
-            real_structurally_clean = (
-                real_return_code is not None
-                and int(real_return_code) == 0
-                and real_message_count is not None
-                and int(real_message_count) > 0
+            real_structurally_clean = is_structurally_clean_read_result(
+                real_return_code,
+                real_message_count,
             )
             clean_match = (
                 result.outcome == "match"
