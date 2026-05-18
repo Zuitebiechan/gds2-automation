@@ -140,13 +140,25 @@ def test_inventory_reports_coverage_and_projected_rtt_savings() -> None:
     assert signature_event.fields["sweep_inventory_write_network_p95_ms"] == 37.0
     assert signature_event.fields["sweep_inventory_read_network_p95_ms"] == 3.0
     assert signature_event.fields["sweep_inventory_pair_network_p95_ms"] == 40.0
+    assert signature_event.fields["sweep_inventory_signature_verdict"] == (
+        "go_shadow_local_candidate"
+    )
+    assert signature_event.fields["sweep_inventory_signature_next_step"] == (
+        "prove_sweep_shadow_match_before_replay"
+    )
     assert summary_event.fields["sweep_inventory_signature_count"] == 1
     assert summary_event.fields["sweep_inventory_replay_candidate_request_count"] == 1
+    assert summary_event.fields["sweep_inventory_non_gm_replay_candidate_request_count"] == 1
     assert summary_event.fields["sweep_inventory_replay_candidate_coverage_pct"] == 100.0
+    assert summary_event.fields["sweep_inventory_non_gm_replay_candidate_coverage_pct"] == 100.0
     assert summary_event.fields["sweep_inventory_projected_write_rtt_savings_ms"] == 37.0
     assert summary_event.fields["sweep_inventory_request_count_by_kind"] == {
         "uds_did": 1
     }
+    assert summary_event.fields["sweep_inventory_verdict"] == "go_shadow_local"
+    assert summary_event.fields["sweep_inventory_next_step"] == (
+        "run_shadow_local_for_top_non_gm_candidate"
+    )
 
 
 def test_inventory_marks_gm_a9_as_observe_only_by_default() -> None:
@@ -194,17 +206,31 @@ def test_inventory_marks_gm_a9_as_observe_only_by_default() -> None:
     assert signature_event.fields["sweep_inventory_replay_eligibility_reason"] == (
         "gm_a9_packet_observe_only"
     )
+    assert signature_event.fields["sweep_inventory_signature_verdict"] == (
+        "no_go_gm_a9_observe_only"
+    )
+    assert signature_event.fields["sweep_inventory_signature_next_step"] == (
+        "do_not_shadow_or_replay_gm_a9"
+    )
     assert signature_event.fields["sweep_inventory_eligibility_reason"] == (
         "gm_a9_packet_observe_only"
     )
     assert summary_event.fields["sweep_inventory_learned_signature_count"] == 1
     assert summary_event.fields["sweep_inventory_replay_candidate_signature_count"] == 0
     assert summary_event.fields["sweep_inventory_replay_candidate_request_count"] == 0
+    assert summary_event.fields["sweep_inventory_non_gm_replay_candidate_request_count"] == 0
     assert summary_event.fields["sweep_inventory_replay_candidate_coverage_pct"] == 0.0
+    assert summary_event.fields["sweep_inventory_non_gm_replay_candidate_coverage_pct"] == 0.0
     assert summary_event.fields["sweep_inventory_request_count_by_kind"] == {
         "gm_a9_packet": 1
     }
     assert summary_event.fields["sweep_inventory_replay_candidate_request_count_by_kind"] == {}
+    assert summary_event.fields["sweep_inventory_verdict"] == (
+        "no_go_no_non_gm_replay_candidates"
+    )
+    assert summary_event.fields["sweep_inventory_next_step"] == (
+        "choose_page_with_repeated_uds_or_obd_read_only_traffic"
+    )
 
 
 def test_replay_candidate_for_write_rejects_gm_a9_even_when_learned() -> None:

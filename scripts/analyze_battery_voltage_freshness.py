@@ -113,6 +113,20 @@ def _counter_block(values: Iterable[Any]) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
+def _as_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _discover_session_ids(cloud_root: Path) -> list[str]:
     raw_dir = cloud_root / "raw"
     if not raw_dir.exists():
@@ -411,6 +425,164 @@ def _summarize_focus_sweep(
     }
 
 
+def _summarize_sweep_inventory(timeline: list[dict[str, Any]]) -> dict[str, Any]:
+    summary_events = [
+        event
+        for event in timeline
+        if event.get("event_type") == "sweep.inventory.summary"
+    ]
+    latest_summary = summary_events[-1] if summary_events else {}
+    latest_signatures: dict[str, dict[str, Any]] = {}
+    for event in timeline:
+        if event.get("event_type") != "sweep.inventory.signature":
+            continue
+        digest = str(event.get("sweep_signature_digest") or "")
+        if not digest:
+            continue
+        latest_signatures[digest] = event
+
+    candidate_signatures: list[dict[str, Any]] = []
+    gm_a9_signature_count = 0
+    for event in latest_signatures.values():
+        kind = str(event.get("sweep_identifier_kind") or "unknown")
+        if kind == "gm_a9_packet":
+            gm_a9_signature_count += 1
+        if not bool(event.get("sweep_inventory_replay_candidate")):
+            continue
+        candidate_signatures.append(
+            {
+                "signature_digest": event.get("sweep_signature_digest"),
+                "identifier_kind": kind,
+                "identifier": event.get("sweep_identifier"),
+                "payload_prefix_hex": event.get("sweep_payload_prefix_hex"),
+                "write_observed_count": event.get(
+                    "sweep_inventory_write_observed_count"
+                ),
+                "read_data_count": event.get("sweep_inventory_read_data_count"),
+                "projected_write_rtt_savings_ms": event.get(
+                    "sweep_inventory_projected_write_rtt_savings_ms"
+                ),
+                "projected_pair_rtt_savings_ms": event.get(
+                    "sweep_inventory_projected_pair_rtt_savings_ms"
+                ),
+                "eligibility_reason": event.get(
+                    "sweep_inventory_replay_eligibility_reason",
+                    event.get("sweep_inventory_eligibility_reason"),
+                ),
+            }
+        )
+    candidate_signatures.sort(
+        key=lambda item: (
+            _as_int(item.get("write_observed_count")),
+            _as_float(item.get("projected_pair_rtt_savings_ms")),
+        ),
+        reverse=True,
+    )
+
+    request_count_by_kind = dict(
+        latest_summary.get("sweep_inventory_request_count_by_kind") or {}
+    )
+    replay_candidate_by_kind = dict(
+        latest_summary.get("sweep_inventory_replay_candidate_request_count_by_kind")
+        or {}
+    )
+    non_gm_candidate_request_count = sum(
+        _as_int(count)
+        for kind, count in replay_candidate_by_kind.items()
+        if str(kind) != "gm_a9_packet"
+    )
+    if not summary_events:
+        non_gm_candidate_request_count = sum(
+            _as_int(item.get("write_observed_count"))
+            for item in candidate_signatures
+            if item.get("identifier_kind") != "gm_a9_packet"
+        )
+    latest_foreground_write_count = _as_int(
+        latest_summary.get("sweep_inventory_foreground_write_count")
+    )
+    latest_verdict = str(latest_summary.get("sweep_inventory_verdict") or "").strip()
+    latest_next_step = str(latest_summary.get("sweep_inventory_next_step") or "").strip()
+    if not latest_verdict:
+        if latest_foreground_write_count <= 0:
+            latest_verdict = "pending_no_foreground_writes"
+            latest_next_step = "enter_data_display_and_collect_sweep_inventory"
+        elif non_gm_candidate_request_count > 0:
+            latest_verdict = "go_shadow_local"
+            latest_next_step = "run_shadow_local_for_top_non_gm_candidate"
+        else:
+            latest_verdict = "no_go_no_non_gm_replay_candidates"
+            latest_next_step = "choose_page_with_repeated_uds_or_obd_read_only_traffic"
+    return {
+        "summary_event_count": len(summary_events),
+        "signature_event_count": len(latest_signatures),
+        "latest_sequence": latest_summary.get("sweep_inventory_sequence"),
+        "verdict": latest_verdict,
+        "next_step": latest_next_step,
+        "sweep_inventory_verdict": latest_verdict,
+        "sweep_inventory_next_step": latest_next_step,
+        "signature_count": latest_summary.get(
+            "sweep_inventory_signature_count",
+            len(latest_signatures),
+        ),
+        "learned_signature_count": latest_summary.get(
+            "sweep_inventory_learned_signature_count"
+        ),
+        "foreground_write_count": latest_summary.get(
+            "sweep_inventory_foreground_write_count"
+        ),
+        "accepted_write_count": latest_summary.get(
+            "sweep_inventory_accepted_write_count"
+        ),
+        "rejected_write_count": latest_summary.get(
+            "sweep_inventory_rejected_write_count"
+        ),
+        "request_count_by_kind": request_count_by_kind,
+        "replay_candidate_request_count_by_kind": replay_candidate_by_kind,
+        "replay_candidate_request_count": latest_summary.get(
+            "sweep_inventory_replay_candidate_request_count",
+            non_gm_candidate_request_count,
+        ),
+        "replay_candidate_coverage_pct": latest_summary.get(
+            "sweep_inventory_replay_candidate_coverage_pct"
+        ),
+        "non_gm_replay_candidate_request_count": non_gm_candidate_request_count,
+        "has_non_gm_replay_candidates": non_gm_candidate_request_count > 0,
+        "gm_a9_request_count": _as_int(request_count_by_kind.get("gm_a9_packet")),
+        "gm_a9_signature_count": gm_a9_signature_count,
+        "rejection_count_by_reason": dict(
+            latest_summary.get("sweep_inventory_rejection_count_by_reason") or {}
+        ),
+        "projected_write_rtt_savings_ms": latest_summary.get(
+            "sweep_inventory_projected_write_rtt_savings_ms"
+        ),
+        "projected_pair_rtt_savings_ms": latest_summary.get(
+            "sweep_inventory_projected_pair_rtt_savings_ms"
+        ),
+        "top_candidate_signature_digest": latest_summary.get(
+            "sweep_inventory_top_candidate_signature_digest"
+        ),
+        "top_candidate_identifier_kind": latest_summary.get(
+            "sweep_inventory_top_candidate_identifier_kind"
+        ),
+        "top_candidate_identifier": latest_summary.get(
+            "sweep_inventory_top_candidate_identifier"
+        ),
+        "top_candidate_payload_prefix_hex": latest_summary.get(
+            "sweep_inventory_top_candidate_payload_prefix_hex"
+        ),
+        "top_candidate_write_observed_count": latest_summary.get(
+            "sweep_inventory_top_candidate_write_observed_count"
+        ),
+        "top_candidate_read_data_count": latest_summary.get(
+            "sweep_inventory_top_candidate_read_data_count"
+        ),
+        "top_candidate_projected_pair_rtt_savings_ms": latest_summary.get(
+            "sweep_inventory_top_candidate_projected_pair_rtt_savings_ms"
+        ),
+        "candidate_signatures": candidate_signatures[:10],
+    }
+
+
 def _summarize_shadow_and_config(timeline: list[dict[str, Any]]) -> dict[str, Any]:
     startup_events = [
         event
@@ -486,6 +658,7 @@ def _build_session_verdict(
     changes: list[dict[str, Any]],
 ) -> dict[str, Any]:
     focus_sweep = _summarize_focus_sweep(timeline, focus_key=focus_key)
+    inventory = _summarize_sweep_inventory(timeline)
     shadow = _summarize_shadow_and_config(timeline)
     forwarded_events = [
         event for event in timeline if event.get("event_type") == "proxy.request.forwarded_to_tunnel"
@@ -508,6 +681,23 @@ def _build_session_verdict(
     if focus_sweep.get("supported") and focus_sweep.get("cadence_event_count") == 0:
         reasons.append("no_focus_sweep_cadence_events")
         next_checks.append("verify sweep inventory sees the focus DID")
+    if (
+        inventory.get("summary_event_count")
+        and not inventory.get("has_non_gm_replay_candidates")
+    ):
+        reasons.append("no_non_gm_a9_replay_candidates")
+        next_checks.append(
+            "choose a Data Display page with repeated UDS/OBD read-only traffic"
+        )
+    if (
+        inventory.get("has_non_gm_replay_candidates")
+        and shadow.get("shadow_transport_enabled")
+        and not shadow.get("shadow_match_count")
+    ):
+        reasons.append("non_gm_candidates_need_shadow_match")
+        next_checks.append(
+            "run shadow_local narrowed to the target DID/PID before active_replay"
+        )
     if shadow.get("shadow_mismatch_count"):
         reasons.append("shadow_results_not_comparison_clean")
         next_checks.append("inspect shadow echo/positive-response frame shape before replay")
@@ -517,9 +707,14 @@ def _build_session_verdict(
         status = "inconclusive_no_focus_changes"
     elif "local_sweep_shadow_read_timeout_zero" in reasons:
         status = "config_not_applied"
+    elif "no_non_gm_a9_replay_candidates" in reasons:
+        status = "inventory_no_go"
     elif "focus_sweep_cadence_still_slow" in reasons:
         status = "freshness_still_slow"
-    elif "shadow_results_not_comparison_clean" in reasons:
+    elif (
+        "shadow_results_not_comparison_clean" in reasons
+        or "non_gm_candidates_need_shadow_match" in reasons
+    ):
         status = "shadow_not_replay_ready"
     else:
         status = "review"
@@ -528,6 +723,7 @@ def _build_session_verdict(
         "confidence": "high" if len(timeline) and changes else "medium",
         "reasons": reasons,
         "next_checks": list(dict.fromkeys(next_checks)),
+        "sweep_inventory": inventory,
         "focus_sweep": focus_sweep,
         "shadow": shadow,
         "foreground_forwarded_count": len(forwarded_events),
@@ -737,6 +933,7 @@ def generate_markdown_report(payload: dict[str, Any]) -> str:
         verdict = session.get("verdict") or {}
         shadow = verdict.get("shadow") or {}
         focus_sweep = verdict.get("focus_sweep") or {}
+        inventory = verdict.get("sweep_inventory") or {}
         startup = shadow.get("startup") or {}
         if verdict:
             lines.extend(
@@ -769,9 +966,38 @@ def generate_markdown_report(payload: dict[str, Any]) -> str:
                         f"id=`{focus_sweep.get('identifier')}`, "
                         f"cadence_events=`{focus_sweep.get('cadence_event_count')}`"
                     ),
+                    (
+                        "- Sweep inventory: "
+                        f"non_gm_candidates=`{inventory.get('non_gm_replay_candidate_request_count')}`, "
+                        f"candidate_by_kind=`{_format_counts(inventory.get('replay_candidate_request_count_by_kind'))}`, "
+                        f"request_by_kind=`{_format_counts(inventory.get('request_count_by_kind'))}`"
+                    ),
+                    (
+                        "- Inventory verdict: "
+                        f"`{inventory.get('sweep_inventory_verdict')}` -> "
+                        f"`{inventory.get('sweep_inventory_next_step')}`"
+                    ),
                     "",
                 ]
             )
+            candidates = inventory.get("candidate_signatures") or []
+            if candidates:
+                lines.extend(
+                    [
+                        "| Candidate kind | Identifier | Writes | Read data | Projected pair RTT ms | Payload prefix |",
+                        "| --- | ---: | ---: | ---: | ---: | --- |",
+                    ]
+                )
+                for candidate in candidates[:5]:
+                    lines.append(
+                        f"| {candidate.get('identifier_kind')} | "
+                        f"{candidate.get('identifier')} | "
+                        f"{candidate.get('write_observed_count')} | "
+                        f"{candidate.get('read_data_count')} | "
+                        f"{candidate.get('projected_pair_rtt_savings_ms')} | "
+                        f"{candidate.get('payload_prefix_hex')} |"
+                    )
+                lines.append("")
         lines.extend(
             [
                 f"| TS | Source | Prev{value_column_unit} | Curr{value_column_unit} | Delta{value_column_unit} | Lag ms | RTT p95 ms | Write-collect txns | Replay armed | Replay served | Forwarded | Prefetch miss details |",

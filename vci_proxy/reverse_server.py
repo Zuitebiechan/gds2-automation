@@ -1027,6 +1027,24 @@ class ReverseProxyServer:
             return "active_plan_no_drained_results"
         return None
 
+    @staticmethod
+    def _shadow_replay_next_step_for_gate(gate: str) -> str:
+        mapping = {
+            "not_ready_plan_pending": "wait_for_plan_start",
+            "not_ready_no_active_plan": "start_or_wait_for_a_shadow_plan",
+            "not_ready_active_plan_no_drained_results": "wait_for_shadow_results_to_drain",
+            "blocked_signature_not_in_active_plan": "verify_target_signature_is_in_the_active_plan",
+            "blocked_signature_not_drained": "wait_for_target_signature_result_to_drain",
+            "blocked_stale_shadow_result": "refresh_shadow_result_then_recheck",
+            "blocked_shadow_mismatch": "inspect_shadow_response_shape_before_replay",
+            "blocked_shadow_error": "fix_shadow_executor_before_replay",
+            "blocked_non_clean_real_result": "repeat_with_clean_foreground_read_shape",
+            "blocked_non_clean_shadow_result": "fix_shadow_response_shape_before_replay",
+            "need_more_clean_matches": "collect_more_matching_cycles_before_replay",
+            "ready_for_active_replay_canary": "eligible_for_active_replay_canary",
+        }
+        return mapping.get(gate, "review_shadow_replay_gate")
+
     def _compare_shadow_result(
         self,
         observed: SweepObservedRequest,
@@ -1052,6 +1070,7 @@ class ReverseProxyServer:
         if result.outcome == "missing":
             not_ready_reason = self._shadow_not_ready_reason(state_fields)
             if not_ready_reason is not None:
+                gate = f"not_ready_{not_ready_reason}"
                 self._emit_proxy_request_event(
                     "sweep.shadow.not_ready",
                     dll_seq=dll_seq,
@@ -1060,7 +1079,12 @@ class ReverseProxyServer:
                     **result.fields,
                     **state_fields,
                     sweep_shadow_not_ready_reason=not_ready_reason,
-            )
+                    sweep_shadow_replay_gate=gate,
+                    sweep_shadow_replay_ready=False,
+                    sweep_shadow_replay_next_step=(
+                        self._shadow_replay_next_step_for_gate(gate)
+                    ),
+                )
                 return
             missing_reason = (
                 "signature_not_in_active_plan"
@@ -1070,9 +1094,17 @@ class ReverseProxyServer:
             result_fields = {
                 **result.fields,
                 "sweep_shadow_missing_reason": missing_reason,
+                "sweep_shadow_replay_gate": f"blocked_{missing_reason}",
+                "sweep_shadow_replay_ready": False,
+                "sweep_shadow_replay_next_step": self._shadow_replay_next_step_for_gate(
+                    f"blocked_{missing_reason}"
+                ),
             }
         else:
             result_fields = result.fields
+        replay_gate = "review_shadow_replay_gate"
+        replay_ready = False
+        replay_next_step = "review_shadow_replay_gate"
         if shadow_result is not None:
             real_return_code = result.fields.get("sweep_real_return_code")
             real_message_count = result.fields.get("sweep_real_message_count")
@@ -1106,6 +1138,40 @@ class ReverseProxyServer:
                     signature_digest
                 ),
                 "sweep_replay_min_clean_matches": self._active_replay_min_clean_matches(),
+            }
+            replay_streak = self._sweep_shadow_store.replay_match_streak(signature_digest)
+            if result.outcome == "match":
+                if not real_structurally_clean:
+                    replay_gate = "blocked_non_clean_real_result"
+                elif not shadow_structurally_clean:
+                    replay_gate = "blocked_non_clean_shadow_result"
+                elif replay_streak >= self._active_replay_min_clean_matches():
+                    replay_gate = "ready_for_active_replay_canary"
+                    replay_ready = True
+                else:
+                    replay_gate = "need_more_clean_matches"
+                replay_next_step = self._shadow_replay_next_step_for_gate(replay_gate)
+            elif result.outcome == "stale":
+                replay_gate = "blocked_stale_shadow_result"
+                replay_next_step = self._shadow_replay_next_step_for_gate(replay_gate)
+            elif result.outcome == "mismatch":
+                replay_gate = "blocked_shadow_mismatch"
+                replay_next_step = self._shadow_replay_next_step_for_gate(replay_gate)
+            elif result.outcome == "error":
+                replay_gate = "blocked_shadow_error"
+                replay_next_step = self._shadow_replay_next_step_for_gate(replay_gate)
+            result_fields = {
+                **result_fields,
+                "sweep_shadow_replay_gate": replay_gate,
+                "sweep_shadow_replay_ready": replay_ready,
+                "sweep_shadow_replay_next_step": replay_next_step,
+            }
+        elif "sweep_shadow_replay_gate" not in result_fields:
+            result_fields = {
+                **result_fields,
+                "sweep_shadow_replay_gate": replay_gate,
+                "sweep_shadow_replay_ready": replay_ready,
+                "sweep_shadow_replay_next_step": replay_next_step,
             }
         self._emit_proxy_request_event(
             f"sweep.shadow.{result.outcome}",
@@ -3715,6 +3781,9 @@ class ReverseProxyServer:
                             dll_seq=sequence,
                             msg_name=msg_name,
                             reason="active_replay_read_served",
+                            replay_gate="ready_for_active_replay_canary",
+                            replay_ready=True,
+                            replay_next_step="served_from_shadow_store",
                             replay_signature_digest=(
                                 replay_pending.observed.signature.signature_digest
                             ),
@@ -3773,6 +3842,9 @@ class ReverseProxyServer:
                             dll_seq=sequence,
                             msg_name=msg_name,
                             reason="active_replay_write_ack",
+                            replay_gate="ready_for_active_replay_canary",
+                            replay_ready=True,
+                            replay_next_step="armed_for_matching_read",
                             replay_signature_digest=(
                                 replay_pending.observed.signature.signature_digest
                             ),

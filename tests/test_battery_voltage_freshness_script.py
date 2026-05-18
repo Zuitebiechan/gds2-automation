@@ -367,6 +367,121 @@ def test_focus_value_freshness_script_reports_engine_speed_changes(tmp_path: Pat
     assert "Engine Speed" in report
 
 
+def test_engine_speed_freshness_verdict_reports_inventory_no_go(
+    tmp_path: Path,
+) -> None:
+    cloud_root = tmp_path / "cloud"
+    raw_dir = cloud_root / "raw"
+    raw_dir.mkdir(parents=True)
+
+    events = [
+        _event(
+            "2026-05-15T00:00:00Z",
+            "session_runtime",
+            "session.lifecycle.started",
+            session_id="session-gm-only",
+            connection_epoch="epoch-gm-only",
+        ),
+        _event(
+            "2026-05-15T00:00:05Z",
+            "session_runtime",
+            "session.live_data.started",
+            session_id="session-gm-only",
+            connection_epoch="epoch-gm-only",
+            page="data_display",
+            module="Engine Control Module",
+            data_category="Engine Data",
+        ),
+        _event(
+            "2026-05-15T00:00:08Z",
+            "reverse_server",
+            "sweep.inventory.summary",
+            connection_epoch="epoch-gm-only",
+            sweep_inventory_sequence=12,
+            sweep_inventory_signature_count=1,
+            sweep_inventory_learned_signature_count=1,
+            sweep_inventory_replay_candidate_signature_count=0,
+            sweep_inventory_foreground_write_count=80,
+            sweep_inventory_accepted_write_count=12,
+            sweep_inventory_rejected_write_count=68,
+            sweep_inventory_replay_candidate_request_count=0,
+            sweep_inventory_replay_candidate_coverage_pct=0.0,
+            sweep_inventory_request_count_by_kind={"gm_a9_packet": 12},
+            sweep_inventory_replay_candidate_request_count_by_kind={},
+            sweep_inventory_rejection_count_by_reason={
+                "not_allowlisted_read_only_shape": 68
+            },
+        ),
+        _event(
+            "2026-05-15T00:00:09Z",
+            "agent_data_collector",
+            "agent.collector.focus_value_changed",
+            session_id="session-gm-only",
+            connection_epoch="epoch-gm-only",
+            page="data_display",
+            module="Engine Control Module",
+            data_category="Engine Data",
+            focus_key="engine_speed",
+            source_parameter_name="Engine Speed",
+            source_parameter_unit="RPM",
+            previous_value="800",
+            current_value="1800",
+            previous_value_number=800.0,
+            current_value_number=1800.0,
+            delta_value_number=1000.0,
+            collector_lag_ms=45.0,
+        ),
+        _event(
+            "2026-05-15T00:00:20Z",
+            "session_runtime",
+            "session.lifecycle.aborted",
+            session_id="session-gm-only",
+            connection_epoch="epoch-gm-only",
+            status="error",
+            failure_code="aborted",
+            failure_domain="session_runtime",
+            reason="Aborted by user",
+        ),
+    ]
+    (raw_dir / "cloud.jsonl").write_text(
+        "\n".join(json.dumps(event, ensure_ascii=False) for event in events),
+        encoding="utf-8",
+    )
+
+    report_path = tmp_path / "gm_only.md"
+    json_path = tmp_path / "gm_only.json"
+    _run(
+        str(SCRIPT),
+        "--cloud-root",
+        str(cloud_root),
+        "--session-id",
+        "session-gm-only",
+        "--focus-key",
+        "engine_speed",
+        "--min-delta",
+        "100",
+        "--json",
+        str(json_path),
+        "--report",
+        str(report_path),
+    )
+
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    verdict = payload["sessions"][0]["verdict"]
+    assert verdict["status"] == "inventory_no_go"
+    assert "no_non_gm_a9_replay_candidates" in verdict["reasons"]
+    assert verdict["sweep_inventory"]["non_gm_replay_candidate_request_count"] == 0
+    assert verdict["sweep_inventory"]["request_count_by_kind"] == {
+        "gm_a9_packet": 12
+    }
+
+    report = report_path.read_text(encoding="utf-8")
+    assert "Inventory verdict" in report
+    assert "no_go_no_non_gm_replay_candidates" in report
+    assert "non_gm_candidates=`0`" in report
+    assert "request_by_kind=`gm_a9_packet:12`" in report
+
+
 def test_engine_speed_freshness_verdict_flags_shadow_timeout_and_slow_cadence(
     tmp_path: Path,
 ) -> None:

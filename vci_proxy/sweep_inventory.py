@@ -157,16 +157,22 @@ class SweepInventorySignatureState:
             replay_reason = "awaiting_min_cycles"
             shadow_eligible = False
             shadow_reason = "awaiting_min_cycles"
+            signature_verdict = "pending_min_cycles"
+            signature_next_step = "keep_observing_until_min_cycles"
         elif self.signature.identifier_kind == "gm_a9_packet":
             replay_candidate = False
             replay_reason = "gm_a9_packet_observe_only"
             shadow_eligible = False
             shadow_reason = "gm_a9_packet_observe_only"
+            signature_verdict = "no_go_gm_a9_observe_only"
+            signature_next_step = "do_not_shadow_or_replay_gm_a9"
         else:
             replay_candidate = True
             replay_reason = "learned_safe_signature"
             shadow_eligible = True
             shadow_reason = "learned_safe_signature"
+            signature_verdict = "go_shadow_local_candidate"
+            signature_next_step = "prove_sweep_shadow_match_before_replay"
         return {
             "sweep_inventory_shadow_eligible": shadow_eligible,
             "sweep_inventory_replay_candidate": replay_candidate,
@@ -174,6 +180,8 @@ class SweepInventorySignatureState:
             "sweep_inventory_eligibility_reason": replay_reason,
             "sweep_inventory_shadow_eligibility_reason": shadow_reason,
             "sweep_inventory_replay_eligibility_reason": replay_reason,
+            "sweep_inventory_signature_verdict": signature_verdict,
+            "sweep_inventory_signature_next_step": signature_next_step,
         }
 
     def fields(
@@ -306,10 +314,13 @@ class SweepInventoryTracker:
         replay_candidate_request_count_by_kind: dict[str, int] = {}
         replay_candidate_signature_count = 0
         replay_candidate_request_count = 0
+        non_gm_replay_candidate_signature_count = 0
+        non_gm_replay_candidate_request_count = 0
         learned_signature_count = 0
         learned_request_count = 0
         projected_write_savings_ms = 0.0
         projected_pair_savings_ms = 0.0
+        top_candidate: SweepInventorySignatureState | None = None
 
         accepted_write_count = 0
         data_response_count = 0
@@ -336,6 +347,17 @@ class SweepInventoryTracker:
                     kind,
                     state.write_observed_count,
                 )
+                if kind != "gm_a9_packet":
+                    non_gm_replay_candidate_signature_count += 1
+                    non_gm_replay_candidate_request_count += state.write_observed_count
+                    if top_candidate is None or (
+                        state.write_observed_count,
+                        state.pair_network_ms.total_ms,
+                    ) > (
+                        top_candidate.write_observed_count,
+                        top_candidate.pair_network_ms.total_ms,
+                    ):
+                        top_candidate = state
 
         rejected_write_count = sum(self._rejections.values())
         foreground_write_count = accepted_write_count + rejected_write_count
@@ -349,12 +371,30 @@ class SweepInventoryTracker:
             if foreground_write_count
             else 0.0
         )
-        return {
+        non_gm_coverage_pct = (
+            (non_gm_replay_candidate_request_count / foreground_write_count) * 100.0
+            if foreground_write_count
+            else 0.0
+        )
+        if foreground_write_count <= 0:
+            inventory_verdict = "pending_no_foreground_writes"
+            inventory_next_step = "enter_data_display_and_collect_sweep_inventory"
+        elif non_gm_replay_candidate_request_count > 0:
+            inventory_verdict = "go_shadow_local"
+            inventory_next_step = "run_shadow_local_for_top_non_gm_candidate"
+        else:
+            inventory_verdict = "no_go_no_non_gm_replay_candidates"
+            inventory_next_step = "choose_page_with_repeated_uds_or_obd_read_only_traffic"
+
+        fields: dict[str, object] = {
             "sweep_inventory_sequence": self._summary_sequence,
             "sweep_inventory_signature_count": len(self._states),
             "sweep_inventory_learned_signature_count": learned_signature_count,
             "sweep_inventory_replay_candidate_signature_count": (
                 replay_candidate_signature_count
+            ),
+            "sweep_inventory_non_gm_replay_candidate_signature_count": (
+                non_gm_replay_candidate_signature_count
             ),
             "sweep_inventory_foreground_write_count": foreground_write_count,
             "sweep_inventory_accepted_write_count": accepted_write_count,
@@ -365,7 +405,14 @@ class SweepInventoryTracker:
             "sweep_inventory_replay_candidate_request_count": (
                 replay_candidate_request_count
             ),
+            "sweep_inventory_non_gm_replay_candidate_request_count": (
+                non_gm_replay_candidate_request_count
+            ),
             "sweep_inventory_replay_candidate_coverage_pct": round(coverage_pct, 3),
+            "sweep_inventory_non_gm_replay_candidate_coverage_pct": round(
+                non_gm_coverage_pct,
+                3,
+            ),
             "sweep_inventory_learned_coverage_pct": round(learned_coverage_pct, 3),
             "sweep_inventory_projected_write_rtt_savings_ms": round(
                 projected_write_savings_ms,
@@ -385,4 +432,34 @@ class SweepInventoryTracker:
             ),
             "sweep_inventory_rejection_count_by_reason": dict(self._rejections),
             "sweep_inventory_active_replay_enabled": False,
+            "sweep_inventory_verdict": inventory_verdict,
+            "sweep_inventory_next_step": inventory_next_step,
         }
+        if top_candidate is not None:
+            fields.update(
+                {
+                    "sweep_inventory_top_candidate_signature_digest": (
+                        top_candidate.signature.signature_digest
+                    ),
+                    "sweep_inventory_top_candidate_identifier_kind": (
+                        top_candidate.signature.identifier_kind
+                    ),
+                    "sweep_inventory_top_candidate_identifier": (
+                        top_candidate.signature.identifier
+                    ),
+                    "sweep_inventory_top_candidate_payload_prefix_hex": (
+                        top_candidate.signature.normalized_payload[:16].hex()
+                    ),
+                    "sweep_inventory_top_candidate_write_observed_count": (
+                        top_candidate.write_observed_count
+                    ),
+                    "sweep_inventory_top_candidate_read_data_count": (
+                        top_candidate.read_data_count
+                    ),
+                    "sweep_inventory_top_candidate_projected_pair_rtt_savings_ms": round(
+                        top_candidate.pair_network_ms.total_ms,
+                        3,
+                    ),
+                }
+            )
+        return fields

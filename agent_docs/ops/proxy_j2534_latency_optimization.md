@@ -12,7 +12,62 @@
 
 ## One-Line Conclusion
 
-Cloud GDS2 live data lag is mainly amplified by `J2534 serial request count x tunnel round-trip cost`. The current optimization stack preserves the synchronous J2534 behavior visible to GDS2 while adding safer cache invalidation, adaptive empty-read handling, local-side read-ahead, transaction RPCs, and a first local sweep observe/inventory stage. A narrow `active_replay` path now exists, but latest ECU evidence shows that GM `A9 81 xx` local execution can regress Data Display semantics before replay ever serves, so GM `A9 81 xx` is now forced back to observe-only / inventory-only and replay advances only on safer signatures whose latest shadow generations are comparison-clean.
+Cloud GDS2 live data lag is mainly amplified by `J2534 serial request count x tunnel round-trip cost`. The current transport stack improves safety, observability, and some read-side costs, but recent Engine Speed evidence shows it has not yet delivered the core product outcome: visible Data Display freshness close to local GDS2. The remaining bottleneck is write-side/page-sweep crossing count; `shadow_local` is comparison infrastructure only, and real latency reduction requires a proven safe path that can answer repeated read-only GDS2 write/read pairs from fresh local-side sweep results instead of synchronously crossing the tunnel for each item.
+
+## Reassessment - 2026-05-18
+
+Treat the current safe transport lane as reaching its practical limit unless new
+logs identify a specific read-side correctness bug. It should no longer be
+described as having made Engine Speed "close to local 1-2s" behavior.
+
+Recent real-vehicle Engine Speed runs changed the interpretation:
+
+- tunnel RTT was generally healthy; nearby `READ_MSGS_REQ` /
+  `WRITE_MSGS_REQ` p95 values were mostly around `38-40ms`, so the observed
+  lag is not explained by one slow network call;
+- meaningful `Engine Speed` changes were present, but the observed focus DID
+  cadence remained slow: one verdict saw p50 around `25.4s`, and the later
+  shadow-plan-expanded run still saw p50 around `9.1s` with max around
+  `11.6s`;
+- each significant Engine Speed change window still contained roughly
+  `42-45` forwarded tunnel requests, and `active_replay_armed` /
+  `active_replay_served` stayed at `0`;
+- `shadow_local` either did not start a useful plan for the focus signature or
+  produced comparison-only evidence. By design it does not serve GDS2 and
+  therefore cannot directly improve visible freshness;
+- ECU voltage tests proved capability negotiation, plan startup, local
+  execution, and result drain for `shadow_local`, but their dominant foreground
+  evidence remained GM `A9 81 xx`, which is intentionally observe-only /
+  inventory-only in the current architecture.
+
+Current conclusion:
+
+- `ReadMsgs` empty-cache changes, adaptive TTL, read-ahead FIFO, read-tail,
+  underfill merge, and read/write collect transactions are still useful
+  guardrails and read-side optimizations;
+- they mainly reduce `WRITE RTT + READ RTT` toward `WRITE RTT + local read
+  collection`, but do not remove the remaining one foreground write crossing
+  per page item;
+- for a Data Display page with many serial read-only requests, that still leaves
+  `N parameters x one tunnel crossing` on the critical path, which is enough to
+  produce multi-second Engine Speed freshness;
+- the next optimization decision must be about reducing write-side crossings,
+  not further tuning read-cache/read-ahead parameters.
+
+Practical handoff for the next conversation:
+
+- do not claim value-level freshness improvement unless the log shows changing
+  focus values and a materially faster focus DID cadence;
+- do not treat absence of `active_replay_*` events as a bug for the current GM
+  A9 guarded lane;
+- do not re-enable GM A9 shadow execution or replay without a separate
+  isolation design and real-vehicle evidence;
+- if continuing implementation, focus on proof tooling and a narrow
+  non-GM-A9, read-only DID path that can produce `sweep.shadow.match` before
+  any replay/serve decision;
+- if continuing validation, choose a page or ECU scene with repeated non-GM-A9
+  UDS DID foreground traffic. Repeating the current ECU voltage scene mainly
+  validates mechanism startup, not latency improvement.
 
 ## Handoff For Real-Vehicle Engine Speed Validation - 2026-05-13
 
@@ -621,11 +676,14 @@ Validation:
 
 ### Phase 5: Local-Side Polling Subscription
 
-Goal: move high-frequency J2534 polling near the VCI and stream results to the cloud.
+Goal: move high-frequency J2534 polling near the VCI and use fresh local
+results to reduce repeated foreground write/read crossings.
 
-The first guarded implementation stage is now available as `observe_only` and
-`shadow_local`. It is still disabled by default and does not synthesize GDS2
-responses.
+The first guarded implementation stage is available as `observe_only` and
+`shadow_local`. A narrow exact-signature `active_replay` path also exists, but
+it is not a proven latency solution yet. Treat it as an experimental canary
+behind the shadow-match gate described in
+`agent_docs/ops/proxy_j2534_local_sweep_scheduler.md`.
 
 The detailed long-term design is maintained in
 `agent_docs/ops/proxy_j2534_local_sweep_scheduler.md`. That document supersedes
@@ -649,12 +707,18 @@ Implemented first-stage behavior:
   `VCI_PROXY_LOCAL_SWEEP_SHADOW_ALLOW_GM_A9_PACKET=1` is explicitly set.
 - v1 shadow transport uses server-driven non-blocking `SWEEP_STATUS_REQ/RSP`
   plus immediate `SWEEP_DRAIN_RESULTS_REQ/RSP`.
-- Shadow results are stored only for comparison and are never served to GDS2.
+- In `shadow_local`, shadow results are stored only for comparison and are
+  never served to GDS2.
 - Shadow comparison logs distinguish startup/not-drained windows
   (`sweep.shadow.not_ready`) from true missing shadow records
   (`sweep.shadow.missing`).
-- Real `WRITE_MSGS_REQ` and `READ_MSGS_REQ` continue through the existing
-  normal proxy path; local sweep does not synthesize replies or skip forwarding.
+- In `observe_only` and `shadow_local`, real `WRITE_MSGS_REQ` and
+  `READ_MSGS_REQ` continue through the existing normal proxy path; local sweep
+  does not synthesize replies or skip forwarding.
+- In `active_replay`, the cloud may synthesize only an exact learned
+  non-GM-A9 write/read pair whose latest shadow generation is fresh,
+  success-coded, non-empty, and repeatedly comparison-clean. All other traffic
+  falls back to the normal tunnel/read-ahead/transaction path.
 
 Long-term design idea:
 
@@ -674,18 +738,19 @@ Risks:
 - More likely to diverge from ordinary J2534 DLL behavior.
 - Requires strong correctness tests and probably protocol-specific tuning.
 
-Use replay only after Phases 1-4 and the Phase 5 observe/shadow evidence prove
-that tunnel RTT count remains the limiting factor and shadow results match
-normal GDS2-visible responses.
+Use replay only after observe/inventory shows useful non-GM-A9 replay-candidate
+coverage and `shadow_local` proves `sweep.shadow.match` on the same signatures.
+Do not use GM `A9 81 xx` absence of replay events as a failure signal.
 
-### Phase 5 Not Implemented Yet
+### Phase 5 Remaining Work
 
-The following remain undone and disabled:
+The following remain undone, unsupported, or not proven for product rollout:
 
-- `active_replay`
-- synthetic write success replies
-- synthetic `READ_MSGS_RSP` replies
-- skipped real tunnel forwarding
+- broad `active_replay` outside the exact-signature canary path
+- production use of synthetic write success replies
+- production use of synthetic `READ_MSGS_RSP` replies
+- skipped real tunnel forwarding for any traffic that has not passed the
+  shadow-match gate
 - serving shadow data through `_try_serve_cached()` or the read-ahead FIFO
 - unsolicited result push
 - blocking long-poll drain
@@ -693,8 +758,9 @@ The following remain undone and disabled:
 - allowlist expansion beyond exact UDS `0x22`, OBD Mode 01, and strict
   observed GM `A9 81 xx` request shapes
 - adaptive scheduler tuning
-- replay decision logic that consumes inventory coverage and shadow-fidelity
-  evidence
+- replay decision logic that is driven by full-session inventory coverage and
+  shadow-fidelity summaries rather than the current exact-signature runtime
+  gate alone
 
 ## Optimizations Not Recommended
 
@@ -723,15 +789,14 @@ Recommended order:
    keep `VCI_PROXY_LOCAL_SWEEP_SHADOW_ALLOW_GM_A9_PACKET=0`; the learned GM A9
    signatures should log `sweep.plan.skipped` rather than starting a high-rate
    local shadow loop.
-9. Before changing shadow policy, collect a run with changing Engine Speed or
-   another changing Data Display value and confirm no disconnects, no cadence
-   gaps, and acceptable tunnel RTT. If the tunnel becomes slow, verify
-   `read_ahead.transaction.guard_armed` and
-   `write_collect_guarded_no_collect` appear.
-10. Enable `active_replay` only for non-GM-A9 signatures with clean
-    `return_code == 0`, non-empty shadow results and repeated comparison
-    success on the latest shadow generation; write a separate ADR/spec before
-    any GM A9 execution or broader replay rollout.
+9. Prove at least one repeated non-GM-A9 UDS/OBD signature reaches
+   `sweep.shadow.match` with fresh, success-coded, non-empty shadow results and
+   no Data Display regression.
+10. Enable the exact-signature `active_replay` canary only for signatures that
+    passed that shadow-match gate, then prove `active_replay_armed` /
+    `active_replay_served` reduces forwarded write crossings and improves DID
+    cadence. Write a separate ADR/spec before any GM A9 execution or broader
+    replay rollout.
 
 ## Suggested Code Touch Points
 
@@ -793,7 +858,9 @@ Roll out in guarded stages:
 5. `read_ahead_enabled`: serve prefetched messages only after shadow results match expected ordering.
 6. `local_sweep_observe_only`: learn read-only Data Display sweep signatures without extra ECU traffic.
 7. `local_sweep_shadow_local`: run a short local shadow plan and compare only; do not synthesize replies or skip normal GDS2 forwarding.
-8. future `active_replay`: separate design and approval required.
+8. `active_replay` canary: enable only for exact non-GM-A9 signatures that
+   already passed the shadow-match gate, then prove reduced forwarded writes
+   and faster DID cadence before any broader rollout.
 
 Rollback trigger examples:
 
@@ -815,31 +882,36 @@ A successful optimization should meet all of these:
 
 Current status against these criteria:
 
-- stability criterion is partially met for recent ECU runs: Data Display
-  refreshed under the safe transport path, and no active replay or local shadow
-  execution was involved;
-- value-level page refresh is now proven through changing battery-voltage rows
-  (`Ignition 1 Signal` and
-  `Engine Controls Ignition Relay Feedback 2 Signal`), but `Engine Speed` and
-  `Accelerator Pedal Position` still remained `0` in the inspected run and are
-  not valid freshness proof for that run;
-- RTT-count reduction for the full page is still incomplete: logs continue to
-  show high-rate non-blocking `ReadMsgs` with oversized counts and partial FIFO
-  underfill, so the current safe lane focuses on read-ahead/read-collect merge
-  behavior plus tail empty-boundary confirmation rather than GM A9 replay;
+- stability criterion is partially met for recent safe-transport and ECU runs:
+  Data Display can refresh without replay serving, and `shadow_local` can
+  negotiate, start plans, execute local items, and drain results;
+- value-level Engine Speed improvement is not met. Real-vehicle runs contained
+  meaningful Engine Speed changes, but the focus DID cadence stayed multi-second
+  (`~9.1s` p50 in the later run, worse in earlier runs), which does not match
+  the local `1-2s` target;
+- RTT-count reduction for the full page is still incomplete. Nearby tunnel p95
+  was often only `38-40ms`, yet each Engine Speed change window still involved
+  dozens of forwarded requests. This points to page-wide serial request count,
+  especially remaining write-side crossings, rather than a single slow tunnel
+  request;
+- ECU battery-voltage runs are useful mechanism tests, but the latest evidence
+  is not sufficient to prove freshness improvement because the repeated
+  foreground traffic was dominated by GM `A9 81 xx`, which remains
+  observe-only / inventory-only;
 - slow-link guard behavior remains unproven unless a future WAN/degraded-link
   run crosses the configured guard threshold.
 
 ## Open Questions
 
-- Which Engine Data groups use the observed strict GM `A9 81 xx` packet
-  request shape, and do their shadow responses match the normal GDS2-visible
-  responses across ECU/vehicle variants?
-- Can a changing-value Engine Data run show value-level improvement, or does the
-  remaining page-wide serial request count still dominate despite
-  read-ahead/transaction?
+- Which Engine Data groups expose repeated non-GM-A9 UDS/OBD read-only
+  signatures that can safely produce `sweep.shadow.match`?
+- What is the minimum write-side reduction path that can safely remove one
+  foreground tunnel crossing per repeated read-only DID without changing GDS2's
+  visible J2534 semantics?
+- Does any read-side issue remain after read-ahead/transaction, or has the
+  remaining visible lag now moved decisively to page-wide write-side crossing
+  count?
 - Under an intentionally slow tunnel or a naturally degraded WAN, does the
   transaction guard arm and suppress collection without causing disconnects?
 - Are there protocol-specific differences between CAN, ISO15765, and other J2534 protocols that require separate read-ahead tuning?
-- Should read-ahead be allowed globally, or only for allowlisted modules/data categories after validation?
 - What is the best freshness target for cloud GDS2: match local `1-2s`, or accept a defined cloud threshold such as `<3s`?

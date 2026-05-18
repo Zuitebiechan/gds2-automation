@@ -677,6 +677,13 @@ Shadow data is comparison-only:
   and the latest generation to have reached the replay clean-match streak
   threshold before DLL-facing arm/serve can happen
 
+For test-log triage, `sweep.inventory.*` and `sweep.shadow.*` events include
+explicit verdict/gate fields such as `sweep_inventory_verdict`,
+`sweep_inventory_next_step`, `sweep_inventory_non_gm_replay_candidate_request_count`,
+`sweep_inventory_top_candidate_*`, `sweep_shadow_replay_gate`,
+`sweep_shadow_replay_ready`, and `sweep_shadow_replay_next_step`. Active replay
+canary events include `replay_gate`, `replay_ready`, and `replay_next_step`.
+
 The stage cancels active shadow plans on disconnect, close, filter mutation,
 non-cacheable or mutating IOCTL, failed writes, connection epoch changes,
 max-seconds expiry, repeated mismatch/error thresholds, and communication-error
@@ -728,16 +735,45 @@ Implemented but still experimental in this stage:
 - synthetic `WRITE_MSGS_RSP` / `READ_MSGS_RSP` only inside that narrow replay
   path
 
+Operationally, this experimental path should be treated as a write-side
+crossing-reduction canary, not as a default latency optimization. Before using
+it in a real vehicle run, the same non-GM-A9 signature must first produce
+`sweep.shadow.match` in `shadow_local`; the canary is useful only if it then
+reduces forwarded foreground `WRITE_MSGS_REQ` crossings and improves target DID
+cadence without Data Display errors.
+
 Still not implemented or not supported in this stage:
 
 - broad skipped real forwarding outside the exact-signature replay path
-- serving shadow data to GDS2
+- serving shadow data to GDS2 through generic cache/FIFO paths or outside the
+  exact-signature canary gate
 - production rollout controls
 - allowlist expansion beyond exact UDS `0x22`, OBD Mode 01, and strict observed
   GM `A9 81 xx` request shapes
 - adaptive sweep-rate tuning
 - safe GM `A9 81 xx` shadow execution or GM `A9 81 xx` replay as a supported
   configuration
+
+### Latency Interpretation After Engine Speed Tests
+
+Recent real-vehicle Engine Speed runs should be interpreted as evidence that
+the current read-side tunnel optimizations are not enough to deliver local-like
+Data Display freshness.
+
+Observed shape:
+
+- tunnel RTT p95 stayed in the tens of milliseconds, so the visible delay is
+  not explained by one degraded tunnel request;
+- Engine Speed / DID `0x000C` cadence remained multi-second even after
+  read-ahead and transaction wrapping were active;
+- `active_replay_armed` and `active_replay_served` stayed absent, so no
+  foreground GDS2 write/read pairs were skipped;
+- `shadow_local` remained comparison-only and does not serve GDS2 responses.
+
+Operational conclusion: keep the read-side features as guarded support code,
+but do not claim they have solved visible latency. Further latency work should
+target write-side crossing reduction for proven-safe repeated read-only
+signatures, with GM `A9 81 xx` still observe-only / inventory-only.
 
 ### Manual GDS2 latency observability
 

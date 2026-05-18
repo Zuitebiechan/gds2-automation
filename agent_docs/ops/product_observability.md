@@ -294,6 +294,47 @@ Latest known interpretation:
   value-level freshness improvement. A changing-value run is required
   before judging visible lag.
 
+### Write-Side Crossing Reduction Evidence
+
+For the next Proxy J2534 latency workstream, observability must prove the
+write-side path in this order:
+
+1. `observe_only` / inventory proof:
+   - `sweep.inventory.summary` shows non-GM-A9 replay-candidate coverage under
+     `sweep_inventory_replay_candidate_request_count_by_kind`;
+   - `sweep.inventory.summary` also surfaces `sweep_inventory_verdict`,
+     `sweep_inventory_next_step`, `sweep_inventory_non_gm_replay_candidate_*`,
+     and the top non-GM candidate fields so pasted logs can be triaged quickly;
+   - `sweep.inventory.signature` shows repeated `uds_did` or `obd_pid`
+     signatures with `sweep_inventory_signature_verdict`,
+     `sweep_inventory_signature_next_step`, successful write/read pairs, and
+     projected write RTT savings;
+   - GM `A9 81 xx` remains visible only as observe-only / inventory-only.
+
+2. `shadow_local` fidelity proof:
+   - `sweep.plan.started` and `sweep.batch.drained` appear for the target
+     non-GM-A9 signature;
+   - repeated `sweep.shadow.match` appears after startup, with
+     `sweep_shadow_clean_match_streak >= sweep_replay_min_clean_matches` and
+     `sweep_shadow_replay_gate=ready_for_active_replay_canary`;
+   - the latest compared shadow result is fresh, success-coded, and non-empty;
+   - persistent `sweep.shadow.missing`, `sweep.shadow.stale`,
+     `sweep.shadow.mismatch`, or `sweep.shadow.error` blocks replay, with the
+     gate field explaining the next step.
+
+3. `active_replay` canary proof:
+   - `proxy.request.active_replay_armed` and
+     `proxy.request.active_replay_served` appear only for the same proven
+     non-GM-A9 signature, and include `replay_gate=ready_for_active_replay_canary`;
+   - forwarded `WRITE_MSGS_REQ` count for that signature decreases compared
+     with the shadow-only baseline;
+   - `sweep.did.cadence` for the target DID improves, and focused collector
+     lag improves when value-level samples exist.
+
+Do not treat absence of `active_replay_*` as a bug when the page is dominated
+by GM `A9 81 xx`, when no non-GM-A9 shadow plan started, or when the latest
+shadow generation has not passed the clean-match gate.
+
 ## Real-Vehicle Engine Speed Freshness Handoff - 2026-05-13
 
 For the next real-vehicle test, `Engine Speed` is the primary freshness signal.

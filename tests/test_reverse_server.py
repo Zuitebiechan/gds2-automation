@@ -3901,6 +3901,11 @@ def test_shadow_missing_before_plan_is_logged_as_not_ready(monkeypatch, tmp_path
     assert not_ready["sweep_shadow_not_ready_reason"] == "no_active_plan"
     assert not_ready["sweep_plan_active"] is False
     assert not_ready["sweep_store_pending_count"] == 0
+    assert not_ready["sweep_shadow_replay_gate"] == "not_ready_no_active_plan"
+    assert not_ready["sweep_shadow_replay_ready"] is False
+    assert not_ready["sweep_shadow_replay_next_step"] == (
+        "start_or_wait_for_a_shadow_plan"
+    )
 
 
 def test_try_serve_cached_never_uses_shadow_store() -> None:
@@ -4089,6 +4094,22 @@ def test_handle_proxy_connection_active_replay_serves_write_read_from_shadow_sto
     event_types = [record["event_type"] for record in records]
     assert "proxy.request.active_replay_armed" in event_types
     assert "proxy.request.active_replay_served" in event_types
+    armed = next(
+        record
+        for record in records
+        if record["event_type"] == "proxy.request.active_replay_armed"
+    )
+    served = next(
+        record
+        for record in records
+        if record["event_type"] == "proxy.request.active_replay_served"
+    )
+    assert armed["replay_gate"] == "ready_for_active_replay_canary"
+    assert armed["replay_ready"] is True
+    assert armed["replay_next_step"] == "armed_for_matching_read"
+    assert served["replay_gate"] == "ready_for_active_replay_canary"
+    assert served["replay_ready"] is True
+    assert served["replay_next_step"] == "served_from_shadow_store"
 
 
 def test_invalidate_caches_cancels_shadow_plan_and_clears_shadow_store() -> None:
