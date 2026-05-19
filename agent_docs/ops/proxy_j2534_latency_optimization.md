@@ -69,6 +69,78 @@ Practical handoff for the next conversation:
   UDS DID foreground traffic. Repeating the current ECU voltage scene mainly
   validates mechanism startup, not latency improvement.
 
+## Fallback Product Lane: Proxy Local Live Data
+
+If the write-side crossing-reduction lane proves ineffective for the target
+GDS2 Data Display page, do not keep tuning read-ahead/read-collect/read-tail
+settings as a substitute for product proof. The next product lane is a separate
+`Proxy Local Live Data` panel: a local-side collector reads a tiny allowlist of
+known, safe, read-only signals through the vehicle-side J2534 path, decodes
+only those known signals, and streams value events to the cloud/UI.
+
+This lane is not a way to make the native GDS2 Data Display page refresh
+faster. It deliberately bypasses the GDS2 page-level sweep for a small set of
+high-value values such as Engine Speed, while GDS2 can continue to display its
+full OEM Data Display at its existing cadence.
+
+Important boundary:
+
+- J2534 does not decode Data Display parameters. It only transports raw
+  messages. GDS2 currently provides most parameter names, units, and OEM decode
+  semantics through the Java Agent page snapshot path.
+- The local collector may decode only signals with explicit known semantics,
+  for example standard OBD Mode 01 PID `0x0C` Engine Speed
+  (`rpm = ((A * 256) + B) / 4`) or an explicitly validated UDS DID with known
+  byte layout and scale.
+- OEM/private payloads, including GM `A9 81 xx`, are not eligible active poll
+  sources under the current evidence. They may be observed for correlation, but
+  not actively executed or treated as a decoded product source without a
+  separate safety design.
+
+Target architecture:
+
+```text
+vehicle-side VCI / J2534
+  -> local VCI Proxy live-data collector
+  -> small read-only allowlist decoder
+  -> reverse tunnel value event
+  -> cloud session latest-value cache and SSE
+  -> product Live Data panel / client GUI
+```
+
+The current Java Agent path remains valid for complete GDS2 page data:
+
+```text
+GDS2 Data Display
+  -> Java Agent latest.json
+  -> cloud/session SSE
+  -> product Live Data table
+```
+
+The fallback product lane adds a second source rather than pretending to own
+GDS2's full decoder catalog. A UI should show source and age, for example
+`source=gds2_agent` for complete but page-limited data and
+`source=proxy_local_obd` for a small fast signal set.
+
+Initial MVP scope:
+
+- one signal first: Engine Speed;
+- allowed source only if the vehicle supports standard OBD `01 0C`, or if a
+  non-GM-A9 UDS DID has been explicitly validated against GDS2/local evidence;
+- default disabled, foreground GDS2 traffic gets priority, and collector polls
+  back off on errors, negative responses, stale results, or J2534/Data Display
+  instability;
+- stream decoded value events only to the product UI; never synthesize
+  DLL-visible `WRITE_MSGS_RSP` / `READ_MSGS_RSP` for GDS2.
+
+Go/no-go evidence for this fallback:
+
+- go: local collector value follows real Engine Speed changes, sample age p95
+  is near the local-feel target (`<= 1000-2000ms`), and GDS2 remains stable;
+- no-go: no safe standard OBD/known-UDS Engine Speed source exists, the
+  collector interferes with GDS2, sample age remains multi-second, or the only
+  apparent source is GM `A9 81 xx`.
+
 ## Handoff For Real-Vehicle Engine Speed Validation - 2026-05-13
 
 The next validation run is a real-vehicle Engine Data / Data Display test where

@@ -3906,6 +3906,10 @@ def test_shadow_missing_before_plan_is_logged_as_not_ready(monkeypatch, tmp_path
     assert not_ready["sweep_shadow_replay_next_step"] == (
         "start_or_wait_for_a_shadow_plan"
     )
+    assert not_ready["sweep_identifier_kind"] == "uds_did"
+    assert not_ready["sweep_identifier"] == 0xF40C
+    assert not_ready["sweep_payload_prefix_hex"] == "22f40c"
+    assert not_ready["sweep_service_id"] == 0x22
 
 
 def test_try_serve_cached_never_uses_shadow_store() -> None:
@@ -4092,6 +4096,13 @@ def test_handle_proxy_connection_active_replay_serves_write_read_from_shadow_sto
 
     records = _read_product_log_events(tmp_path)
     event_types = [record["event_type"] for record in records]
+    matches = [
+        record for record in records if record["event_type"] == "sweep.shadow.match"
+    ]
+    assert matches
+    assert matches[-1]["sweep_identifier_kind"] == "uds_did"
+    assert matches[-1]["sweep_identifier"] == 0xF40C
+    assert matches[-1]["sweep_payload_prefix_hex"] == "22f40c"
     assert "proxy.request.active_replay_armed" in event_types
     assert "proxy.request.active_replay_served" in event_types
     armed = next(

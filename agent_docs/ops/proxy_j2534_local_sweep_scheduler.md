@@ -102,6 +102,57 @@ actually emits those requests. A CAN-ID-prefixed GM `A9 81 xx` packet that
 contains RPM-like data is still not an eligible active execution or replay
 path under the current design.
 
+## Exit Criteria And Fallback If Replay Is Not Viable
+
+The local sweep scheduler should have a clear stop condition. If the target
+Data Display page does not expose useful non-GM-A9 replay candidates, if
+`shadow_local` cannot produce clean `sweep.shadow.match` evidence, or if
+`active_replay` serves too little traffic to improve DID cadence, this
+workstream should be paused for that page rather than expanded into unsafe GM
+A9 execution or more read-side tuning.
+
+In that case, the product fallback is `Proxy Local Live Data`: a separate
+local-side live-data collector that does not serve GDS2 and does not try to
+accelerate the native GDS2 Data Display page. It polls only a small allowlist
+of known read-only signals locally, decodes only signals with known standard or
+validated formulas, and streams value-level samples to the product UI.
+
+This fallback is intentionally narrower than GDS2:
+
+- J2534 provides raw messages, not GDS2 parameter names, units, or OEM decode
+  semantics.
+- Standard OBD Mode 01 PIDs can be decoded when supported. Engine Speed is the
+  initial target via OBD `01 0C` (`41 0C A B` -> `((A * 256) + B) / 4` RPM).
+- UDS `0x22` DIDs are eligible only when the DID and scale are explicitly
+  known or have been validated against GDS2/local evidence.
+- GM `A9 81 xx` remains observe-only / inventory-only and is not an active
+  polling or decoder source for this fallback.
+
+The fallback data path should be separate from replay:
+
+```text
+local J2534 worker / local VCI Proxy
+  -> Proxy Local Live Data collector
+  -> allowlisted decoder
+  -> reverse tunnel value event
+  -> cloud live-data event stream
+  -> client Live Data panel
+```
+
+The current Java Agent page-scan stream remains the source of complete GDS2
+Data Display rows. The proxy-local stream is a second source for a small fast
+signal set, and the UI should expose source and value age so operators can
+distinguish `gds2_agent` rows from `proxy_local_obd` or
+`proxy_local_known_uds` rows.
+
+Validation should prove product value directly:
+
+- decoded Engine Speed follows real RPM changes;
+- local collector sample-age p95 is near `<= 1000-2000ms`;
+- GDS2 stays connected and Data Display does not freeze;
+- active requests are read-only, non-GM-A9, and from the explicit allowlist;
+- no DLL-visible GDS2 responses are synthesized.
+
 ## Current Implementation Stage
 
 The current code implements two disabled-by-default modes:

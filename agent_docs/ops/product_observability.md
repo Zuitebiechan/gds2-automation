@@ -335,6 +335,49 @@ Do not treat absence of `active_replay_*` as a bug when the page is dominated
 by GM `A9 81 xx`, when no non-GM-A9 shadow plan started, or when the latest
 shadow generation has not passed the clean-match gate.
 
+## Proxy Local Live Data Fallback Observability
+
+If the write-side replay lane fails for a GDS2 Data Display page, the next
+candidate product lane is a separate proxy-local live-data stream. Observability
+for that lane must make the source boundary explicit: these values are not
+GDS2 Data Display rows and are not proof that the native GDS2 page refreshed
+faster.
+
+Required source labels:
+
+- `gds2_agent`: value came from the Java Agent scanning GDS2 Data Display and
+  therefore inherits GDS2's parameter names, units, and OEM decode semantics;
+- `proxy_local_obd`: value came from a standard OBD Mode 01 PID decoded by the
+  local proxy allowlist;
+- `proxy_local_known_uds`: value came from an explicitly validated non-GM-A9
+  UDS DID decoder;
+- `proxy_local_observe_only`: raw or correlated payload evidence only; not a
+  product decoded value.
+
+The proxy-local stream should emit value-level events that are easy to paste
+and classify, for example `proxy.local_live_data.sample` and
+`proxy.local_live_data.summary`. Each sample should include:
+
+- `signal_key`, display name, numeric value, unit, and source label;
+- local sample timestamp, cloud receive timestamp, and `sample_age_ms`;
+- request signature (`obd_pid` or `uds_did`), decoder id, return code, and
+  poll duration;
+- foreground-priority/backoff fields showing whether GDS2 traffic was allowed
+  to run first;
+- negative-response, timeout, or unsupported-signal reasons when no value is
+  emitted.
+
+For Engine Speed MVP validation, logs must answer these questions without
+needing raw payload reconstruction:
+
+- did the vehicle support a safe source such as OBD `01 0C`, or a validated
+  non-GM-A9 UDS DID;
+- did decoded RPM change when the real vehicle RPM changed;
+- did `sample_age_ms` stay near the local-feel target (`<= 1000-2000ms` p95);
+- did GDS2 stay connected and avoid Data Display freeze/disconnect events;
+- were any samples sourced from GM `A9 81 xx` active polling. The expected
+  answer is no under the current design.
+
 ## Real-Vehicle Engine Speed Freshness Handoff - 2026-05-13
 
 For the next real-vehicle test, `Engine Speed` is the primary freshness signal.

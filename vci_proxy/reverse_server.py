@@ -1056,6 +1056,7 @@ class ReverseProxyServer:
         if not self.config.local_sweep.shadow_transport_enabled:
             return
         signature_digest = observed.signature.signature_digest
+        signature_fields = observed.signature.to_observability()
         shadow_result = self._sweep_shadow_store.latest_for(signature_digest)
         result = compare_shadow_to_real(
             signature_digest=signature_digest,
@@ -1076,7 +1077,7 @@ class ReverseProxyServer:
                     dll_seq=dll_seq,
                     msg_name=msg_name,
                     reason=f"shadow_{not_ready_reason}",
-                    **result.fields,
+                    **{**signature_fields, **result.fields},
                     **state_fields,
                     sweep_shadow_not_ready_reason=not_ready_reason,
                     sweep_shadow_replay_gate=gate,
@@ -1178,7 +1179,7 @@ class ReverseProxyServer:
             dll_seq=dll_seq,
             msg_name=msg_name,
             reason=f"shadow_{result.outcome}",
-            **result_fields,
+            **{**signature_fields, **result_fields},
             **state_fields,
         )
         if result.outcome == "mismatch":

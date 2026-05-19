@@ -775,6 +775,53 @@ but do not claim they have solved visible latency. Further latency work should
 target write-side crossing reduction for proven-safe repeated read-only
 signatures, with GM `A9 81 xx` still observe-only / inventory-only.
 
+### Proxy Local Live Data Fallback
+
+If exact-signature replay cannot materially improve the target GDS2 Data
+Display page, the supported fallback direction is a product-level live-data
+stream that is separate from GDS2's native Data Display refresh loop.
+
+This fallback does not make GDS2's Data Display faster. It adds a small
+proxy-local source for high-value signals:
+
+```text
+vehicle-side J2534
+  -> local VCI Proxy / worker collector
+  -> allowlisted read-only request
+  -> known decoder
+  -> reverse tunnel value event
+  -> cloud live-data SSE
+  -> client Live Data panel
+```
+
+The design must not assume that J2534 can decode GDS2 Data Display values.
+J2534 is a transport API. GDS2 and its Java Agent currently provide complete
+parameter names, units, and OEM-specific decode semantics for the native Data
+Display rows. The proxy-local fallback may decode only a small allowlist:
+
+- standard OBD Mode 01 PIDs with public formulas, starting with Engine Speed
+  `01 0C` / response `41 0C A B` / `rpm = ((A * 256) + B) / 4`;
+- explicitly validated non-GM-A9 UDS `0x22` DIDs whose byte layout and scale
+  are known from documentation or real-vehicle comparison;
+- no active GM `A9 81 xx` polling, decoding, shadow execution, or replay under
+  the current evidence.
+
+The tunnel event should carry decoded value-level data, not J2534 replay
+payloads. A future event shape should include at minimum:
+
+- signal name, value, unit, and source (`proxy_local_obd` or
+  `proxy_local_known_uds`);
+- local sample timestamp and `sample_age_ms`;
+- request signature and decoder id;
+- poll duration, return code, negative-response/backoff state, and whether
+  foreground GDS2 traffic was prioritized.
+
+The cloud/client UI should keep the existing Java Agent GDS2 stream available
+as the complete page view and display proxy-local values as a separate or
+source-labeled fast signal set. Do not merge sources in a way that hides
+whether a value came from GDS2's Data Display decoder or from the local
+allowlisted proxy decoder.
+
 ### Manual GDS2 latency observability
 
 When the cloud GDS2 UI is operated manually, the Flask/session live-data
