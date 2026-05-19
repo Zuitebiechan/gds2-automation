@@ -27,6 +27,7 @@ from vci_proxy.cache_ioctl import IoctlCache
 from vci_proxy.config import ProxyConfig
 from vci_proxy.j2534_driver import J2534Driver
 from vci_proxy.j2534_worker import create_driver_runtime
+from vci_proxy.local_live_data import LocalLiveDataMonitor
 from vci_proxy.protocol import (
     HEADER_SIZE,
     MAGIC,
@@ -98,12 +99,14 @@ class ReverseProxyClient:
         self._server_connection_epoch: str | None = None
         self._driver_call_lock = asyncio.Lock()
         self._foreground_request_depth = 0
+        self._local_live_data = LocalLiveDataMonitor()
         self._sweep_executor = LocalSweepExecutor(
             config=self.config.local_sweep,
             run_driver_call=self._run_driver_call,
             context_factory=self._sweep_log_context,
             emit_event=self._emit_client_event,
             foreground_idle=self._foreground_idle,
+            local_live_data=self._local_live_data,
         )
 
     @staticmethod

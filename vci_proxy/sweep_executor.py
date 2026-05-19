@@ -11,6 +11,7 @@ from diagnostic_platform.observability import LogContext
 
 from .cache_read_msgs import BUFFER_EMPTY
 from .config import LocalSweepConfig
+from .local_live_data import LocalLiveDataMonitor
 from .protocol import HEADER_SIZE, ProtocolDecoder, ProtocolEncoder
 from .sweep_protocol import (
     SweepPlanStartRequest,
@@ -35,12 +36,14 @@ class LocalSweepExecutor:
         context_factory: ContextFactory,
         emit_event: EventEmitter,
         foreground_idle: Callable[[], bool],
+        local_live_data: LocalLiveDataMonitor | None = None,
     ):
         self._config = config
         self._run_driver_call = run_driver_call
         self._context_factory = context_factory
         self._emit_event = emit_event
         self._foreground_idle = foreground_idle
+        self._local_live_data = local_live_data
         self._active_plan: SweepPlanStartRequest | None = None
         self._pending_plan: SweepPlanStartRequest | None = None
         self._pending_plan_callback_registered = False
@@ -342,6 +345,7 @@ class LocalSweepExecutor:
                 list(read_messages),
                 0,
             )[HEADER_SIZE:]
+            finished_at = time.time()
             self._queue.append(
                 SweepResultRecord(
                     plan_id=plan.plan_id,
@@ -349,7 +353,7 @@ class LocalSweepExecutor:
                     return_code=int(read_ret),
                     read_rsp_body=read_rsp_body,
                     started_at_s=started_at,
-                    finished_at_s=time.time(),
+                    finished_at_s=finished_at,
                 )
             )
             self._emit_event(
@@ -371,6 +375,18 @@ class LocalSweepExecutor:
                 ],
                 **read_observability,
             )
+            self._emit_local_live_data_events(
+                context=context,
+                plan=plan,
+                index=index,
+                request=request,
+                write_messages=messages,
+                read_messages=read_messages,
+                return_code=int(read_ret),
+                started_at_s=started_at,
+                finished_at_s=finished_at,
+                read_observability=read_observability,
+            )
         except Exception as exc:
             if not self._plan_is_active(plan):
                 return
@@ -379,6 +395,58 @@ class LocalSweepExecutor:
                 request.signature_digest,
                 started_at,
                 f"{type(exc).__name__}:{exc}",
+            )
+
+    def _emit_local_live_data_events(
+        self,
+        *,
+        context: LogContext,
+        plan: SweepPlanStartRequest,
+        index: int,
+        request,
+        write_messages: list[dict],
+        read_messages: list[dict],
+        return_code: int,
+        started_at_s: float,
+        finished_at_s: float,
+        read_observability: dict[str, object],
+    ) -> None:
+        if self._local_live_data is None:
+            return
+        try:
+            events = self._local_live_data.record_sweep_item_finished(
+                write_messages=write_messages,
+                read_messages=read_messages,
+                return_code=return_code,
+                started_at_s=started_at_s,
+                finished_at_s=finished_at_s,
+                channel_id=plan.channel_id,
+                sweep_plan_id=plan.plan_id,
+                sweep_item_index=index,
+                sweep_signature_digest=request.signature_digest,
+                read_observability=read_observability,
+            )
+        except Exception as exc:
+            self._emit_event(
+                "proxy.local_live_data.backoff",
+                context=context,
+                status="error",
+                failure_code="local_live_data_processing_failed",
+                failure_domain="local_reverse_client",
+                reason="local_live_data_processing_failed",
+                impact_scope="proxy_local_live_data",
+                error=f"{type(exc).__name__}:{exc}",
+                sweep_plan_id=plan.plan_id,
+                sweep_item_index=index,
+                sweep_signature_digest=request.signature_digest,
+            )
+            return
+        for event_type, fields in events:
+            self._emit_event(
+                event_type,
+                context=context,
+                impact_scope="proxy_local_live_data",
+                **fields,
             )
 
     def _record_error_result(

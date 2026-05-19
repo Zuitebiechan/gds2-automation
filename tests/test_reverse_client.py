@@ -2369,7 +2369,9 @@ def test_cacheable_foreground_ioctl_pauses_shadow_without_cancelling_plan() -> N
     asyncio.run(_run())
 
 
-def test_shadow_executor_tail_reads_after_echo_only_result() -> None:
+def test_shadow_executor_tail_reads_after_echo_only_result(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+
     async def _run() -> None:
         read_calls: list[tuple[int, int]] = []
         emitted: list[tuple[str, dict[str, object]]] = []
@@ -2470,6 +2472,26 @@ def test_shadow_executor_tail_reads_after_echo_only_result() -> None:
         assert finished["tail_read_data_reads"] == 1
         assert finished["read_timeout_ms"] == 1
         assert len(finished["read_attempts"]) == 2
+        sample = [
+            fields
+            for event_type, fields in emitted
+            if event_type == "proxy.local_live_data.sample"
+        ][0]
+        assert sample["signal_key"] == "engine_speed"
+        assert sample["value"] == 1165.0
+        assert sample["source"] == "proxy_local_known_uds"
+        assert sample["decoder_id"] == "uds_did_000c_engine_speed"
+        summary = [
+            fields
+            for event_type, fields in emitted
+            if event_type == "proxy.local_live_data.summary"
+        ][0]
+        assert summary["sample_count"] == 1
+
+        latest_path = tmp_path / "VCI_Proxy" / "live_data" / "latest.json"
+        latest = json.loads(latest_path.read_text(encoding="utf-8"))
+        assert latest["latest_sample"]["value"] == 1165.0
+        assert latest["latest_sample"]["source"] == "proxy_local_known_uds"
 
     asyncio.run(_run())
 
