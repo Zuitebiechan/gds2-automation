@@ -42,6 +42,7 @@ class LocalLiveDataMonitor:
     backoff_count: int = 0
     timeout_count: int = 0
     negative_response_count: int = 0
+    return_code_warning_count: int = 0
     foreground_priority_pause_count: int = 0
 
     def record_sweep_item_finished(
@@ -88,30 +89,31 @@ class LocalLiveDataMonitor:
             )
 
         events: list[tuple[str, dict[str, object]]] = []
-        if int(return_code) != 0:
-            reason = "read_return_code"
-            self.backoff_count += 1
-            if _looks_like_timeout_return_code(return_code):
-                self.timeout_count += 1
-                reason = "timeout_return_code"
-            events.append(
-                (
-                    "proxy.local_live_data.backoff",
-                    {
-                        **common,
-                        "status": "error",
-                        "failure_code": reason,
-                        "failure_domain": "vehicle_or_vci",
-                        "reason": reason,
-                        "backoff_reason": reason,
-                    },
-                )
-            )
-            events.append(("proxy.local_live_data.summary", self.summary_fields(reason=reason)))
-            return events
-
         decoded = decode_engine_speed_from_messages(read_messages)
         if decoded is None:
+            if int(return_code) != 0:
+                reason = "read_return_code"
+                self.backoff_count += 1
+                if _looks_like_timeout_return_code(return_code):
+                    self.timeout_count += 1
+                    reason = "timeout_return_code"
+                events.append(
+                    (
+                        "proxy.local_live_data.backoff",
+                        {
+                            **common,
+                            "status": "error",
+                            "failure_code": reason,
+                            "failure_domain": "vehicle_or_vci",
+                            "reason": reason,
+                            "backoff_reason": reason,
+                            "raw_prefix_hex": _first_raw_prefix_hex(read_messages),
+                        },
+                    )
+                )
+                events.append(("proxy.local_live_data.summary", self.summary_fields(reason=reason)))
+                return events
+
             negative = _contains_negative_response(read_messages)
             if negative:
                 self.negative_response_count += 1
@@ -137,6 +139,10 @@ class LocalLiveDataMonitor:
             events.append(("proxy.local_live_data.summary", self.summary_fields(reason=reason)))
             return events
 
+        return_code_warning = _sample_return_code_warning_reason(return_code)
+        if return_code_warning is not None:
+            self.return_code_warning_count += 1
+
         sample_age_ms = round(max(0.0, (time.time() - finished_at_s) * 1000.0), 3)
         self.sample_count += 1
         self._sample_ages_ms.append(sample_age_ms)
@@ -146,10 +152,16 @@ class LocalLiveDataMonitor:
         sample = {
             **common,
             "status": "ok",
-            "reason": "sample_decoded",
+            "reason": (
+                "sample_decoded_with_return_code_warning"
+                if return_code_warning is not None
+                else "sample_decoded"
+            ),
             "value": decoded.value,
             "source": decoded.source,
             "decoder_id": decoded.decoder_id,
+            "j2534_return_code_warning": return_code_warning is not None,
+            "j2534_return_code_warning_reason": return_code_warning,
             "sample_ts": _format_timestamp(finished_at_s),
             "sample_age_ms": sample_age_ms,
             "raw_value": decoded.raw_value,
@@ -194,6 +206,7 @@ class LocalLiveDataMonitor:
             "backoff_count": self.backoff_count,
             "timeout_count": self.timeout_count,
             "negative_response_count": self.negative_response_count,
+            "return_code_warning_count": self.return_code_warning_count,
             "foreground_priority_pause_count": self.foreground_priority_pause_count,
             "sample_age_ms_p50": _percentile(self._sample_ages_ms, 50),
             "sample_age_ms_p95": _percentile(self._sample_ages_ms, 95),
@@ -335,6 +348,14 @@ def _first_raw_prefix_hex(messages: Sequence[Mapping[str, Any]]) -> str | None:
 
 def _looks_like_timeout_return_code(return_code: int) -> bool:
     return int(return_code) in {0x10, 0x09}
+
+
+def _sample_return_code_warning_reason(return_code: int) -> str | None:
+    if int(return_code) == 0:
+        return None
+    if _looks_like_timeout_return_code(return_code):
+        return "timeout_return_code_with_data"
+    return "read_return_code_with_data"
 
 
 def _percentile(values: Sequence[float], percentile: int) -> float | None:

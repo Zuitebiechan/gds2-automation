@@ -80,6 +80,61 @@ def test_monitor_writes_latest_snapshot_for_decoded_engine_speed(tmp_path: Path)
     assert payload["summary"]["sample_count"] == 1
 
 
+def test_monitor_decodes_engine_speed_payload_with_timeout_return_code(
+    tmp_path: Path,
+) -> None:
+    monitor = LocalLiveDataMonitor(latest_path=tmp_path / "latest.json")
+    now = time.time()
+
+    events = monitor.record_sweep_item_finished(
+        write_messages=[{"protocol_id": 6, "data": b"\x22\x00\x0c"}],
+        read_messages=[
+            {"protocol_id": 6, "data": bytes.fromhex("000007e0")},
+            {"protocol_id": 6, "data": bytes.fromhex("000007e862000c0d96")},
+        ],
+        return_code=9,
+        started_at_s=now - 0.024,
+        finished_at_s=now,
+        channel_id=1,
+        sweep_plan_id="plan-000c",
+        sweep_item_index=0,
+        sweep_signature_digest="sig-000c",
+        read_observability={
+            "read_timeout_ms": 15,
+            "tail_read_triggered": False,
+            "tail_read_attempts": 0,
+            "tail_read_data_reads": 0,
+        },
+    )
+
+    event_types = [event_type for event_type, _fields in events]
+    assert event_types == [
+        "proxy.local_live_data.sample",
+        "proxy.local_live_data.summary",
+    ]
+    sample = events[0][1]
+    assert sample["value"] == pytest.approx(869.5)
+    assert sample["source"] == "proxy_local_known_uds"
+    assert sample["return_code"] == 9
+    assert sample["j2534_return_code_warning"] is True
+    assert sample["j2534_return_code_warning_reason"] == "timeout_return_code_with_data"
+    assert sample["raw_prefix_hex"] == "000007e862000c0d96"
+    assert sample["read_timeout_ms"] == 15
+    assert sample["message_index"] == 1
+
+    summary = events[1][1]
+    assert summary["sample_count"] == 1
+    assert summary["backoff_count"] == 0
+    assert summary["timeout_count"] == 0
+    assert summary["return_code_warning_count"] == 1
+
+    payload = json.loads((tmp_path / "latest.json").read_text(encoding="utf-8"))
+    latest = payload["latest_sample"]
+    assert latest["value"] == pytest.approx(869.5)
+    assert latest["return_code"] == 9
+    assert latest["j2534_return_code_warning"] is True
+
+
 def test_monitor_reports_unsupported_engine_speed_response(tmp_path: Path) -> None:
     monitor = LocalLiveDataMonitor(latest_path=tmp_path / "latest.json")
     now = time.time()
