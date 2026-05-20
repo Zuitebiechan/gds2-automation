@@ -13,6 +13,7 @@ import pytest
 from diagnostic_platform.observability import LogContext, flush_product_log_writers
 from vci_proxy.cache_read_msgs import BUFFER_EMPTY
 from vci_proxy.config import LOCAL_SWEEP_MIN_ITEM_INTERVAL_FLOOR_MS, ProxyConfig
+from vci_proxy.local_live_data import LocalLiveDataChannel
 from vci_proxy.protocol import (
     HEADER_SIZE,
     Message,
@@ -2626,6 +2627,163 @@ def test_handle_requests_emits_j2534_error_name_on_failed_return_code(monkeypatc
     rows = _read_local_events(tmp_path)
     failed = next(row for row in rows if row["event_type"] == "j2534.call.failed")
     assert failed["error_name"] == "ERR_DEVICE_NOT_CONNECTED"
+
+
+def test_local_live_data_collector_starts_after_connect_and_stops_on_disconnect(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    calls: list[tuple[str, tuple[object, ...]]] = []
+
+    def _connect(device_id: int, protocol_id: int, flags: int, baudrate: int):
+        calls.append(("connect", (device_id, protocol_id, flags, baudrate)))
+        return 0, 44
+
+    def _disconnect(channel_id: int):
+        calls.append(("disconnect", (channel_id,)))
+        return 0
+
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(
+            auth_token="secret",
+            local_live_data_enabled=True,
+            local_live_data_interval_ms=1000,
+        ),
+    )
+    client.running = True
+    client.driver = types.SimpleNamespace(
+        connect=_connect,
+        disconnect=_disconnect,
+        get_error_name=lambda code: f"ERR_{code}",
+    )
+
+    async def _run() -> None:
+        connect_rsp = await client._handle_connect(
+            ProtocolEncoder.encode_connect_req(1, 6, 0, 500000)[HEADER_SIZE:],
+            sequence=1,
+        )
+        assert ProtocolDecoder.decode_connect_rsp(connect_rsp[HEADER_SIZE:]) == (0, 44)
+        assert client._local_live_data_channel is not None
+        assert client._local_live_data_channel.channel_id == 44
+        assert client._local_live_data_collector.running is True
+
+        disconnect_rsp = await client._handle_disconnect(
+            ProtocolEncoder.encode_disconnect_req(44)[HEADER_SIZE:],
+            sequence=2,
+        )
+        assert ProtocolDecoder.decode_disconnect_rsp(disconnect_rsp[HEADER_SIZE:]) == 0
+        await asyncio.sleep(0)
+        assert client._local_live_data_channel is None
+        assert client._local_live_data_collector.running is False
+
+    asyncio.run(_run())
+
+    assert calls == [
+        ("connect", (1, 6, 0, 500000)),
+        ("disconnect", (44,)),
+    ]
+    rows = _read_local_events(tmp_path)
+    event_types = [row["event_type"] for row in rows]
+    assert "proxy.local_live_data.collector.started" in event_types
+    assert "proxy.local_live_data.collector.stopped" in event_types
+
+
+def test_local_live_data_collector_stays_disabled_by_default_after_iso15765_connect(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(auth_token="secret"),
+    )
+    client.running = True
+    client.driver = types.SimpleNamespace(
+        connect=lambda _device_id, _protocol_id, _flags, _baudrate: (0, 44),
+        get_error_name=lambda code: f"ERR_{code}",
+    )
+
+    async def _run() -> None:
+        connect_rsp = await client._handle_connect(
+            ProtocolEncoder.encode_connect_req(1, 6, 0, 500000)[HEADER_SIZE:],
+            sequence=1,
+        )
+        assert ProtocolDecoder.decode_connect_rsp(connect_rsp[HEADER_SIZE:]) == (0, 44)
+        assert client._local_live_data_channel is not None
+        assert client._local_live_data_collector.running is False
+
+    asyncio.run(_run())
+
+    rows = _read_local_events(tmp_path)
+    assert not any(
+        row["event_type"] == "proxy.local_live_data.collector.started"
+        for row in rows
+    )
+
+
+def test_local_live_data_collector_does_not_start_for_non_iso15765_connect(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(auth_token="secret", local_live_data_enabled=True),
+    )
+    client.running = True
+    client.driver = types.SimpleNamespace(
+        connect=lambda _device_id, _protocol_id, _flags, _baudrate: (0, 55),
+        get_error_name=lambda code: f"ERR_{code}",
+    )
+
+    async def _run() -> None:
+        connect_rsp = await client._handle_connect(
+            ProtocolEncoder.encode_connect_req(1, 5, 0, 500000)[HEADER_SIZE:],
+            sequence=1,
+        )
+        assert ProtocolDecoder.decode_connect_rsp(connect_rsp[HEADER_SIZE:]) == (0, 55)
+        assert client._local_live_data_channel is None
+        assert client._local_live_data_collector.running is False
+
+    asyncio.run(_run())
+
+    rows = _read_local_events(tmp_path)
+    unsupported = next(
+        row for row in rows if row["event_type"] == "proxy.local_live_data.unsupported"
+    )
+    assert unsupported["reason"] == "unsupported_protocol"
+    assert unsupported["protocol_id"] == 5
+    assert unsupported["supported_protocol_id"] == 6
+    assert not any(
+        row["event_type"] == "proxy.local_live_data.collector.started"
+        for row in rows
+    )
+
+
+def test_local_live_data_collector_foreground_busy_does_not_call_driver(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(auth_token="secret", local_live_data_enabled=True),
+    )
+    client._local_live_data_channel = LocalLiveDataChannel(
+        channel_id=44,
+        protocol_id=6,
+    )
+    client._foreground_request_depth = 1
+
+    async def _fake_run_driver_call(*_args, **_kwargs):
+        raise AssertionError("foreground busy collector poll should not reach driver")
+
+    client._local_live_data_collector._run_driver_call = _fake_run_driver_call
+
+    async def _run() -> None:
+        events = await client._local_live_data_collector.poll_once()
+        assert events[0][0] == "proxy.local_live_data.backoff"
+        assert events[0][1]["reason"] == "foreground_busy"
+        assert events[1][1]["foreground_priority_pause_count"] == 1
+
+    asyncio.run(_run())
 
 
 def test_connect_and_serve_emits_lifecycle_events(monkeypatch, tmp_path: Path) -> None:

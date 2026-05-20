@@ -48,6 +48,13 @@ LOCAL_SWEEP_MISMATCH_THRESHOLD_ENV = "VCI_PROXY_LOCAL_SWEEP_MISMATCH_THRESHOLD"
 LOCAL_SWEEP_ERROR_THRESHOLD_ENV = "VCI_PROXY_LOCAL_SWEEP_ERROR_THRESHOLD"
 LOCAL_SWEEP_INCLUDE_UDS_DIDS_ENV = "VCI_PROXY_LOCAL_SWEEP_INCLUDE_UDS_DIDS"
 LOCAL_SWEEP_EXCLUDE_UDS_DIDS_ENV = "VCI_PROXY_LOCAL_SWEEP_EXCLUDE_UDS_DIDS"
+LOCAL_LIVE_DATA_ENABLED_ENV = "VCI_PROXY_LOCAL_LIVE_DATA"
+LOCAL_LIVE_DATA_INTERVAL_MS_ENV = "VCI_PROXY_LOCAL_LIVE_DATA_INTERVAL_MS"
+LOCAL_LIVE_DATA_READ_TIMEOUT_MS_ENV = "VCI_PROXY_LOCAL_LIVE_DATA_READ_TIMEOUT_MS"
+LOCAL_LIVE_DATA_MAX_CONSECUTIVE_ERRORS_ENV = (
+    "VCI_PROXY_LOCAL_LIVE_DATA_MAX_CONSECUTIVE_ERRORS"
+)
+LOCAL_LIVE_DATA_SOURCE_ENV = "VCI_PROXY_LOCAL_LIVE_DATA_SOURCE"
 
 READ_AHEAD_ENV_NAMES = (
     READ_AHEAD_ENABLED_ENV,
@@ -83,10 +90,18 @@ LOCAL_SWEEP_ENV_NAMES = (
     LOCAL_SWEEP_INCLUDE_UDS_DIDS_ENV,
     LOCAL_SWEEP_EXCLUDE_UDS_DIDS_ENV,
 )
+LOCAL_LIVE_DATA_ENV_NAMES = (
+    LOCAL_LIVE_DATA_ENABLED_ENV,
+    LOCAL_LIVE_DATA_INTERVAL_MS_ENV,
+    LOCAL_LIVE_DATA_READ_TIMEOUT_MS_ENV,
+    LOCAL_LIVE_DATA_MAX_CONSECUTIVE_ERRORS_ENV,
+    LOCAL_LIVE_DATA_SOURCE_ENV,
+)
 
 _TRUE_VALUES = {"1", "true", "yes", "on", "enabled"}
 _FALSE_VALUES = {"0", "false", "no", "off", "disabled", ""}
 LOCAL_SWEEP_MIN_ITEM_INTERVAL_FLOOR_MS = 250
+LOCAL_LIVE_DATA_MIN_INTERVAL_FLOOR_MS = 250
 
 
 def _resolve_environ(environ: Mapping[str, str] | None = None) -> Mapping[str, str]:
@@ -169,6 +184,15 @@ def local_sweep_env_is_configured(
     """Return True when any shared local sweep env setting is present."""
     env = _resolve_environ(environ)
     return any(name in env for name in LOCAL_SWEEP_ENV_NAMES)
+
+
+def local_live_data_env_is_configured(
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> bool:
+    """Return True when any local live-data env setting is present."""
+    env = _resolve_environ(environ)
+    return any(name in env for name in LOCAL_LIVE_DATA_ENV_NAMES)
 
 
 @dataclass(frozen=True)
@@ -267,10 +291,29 @@ class LocalSweepConfig:
         return self.enabled and self.mode in {"shadow_local", "active_replay"}
 
 
+@dataclass(frozen=True)
+class LocalLiveDataConfig:
+    """Independent local allowlisted live-data collector."""
+    enabled: bool = False
+    interval_ms: int = 500
+    read_timeout_ms: int = 15
+    max_consecutive_errors: int = 3
+    source: str = "uds_did_000c"
+    write_timeout_ms: int = 25
+    read_num_msgs: int = 8
+
+
 def _normalized_sweep_mode(value: object, default: str) -> str:
     mode = str(value or "").strip().lower()
     if mode in {"observe_only", "shadow_local", "active_replay"}:
         return mode
+    return default
+
+
+def _normalized_local_live_data_source(value: object, default: str) -> str:
+    source = str(value or "").strip().lower()
+    if source in {"uds_did_000c", "engine_speed_uds_did_000c"}:
+        return "uds_did_000c"
     return default
 
 
@@ -452,6 +495,78 @@ def local_sweep_config_from_env(
     )
 
 
+def local_live_data_config_from_env(
+    base: LocalLiveDataConfig | None = None,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> LocalLiveDataConfig:
+    """Apply local live-data environment settings on top of a base config."""
+    base = base or LocalLiveDataConfig()
+    env = _resolve_environ(environ)
+    return local_live_data_config_from_values(
+        base=base,
+        enabled=env_bool(LOCAL_LIVE_DATA_ENABLED_ENV, base.enabled, environ=env),
+        interval_ms=env_int(
+            LOCAL_LIVE_DATA_INTERVAL_MS_ENV,
+            base.interval_ms,
+            environ=env,
+        ),
+        read_timeout_ms=env_int(
+            LOCAL_LIVE_DATA_READ_TIMEOUT_MS_ENV,
+            base.read_timeout_ms,
+            environ=env,
+        ),
+        max_consecutive_errors=env_int(
+            LOCAL_LIVE_DATA_MAX_CONSECUTIVE_ERRORS_ENV,
+            base.max_consecutive_errors,
+            environ=env,
+        ),
+        source=env.get(LOCAL_LIVE_DATA_SOURCE_ENV),
+    )
+
+
+def local_live_data_config_from_values(
+    *,
+    base: LocalLiveDataConfig,
+    enabled: object | None = None,
+    interval_ms: object | None = None,
+    read_timeout_ms: object | None = None,
+    max_consecutive_errors: object | None = None,
+    source: object | None = None,
+    write_timeout_ms: object | None = None,
+    read_num_msgs: object | None = None,
+) -> LocalLiveDataConfig:
+    """Build local live-data config with shared normalization/floors."""
+    return LocalLiveDataConfig(
+        enabled=base.enabled if enabled is None else bool(enabled),
+        interval_ms=max(
+            LOCAL_LIVE_DATA_MIN_INTERVAL_FLOOR_MS,
+            base.interval_ms if interval_ms is None else int(interval_ms),
+        ),
+        read_timeout_ms=max(
+            1,
+            base.read_timeout_ms if read_timeout_ms is None else int(read_timeout_ms),
+        ),
+        max_consecutive_errors=max(
+            1,
+            (
+                base.max_consecutive_errors
+                if max_consecutive_errors is None
+                else int(max_consecutive_errors)
+            ),
+        ),
+        source=_normalized_local_live_data_source(source, base.source),
+        write_timeout_ms=max(
+            1,
+            base.write_timeout_ms if write_timeout_ms is None else int(write_timeout_ms),
+        ),
+        read_num_msgs=max(
+            1,
+            base.read_num_msgs if read_num_msgs is None else int(read_num_msgs),
+        ),
+    )
+
+
 @dataclass(frozen=True)
 class TlsConfig:
     """Optional TLS transport settings for the reverse tunnel."""
@@ -473,6 +588,7 @@ class ProxyConfig:
     ioctl_cache: IoctlCacheConfig = IoctlCacheConfig()
     read_ahead: ReadAheadConfig = ReadAheadConfig()
     local_sweep: LocalSweepConfig = LocalSweepConfig()
+    local_live_data: LocalLiveDataConfig = LocalLiveDataConfig()
     tls: TlsConfig = TlsConfig()
 
     @classmethod
@@ -681,6 +797,21 @@ class ProxyConfig:
                 else tuple(int(value) for value in kwargs.get("local_sweep_exclude_uds_dids"))
             ),
         )
+        local_live_data_defaults = local_live_data_config_from_env(environ=environ)
+        local_live_data = local_live_data_config_from_values(
+            base=local_live_data_defaults,
+            enabled=(
+                None
+                if kwargs.get("local_live_data_enabled") is None
+                else kwargs.get("local_live_data_enabled")
+            ),
+            interval_ms=kwargs.get("local_live_data_interval_ms"),
+            read_timeout_ms=kwargs.get("local_live_data_read_timeout_ms"),
+            max_consecutive_errors=kwargs.get("local_live_data_max_consecutive_errors"),
+            source=kwargs.get("local_live_data_source"),
+            write_timeout_ms=kwargs.get("local_live_data_write_timeout_ms"),
+            read_num_msgs=kwargs.get("local_live_data_read_num_msgs"),
+        )
         tls = TlsConfig(
             enabled=bool(kwargs.get("tls_enabled", False)),
             certfile=kwargs.get("tls_certfile"),
@@ -697,5 +828,6 @@ class ProxyConfig:
             ioctl_cache=ioctl_cache,
             read_ahead=read_ahead,
             local_sweep=local_sweep,
+            local_live_data=local_live_data,
             tls=tls,
         )

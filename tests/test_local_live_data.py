@@ -4,11 +4,20 @@ from pathlib import Path
 
 import pytest
 
+from diagnostic_platform.observability import LogContext
+from vci_proxy.config import LocalLiveDataConfig
 from vci_proxy.local_live_data import (
+    LocalLiveDataChannel,
+    LocalLiveDataCollector,
     LocalLiveDataMonitor,
     decode_engine_speed_frame,
+    engine_speed_uds_request_message,
     get_latest_snapshot_path,
 )
+
+
+def _local_live_data_context(_msg_name: str) -> LogContext:
+    return LogContext(operation_kind="j2534:LOCAL_LIVE_DATA")
 
 
 def test_decode_engine_speed_obd_mode01_pid_0c_response() -> None:
@@ -178,3 +187,202 @@ def test_monitor_reports_backoff_for_failed_engine_speed_read(tmp_path: Path) ->
     assert events[0][1]["backoff_reason"] == "read_return_code"
     assert events[1][0] == "proxy.local_live_data.summary"
     assert events[1][1]["backoff_count"] == 1
+
+
+def test_engine_speed_uds_request_message_uses_known_can_id_prefixed_shape() -> None:
+    message = engine_speed_uds_request_message(protocol_id=6)
+
+    assert message["protocol_id"] == 6
+    assert message["tx_flags"] == 64
+    assert message["data"] == bytes.fromhex("000007e022000c")
+
+
+def test_collector_poll_once_emits_sample_and_snapshot(tmp_path: Path) -> None:
+    async def _run() -> None:
+        monitor = LocalLiveDataMonitor(latest_path=tmp_path / "latest.json")
+        emitted: list[tuple[str, dict[str, object]]] = []
+        calls: list[tuple[str, int, int]] = []
+
+        async def _run_driver_call(method_name: str, *args, **_kwargs):
+            if method_name == "write_msgs":
+                channel_id, messages, timeout = args
+                calls.append((method_name, channel_id, timeout))
+                assert messages[0]["data"] == bytes.fromhex("000007e022000c")
+                return 0, 1
+            if method_name == "read_msgs":
+                channel_id, num_msgs, timeout = args
+                calls.append((method_name, channel_id, timeout))
+                assert num_msgs == 8
+                return 9, [{"protocol_id": 6, "data": bytes.fromhex("000007e862000c0d96")}]
+            raise AssertionError(method_name)
+
+        collector = LocalLiveDataCollector(
+            config=LocalLiveDataConfig(enabled=True, read_timeout_ms=15),
+            monitor=monitor,
+            run_driver_call=_run_driver_call,
+            context_factory=_local_live_data_context,
+            emit_event=lambda event_type, **fields: emitted.append((event_type, fields)),
+            foreground_idle=lambda: True,
+            channel_provider=lambda: LocalLiveDataChannel(channel_id=44, protocol_id=6),
+        )
+
+        events = await collector.poll_once()
+
+        assert [name for name, *_ in calls] == ["write_msgs", "read_msgs"]
+        event_types = [event_type for event_type, _fields in events]
+        assert event_types == [
+            "proxy.local_live_data.sample",
+            "proxy.local_live_data.summary",
+        ]
+        sample = events[0][1]
+        assert sample["request_origin"] == "local_live_data_collector"
+        assert sample["value"] == pytest.approx(869.5)
+        assert sample["return_code"] == 9
+        assert sample["j2534_return_code_warning"] is True
+        assert sample["sample_gap_ms"] is None
+        assert emitted[0][0] == "proxy.local_live_data.sample"
+        assert emitted[0][1]["collector_source"] == "uds_did_000c"
+        assert emitted[0][1]["collector_interval_ms"] == 500
+        assert emitted[0][1]["read_timeout_ms"] == 15
+
+        latest = json.loads((tmp_path / "latest.json").read_text(encoding="utf-8"))
+        assert latest["latest_sample"]["value"] == pytest.approx(869.5)
+
+    import asyncio
+
+    asyncio.run(_run())
+
+
+def test_collector_poll_once_pauses_when_foreground_is_busy(tmp_path: Path) -> None:
+    async def _run() -> None:
+        monitor = LocalLiveDataMonitor(latest_path=tmp_path / "latest.json")
+        emitted: list[tuple[str, dict[str, object]]] = []
+
+        async def _run_driver_call(*_args, **_kwargs):
+            raise AssertionError("collector should not call driver while foreground is busy")
+
+        collector = LocalLiveDataCollector(
+            config=LocalLiveDataConfig(enabled=True),
+            monitor=monitor,
+            run_driver_call=_run_driver_call,
+            context_factory=_local_live_data_context,
+            emit_event=lambda event_type, **fields: emitted.append((event_type, fields)),
+            foreground_idle=lambda: False,
+            channel_provider=lambda: LocalLiveDataChannel(channel_id=44, protocol_id=6),
+        )
+
+        events = await collector.poll_once()
+
+        assert events[0][0] == "proxy.local_live_data.backoff"
+        assert events[0][1]["reason"] == "foreground_busy"
+        assert events[1][1]["foreground_priority_pause_count"] == 1
+        assert emitted[0][0] == "proxy.local_live_data.backoff"
+        assert not (tmp_path / "latest.json").exists()
+
+    import asyncio
+
+    asyncio.run(_run())
+
+
+def test_collector_poll_once_reports_no_channel_without_driver_call(tmp_path: Path) -> None:
+    async def _run() -> None:
+        monitor = LocalLiveDataMonitor(latest_path=tmp_path / "latest.json")
+
+        async def _run_driver_call(*_args, **_kwargs):
+            raise AssertionError("collector should not call driver without a channel")
+
+        collector = LocalLiveDataCollector(
+            config=LocalLiveDataConfig(enabled=True),
+            monitor=monitor,
+            run_driver_call=_run_driver_call,
+            context_factory=_local_live_data_context,
+            emit_event=lambda *_args, **_kwargs: None,
+            foreground_idle=lambda: True,
+            channel_provider=lambda: None,
+        )
+
+        events = await collector.poll_once()
+
+        assert events[0][0] == "proxy.local_live_data.backoff"
+        assert events[0][1]["reason"] == "no_channel"
+        assert events[1][1]["backoff_count"] == 1
+
+    import asyncio
+
+    asyncio.run(_run())
+
+
+def test_collector_poll_once_rejects_non_iso15765_channel_without_driver_call(tmp_path: Path) -> None:
+    async def _run() -> None:
+        monitor = LocalLiveDataMonitor(latest_path=tmp_path / "latest.json")
+
+        async def _run_driver_call(*_args, **_kwargs):
+            raise AssertionError("collector should not call driver for unsupported protocol")
+
+        collector = LocalLiveDataCollector(
+            config=LocalLiveDataConfig(enabled=True),
+            monitor=monitor,
+            run_driver_call=_run_driver_call,
+            context_factory=_local_live_data_context,
+            emit_event=lambda *_args, **_kwargs: None,
+            foreground_idle=lambda: True,
+            channel_provider=lambda: LocalLiveDataChannel(channel_id=44, protocol_id=5),
+        )
+
+        events = await collector.poll_once()
+
+        assert events[0][0] == "proxy.local_live_data.backoff"
+        assert events[0][1]["reason"] == "unsupported_protocol"
+        assert events[0][1]["channel_id"] == 44
+        assert events[1][1]["backoff_count"] == 1
+
+    import asyncio
+
+    asyncio.run(_run())
+
+
+def test_collector_stop_waits_for_in_flight_driver_call(tmp_path: Path) -> None:
+    async def _run() -> None:
+        monitor = LocalLiveDataMonitor(latest_path=tmp_path / "latest.json")
+        write_started = asyncio.Event()
+        release_write = asyncio.Event()
+        write_finished = False
+        read_called = False
+
+        async def _run_driver_call(method_name: str, *args, **_kwargs):
+            nonlocal read_called, write_finished
+            if method_name == "write_msgs":
+                write_started.set()
+                await release_write.wait()
+                write_finished = True
+                return 0, 1
+            if method_name == "read_msgs":
+                read_called = True
+                return 0, [{"protocol_id": 6, "data": bytes.fromhex("000007e862000c1234")}]
+            raise AssertionError(method_name)
+
+        collector = LocalLiveDataCollector(
+            config=LocalLiveDataConfig(enabled=True, interval_ms=250),
+            monitor=monitor,
+            run_driver_call=_run_driver_call,
+            context_factory=_local_live_data_context,
+            emit_event=lambda *_args, **_kwargs: None,
+            foreground_idle=lambda: True,
+            channel_provider=lambda: LocalLiveDataChannel(channel_id=44, protocol_id=6),
+        )
+
+        assert collector.start()
+        await write_started.wait()
+        stop_task = asyncio.create_task(collector.stop("test_stop"))
+        await asyncio.sleep(0)
+        assert write_finished is False
+        assert collector.running is True
+        release_write.set()
+        await stop_task
+        assert write_finished is True
+        assert read_called is False
+        assert collector.running is False
+
+    import asyncio
+
+    asyncio.run(_run())

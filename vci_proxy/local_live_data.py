@@ -2,20 +2,35 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+from diagnostic_platform.observability import LogContext
+from vci_proxy.cache_read_msgs import BUFFER_EMPTY
+from vci_proxy.config import LocalLiveDataConfig
 
 
 SCHEMA_VERSION = "proxy.local_live_data.v1"
 ENGINE_SPEED_SIGNAL_KEY = "engine_speed"
 ENGINE_SPEED_DISPLAY_NAME = "Engine Speed"
 ENGINE_SPEED_UNIT = "RPM"
+ENGINE_SPEED_UDS_REQUEST_DATA = b"\x00\x00\x07\xe0\x22\x00\x0c"
+ENGINE_SPEED_UDS_REQUEST_TX_FLAGS = 64
+ENGINE_SPEED_UDS_REQUEST_PROTOCOL_ID = 6
+
+RunDriverCall = Callable[..., Awaitable[Any]]
+ContextFactory = Callable[[str], LogContext]
+EventEmitter = Callable[..., None]
+ForegroundIdle = Callable[[], bool]
+ChannelProvider = Callable[[], "LocalLiveDataChannel | None"]
 
 
 @dataclass(frozen=True)
@@ -28,6 +43,12 @@ class EngineSpeedDecode:
     raw_offset: int
     raw_prefix_hex: str
     raw_length: int
+
+
+@dataclass(frozen=True)
+class LocalLiveDataChannel:
+    channel_id: int
+    protocol_id: int
 
 
 @dataclass
@@ -44,6 +65,8 @@ class LocalLiveDataMonitor:
     negative_response_count: int = 0
     return_code_warning_count: int = 0
     foreground_priority_pause_count: int = 0
+    _sample_gap_ms: list[float] = field(default_factory=list)
+    _latest_sample_monotonic_s: float | None = None
 
     def record_sweep_item_finished(
         self,
@@ -59,6 +82,37 @@ class LocalLiveDataMonitor:
         sweep_signature_digest: str,
         read_observability: Mapping[str, Any] | None = None,
     ) -> list[tuple[str, dict[str, object]]]:
+        return self.record_poll_result(
+            write_messages=write_messages,
+            read_messages=read_messages,
+            return_code=return_code,
+            started_at_s=started_at_s,
+            finished_at_s=finished_at_s,
+            channel_id=channel_id,
+            poll_id=f"{sweep_plan_id}:{sweep_item_index}",
+            request_origin="shadow_local",
+            sweep_plan_id=sweep_plan_id,
+            sweep_item_index=sweep_item_index,
+            sweep_signature_digest=sweep_signature_digest,
+            read_observability=read_observability,
+        )
+
+    def record_poll_result(
+        self,
+        *,
+        write_messages: Sequence[Mapping[str, Any]],
+        read_messages: Sequence[Mapping[str, Any]],
+        return_code: int,
+        started_at_s: float,
+        finished_at_s: float,
+        channel_id: int,
+        poll_id: str,
+        request_origin: str,
+        sweep_plan_id: str | None = None,
+        sweep_item_index: int | None = None,
+        sweep_signature_digest: str | None = None,
+        read_observability: Mapping[str, Any] | None = None,
+    ) -> list[tuple[str, dict[str, object]]]:
         request_kind = engine_speed_request_kind(write_messages)
         if request_kind is None:
             return []
@@ -69,15 +123,20 @@ class LocalLiveDataMonitor:
             "unit": ENGINE_SPEED_UNIT,
             "request_kind": request_kind,
             "channel_id": int(channel_id),
-            "sweep_plan_id": sweep_plan_id,
-            "sweep_item_index": int(sweep_item_index),
-            "sweep_signature_digest": sweep_signature_digest,
+            "request_origin": request_origin,
+            "poll_id": poll_id,
             "return_code": int(return_code),
             "message_count": len(read_messages),
             "poll_duration_ms": round(max(0.0, (finished_at_s - started_at_s) * 1000.0), 3),
             "foreground_priority_state": "foreground_idle",
             "backoff_reason": None,
         }
+        if sweep_plan_id is not None:
+            common["sweep_plan_id"] = sweep_plan_id
+        if sweep_item_index is not None:
+            common["sweep_item_index"] = int(sweep_item_index)
+        if sweep_signature_digest is not None:
+            common["sweep_signature_digest"] = sweep_signature_digest
         if read_observability:
             common.update(
                 {
@@ -144,6 +203,12 @@ class LocalLiveDataMonitor:
             self.return_code_warning_count += 1
 
         sample_age_ms = round(max(0.0, (time.time() - finished_at_s) * 1000.0), 3)
+        now_mono = time.monotonic()
+        sample_gap_ms = None
+        if self._latest_sample_monotonic_s is not None:
+            sample_gap_ms = round(max(0.0, (now_mono - self._latest_sample_monotonic_s) * 1000.0), 3)
+            self._sample_gap_ms.append(sample_gap_ms)
+        self._latest_sample_monotonic_s = now_mono
         self.sample_count += 1
         self._sample_ages_ms.append(sample_age_ms)
         self._poll_durations_ms.append(float(common["poll_duration_ms"]))
@@ -164,6 +229,7 @@ class LocalLiveDataMonitor:
             "j2534_return_code_warning_reason": return_code_warning,
             "sample_ts": _format_timestamp(finished_at_s),
             "sample_age_ms": sample_age_ms,
+            "sample_gap_ms": sample_gap_ms,
             "raw_value": decoded.raw_value,
             "raw_offset": decoded.raw_offset,
             "raw_prefix_hex": decoded.raw_prefix_hex,
@@ -211,6 +277,9 @@ class LocalLiveDataMonitor:
             "sample_age_ms_p50": _percentile(self._sample_ages_ms, 50),
             "sample_age_ms_p95": _percentile(self._sample_ages_ms, 95),
             "sample_age_ms_max": max(self._sample_ages_ms) if self._sample_ages_ms else None,
+            "sample_gap_ms_p50": _percentile(self._sample_gap_ms, 50),
+            "sample_gap_ms_p95": _percentile(self._sample_gap_ms, 95),
+            "sample_gap_ms_max": max(self._sample_gap_ms) if self._sample_gap_ms else None,
             "poll_duration_ms_p50": _percentile(self._poll_durations_ms, 50),
             "poll_duration_ms_p95": _percentile(self._poll_durations_ms, 95),
             "poll_duration_ms_max": max(self._poll_durations_ms) if self._poll_durations_ms else None,
@@ -235,6 +304,323 @@ class LocalLiveDataMonitor:
 
     def write_latest_snapshot(self) -> Path:
         return write_latest_snapshot(self.latest_path, self.snapshot_payload())
+
+    def record_collector_pause(
+        self,
+        *,
+        reason: str,
+        channel_id: int | None = None,
+        poll_id: str | None = None,
+    ) -> list[tuple[str, dict[str, object]]]:
+        if reason == "foreground_busy":
+            self.foreground_priority_pause_count += 1
+        else:
+            self.backoff_count += 1
+        fields: dict[str, object] = {
+            "status": "blocked",
+            "signal_key": ENGINE_SPEED_SIGNAL_KEY,
+            "display_name": ENGINE_SPEED_DISPLAY_NAME,
+            "unit": ENGINE_SPEED_UNIT,
+            "request_kind": "uds_did_000c",
+            "request_origin": "local_live_data_collector",
+            "reason": reason,
+            "backoff_reason": reason,
+            "foreground_priority_state": (
+                "foreground_busy" if reason == "foreground_busy" else "foreground_idle"
+            ),
+        }
+        if channel_id is not None:
+            fields["channel_id"] = int(channel_id)
+        if poll_id is not None:
+            fields["poll_id"] = poll_id
+        return [
+            ("proxy.local_live_data.backoff", fields),
+            ("proxy.local_live_data.summary", self.summary_fields(reason=reason)),
+        ]
+
+
+class LocalLiveDataCollector:
+    """Opportunistic local Engine Speed collector with foreground priority."""
+
+    def __init__(
+        self,
+        *,
+        config: LocalLiveDataConfig,
+        monitor: LocalLiveDataMonitor,
+        run_driver_call: RunDriverCall,
+        context_factory: ContextFactory,
+        emit_event: EventEmitter,
+        foreground_idle: ForegroundIdle,
+        channel_provider: ChannelProvider,
+    ) -> None:
+        self._config = config
+        self._monitor = monitor
+        self._run_driver_call = run_driver_call
+        self._context_factory = context_factory
+        self._emit_event = emit_event
+        self._foreground_idle = foreground_idle
+        self._channel_provider = channel_provider
+        self._task: asyncio.Task | None = None
+        self._stop_requested = False
+        self._poll_counter = 0
+        self._consecutive_errors = 0
+        self._stop_event: asyncio.Event | None = None
+        self._stop_emitted = False
+
+    @property
+    def running(self) -> bool:
+        return self._task is not None and not self._task.done()
+
+    def start(self, *, reason: str = "enabled") -> bool:
+        if not self._config.enabled or self.running:
+            return False
+        self._stop_requested = False
+        self._stop_emitted = False
+        self._stop_event = asyncio.Event()
+        self._task = asyncio.create_task(self._run_loop(), name="local-live-data-collector")
+        self._emit_event(
+            "proxy.local_live_data.collector.started",
+            context=self._context_factory("LOCAL_LIVE_DATA"),
+            impact_scope="proxy_local_live_data",
+            reason=reason,
+            source=self._config.source,
+            interval_ms=self._config.interval_ms,
+            read_timeout_ms=self._config.read_timeout_ms,
+            max_consecutive_errors=self._config.max_consecutive_errors,
+        )
+        return True
+
+    async def stop(self, reason: str = "stopped") -> None:
+        task = self._task
+        self._stop_requested = True
+        stop_event = self._stop_event
+        if stop_event is not None:
+            stop_event.set()
+        if task is None:
+            return
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
+        if self._task is task:
+            self._task = None
+        self._stop_event = None
+        self._emit_stopped(reason)
+
+    def request_stop(self, reason: str = "stopped") -> None:
+        task = self._task
+        if task is None:
+            return
+        self._stop_requested = True
+        stop_event = self._stop_event
+        if stop_event is not None:
+            stop_event.set()
+        task.add_done_callback(self._clear_finished_task)
+        self._emit_stopped(reason)
+
+    async def poll_once(self) -> list[tuple[str, dict[str, object]]]:
+        self._poll_counter += 1
+        poll_id = f"local-live-data-{self._poll_counter}"
+        channel = self._channel_provider()
+        if channel is None:
+            events = self._monitor.record_collector_pause(
+                reason="no_channel",
+                poll_id=poll_id,
+            )
+            self._consecutive_errors += 1
+            self._emit_events(events)
+            return events
+        if channel.protocol_id != ENGINE_SPEED_UDS_REQUEST_PROTOCOL_ID:
+            events = self._monitor.record_collector_pause(
+                reason="unsupported_protocol",
+                channel_id=channel.channel_id,
+                poll_id=poll_id,
+            )
+            self._consecutive_errors += 1
+            self._emit_events(events)
+            return events
+        if not self._foreground_idle():
+            events = self._monitor.record_collector_pause(
+                reason="foreground_busy",
+                channel_id=channel.channel_id,
+                poll_id=poll_id,
+            )
+            self._emit_events(events)
+            return events
+
+        context = self._context_factory("LOCAL_LIVE_DATA")
+        request_message = engine_speed_uds_request_message(protocol_id=channel.protocol_id)
+        started_mono = time.monotonic()
+        started_at_s = time.time()
+        write_ret, _num_written = await self._run_driver_call(
+            "write_msgs",
+            channel.channel_id,
+            [request_message],
+            self._config.write_timeout_ms,
+            request_context=context,
+            result_metadata={
+                "channel_id": channel.channel_id,
+                "proxy_local_live_data": True,
+                "signal_key": ENGINE_SPEED_SIGNAL_KEY,
+                "request_kind": "uds_did_000c",
+            },
+        )
+        if int(write_ret) != 0:
+            finished_at_s = time.time()
+            events = self._monitor.record_poll_result(
+                write_messages=[request_message],
+                read_messages=[],
+                return_code=int(write_ret),
+                started_at_s=started_at_s,
+                finished_at_s=finished_at_s,
+                channel_id=channel.channel_id,
+                poll_id=poll_id,
+                request_origin="local_live_data_collector",
+                read_observability={
+                    "read_timeout_ms": self._config.read_timeout_ms,
+                    "tail_read_triggered": False,
+                    "tail_read_attempts": 0,
+                    "tail_read_data_reads": 0,
+                },
+            )
+            self._consecutive_errors += 1
+            self._emit_events(events)
+            return events
+
+        current_channel = self._channel_provider()
+        if (
+            self._stop_requested
+            or current_channel is None
+            or current_channel.channel_id != channel.channel_id
+            or current_channel.protocol_id != channel.protocol_id
+        ):
+            events = self._monitor.record_collector_pause(
+                reason="stopped_before_read",
+                channel_id=channel.channel_id,
+                poll_id=poll_id,
+            )
+            self._emit_events(events)
+            return events
+
+        if not self._foreground_idle():
+            events = self._monitor.record_collector_pause(
+                reason="foreground_busy",
+                channel_id=channel.channel_id,
+                poll_id=poll_id,
+            )
+            self._emit_events(events)
+            return events
+
+        read_ret, read_messages = await self._run_driver_call(
+            "read_msgs",
+            channel.channel_id,
+            self._config.read_num_msgs,
+            self._config.read_timeout_ms,
+            request_context=context,
+            ok_codes=(0, BUFFER_EMPTY, 9),
+            result_metadata={
+                "channel_id": channel.channel_id,
+                "proxy_local_live_data": True,
+                "signal_key": ENGINE_SPEED_SIGNAL_KEY,
+                "request_kind": "uds_did_000c",
+            },
+        )
+        finished_at_s = time.time()
+        elapsed_ms = round((time.monotonic() - started_mono) * 1000.0, 3)
+        materialized = list(read_messages)
+        events = self._monitor.record_poll_result(
+            write_messages=[request_message],
+            read_messages=materialized,
+            return_code=int(read_ret),
+            started_at_s=started_at_s,
+            finished_at_s=finished_at_s,
+            channel_id=channel.channel_id,
+            poll_id=poll_id,
+            request_origin="local_live_data_collector",
+            read_observability={
+                "read_timeout_ms": self._config.read_timeout_ms,
+                "tail_read_triggered": False,
+                "tail_read_attempts": 0,
+                "tail_read_data_reads": 0,
+                "collector_elapsed_ms": elapsed_ms,
+            },
+        )
+        if any(event_type == "proxy.local_live_data.sample" for event_type, _fields in events):
+            self._consecutive_errors = 0
+        elif any(event_type == "proxy.local_live_data.backoff" for event_type, _fields in events):
+            self._consecutive_errors += 1
+        self._emit_events(events)
+        return events
+
+    async def _run_loop(self) -> None:
+        interval_s = max(0.001, self._config.interval_ms / 1000.0)
+        while not self._stop_requested:
+            try:
+                await self.poll_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._consecutive_errors += 1
+                self._emit_event(
+                    "proxy.local_live_data.backoff",
+                    context=self._context_factory("LOCAL_LIVE_DATA"),
+                    status="error",
+                    failure_code="collector_poll_failed",
+                    failure_domain="local_reverse_client",
+                    reason="collector_poll_failed",
+                    impact_scope="proxy_local_live_data",
+                    error=f"{type(exc).__name__}:{exc}",
+                    consecutive_errors=self._consecutive_errors,
+                )
+            sleep_s = interval_s
+            if self._consecutive_errors >= self._config.max_consecutive_errors:
+                sleep_s = max(sleep_s, interval_s * self._config.max_consecutive_errors)
+            stop_event = self._stop_event
+            if stop_event is None:
+                await asyncio.sleep(sleep_s)
+                continue
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=sleep_s)
+            except asyncio.TimeoutError:
+                pass
+
+    def _clear_finished_task(self, task: asyncio.Task) -> None:
+        _consume_finished_task(task)
+        if self._task is task:
+            self._task = None
+            self._stop_event = None
+
+    def _emit_stopped(self, reason: str) -> None:
+        if self._stop_emitted:
+            return
+        self._stop_emitted = True
+        self._emit_event(
+            "proxy.local_live_data.collector.stopped",
+            context=self._context_factory("LOCAL_LIVE_DATA"),
+            impact_scope="proxy_local_live_data",
+            reason=reason,
+            sample_count=self._monitor.sample_count,
+            backoff_count=self._monitor.backoff_count,
+            foreground_priority_pause_count=self._monitor.foreground_priority_pause_count,
+        )
+
+    def _emit_events(self, events: Sequence[tuple[str, dict[str, object]]]) -> None:
+        for event_type, fields in events:
+            enriched = {
+                "collector_source": self._config.source,
+                "collector_interval_ms": self._config.interval_ms,
+                "read_timeout_ms": self._config.read_timeout_ms,
+                "consecutive_errors": self._consecutive_errors,
+                **fields,
+            }
+            self._emit_event(
+                event_type,
+                context=self._context_factory("LOCAL_LIVE_DATA"),
+                impact_scope="proxy_local_live_data",
+                **enriched,
+            )
 
 
 def get_latest_snapshot_path(appdata: str | Path | None = None) -> Path:
@@ -262,6 +648,25 @@ def write_latest_snapshot(path: str | Path, payload: Mapping[str, Any]) -> Path:
         except OSError:
             pass
     return target
+
+
+def _consume_finished_task(task: asyncio.Task) -> None:
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        pass
+
+
+def engine_speed_uds_request_message(*, protocol_id: int = ENGINE_SPEED_UDS_REQUEST_PROTOCOL_ID) -> dict[str, object]:
+    return {
+        "protocol_id": int(protocol_id),
+        "rx_status": 0,
+        "tx_flags": ENGINE_SPEED_UDS_REQUEST_TX_FLAGS,
+        "timestamp": 0,
+        "data": ENGINE_SPEED_UDS_REQUEST_DATA,
+    }
 
 
 def engine_speed_request_kind(messages: Sequence[Mapping[str, Any]]) -> str | None:

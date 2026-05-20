@@ -27,7 +27,11 @@ from vci_proxy.cache_ioctl import IoctlCache
 from vci_proxy.config import ProxyConfig
 from vci_proxy.j2534_driver import J2534Driver
 from vci_proxy.j2534_worker import create_driver_runtime
-from vci_proxy.local_live_data import LocalLiveDataMonitor
+from vci_proxy.local_live_data import (
+    LocalLiveDataChannel,
+    LocalLiveDataCollector,
+    LocalLiveDataMonitor,
+)
 from vci_proxy.protocol import (
     HEADER_SIZE,
     MAGIC,
@@ -56,6 +60,7 @@ logger = logging.getLogger(__name__)
 READ_COLLECT_MIN_DRAIN_CAP_MS = 8
 READ_COLLECT_DATA_AT_MAX_EXTRA_READS = 2
 READ_COLLECT_EMPTY_GRACE_DATA_EXTRA_READS = 1
+ISO15765_PROTOCOL_ID = 6
 
 
 class ReverseProxyClient:
@@ -99,7 +104,17 @@ class ReverseProxyClient:
         self._server_connection_epoch: str | None = None
         self._driver_call_lock = asyncio.Lock()
         self._foreground_request_depth = 0
+        self._local_live_data_channel: LocalLiveDataChannel | None = None
         self._local_live_data = LocalLiveDataMonitor()
+        self._local_live_data_collector = LocalLiveDataCollector(
+            config=self.config.local_live_data,
+            monitor=self._local_live_data,
+            run_driver_call=self._run_driver_call,
+            context_factory=self._sweep_log_context,
+            emit_event=self._emit_client_event,
+            foreground_idle=self._foreground_idle,
+            channel_provider=self._get_local_live_data_channel,
+        )
         self._sweep_executor = LocalSweepExecutor(
             config=self.config.local_sweep,
             run_driver_call=self._run_driver_call,
@@ -221,6 +236,17 @@ class ReverseProxyClient:
     def _foreground_idle(self) -> bool:
         return self._foreground_request_depth <= 0 and not self._driver_call_lock.locked()
 
+    def _get_local_live_data_channel(self) -> LocalLiveDataChannel | None:
+        return self._local_live_data_channel
+
+    def _stop_local_live_data_collector(self, reason: str) -> None:
+        self._local_live_data_channel = None
+        self._local_live_data_collector.request_stop(reason)
+
+    async def _stop_local_live_data_collector_async(self, reason: str) -> None:
+        self._local_live_data_channel = None
+        await self._local_live_data_collector.stop(reason)
+
     def _cancel_shadow_for_foreground_if_needed(self, msg_type: int, body: bytes) -> None:
         if msg_type in {
             MsgType.DISCONNECT_REQ,
@@ -229,6 +255,8 @@ class ReverseProxyClient:
             MsgType.STOP_FILTER_REQ,
         }:
             self._sweep_executor.stop("foreground_invalidation")
+            if msg_type in {MsgType.DISCONNECT_REQ, MsgType.CLOSE_REQ}:
+                self._stop_local_live_data_collector("foreground_disconnect_or_close")
             return
         if msg_type != MsgType.IOCTL_REQ:
             return
@@ -505,6 +533,7 @@ class ReverseProxyClient:
             backoff_sleep_task.cancel()
 
         await self._cancel_prewarm_task()
+        await self._stop_local_live_data_collector_async("shutdown")
         await self._release_prewarmed_device()
         await self._close_writer()
         cleanup = self._driver_cleanup
@@ -710,6 +739,7 @@ class ReverseProxyClient:
                         self._describe_task_state(self._prewarm_task),
                     )
                     await self._cancel_prewarm_task()
+                    await self._stop_local_live_data_collector_async("connection_cleanup")
                     await self._release_prewarmed_device()
                     await self._close_writer()
                     self._ioctl_cache.invalidate()
@@ -755,6 +785,7 @@ class ReverseProxyClient:
         self._server_write_collect_enabled = False
         self._server_sweep_shadow_enabled = False
         self._server_connection_epoch = None
+        self._stop_local_live_data_collector("registration_reset")
         if self.config.auth.enabled and self.config.auth.token:
             timestamp = int(time.time())
             signature = compute_signature(self.config.auth.token, timestamp)
@@ -1089,6 +1120,7 @@ class ReverseProxyClient:
         )
         self._log_j2534_result("PassThruClose", ret, detail=f" device_id={device_id}")
         self._ioctl_cache.invalidate()
+        self._stop_local_live_data_collector("device_closed")
         self._prewarm_device_id = None
         self._prewarm_ret = None
         return ProtocolEncoder.encode_close_rsp(ret, sequence)
@@ -1118,6 +1150,25 @@ class ReverseProxyClient:
             ret,
             detail=f" device_id={device_id} protocol={protocol_id} baud={baudrate} channel_id={channel_id}",
         )
+        if int(ret) == 0:
+            if int(protocol_id) == ISO15765_PROTOCOL_ID:
+                self._local_live_data_channel = LocalLiveDataChannel(
+                    channel_id=int(channel_id),
+                    protocol_id=int(protocol_id),
+                )
+                self._local_live_data_collector.start(reason="channel_connected")
+            elif self.config.local_live_data.enabled:
+                self._emit_client_event(
+                    "proxy.local_live_data.unsupported",
+                    context=request_context,
+                    impact_scope="proxy_local_live_data",
+                    reason="unsupported_protocol",
+                    signal_key="engine_speed",
+                    request_kind="uds_did_000c",
+                    protocol_id=int(protocol_id),
+                    channel_id=int(channel_id),
+                    supported_protocol_id=ISO15765_PROTOCOL_ID,
+                )
         return ProtocolEncoder.encode_connect_rsp(ret, channel_id, sequence)
 
     async def _handle_disconnect(self, body: bytes, sequence: int, request_context: LogContext | None = None) -> bytes:
@@ -1135,6 +1186,11 @@ class ReverseProxyClient:
         )
         self._log_j2534_result("PassThruDisconnect", ret, detail=f" channel_id={channel_id}")
         self._ioctl_cache.invalidate()
+        if (
+            self._local_live_data_channel is None
+            or self._local_live_data_channel.channel_id == int(channel_id)
+        ):
+            self._stop_local_live_data_collector("channel_disconnected")
         return ProtocolEncoder.encode_disconnect_rsp(ret, sequence)
 
     async def _handle_read_msgs_common(

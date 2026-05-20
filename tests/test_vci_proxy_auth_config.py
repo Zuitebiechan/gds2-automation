@@ -8,6 +8,7 @@ from vci_proxy.auth import compute_signature, verify_signature
 from vci_proxy.config import (
     AuthConfig,
     IoctlCacheConfig,
+    LocalLiveDataConfig,
     LOCAL_SWEEP_MIN_ITEM_INTERVAL_FLOOR_MS,
     LocalSweepConfig,
     ProxyConfig,
@@ -86,6 +87,10 @@ def test_proxy_config_from_args_maps_flat_cli_flags_to_nested_configs() -> None:
         local_sweep_plan_delay_ms=250,
         local_sweep_include_uds_dids=(0x000C, 0x0031),
         local_sweep_exclude_uds_dids=(0x0031,),
+        local_live_data_enabled=True,
+        local_live_data_interval_ms=600,
+        local_live_data_read_timeout_ms=20,
+        local_live_data_max_consecutive_errors=4,
     )
 
     assert config == ProxyConfig(
@@ -127,6 +132,12 @@ def test_proxy_config_from_args_maps_flat_cli_flags_to_nested_configs() -> None:
             plan_delay_ms=250,
             include_uds_dids=(0x000C, 0x0031),
             exclude_uds_dids=(0x0031,),
+        ),
+        local_live_data=LocalLiveDataConfig(
+            enabled=True,
+            interval_ms=600,
+            read_timeout_ms=20,
+            max_consecutive_errors=4,
         ),
     )
 
@@ -270,6 +281,26 @@ def test_proxy_config_uses_shared_local_sweep_env_defaults() -> None:
         error_threshold=5,
         include_uds_dids=(12, 49),
         exclude_uds_dids=(49,),
+    )
+
+
+def test_proxy_config_uses_independent_local_live_data_env_defaults() -> None:
+    config = ProxyConfig.from_args(
+        environ={
+            "VCI_PROXY_LOCAL_LIVE_DATA": "1",
+            "VCI_PROXY_LOCAL_LIVE_DATA_INTERVAL_MS": "100",
+            "VCI_PROXY_LOCAL_LIVE_DATA_READ_TIMEOUT_MS": "15",
+            "VCI_PROXY_LOCAL_LIVE_DATA_MAX_CONSECUTIVE_ERRORS": "5",
+            "VCI_PROXY_LOCAL_LIVE_DATA_SOURCE": "engine_speed_uds_did_000c",
+        }
+    )
+
+    assert config.local_live_data == LocalLiveDataConfig(
+        enabled=True,
+        interval_ms=250,
+        read_timeout_ms=15,
+        max_consecutive_errors=5,
+        source="uds_did_000c",
     )
 
 
