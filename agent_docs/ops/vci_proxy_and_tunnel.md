@@ -124,6 +124,11 @@ Proxy Local Live Data MVP 2:
 - the local client sends proxy-local samples only after the ack includes it;
 - the legacy heartbeat/no-ack path remains local-only.
 
+Capability state is bound to the accepted active tunnel owner. Auth-stage
+failures, scanner connections, or rejected extra tunnels must not clear
+`read_collect`, `write_collect`, `sweep_shadow`, or `local_live_data`
+capabilities for the current healthy tunnel.
+
 `LOCAL_LIVE_DATA_SAMPLE` (`0x0300`) is a one-way internal client-to-server
 frame. It carries decoded Engine Speed sample JSON with schema
 `proxy.local_live_data.sample.v1` and redacted metadata such as value, unit,

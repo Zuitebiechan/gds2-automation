@@ -200,6 +200,14 @@ class _ActiveReplayPending:
 
 
 @dataclass(frozen=True)
+class _VciConnectionCapabilities:
+    read_collect_supported: bool = False
+    write_collect_supported: bool = False
+    sweep_shadow_supported: bool = False
+    local_live_data_supported: bool = False
+
+
+@dataclass(frozen=True)
 class _PrefetchRecordObservation:
     message_count: int
     source: str | None
@@ -1655,7 +1663,12 @@ class ReverseProxyServer:
 
         return context
 
-    def _auth_success_message(self, *, connection_epoch: str | None = None) -> str:
+    def _auth_success_message(
+        self,
+        *,
+        connection_epoch: str | None = None,
+        connection_capabilities: _VciConnectionCapabilities | None = None,
+    ) -> str:
         capabilities = ["ok"]
         if self.config.read_ahead.enabled:
             capabilities.append("read_ahead=1")
@@ -1664,7 +1677,12 @@ class ReverseProxyServer:
                 capabilities.append("write_collect=1")
         if self.config.local_sweep.shadow_transport_enabled:
             capabilities.append("sweep_shadow=1")
-        if getattr(self, "_vci_local_live_data_supported", False):
+        local_live_data_supported = (
+            connection_capabilities.local_live_data_supported
+            if connection_capabilities is not None
+            else getattr(self, "_vci_local_live_data_supported", False)
+        )
+        if local_live_data_supported:
             capabilities.append("local_live_data=1")
         if connection_epoch:
             capabilities.append(f"connection_epoch={connection_epoch}")
@@ -1677,6 +1695,32 @@ class ReverseProxyServer:
             token.strip().lower() == expected
             for token in str(message or "").replace(",", ";").split(";")
         )
+
+    def _connection_capabilities_from_message(
+        self,
+        message: str,
+    ) -> _VciConnectionCapabilities:
+        return _VciConnectionCapabilities(
+            read_collect_supported=self._capability_enabled(message, "read_collect"),
+            write_collect_supported=self._capability_enabled(message, "write_collect"),
+            sweep_shadow_supported=self._capability_enabled(message, "sweep_shadow"),
+            local_live_data_supported=self._capability_enabled(
+                message,
+                "local_live_data",
+            ),
+        )
+
+    def _apply_vci_connection_capabilities(
+        self,
+        capabilities: _VciConnectionCapabilities,
+    ) -> None:
+        self._vci_read_collect_supported = capabilities.read_collect_supported
+        self._vci_write_collect_supported = capabilities.write_collect_supported
+        self._vci_sweep_shadow_supported = capabilities.sweep_shadow_supported
+        self._vci_local_live_data_supported = capabilities.local_live_data_supported
+
+    def _clear_vci_connection_capabilities(self) -> None:
+        self._apply_vci_connection_capabilities(_VciConnectionCapabilities())
 
     async def start(self):
         """启动服务器"""
@@ -1892,6 +1936,7 @@ class ReverseProxyServer:
         writer: asyncio.StreamWriter,
         *,
         connection_epoch_hint: str | None = None,
+        capabilities_out: list[_VciConnectionCapabilities] | None = None,
     ) -> bool:
         """Authenticate the VCI connection.
 
@@ -1909,10 +1954,13 @@ class ReverseProxyServer:
         Returns True if authenticated, False otherwise.
         """
         peer = writer.get_extra_info("peername")
-        self._vci_read_collect_supported = False
-        self._vci_write_collect_supported = False
-        self._vci_sweep_shadow_supported = False
-        self._vci_local_live_data_supported = False
+        def _accept(capabilities: _VciConnectionCapabilities) -> bool:
+            if capabilities_out is not None:
+                capabilities_out.append(capabilities)
+            else:
+                self._apply_vci_connection_capabilities(capabilities)
+            return True
+
         try:
             header = await asyncio.wait_for(
                 reader.readexactly(HEADER_SIZE),
@@ -1962,21 +2010,8 @@ class ReverseProxyServer:
                 # Auth not required, but client sent AUTH_REQ -- accept it
                 logger.info("Auth not required, accepting AUTH_REQ")
                 capabilities = ProtocolDecoder.decode_auth_req_capabilities(body)
-                self._vci_read_collect_supported = self._capability_enabled(
-                    capabilities,
-                    "read_collect",
-                )
-                self._vci_write_collect_supported = self._capability_enabled(
-                    capabilities,
-                    "write_collect",
-                )
-                self._vci_sweep_shadow_supported = self._capability_enabled(
-                    capabilities,
-                    "sweep_shadow",
-                )
-                self._vci_local_live_data_supported = self._capability_enabled(
-                    capabilities,
-                    "local_live_data",
+                connection_capabilities = self._connection_capabilities_from_message(
+                    capabilities
                 )
                 self._emit_tunnel_event(
                     "tunnel.auth.accepted",
@@ -1984,17 +2019,21 @@ class ReverseProxyServer:
                     client_capabilities=capabilities,
                     vci_capabilities=self._auth_success_message(
                         connection_epoch=connection_epoch_hint,
+                        connection_capabilities=connection_capabilities,
                     ),
-                    read_ahead_enabled=self._vci_read_collect_supported,
-                    read_collect_enabled=self._vci_read_collect_supported,
-                    write_collect_enabled=self._vci_write_collect_supported,
-                    sweep_shadow_supported=self._vci_sweep_shadow_supported,
-                    local_live_data_supported=self._vci_local_live_data_supported,
+                    read_ahead_enabled=connection_capabilities.read_collect_supported,
+                    read_collect_enabled=connection_capabilities.read_collect_supported,
+                    write_collect_enabled=connection_capabilities.write_collect_supported,
+                    sweep_shadow_supported=connection_capabilities.sweep_shadow_supported,
+                    local_live_data_supported=(
+                        connection_capabilities.local_live_data_supported
+                    ),
                 )
                 rsp = ProtocolEncoder.encode_auth_rsp(
                     True,
                     self._auth_success_message(
                         connection_epoch=connection_epoch_hint,
+                        connection_capabilities=connection_capabilities,
                     ),
                     sequence,
                 )
@@ -2008,7 +2047,7 @@ class ReverseProxyServer:
                         exc,
                     )
                     return False
-                return True
+                return _accept(connection_capabilities)
 
             timestamp, signature = ProtocolDecoder.decode_auth_req(body)
             capabilities = ProtocolDecoder.decode_auth_req_capabilities(body)
@@ -2018,36 +2057,27 @@ class ReverseProxyServer:
             if success and self._is_replayed_auth(signature, timestamp):
                 success = False
                 reason = "replay detected"
+            connection_capabilities = _VciConnectionCapabilities()
             if success:
-                self._vci_read_collect_supported = self._capability_enabled(
-                    capabilities,
-                    "read_collect",
-                )
-                self._vci_write_collect_supported = self._capability_enabled(
-                    capabilities,
-                    "write_collect",
-                )
-                self._vci_sweep_shadow_supported = self._capability_enabled(
-                    capabilities,
-                    "sweep_shadow",
-                )
-                self._vci_local_live_data_supported = self._capability_enabled(
-                    capabilities,
-                    "local_live_data",
+                connection_capabilities = self._connection_capabilities_from_message(
+                    capabilities
                 )
                 reason = self._auth_success_message(
                     connection_epoch=connection_epoch_hint,
+                    connection_capabilities=connection_capabilities,
                 )
                 self._emit_tunnel_event(
                     "tunnel.auth.accepted",
                     reason="auth_success",
                     client_capabilities=capabilities,
                     vci_capabilities=reason,
-                    read_ahead_enabled=self._vci_read_collect_supported,
-                    read_collect_enabled=self._vci_read_collect_supported,
-                    write_collect_enabled=self._vci_write_collect_supported,
-                    sweep_shadow_supported=self._vci_sweep_shadow_supported,
-                    local_live_data_supported=self._vci_local_live_data_supported,
+                    read_ahead_enabled=connection_capabilities.read_collect_supported,
+                    read_collect_enabled=connection_capabilities.read_collect_supported,
+                    write_collect_enabled=connection_capabilities.write_collect_supported,
+                    sweep_shadow_supported=connection_capabilities.sweep_shadow_supported,
+                    local_live_data_supported=(
+                        connection_capabilities.local_live_data_supported
+                    ),
                 )
             rsp = ProtocolEncoder.encode_auth_rsp(success, reason, sequence)
             try:
@@ -2065,13 +2095,9 @@ class ReverseProxyServer:
                 logger.info("VCI client authenticated successfully")
             else:
                 logger.warning(f"VCI client authentication failed: {reason}")
-            return success
+            return _accept(connection_capabilities) if success else False
 
         if msg_type == MsgType.HEARTBEAT:
-            self._vci_read_collect_supported = False
-            self._vci_write_collect_supported = False
-            self._vci_sweep_shadow_supported = False
-            self._vci_local_live_data_supported = False
             if self.config.auth.enabled:
                 logger.warning(
                     "Auth required but VCI client sent HEARTBEAT (legacy client)"
@@ -2152,7 +2178,7 @@ class ReverseProxyServer:
                 return False
 
             logger.info("VCI client registered via two-phase heartbeat handshake")
-            return True
+            return _accept(_VciConnectionCapabilities())
 
         logger.warning(f"Unexpected first message type during auth: {msg_type:#x}")
         return False
@@ -2216,11 +2242,14 @@ class ReverseProxyServer:
             f"epoch-{int(time.time() * 1000)}-{next_connection_counter:03d}"
         )
 
-        # Authenticate before accepting the connection
+        # Authenticate before accepting the connection. Keep advertised
+        # capabilities local until this writer becomes the active tunnel owner.
+        connection_capabilities: list[_VciConnectionCapabilities] = []
         if not await self._authenticate_vci(
             reader,
             writer,
             connection_epoch_hint=provisional_epoch,
+            capabilities_out=connection_capabilities,
         ):
             logger.warning("VCI tunnel authentication failed: %s", addr)
             self._emit_tunnel_event(
@@ -2233,6 +2262,11 @@ class ReverseProxyServer:
             )
             writer.close()
             return
+        accepted_capabilities = (
+            connection_capabilities[-1]
+            if connection_capabilities
+            else _VciConnectionCapabilities()
+        )
 
         accept_new, decision_reason, existing_addr = self._should_accept_new_vci_connection(addr)
         if not accept_new:
@@ -2288,6 +2322,7 @@ class ReverseProxyServer:
 
         self.vci_reader = reader
         self.vci_writer = writer
+        self._apply_vci_connection_capabilities(accepted_capabilities)
         logger.info("VCI Proxy connected: %s", addr)
         self._connection_counter = next_connection_counter
         local_epoch = provisional_epoch
@@ -2434,10 +2469,7 @@ class ReverseProxyServer:
         finally:
             owns_current_tunnel = self.vci_writer is writer
             if owns_current_tunnel:
-                self._vci_write_collect_supported = False
-                self._vci_read_collect_supported = False
-                self._vci_sweep_shadow_supported = False
-                self._vci_local_live_data_supported = False
+                self._clear_vci_connection_capabilities()
                 self._cancel_sweep_plan("connection_epoch_changed")
                 self.vci_connected.clear()
                 self._cancel_pending_futures()

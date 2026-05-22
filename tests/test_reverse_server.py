@@ -392,6 +392,10 @@ def test_handle_vci_connection_ignores_auth_stage_connection_reset(caplog) -> No
         server.vci_writer = current_writer
         server.vci_connected.set()
         server._connection_epoch = "epoch-existing"
+        server._vci_read_collect_supported = True
+        server._vci_write_collect_supported = True
+        server._vci_sweep_shadow_supported = True
+        server._vci_local_live_data_supported = True
         server._tunnel_quality = types.SimpleNamespace(
             snapshot=lambda: {"connected": True, "fresh": True}
         )
@@ -404,12 +408,67 @@ def test_handle_vci_connection_ignores_auth_stage_connection_reset(caplog) -> No
         assert server.vci_writer is current_writer
         assert current_writer.closed is False
         assert incoming_writer.closed is True
+        assert server._vci_read_collect_supported is True
+        assert server._vci_write_collect_supported is True
+        assert server._vci_sweep_shadow_supported is True
+        assert server._vci_local_live_data_supported is True
 
     asyncio.run(_run())
 
     assert "VCI client disconnected during auth" in caplog.text
     assert "VCI tunnel authentication failed" in caplog.text
     assert "Unhandled exception in client_connected_cb" not in caplog.text
+
+
+def test_rejected_probe_connection_does_not_clear_active_tunnel_capabilities(
+    monkeypatch,
+) -> None:
+    async def _run() -> None:
+        server = ReverseProxyServer(
+            config=ProxyConfig.from_args(
+                auth_token="secret",
+                read_ahead_enabled=True,
+                read_ahead_transaction_enabled=True,
+            )
+        )
+        current_writer = _FakeWriter(peername=("58.247.23.76", 33526))
+        server.vci_writer = current_writer
+        server.vci_connected.set()
+        server._connection_epoch = "epoch-existing"
+        server._vci_read_collect_supported = True
+        server._vci_write_collect_supported = True
+        server._vci_local_live_data_supported = True
+        server._tunnel_quality = types.SimpleNamespace(
+            snapshot=lambda: {
+                "connected": True,
+                "fresh": True,
+                "probe_failures": 0,
+            }
+        )
+
+        incoming_auth = ProtocolEncoder.encode_auth_req(
+            123,
+            b"x" * 32,
+            sequence=7,
+            capabilities="",
+        )
+        incoming_reader = _FakeReader(incoming_auth)
+        incoming_writer = _FakeWriter(peername=("69.5.169.29", 36779))
+        monkeypatch.setattr(
+            "vci_proxy.reverse_server.verify_signature",
+            lambda token, timestamp, signature: (True, "ok"),
+        )
+
+        await server._handle_vci_connection(incoming_reader, incoming_writer)
+
+        assert server.vci_writer is current_writer
+        assert current_writer.closed is False
+        assert incoming_writer.closed is True
+        assert server._vci_read_collect_supported is True
+        assert server._vci_write_collect_supported is True
+        assert server._vci_local_live_data_supported is True
+
+    asyncio.run(_run())
 
 
 def test_handle_vci_connection_treats_midstream_connection_reset_as_clean_disconnect(
