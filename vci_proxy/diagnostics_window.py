@@ -428,6 +428,8 @@ class DiagnosticsWindow:
     SESSION_STATUS_POLL_INTERVAL_MS = 1500
     BOOTSTRAP_ASSIGNMENT_RETRY_LIMIT = 1
     LIVE_DATA_INTERVAL_MS = 250
+    PROXY_LOCAL_LIVE_DATA_POLL_MS = 1000
+    PROXY_LOCAL_LIVE_DATA_MAX_AGE_MS = 5000
     _VEHICLE_DTC_INFORMATION_LABEL = "Vehicle DTC Information"
     _VEHICLE_DTC_LOADING_MESSAGE = (
         "Vehicle DTC Information is still loading. "
@@ -514,6 +516,15 @@ class DiagnosticsWindow:
 
         self._live_param_rows: dict[str, str] = {}
         self._live_status_text = tk.StringVar(value="Ready")
+        self._proxy_local_engine_speed_status_text = tk.StringVar(
+            value="Proxy Local Engine Speed: unavailable"
+        )
+        self._proxy_local_engine_speed_value_text = tk.StringVar(value="--")
+        self._proxy_local_engine_speed_detail_text = tk.StringVar(
+            value="Proxy Local inactive"
+        )
+        self._proxy_local_live_data_refresh_inflight = False
+        self._proxy_local_live_data_after_id: str | None = None
 
         self._status_message = tk.StringVar(value="Ready")
         self._server_state_text = tk.StringVar(value=f"Server: {self._server_display}")
@@ -700,6 +711,7 @@ class DiagnosticsWindow:
             return
 
         self._is_destroying = True
+        self._stop_proxy_local_live_data_refresh(clear=False)
         self._stop_sse_thread()
         self._stop_ai_sse_thread()
         self._stop_session_sse_thread()
@@ -1209,7 +1221,7 @@ class DiagnosticsWindow:
 
         live_frame = ttk.Frame(notebook, style="Card.TFrame", padding=8)
         live_frame.columnconfigure(0, weight=1)
-        live_frame.rowconfigure(1, weight=1)
+        live_frame.rowconfigure(2, weight=1)
         notebook.add(live_frame, text="Live Data")
 
         live_header = ttk.Frame(live_frame, style="Card.TFrame")
@@ -1221,9 +1233,35 @@ class DiagnosticsWindow:
             sticky="w",
         )
 
+        proxy_local_frame = ttk.Frame(live_frame, style="Card.TFrame", padding=(0, 0, 0, 8))
+        proxy_local_frame.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        proxy_local_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(proxy_local_frame, text="Proxy Local", style="Subtle.TLabel").grid(
+            row=0,
+            column=0,
+            sticky="w",
+            padx=(0, 12),
+        )
+        ttk.Label(
+            proxy_local_frame,
+            textvariable=self._proxy_local_engine_speed_value_text,
+            style="Status.TLabel",
+        ).grid(row=0, column=1, sticky="w")
+        ttk.Label(
+            proxy_local_frame,
+            textvariable=self._proxy_local_engine_speed_status_text,
+            style="Subtle.TLabel",
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        ttk.Label(
+            proxy_local_frame,
+            textvariable=self._proxy_local_engine_speed_detail_text,
+            style="Subtle.TLabel",
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(2, 0))
+
         live_cols = ("parameter", "value", "unit")
         self._live_tree = ttk.Treeview(live_frame, columns=live_cols, show="headings", height=10)
-        self._live_tree.grid(row=1, column=0, sticky="nsew")
+        self._live_tree.grid(row=2, column=0, sticky="nsew")
         self._live_tree.heading("parameter", text="Parameter")
         self._live_tree.heading("value", text="Value")
         self._live_tree.heading("unit", text="Unit")
@@ -1232,7 +1270,7 @@ class DiagnosticsWindow:
         self._live_tree.column("unit", width=120, anchor=tk.W, stretch=False)
 
         live_scroll = ttk.Scrollbar(live_frame, orient=tk.VERTICAL, command=self._live_tree.yview)
-        live_scroll.grid(row=1, column=1, sticky="ns")
+        live_scroll.grid(row=2, column=1, sticky="ns")
         self._live_tree.configure(yscrollcommand=live_scroll.set)
     # ------------------------------------------------------------------
     # Generic threaded API helpers
@@ -1372,6 +1410,8 @@ class DiagnosticsWindow:
             self._handle_live_start_result(data)
         elif event == "live_stop_result":
             self._handle_live_stop_result(data)
+        elif event == "proxy_local_live_data_latest_result":
+            self._handle_proxy_local_live_data_latest_result(data)
         elif event == "sse_snapshot":
             self._handle_sse_snapshot(data)
         elif event == "sse_error":
@@ -1699,6 +1739,7 @@ class DiagnosticsWindow:
         self._stream_active = False
         self._live_start_pending = False
         self._live_stop_pending = False
+        self._stop_proxy_local_live_data_refresh(clear=True)
         self._clear_live_data_rows()
         self._session_category_confirmed = False
         self._navigate_session_id = None
@@ -1762,6 +1803,7 @@ class DiagnosticsWindow:
         self._stream_active = False
         self._live_start_pending = False
         self._live_stop_pending = False
+        self._stop_proxy_local_live_data_refresh(clear=True)
         self._clear_live_data_rows()
         self._navigate_session_id = None
         self._vehicle_dtc_ready = False
@@ -1806,6 +1848,7 @@ class DiagnosticsWindow:
         self._stream_active = False
         self._live_start_pending = False
         self._live_stop_pending = False
+        self._stop_proxy_local_live_data_refresh(clear=True)
         self._clear_live_data_rows()
         self._session_status_refresh_inflight = False
         self._session_category_confirmed = False
@@ -2895,6 +2938,10 @@ class DiagnosticsWindow:
         self._session_live_data_active = bool(payload.get("live_data_active"))
         self._session_ai_active = bool(payload.get("active_ai_session_id"))
         self._session_navigation_active = bool(payload.get("active_navigation_session_id"))
+        if self._session_live_data_active:
+            self._schedule_proxy_local_live_data_refresh()
+        else:
+            self._stop_proxy_local_live_data_refresh(clear=True)
         self._set_current_page(self._extract_current_page(payload))
         self._update_vehicle_dtc_status(payload)
         decision = payload.get("pending_decision")
@@ -3002,15 +3049,18 @@ class DiagnosticsWindow:
             self._stream_active = True
             self._session_live_data_active = True
             self._clear_live_data_rows()
+            self._clear_proxy_local_live_data_state(status="waiting")
             self._set_action_output_mode("live")
             self._live_status_text.set("Waiting for first snapshot...")
             self._set_status_text(payload.get("message") or "Live Data started.")
             self._refresh_action_buttons()
             self._start_sse_thread()
+            self._schedule_proxy_local_live_data_refresh()
             return
 
         self._stream_active = False
         self._session_live_data_active = False
+        self._stop_proxy_local_live_data_refresh(clear=True)
         self._set_server_connected(False)
         self._live_status_text.set(f"Start failed: {self._error_message(payload, 'Request failed.')}")
         self._refresh_action_buttons()
@@ -3023,6 +3073,7 @@ class DiagnosticsWindow:
 
         if payload.get("success"):
             self._session_live_data_active = False
+            self._stop_proxy_local_live_data_refresh(clear=True)
             self._set_server_connected(True)
             message = payload.get("message") or "Live Data stopped."
             self._live_status_text.set(message)
@@ -3099,6 +3150,174 @@ class DiagnosticsWindow:
         if self._sse_thread and self._sse_thread.is_alive():
             self._sse_thread.join(timeout=1.5)
         self._sse_thread = None
+
+    # ------------------------------------------------------------------
+    # Proxy-local live data latest-value polling
+    # ------------------------------------------------------------------
+
+    def _proxy_local_live_data_should_refresh(self) -> bool:
+        if getattr(self, "_is_destroying", False):
+            return False
+        if not getattr(self, "_session_id", None):
+            return False
+        return bool(
+            getattr(self, "_session_live_data_active", False)
+            or getattr(self, "_stream_active", False)
+        )
+
+    def _schedule_proxy_local_live_data_refresh(self, *, immediate: bool = False) -> None:
+        if not self._proxy_local_live_data_should_refresh():
+            self._stop_proxy_local_live_data_refresh(clear=True)
+            return
+        if immediate:
+            self._request_proxy_local_live_data_latest()
+            return
+        if getattr(self, "_proxy_local_live_data_after_id", None):
+            return
+
+        try:
+            self._proxy_local_live_data_after_id = self._root.after(
+                self.PROXY_LOCAL_LIVE_DATA_POLL_MS,
+                self._request_proxy_local_live_data_latest,
+            )
+        except (AttributeError, tk.TclError):
+            self._proxy_local_live_data_after_id = None
+
+    def _stop_proxy_local_live_data_refresh(self, *, clear: bool) -> None:
+        after_id = getattr(self, "_proxy_local_live_data_after_id", None)
+        self._proxy_local_live_data_after_id = None
+        if after_id:
+            try:
+                self._root.after_cancel(after_id)
+            except (AttributeError, tk.TclError):
+                pass
+        self._proxy_local_live_data_refresh_inflight = False
+        if clear:
+            self._clear_proxy_local_live_data_state()
+
+    def _request_proxy_local_live_data_latest(self) -> None:
+        self._proxy_local_live_data_after_id = None
+        if not self._proxy_local_live_data_should_refresh():
+            self._stop_proxy_local_live_data_refresh(clear=True)
+            return
+        if getattr(self, "_proxy_local_live_data_refresh_inflight", False):
+            self._schedule_proxy_local_live_data_refresh(immediate=False)
+            return
+
+        self._proxy_local_live_data_refresh_inflight = True
+        self._api_call(
+            "GET",
+            "/api/session/live_data/proxy_local/latest",
+            query_params={
+                "session_id": self._session_id,
+                "max_age_ms": self.PROXY_LOCAL_LIVE_DATA_MAX_AGE_MS,
+            },
+            callback_event="proxy_local_live_data_latest_result",
+        )
+
+    def _handle_proxy_local_live_data_latest_result(self, payload: dict[str, Any]) -> None:
+        self._proxy_local_live_data_refresh_inflight = False
+        if self._is_stale_session_payload(payload):
+            self._set_proxy_local_live_data_unavailable("session_mismatch")
+            self._schedule_proxy_local_live_data_refresh(immediate=False)
+            return
+        if not self._proxy_local_live_data_should_refresh():
+            self._clear_proxy_local_live_data_state()
+            return
+
+        sample = payload.get("latest_sample") if isinstance(payload, dict) else None
+        if payload.get("success") and payload.get("available") and isinstance(sample, dict):
+            if self._set_proxy_local_engine_speed_state(payload, sample):
+                self._schedule_proxy_local_live_data_refresh(immediate=False)
+                return
+            self._set_proxy_local_live_data_unavailable("invalid_engine_speed_sample")
+        else:
+            reason = str(
+                payload.get("reason") or payload.get("error") or "unavailable"
+            ).strip()
+            self._set_proxy_local_live_data_unavailable(reason)
+
+        self._schedule_proxy_local_live_data_refresh(immediate=False)
+
+    def _set_proxy_local_engine_speed_state(
+        self,
+        payload: dict[str, Any],
+        sample: dict[str, Any],
+    ) -> bool:
+        if str(sample.get("signal_key") or "") != "engine_speed":
+            return False
+        value = sample.get("value")
+        if value is None:
+            return False
+        try:
+            value_float = float(value)
+        except (TypeError, ValueError):
+            return False
+
+        unit = str(sample.get("unit") or "").strip()
+        if not unit:
+            return False
+        source = str(sample.get("source") or payload.get("source") or "proxy_local_live_data").strip()
+        decoder_id = str(sample.get("decoder_id") or "").strip()
+        age_text = self._format_proxy_local_age(payload.get("cloud_received_age_ms"))
+        value_text = f"Engine Speed {value_float:g} {unit}"
+        status_text = f"Proxy Local Engine Speed: {value_text}"
+        detail_parts = [part for part in (age_text, source, decoder_id) if part]
+        detail_text = " | ".join(detail_parts) if detail_parts else "Proxy Local latest sample"
+
+        self._set_var_if_present("_proxy_local_engine_speed_value_text", value_text)
+        self._set_var_if_present("_proxy_local_engine_speed_status_text", status_text)
+        self._set_var_if_present("_proxy_local_engine_speed_detail_text", detail_text)
+        return True
+
+    def _set_proxy_local_live_data_unavailable(self, reason: str) -> None:
+        reason_text = str(reason or "unavailable").strip() or "unavailable"
+        self._set_var_if_present("_proxy_local_engine_speed_value_text", "--")
+        self._set_var_if_present(
+            "_proxy_local_engine_speed_status_text",
+            f"Proxy Local Engine Speed: unavailable ({reason_text})",
+        )
+        self._set_var_if_present(
+            "_proxy_local_engine_speed_detail_text",
+            "Proxy Local latest sample is not fresh",
+        )
+
+    def _clear_proxy_local_live_data_state(self, *, status: str = "inactive") -> None:
+        self._set_var_if_present("_proxy_local_engine_speed_value_text", "--")
+        if status == "waiting":
+            self._set_var_if_present(
+                "_proxy_local_engine_speed_status_text",
+                "Proxy Local Engine Speed: waiting for latest sample",
+            )
+            self._set_var_if_present(
+                "_proxy_local_engine_speed_detail_text",
+                "Proxy Local latest sample pending",
+            )
+            return
+        self._set_var_if_present(
+            "_proxy_local_engine_speed_status_text",
+            "Proxy Local Engine Speed: unavailable",
+        )
+        self._set_var_if_present(
+            "_proxy_local_engine_speed_detail_text",
+            "Proxy Local inactive",
+        )
+
+    def _format_proxy_local_age(self, age: Any) -> str:
+        try:
+            age_float = float(age)
+        except (TypeError, ValueError):
+            return ""
+        return f"cloud age {age_float:.0f} ms"
+
+    def _set_var_if_present(self, attr_name: str, value: str) -> None:
+        variable = getattr(self, attr_name, None)
+        if variable is None:
+            return
+        try:
+            variable.set(value)
+        except Exception:
+            pass
 
     def _handle_sse_error(self, payload: dict[str, Any]) -> None:
         self._stop_sse_thread()

@@ -234,6 +234,29 @@ MVP 2 remains latest-value only. It does not add GUI, cloud SSE fan-out,
 additional signals, active replay, DLL response synthesis, Java Agent snapshot
 mutation, or GM `A9 81 xx` polling/decoding.
 
+## UI Debug Display
+
+After MVP 2 real-vehicle validation proves the guarded latest endpoint, the
+local diagnostics window may show Engine Speed as a separate read-only
+`Proxy Local` signal in the Live Data output area. This UI display reads:
+
+```text
+GET /api/session/live_data/proxy_local/latest?session_id=...&max_age_ms=5000
+```
+
+It must remain visibly separate from the native GDS2 Data Display table:
+
+- display only Engine Speed;
+- label the source as `Proxy Local`;
+- show freshness/source/decoder metadata when available;
+- clear or mark the value unavailable on stale, inactive, wrong-session,
+  wrong-epoch, malformed, or endpoint-error responses;
+- do not insert proxy-local samples into the GDS2-native live-data row table.
+
+This UI proof still does not add cloud SSE fan-out, additional signals,
+active replay, DLL response synthesis, Java Agent snapshot mutation, or GM
+`A9 81 xx` polling/decoding.
+
 ## Observability Requirements
 
 Use local observability first. Cloud observability can be added later when the

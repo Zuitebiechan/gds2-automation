@@ -180,6 +180,11 @@ def _build_window(*, current_page: str = "") -> DiagnosticsWindow:
     window._live_tree = _Tree()
     window._live_param_rows = {}
     window._live_status_text = _Var("Ready")
+    window._proxy_local_engine_speed_status_text = _Var("Proxy Local Engine Speed: unavailable")
+    window._proxy_local_engine_speed_value_text = _Var("--")
+    window._proxy_local_engine_speed_detail_text = _Var("Proxy Local inactive")
+    window._proxy_local_live_data_refresh_inflight = False
+    window._proxy_local_live_data_after_id = None
     window._action_output_notebook = _Notebook()
     window._module_label = _Widget()
     window._data_label = _Widget()
@@ -1002,7 +1007,9 @@ def test_handle_live_start_result_selects_live_output_and_clears_stale_rows() ->
     stale_id = window._live_tree.insert("", tk.END, values=("Old", "1", "V"))
     window._live_param_rows["Old"] = stale_id
     started: list[bool] = []
+    scheduled: list[bool] = []
     window._start_sse_thread = lambda: started.append(True)
+    window._schedule_proxy_local_live_data_refresh = lambda **kwargs: scheduled.append(bool(kwargs.get("immediate", False)))
 
     window._handle_live_start_result({"success": True, "message": "Started"})
 
@@ -1015,6 +1022,7 @@ def test_handle_live_start_result_selects_live_output_and_clears_stale_rows() ->
     assert window._live_param_rows == {}
     assert window._live_status_text.get() == "Waiting for first snapshot..."
     assert started == [True]
+    assert scheduled == [False]
     assert window._stop_stream_button.state == tk.NORMAL
 
 
@@ -1065,6 +1073,212 @@ def test_handle_live_stop_result_failure_keeps_stop_available_for_retry() -> Non
     assert window._session_live_data_active is True
     assert window._stop_stream_button.state == tk.NORMAL
     assert window._live_status_text.get() == "Stop failed: timeout"
+
+
+def test_proxy_local_latest_request_uses_session_endpoint() -> None:
+    window = _build_window(current_page="data_display")
+    window._session_live_data_active = True
+    calls: list[tuple[str, str, dict[str, object]]] = []
+    window._api_call = lambda method, endpoint, **kwargs: calls.append((method, endpoint, kwargs))
+
+    window._request_proxy_local_live_data_latest()
+
+    assert calls == [
+        (
+            "GET",
+            "/api/session/live_data/proxy_local/latest",
+            {
+                "query_params": {
+                    "session_id": "session-123",
+                    "max_age_ms": 5000,
+                },
+                "callback_event": "proxy_local_live_data_latest_result",
+            },
+        )
+    ]
+    assert window._proxy_local_live_data_refresh_inflight is True
+
+
+def test_proxy_local_latest_request_is_gated_and_single_flight() -> None:
+    window = _build_window(current_page="data_display")
+    calls: list[tuple[str, str, dict[str, object]]] = []
+    window._api_call = lambda method, endpoint, **kwargs: calls.append((method, endpoint, kwargs))
+
+    window._request_proxy_local_live_data_latest()
+    assert calls == []
+
+    window._session_live_data_active = True
+    window._session_id = None
+    window._request_proxy_local_live_data_latest()
+    assert calls == []
+
+    window._session_id = "session-123"
+    window._proxy_local_live_data_refresh_inflight = True
+    window._request_proxy_local_live_data_latest()
+    assert calls == []
+
+
+def test_handle_proxy_local_latest_result_updates_separate_display_only() -> None:
+    window = _build_window(current_page="data_display")
+    window._session_live_data_active = True
+    window._live_tree.insert("", tk.END, values=("RPM", "800", "rpm"))
+    window._live_param_rows["RPM"] = "I0"
+
+    window._handle_proxy_local_live_data_latest_result(
+        {
+            "success": True,
+            "available": True,
+            "session_id": "session-123",
+            "source": "proxy_local_live_data",
+            "cloud_received_age_ms": 366.903,
+            "latest_sample": {
+                "signal_key": "engine_speed",
+                "display_name": "Engine Speed",
+                "value": 872.0,
+                "unit": "RPM",
+                "source": "proxy_local_known_uds",
+                "decoder_id": "uds_did_000c_engine_speed",
+            },
+        }
+    )
+
+    assert window._proxy_local_engine_speed_value_text.get() == "Engine Speed 872 RPM"
+    assert "Proxy Local" in window._proxy_local_engine_speed_status_text.get()
+    assert "872 RPM" in window._proxy_local_engine_speed_status_text.get()
+    assert "cloud age 367 ms" in window._proxy_local_engine_speed_detail_text.get()
+    assert "proxy_local_known_uds" in window._proxy_local_engine_speed_detail_text.get()
+    assert "uds_did_000c_engine_speed" in window._proxy_local_engine_speed_detail_text.get()
+    assert window._live_tree.get_children() == ["I0"]
+    assert window._live_tree.rows[0] == ("RPM", "800", "rpm")
+    assert window._live_param_rows == {"RPM": "I0"}
+
+
+def test_handle_proxy_local_latest_result_marks_unavailable_and_clears_stale_value() -> None:
+    window = _build_window(current_page="data_display")
+    window._session_live_data_active = True
+    window._proxy_local_engine_speed_value_text.set("Engine Speed 872 RPM")
+    window._proxy_local_engine_speed_status_text.set("Proxy Local Engine Speed: Engine Speed 872 RPM")
+
+    window._handle_proxy_local_live_data_latest_result(
+        {
+            "success": False,
+            "available": False,
+            "session_id": "session-123",
+            "reason": "stale_sample",
+        }
+    )
+
+    assert window._proxy_local_engine_speed_value_text.get() == "--"
+    assert "stale_sample" in window._proxy_local_engine_speed_status_text.get()
+    assert "872 RPM" not in window._proxy_local_engine_speed_status_text.get()
+
+
+def test_handle_proxy_local_latest_result_rejects_malformed_sample() -> None:
+    window = _build_window(current_page="data_display")
+    window._session_live_data_active = True
+
+    window._handle_proxy_local_live_data_latest_result(
+        {
+            "success": True,
+            "available": True,
+            "session_id": "session-123",
+            "latest_sample": {
+                "signal_key": "engine_speed",
+                "unit": "RPM",
+            },
+        }
+    )
+
+    assert window._proxy_local_engine_speed_value_text.get() == "--"
+    assert "invalid_engine_speed_sample" in window._proxy_local_engine_speed_status_text.get()
+
+
+def test_handle_proxy_local_latest_result_rejects_missing_unit() -> None:
+    window = _build_window(current_page="data_display")
+    window._session_live_data_active = True
+
+    window._handle_proxy_local_live_data_latest_result(
+        {
+            "success": True,
+            "available": True,
+            "session_id": "session-123",
+            "latest_sample": {
+                "signal_key": "engine_speed",
+                "value": 872.0,
+                "unit": "",
+            },
+        }
+    )
+
+    assert window._proxy_local_engine_speed_value_text.get() == "--"
+    assert "invalid_engine_speed_sample" in window._proxy_local_engine_speed_status_text.get()
+
+
+def test_handle_proxy_local_latest_result_marks_wrong_session_unavailable() -> None:
+    window = _build_window(current_page="data_display")
+    window._session_live_data_active = True
+    window._proxy_local_engine_speed_value_text.set("Engine Speed 872 RPM")
+    window._proxy_local_engine_speed_status_text.set("Proxy Local Engine Speed: Engine Speed 872 RPM")
+
+    window._handle_proxy_local_live_data_latest_result(
+        {
+            "success": True,
+            "available": True,
+            "session_id": "session-old",
+            "latest_sample": {
+                "signal_key": "engine_speed",
+                "value": 900.0,
+                "unit": "RPM",
+            },
+        }
+    )
+
+    assert window._proxy_local_engine_speed_value_text.get() == "--"
+    assert "session_mismatch" in window._proxy_local_engine_speed_status_text.get()
+    assert "872 RPM" not in window._proxy_local_engine_speed_status_text.get()
+
+
+def test_live_stop_success_clears_proxy_local_state() -> None:
+    window = _build_window(current_page="data_display")
+    window._active_branch = "module"
+    window._stream_active = True
+    window._session_live_data_active = True
+    window._live_stop_pending = True
+    window._proxy_local_live_data_refresh_inflight = True
+    window._proxy_local_engine_speed_value_text.set("Engine Speed 872 RPM")
+    window._stop_sse_thread = lambda: None
+
+    window._handle_live_stop_result({"success": True, "message": "Stopped"})
+
+    assert window._proxy_local_live_data_refresh_inflight is False
+    assert window._proxy_local_engine_speed_value_text.get() == "--"
+    assert "unavailable" in window._proxy_local_engine_speed_status_text.get()
+
+
+def test_session_status_inactive_clears_proxy_local_state() -> None:
+    window = _build_window(current_page="")
+    window._active_branch = "module"
+    window._selected_module.set("ECM")
+    window._selected_data_category.set("Engine Data")
+    window._session_category_confirmed = True
+    window._session_live_data_active = True
+    window._stream_active = True
+    window._proxy_local_engine_speed_value_text.set("Engine Speed 872 RPM")
+
+    window._handle_session_status_result(
+        {
+            "success": True,
+            "active_ai_session_id": "",
+            "active_navigation_session_id": "",
+            "live_data_active": False,
+            "backend_state_summary": {
+                "current_page": "data_display",
+            },
+        }
+    )
+
+    assert window._proxy_local_engine_speed_value_text.get() == "--"
+    assert "unavailable" in window._proxy_local_engine_speed_status_text.get()
 
 
 def test_handle_sse_snapshot_updates_existing_live_tree_rows_in_place() -> None:
