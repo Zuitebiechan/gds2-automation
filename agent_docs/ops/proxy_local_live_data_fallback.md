@@ -185,6 +185,41 @@ flag and let any in-flight J2534 call finish before teardown, then stop on
 disconnect, close, connection cleanup, or shutdown. It does not require
 `shadow_local` and does not arm/serve `active_replay`.
 
+## MVP 2: Tunnel Push And Cloud Latest Endpoint
+
+MVP 2 makes the local Engine Speed sample visible to the cloud/session side
+without changing GDS2, the virtual DLL, or Java Agent Data Display semantics.
+
+Scope:
+
+- the local client advertises `local_live_data=1` only when
+  `VCI_PROXY_LOCAL_LIVE_DATA=1`;
+- the cloud reverse server echoes `local_live_data=1` only after the client
+  advertised that capability;
+- the client sends a best-effort internal `LOCAL_LIVE_DATA_SAMPLE` tunnel frame
+  only after that auth ack;
+- the cloud reverse server writes an atomic latest cache at
+  `%PROGRAMDATA%\RPA_Diagnostic\observability\cloud\live_data\proxy_local_latest.json`;
+- Flask exposes
+  `GET /api/session/live_data/proxy_local/latest?session_id=...&max_age_ms=5000`.
+
+The sample frame is unsolicited and internal. It is routed by message type
+before pending response-future sequence matching, so it cannot be mistaken for
+a DLL-visible J2534 response even if its sequence number collides with an
+in-flight request.
+
+The endpoint returns a sample only when all gates pass:
+
+- session exists and supports `LIVE_DATA`;
+- the session live-data stream is active in worker runtime;
+- latest cache `session_id` matches the requested session;
+- latest cache `connection_epoch` matches the active worker epoch when present;
+- freshness is within `max_age_ms`, computed from cloud `cloud_received_ts`.
+
+MVP 2 remains latest-value only. It does not add GUI, cloud SSE fan-out,
+additional signals, active replay, DLL response synthesis, Java Agent snapshot
+mutation, or GM `A9 81 xx` polling/decoding.
+
 ## Observability Requirements
 
 Use local observability first. Cloud observability can be added later when the
@@ -199,6 +234,7 @@ proxy.local_live_data.backoff
 proxy.local_live_data.unsupported
 proxy.local_live_data.collector.started
 proxy.local_live_data.collector.stopped
+proxy.local_live_data.tunnel_send_failed
 ```
 
 Summary fields should include:
@@ -215,6 +251,24 @@ Summary fields should include:
 When cloud push is implemented, add the cloud receive timestamp and cloud-side
 age so pasted logs can distinguish local collection freshness from tunnel/UI
 delivery freshness.
+
+MVP 2 cloud events:
+
+```text
+proxy.local_live_data.cloud_sample_received
+proxy.local_live_data.cloud_sample_dropped
+```
+
+MVP 2 cache fields:
+
+- `schema_version=proxy.local_live_data.cloud_latest.v1`;
+- `cloud_received_ts`;
+- `connection_epoch`;
+- `session_id`;
+- `live_data_active_at_receive`;
+- `source=proxy_local_live_data`;
+- `latest_sample`;
+- `signals.engine_speed`.
 
 ## Implemented Local Passes
 
@@ -234,8 +288,17 @@ MVP 1:
 4. Pause on foreground traffic and emit reason-specific backoff/summary events.
 5. Stop collection on disconnect, close, connection cleanup, and shutdown.
 
+MVP 2:
+
+1. Add internal tunnel frame `LOCAL_LIVE_DATA_SAMPLE`.
+2. Add `local_live_data=1` auth capability negotiation.
+3. Push local Engine Speed samples through the tunnel only after ack.
+4. Write cloud latest cache using the server connection epoch.
+5. Add guarded Flask latest endpoint.
+6. Keep source labels separate from native GDS2 Data Display values.
+
 Do not implement `active_replay`, semantic replay tolerance, cloud SSE, or GUI
-in these local passes.
+in these passes.
 
 ## Validation Run
 
@@ -264,6 +327,25 @@ Fields to inspect:
 - `backoff_reason`;
 - absence of `active_replay_armed`, `active_replay_served`, and GM `A9 81 xx`
   sample sources.
+
+Additional MVP 2 fields to inspect:
+
+- local `reverse_client.lifecycle.auth_succeeded` reason includes
+  `local_live_data=1`;
+- cloud `tunnel.auth.accepted` includes
+  `local_live_data_supported=true`;
+- local sample events include `client_sample_seq`;
+- absence of `proxy.local_live_data.tunnel_send_failed`;
+- cloud `proxy.local_live_data.cloud_sample_received` includes
+  `session_id`, `connection_epoch`, `cloud_received_ts`,
+  `cloud_received_age_ms`, `local_to_cloud_clock_delta_ms`,
+  `source=proxy_local_known_uds`, and
+  `decoder_id=uds_did_000c_engine_speed`;
+- latest endpoint returns `success=true`, `available=true`,
+  `source=proxy_local_live_data`, `epoch_match_status=matched`, and a fresh
+  `latest_sample.value`;
+- stale, inactive, wrong-session, or wrong-epoch checks return `409` rather
+  than showing a misleading value.
 
 Go criteria:
 

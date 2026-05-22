@@ -4,6 +4,7 @@ import pytest
 
 from vci_proxy.protocol import (
     HEADER_SIZE,
+    LOCAL_LIVE_DATA_SAMPLE_SCHEMA_VERSION,
     MAGIC,
     PREFETCH_MAGIC,
     Message,
@@ -106,6 +107,37 @@ def test_protocol_round_trips_ioctl_and_auth_messages() -> None:
     assert ProtocolDecoder.decode_auth_req(auth_req[HEADER_SIZE:]) == (1_700_000_000, b"x" * 32)
     assert ProtocolDecoder.decode_auth_req_capabilities(auth_req[HEADER_SIZE:]) == "read_ahead=1;write_collect=1"
     assert ProtocolDecoder.decode_auth_rsp(auth_rsp[HEADER_SIZE:]) == (True, "ok")
+
+
+def test_protocol_round_trips_local_live_data_sample_frame() -> None:
+    payload = {
+        "schema_version": LOCAL_LIVE_DATA_SAMPLE_SCHEMA_VERSION,
+        "signal_key": "engine_speed",
+        "display_name": "Engine Speed",
+        "unit": "RPM",
+        "value": 869.5,
+        "source": "proxy_local_known_uds",
+        "decoder_id": "uds_did_000c_engine_speed",
+        "sample_ts": "2026-05-22T00:00:00Z",
+        "local_send_ts": "2026-05-22T00:00:00.100Z",
+        "client_sample_seq": 3,
+    }
+
+    encoded = ProtocolEncoder.encode_local_live_data_sample(payload, sequence=3)
+    magic, length, msg_type, sequence = Message.decode_header(encoded[:HEADER_SIZE])
+
+    assert magic == MAGIC
+    assert length == len(encoded)
+    assert msg_type == MsgType.LOCAL_LIVE_DATA_SAMPLE
+    assert sequence == 3
+    assert ProtocolDecoder.decode_local_live_data_sample(
+        encoded[HEADER_SIZE:]
+    ) == payload
+
+
+def test_local_live_data_sample_decoder_rejects_invalid_json_body() -> None:
+    with pytest.raises(ValueError, match="invalid JSON payload"):
+        ProtocolDecoder.decode_local_live_data_sample(b"{not-json")
 
 
 def test_protocol_decoder_validates_lengths_for_fixed_size_messages() -> None:

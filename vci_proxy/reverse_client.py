@@ -11,7 +11,7 @@ import os
 import socket
 import ssl
 import time
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from diagnostic_platform.observability import (
     LogContext,
@@ -19,6 +19,7 @@ from diagnostic_platform.observability import (
     generate_request_id,
     get_local_observability_root,
     get_product_log_writer,
+    utc_now_iso,
 )
 from vci_proxy.auth import compute_signature
 from vci_proxy.benchmark import attach_timing_trailer
@@ -34,6 +35,7 @@ from vci_proxy.local_live_data import (
 )
 from vci_proxy.protocol import (
     HEADER_SIZE,
+    LOCAL_LIVE_DATA_SAMPLE_SCHEMA_VERSION,
     MAGIC,
     Message,
     MsgType,
@@ -101,8 +103,11 @@ class ReverseProxyClient:
         self._server_read_collect_enabled = False
         self._server_write_collect_enabled = False
         self._server_sweep_shadow_enabled = False
+        self._server_local_live_data_enabled = False
         self._server_connection_epoch: str | None = None
         self._driver_call_lock = asyncio.Lock()
+        self._tunnel_write_lock = asyncio.Lock()
+        self._client_sample_seq = 0
         self._foreground_request_depth = 0
         self._local_live_data_channel: LocalLiveDataChannel | None = None
         self._local_live_data = LocalLiveDataMonitor()
@@ -114,6 +119,7 @@ class ReverseProxyClient:
             emit_event=self._emit_client_event,
             foreground_idle=self._foreground_idle,
             channel_provider=self._get_local_live_data_channel,
+            on_sample=self._handle_local_live_data_sample,
         )
         self._sweep_executor = LocalSweepExecutor(
             config=self.config.local_sweep,
@@ -239,6 +245,86 @@ class ReverseProxyClient:
     def _get_local_live_data_channel(self) -> LocalLiveDataChannel | None:
         return self._local_live_data_channel
 
+    def _handle_local_live_data_sample(self, sample: Mapping[str, object]) -> None:
+        try:
+            loop = self._loop or asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if not loop.is_running():
+            return
+        loop.create_task(self._send_local_live_data_sample(sample))
+
+    async def _write_tunnel_frame(self, writer: asyncio.StreamWriter, frame: bytes) -> None:
+        async with self._tunnel_write_lock:
+            writer.write(frame)
+            await writer.drain()
+
+    async def _send_local_live_data_sample(self, sample: Mapping[str, object]) -> None:
+        if not self._server_local_live_data_enabled:
+            return
+        writer = self._active_writer
+        if writer is None:
+            return
+        self._client_sample_seq += 1
+        client_sample_seq = self._client_sample_seq
+        payload = self._local_live_data_tunnel_payload(
+            sample,
+            client_sample_seq=client_sample_seq,
+        )
+        frame = ProtocolEncoder.encode_local_live_data_sample(
+            payload,
+            sequence=client_sample_seq,
+        )
+        try:
+            if not self._server_local_live_data_enabled:
+                return
+            writer = self._active_writer
+            if writer is None:
+                return
+            await self._write_tunnel_frame(writer, frame)
+        except Exception as exc:
+            self._emit_client_event(
+                "proxy.local_live_data.tunnel_send_failed",
+                context=self._sweep_log_context("LOCAL_LIVE_DATA"),
+                status="warning",
+                failure_code=type(exc).__name__,
+                failure_domain="cloud_proxy_tunnel",
+                reason="tunnel_send_failed",
+                impact_scope="proxy_local_live_data",
+                client_sample_seq=client_sample_seq,
+                error=str(exc),
+            )
+
+    @staticmethod
+    def _local_live_data_tunnel_payload(
+        sample: Mapping[str, object],
+        *,
+        client_sample_seq: int,
+    ) -> dict[str, object]:
+        fields = {
+            "schema_version": LOCAL_LIVE_DATA_SAMPLE_SCHEMA_VERSION,
+            "signal_key": sample.get("signal_key"),
+            "display_name": sample.get("display_name"),
+            "unit": sample.get("unit"),
+            "value": sample.get("value"),
+            "source": sample.get("source"),
+            "decoder_id": sample.get("decoder_id"),
+            "sample_ts": sample.get("sample_ts"),
+            "local_send_ts": utc_now_iso(),
+            "local_reported_sample_age_ms": sample.get("sample_age_ms"),
+            "poll_id": sample.get("poll_id"),
+            "channel_id": sample.get("channel_id"),
+            "request_kind": sample.get("request_kind"),
+            "request_origin": sample.get("request_origin"),
+            "return_code": sample.get("return_code"),
+            "j2534_return_code_warning": sample.get("j2534_return_code_warning"),
+            "raw_prefix_hex": sample.get("raw_prefix_hex"),
+            "collector_interval_ms": sample.get("collector_interval_ms"),
+            "read_timeout_ms": sample.get("read_timeout_ms"),
+            "client_sample_seq": client_sample_seq,
+        }
+        return {key: value for key, value in fields.items() if value is not None}
+
     def _stop_local_live_data_collector(self, reason: str) -> None:
         self._local_live_data_channel = None
         self._local_live_data_collector.request_stop(reason)
@@ -323,6 +409,13 @@ class ReverseProxyClient:
         )
 
     @staticmethod
+    def _auth_message_enables_local_live_data(message: str) -> bool:
+        return any(
+            token.strip().lower() == "local_live_data=1"
+            for token in message.replace(",", ";").split(";")
+        )
+
+    @staticmethod
     def _auth_message_connection_epoch(message: str) -> str | None:
         for token in str(message or "").replace(",", ";").split(";"):
             stripped = token.strip()
@@ -344,6 +437,8 @@ class ReverseProxyClient:
                 capabilities.append("write_collect=1")
         if self.config.local_sweep.shadow_transport_enabled:
             capabilities.append("sweep_shadow=1")
+        if self.config.local_live_data.enabled:
+            capabilities.append("local_live_data=1")
         return ";".join(capabilities)
 
     async def _run_driver_call(
@@ -352,6 +447,8 @@ class ReverseProxyClient:
         *args: Any,
         request_context: LogContext,
         ok_codes: tuple[int, ...] = (0,),
+        warning_codes: tuple[int, ...] = (),
+        warning_requires_payload: bool = False,
         result_metadata: dict[str, object] | None = None,
     ) -> Any:
         loop = asyncio.get_running_loop()
@@ -401,17 +498,39 @@ class ReverseProxyClient:
             first = result[0]
             if isinstance(first, int):
                 return_code = first
-        status = "ok" if return_code is None or return_code in ok_codes else "error"
-        failure_domain = "unknown" if status == "ok" else "local_j2534_driver"
-        failure_code = None if status == "ok" else str(return_code)
-        error_name = None if status == "ok" else self._get_error_name(int(return_code))
+        payload_present = False
+        if isinstance(result, tuple) and len(result) > 1:
+            payload = result[1]
+            if isinstance(payload, (list, tuple)):
+                payload_present = len(payload) > 0
+        status = "ok"
+        event_type = "j2534.call.finished"
+        failure_domain = "unknown"
+        failure_code = None
+        error_name = None
+        reason = "call_finished"
+        if return_code is not None and return_code not in ok_codes:
+            if return_code in warning_codes and (
+                not warning_requires_payload or payload_present
+            ):
+                status = "warning"
+                event_type = "j2534.call.warning"
+                failure_domain = "vehicle_or_vci"
+                reason = "driver_return_code_with_data"
+            else:
+                status = "error"
+                event_type = "j2534.call.failed"
+                failure_domain = "local_j2534_driver"
+                failure_code = str(return_code)
+                reason = "driver_return_code"
+                error_name = self._get_error_name(int(return_code))
         self._emit_client_event(
-            "j2534.call.finished" if status == "ok" else "j2534.call.failed",
+            event_type,
             context=request_context,
             status=status,
             failure_code=failure_code,
             failure_domain=failure_domain,
-            reason="call_finished" if status == "ok" else "driver_return_code",
+            reason=reason,
             duration_ms=duration_ms,
             j2534_method=j2534_method,
             return_code=return_code,
@@ -784,6 +903,7 @@ class ReverseProxyClient:
         self._server_read_collect_enabled = False
         self._server_write_collect_enabled = False
         self._server_sweep_shadow_enabled = False
+        self._server_local_live_data_enabled = False
         self._server_connection_epoch = None
         self._stop_local_live_data_collector("registration_reset")
         if self.config.auth.enabled and self.config.auth.token:
@@ -795,8 +915,7 @@ class ReverseProxyClient:
                 0,
                 capabilities=self._auth_capability_message(),
             )
-            writer.write(msg)
-            await writer.drain()
+            await self._write_tunnel_frame(writer, msg)
             logger.debug(
                 "[CLIENT_CONN] instance=%s %s sent auth request ts=%s",
                 self._instance_id,
@@ -815,6 +934,8 @@ class ReverseProxyClient:
                     self._server_read_collect_enabled = False
                     self._server_write_collect_enabled = False
                     self._server_sweep_shadow_enabled = False
+                    self._server_local_live_data_enabled = False
+                    self._server_connection_epoch = None
                     logger.error("Invalid magic in auth response: %#x", magic)
                     return False
 
@@ -834,6 +955,9 @@ class ReverseProxyClient:
                     )
                     self._server_sweep_shadow_enabled = (
                         success and self._auth_message_enables_sweep_shadow(message)
+                    )
+                    self._server_local_live_data_enabled = (
+                        success and self._auth_message_enables_local_live_data(message)
                     )
                     self._server_connection_epoch = (
                         self._auth_message_connection_epoch(message)
@@ -872,6 +996,7 @@ class ReverseProxyClient:
                     self._server_read_collect_enabled = False
                     self._server_write_collect_enabled = False
                     self._server_sweep_shadow_enabled = False
+                    self._server_local_live_data_enabled = False
                     self._server_connection_epoch = None
                     logger.warning(
                         "[CLIENT_CONN] instance=%s %s server accepted auth as legacy heartbeat",
@@ -896,6 +1021,7 @@ class ReverseProxyClient:
                 self._server_read_collect_enabled = False
                 self._server_write_collect_enabled = False
                 self._server_sweep_shadow_enabled = False
+                self._server_local_live_data_enabled = False
                 self._emit_client_event(
                     "reverse_client.lifecycle.auth_failed",
                     status="error",
@@ -911,6 +1037,7 @@ class ReverseProxyClient:
                 self._server_read_collect_enabled = False
                 self._server_write_collect_enabled = False
                 self._server_sweep_shadow_enabled = False
+                self._server_local_live_data_enabled = False
                 self._server_connection_epoch = None
                 logger.error(
                     "[CLIENT_CONN] instance=%s %s auth response timeout after %ss",
@@ -930,8 +1057,8 @@ class ReverseProxyClient:
                 return False
 
         msg = ProtocolEncoder.encode_heartbeat(0)
-        writer.write(msg)
-        await writer.drain()
+        self._server_local_live_data_enabled = False
+        await self._write_tunnel_frame(writer, msg)
         logger.debug(
             "[CLIENT_CONN] instance=%s %s sent registration heartbeat phase=1",
             self._instance_id,
@@ -965,8 +1092,7 @@ class ReverseProxyClient:
             return False
 
         msg2 = ProtocolEncoder.encode_heartbeat(1)
-        writer.write(msg2)
-        await writer.drain()
+        await self._write_tunnel_frame(writer, msg2)
         logger.debug(
             "[CLIENT_CONN] instance=%s %s sent registration heartbeat phase=2",
             self._instance_id,
@@ -1019,8 +1145,7 @@ class ReverseProxyClient:
 
                 if response:
                     response = attach_timing_trailer(response, hw_ms)
-                    writer.write(response)
-                    await writer.drain()
+                    await self._write_tunnel_frame(writer, response)
 
             except asyncio.TimeoutError:
                 logger.debug(
@@ -1034,8 +1159,7 @@ class ReverseProxyClient:
                     instance_id=self._instance_id,
                     attempt_label=attempt_label,
                 )
-                writer.write(ProtocolEncoder.encode_heartbeat(0))
-                await writer.drain()
+                await self._write_tunnel_frame(writer, ProtocolEncoder.encode_heartbeat(0))
             except asyncio.IncompleteReadError as exc:
                 raise ConnectionError(
                     "reverse server disconnected: EOF while waiting for messages "

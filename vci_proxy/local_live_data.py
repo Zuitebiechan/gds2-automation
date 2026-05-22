@@ -31,6 +31,7 @@ ContextFactory = Callable[[str], LogContext]
 EventEmitter = Callable[..., None]
 ForegroundIdle = Callable[[], bool]
 ChannelProvider = Callable[[], "LocalLiveDataChannel | None"]
+SampleCallback = Callable[[Mapping[str, object]], None]
 
 
 @dataclass(frozen=True)
@@ -352,6 +353,7 @@ class LocalLiveDataCollector:
         emit_event: EventEmitter,
         foreground_idle: ForegroundIdle,
         channel_provider: ChannelProvider,
+        on_sample: SampleCallback | None = None,
     ) -> None:
         self._config = config
         self._monitor = monitor
@@ -360,6 +362,7 @@ class LocalLiveDataCollector:
         self._emit_event = emit_event
         self._foreground_idle = foreground_idle
         self._channel_provider = channel_provider
+        self._on_sample = on_sample
         self._task: asyncio.Task | None = None
         self._stop_requested = False
         self._poll_counter = 0
@@ -519,7 +522,9 @@ class LocalLiveDataCollector:
             self._config.read_num_msgs,
             self._config.read_timeout_ms,
             request_context=context,
-            ok_codes=(0, BUFFER_EMPTY, 9),
+            ok_codes=(0, BUFFER_EMPTY),
+            warning_codes=(9,),
+            warning_requires_payload=True,
             result_metadata={
                 "channel_id": channel.channel_id,
                 "proxy_local_live_data": True,
@@ -621,6 +626,8 @@ class LocalLiveDataCollector:
                 impact_scope="proxy_local_live_data",
                 **enriched,
             )
+            if event_type == "proxy.local_live_data.sample" and self._on_sample is not None:
+                self._on_sample(enriched)
 
 
 def get_latest_snapshot_path(appdata: str | Path | None = None) -> Path:

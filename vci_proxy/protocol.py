@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import struct
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 
 MAGIC = 0x4A325334  # "J254" in ASCII
@@ -35,6 +36,7 @@ class MsgType(IntEnum):
     SWEEP_PLAN_STOP_REQ = 0x0201
     SWEEP_STATUS_REQ = 0x0202
     SWEEP_DRAIN_RESULTS_REQ = 0x0203
+    LOCAL_LIVE_DATA_SAMPLE = 0x0300
 
     # Responses (0x80xx)
     OPEN_RSP = 0x8001
@@ -58,6 +60,7 @@ class MsgType(IntEnum):
 
 
 MSG_NAMES = {value: value.name for value in MsgType}
+LOCAL_LIVE_DATA_SAMPLE_SCHEMA_VERSION = "proxy.local_live_data.sample.v1"
 
 
 @dataclass
@@ -358,6 +361,19 @@ class ProtocolEncoder:
         msg_bytes = message.encode("utf-8")
         body = struct.pack(">B", 1 if success else 0) + msg_bytes
         return Message(MsgType.AUTH_RSP, sequence, body).encode()
+
+    @staticmethod
+    def encode_local_live_data_sample(
+        payload: dict[str, Any],
+        sequence: int = 0,
+    ) -> bytes:
+        body = json.dumps(
+            dict(payload),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        return Message(MsgType.LOCAL_LIVE_DATA_SAMPLE, sequence, body).encode()
 
     @staticmethod
     def encode_start_filter_req(
@@ -677,6 +693,18 @@ class ProtocolDecoder:
         success = body[0] != 0
         message = body[1:].decode("utf-8", errors="replace") if len(body) > 1 else ""
         return success, message
+
+    @staticmethod
+    def decode_local_live_data_sample(body: bytes) -> dict[str, Any]:
+        if not body:
+            raise ValueError("LocalLiveDataSample: body too short (0 < 1)")
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("LocalLiveDataSample: invalid JSON payload") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("LocalLiveDataSample: JSON payload must be an object")
+        return payload
 
     @staticmethod
     def decode_write_and_collect_reads_req(body: bytes) -> WriteAndCollectReadsRequest:

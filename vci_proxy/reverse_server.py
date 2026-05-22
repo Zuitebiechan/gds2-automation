@@ -30,6 +30,9 @@ from diagnostic_platform.observability import (
     install_observability_log_handler,
     read_active_session_snapshot,
 )
+from diagnostic_platform.proxy_local_live_data import (
+    write_proxy_local_live_data_latest,
+)
 
 from .config import LOCAL_SWEEP_READ_TIMEOUT_MS_ENV, ProxyConfig
 from .cache_read_msgs import BUFFER_EMPTY, ReadMsgsCache
@@ -273,6 +276,7 @@ class ReverseProxyServer:
         self._vci_read_collect_supported = False
         self._vci_write_collect_supported = False
         self._vci_sweep_shadow_supported = False
+        self._vci_local_live_data_supported = False
         self._read_ahead_transaction_guard_until_mono = 0.0
         self._read_ahead_transaction_guard_reason: str | None = None
         self._read_ahead_transaction_guard_network_ms: float | None = None
@@ -438,6 +442,86 @@ class ReverseProxyServer:
                 reason=event.event_type,
                 **event.fields,
             )
+
+    def _handle_local_live_data_sample_frame(
+        self,
+        body: bytes,
+        *,
+        sequence: int,
+    ) -> None:
+        try:
+            sample = ProtocolDecoder.decode_local_live_data_sample(body)
+        except ValueError as exc:
+            self._emit_tunnel_event(
+                "proxy.local_live_data.cloud_sample_dropped",
+                status="error",
+                failure_code="invalid_sample_payload",
+                failure_domain="cloud_proxy_tunnel",
+                reason="invalid_sample_payload",
+                impact_scope="proxy_local_live_data",
+                sample_sequence=sequence,
+                error=str(exc),
+            )
+            return
+
+        if not self._vci_local_live_data_supported:
+            self._emit_tunnel_event(
+                "proxy.local_live_data.cloud_sample_dropped",
+                status="warning",
+                failure_code="capability_not_negotiated",
+                failure_domain="cloud_proxy_tunnel",
+                reason="capability_not_negotiated",
+                impact_scope="proxy_local_live_data",
+                sample_sequence=sequence,
+                signal_key=sample.get("signal_key"),
+            )
+            return
+
+        snapshot = read_active_session_snapshot() or {}
+        received_at_s = time.time()
+        try:
+            latest = write_proxy_local_live_data_latest(
+                sample=sample,
+                connection_epoch=self._connection_epoch,
+                session_snapshot=snapshot,
+                received_at_s=received_at_s,
+            )
+        except ValueError as exc:
+            self._emit_tunnel_event(
+                "proxy.local_live_data.cloud_sample_dropped",
+                status="warning",
+                failure_code="unsupported_sample",
+                failure_domain="cloud_proxy_tunnel",
+                reason="unsupported_sample",
+                impact_scope="proxy_local_live_data",
+                sample_sequence=sequence,
+                signal_key=sample.get("signal_key"),
+                schema_version=sample.get("schema_version"),
+                error=str(exc),
+            )
+            return
+        self._emit_tunnel_event(
+            "proxy.local_live_data.cloud_sample_received",
+            connection_epoch=self._connection_epoch,
+            operation_kind="proxy_local_live_data",
+            reason="sample_received",
+            impact_scope="proxy_local_live_data",
+            sample_sequence=sequence,
+            client_sample_seq=sample.get("client_sample_seq"),
+            signal_key=sample.get("signal_key"),
+            source=sample.get("source"),
+            decoder_id=sample.get("decoder_id"),
+            value=sample.get("value"),
+            unit=sample.get("unit"),
+            session_id=latest.get("session_id"),
+            live_data_active_at_receive=latest.get("live_data_active_at_receive"),
+            cloud_received_ts=latest.get("cloud_received_ts"),
+            cloud_received_age_ms=0.0,
+            local_to_cloud_clock_delta_ms=_clock_delta_ms(
+                str(sample.get("local_send_ts") or ""),
+                received_at_s,
+            ),
+        )
 
     def _observe_sweep_write(
         self,
@@ -1580,6 +1664,8 @@ class ReverseProxyServer:
                 capabilities.append("write_collect=1")
         if self.config.local_sweep.shadow_transport_enabled:
             capabilities.append("sweep_shadow=1")
+        if getattr(self, "_vci_local_live_data_supported", False):
+            capabilities.append("local_live_data=1")
         if connection_epoch:
             capabilities.append(f"connection_epoch={connection_epoch}")
         return ";".join(capabilities)
@@ -1826,6 +1912,7 @@ class ReverseProxyServer:
         self._vci_read_collect_supported = False
         self._vci_write_collect_supported = False
         self._vci_sweep_shadow_supported = False
+        self._vci_local_live_data_supported = False
         try:
             header = await asyncio.wait_for(
                 reader.readexactly(HEADER_SIZE),
@@ -1887,6 +1974,10 @@ class ReverseProxyServer:
                     capabilities,
                     "sweep_shadow",
                 )
+                self._vci_local_live_data_supported = self._capability_enabled(
+                    capabilities,
+                    "local_live_data",
+                )
                 self._emit_tunnel_event(
                     "tunnel.auth.accepted",
                     reason="auth_not_required",
@@ -1898,6 +1989,7 @@ class ReverseProxyServer:
                     read_collect_enabled=self._vci_read_collect_supported,
                     write_collect_enabled=self._vci_write_collect_supported,
                     sweep_shadow_supported=self._vci_sweep_shadow_supported,
+                    local_live_data_supported=self._vci_local_live_data_supported,
                 )
                 rsp = ProtocolEncoder.encode_auth_rsp(
                     True,
@@ -1927,9 +2019,6 @@ class ReverseProxyServer:
                 success = False
                 reason = "replay detected"
             if success:
-                reason = self._auth_success_message(
-                    connection_epoch=connection_epoch_hint,
-                )
                 self._vci_read_collect_supported = self._capability_enabled(
                     capabilities,
                     "read_collect",
@@ -1942,6 +2031,13 @@ class ReverseProxyServer:
                     capabilities,
                     "sweep_shadow",
                 )
+                self._vci_local_live_data_supported = self._capability_enabled(
+                    capabilities,
+                    "local_live_data",
+                )
+                reason = self._auth_success_message(
+                    connection_epoch=connection_epoch_hint,
+                )
                 self._emit_tunnel_event(
                     "tunnel.auth.accepted",
                     reason="auth_success",
@@ -1951,6 +2047,7 @@ class ReverseProxyServer:
                     read_collect_enabled=self._vci_read_collect_supported,
                     write_collect_enabled=self._vci_write_collect_supported,
                     sweep_shadow_supported=self._vci_sweep_shadow_supported,
+                    local_live_data_supported=self._vci_local_live_data_supported,
                 )
             rsp = ProtocolEncoder.encode_auth_rsp(success, reason, sequence)
             try:
@@ -1974,6 +2071,7 @@ class ReverseProxyServer:
             self._vci_read_collect_supported = False
             self._vci_write_collect_supported = False
             self._vci_sweep_shadow_supported = False
+            self._vci_local_live_data_supported = False
             if self.config.auth.enabled:
                 logger.warning(
                     "Auth required but VCI client sent HEARTBEAT (legacy client)"
@@ -2238,6 +2336,13 @@ class ReverseProxyServer:
                     continue
 
                 # 查找对应的 Future（响应消息）
+                if msg_type == MsgType.LOCAL_LIVE_DATA_SAMPLE:
+                    self._handle_local_live_data_sample_frame(
+                        body,
+                        sequence=sequence,
+                    )
+                    continue
+
                 if sequence in self.response_futures:
                     future = self.response_futures.pop(sequence)
                     prefetch_source = self._prefetch_bundle_source_by_proxy_seq.pop(
@@ -2332,6 +2437,7 @@ class ReverseProxyServer:
                 self._vci_write_collect_supported = False
                 self._vci_read_collect_supported = False
                 self._vci_sweep_shadow_supported = False
+                self._vci_local_live_data_supported = False
                 self._cancel_sweep_plan("connection_epoch_changed")
                 self.vci_connected.clear()
                 self._cancel_pending_futures()
@@ -4279,6 +4385,21 @@ def _run_server_until_stopped(server: ReverseProxyServer) -> None:
         signal.signal(signal.SIGINT, previous_sigint_handler)
         asyncio.set_event_loop(None)
         loop.close()
+
+
+def _clock_delta_ms(local_send_ts: str, received_at_s: float) -> float | None:
+    text = str(local_send_ts or "").strip()
+    if not text:
+        return None
+    try:
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        from datetime import datetime
+
+        local_s = datetime.fromisoformat(text).timestamp()
+    except (TypeError, ValueError):
+        return None
+    return round(max(0.0, (received_at_s - local_s) * 1000.0), 3)
 
 
 def main():

@@ -9,6 +9,8 @@ This document does not restate all deployment commands. For environment setup an
 For the staged plan to reduce cloud GDS2 live-data latency in the Proxy J2534 architecture, read `agent_docs/ops/proxy_j2534_latency_optimization.md`.
 For the long-term local-side Data Display sweep scheduler design, read
 `agent_docs/ops/proxy_j2534_local_sweep_scheduler.md`.
+For the current Engine Speed fallback implementation lane, read
+`agent_docs/ops/proxy_local_live_data_fallback.md`.
 
 ## Purpose
 
@@ -111,6 +113,24 @@ At connection time:
 
 - auth is enabled by default, and the client sends `AUTH_REQ`
 - otherwise the legacy two-phase heartbeat registration is used
+
+Capability strings are semicolon-separated. `local_live_data=1` is used by
+Proxy Local Live Data MVP 2:
+
+- the local reverse client advertises it only when
+  `VCI_PROXY_LOCAL_LIVE_DATA=1`;
+- the cloud reverse server echoes it in `AUTH_RSP` only when the client
+  advertised it;
+- the local client sends proxy-local samples only after the ack includes it;
+- the legacy heartbeat/no-ack path remains local-only.
+
+`LOCAL_LIVE_DATA_SAMPLE` (`0x0300`) is a one-way internal client-to-server
+frame. It carries decoded Engine Speed sample JSON with schema
+`proxy.local_live_data.sample.v1` and redacted metadata such as value, unit,
+decoder id, local send timestamp, return code, and raw prefix. It never
+represents a DLL-visible J2534 response. The reverse server handles this
+message type before `response_futures` sequence matching so unsolicited sample
+frames cannot complete pending foreground requests.
 
 ## Authentication
 
@@ -781,6 +801,13 @@ If exact-signature replay cannot materially improve the target GDS2 Data
 Display page, the supported fallback direction is a product-level live-data
 stream that is separate from GDS2's native Data Display refresh loop.
 
+As of the 2026-05-19 real-vehicle Engine Speed tests, this is the primary next
+implementation lane for Engine Speed. The `READ_TIMEOUT_MS=15` shadow run
+captured local `0x000C` responses often enough to prove local availability, but
+the exact raw shadow-match gate still failed because the dynamic RPM value
+drifted between local shadow and foreground GDS2 reads. Do not enable
+`active_replay` from that evidence; implement the local decoded stream first.
+
 This fallback does not make GDS2's Data Display faster. It adds a small
 proxy-local source for high-value signals:
 
@@ -790,8 +817,8 @@ vehicle-side J2534
   -> allowlisted read-only request
   -> known decoder
   -> reverse tunnel value event
-  -> cloud live-data SSE
-  -> client Live Data panel
+  -> cloud latest cache and guarded session endpoint
+  -> later: cloud live-data SSE and client Live Data panel
 ```
 
 The design must not assume that J2534 can decode GDS2 Data Display values.
@@ -806,15 +833,35 @@ Display rows. The proxy-local fallback may decode only a small allowlist:
 - no active GM `A9 81 xx` polling, decoding, shadow execution, or replay under
   the current evidence.
 
-The tunnel event should carry decoded value-level data, not J2534 replay
-payloads. A future event shape should include at minimum:
+Implemented boundaries:
+
+- add local-only Engine Speed decoding and observability first;
+- allow local `shadow_local` `0x000C` results to act as the initial decoder
+  proof source;
+- emit `proxy.local_live_data.sample` and write a local latest-value snapshot;
+- MVP 1 adds an independent local Engine Speed collector;
+- MVP 2 adds tunnel sample push plus a cloud latest cache and guarded Flask
+  latest endpoint;
+- do not add cloud SSE, UI, or replay in these passes.
+
+The detailed implementation handoff is
+`agent_docs/ops/proxy_local_live_data_fallback.md`.
+
+The tunnel sample carries decoded value-level data, not J2534 replay payloads.
+It includes at minimum:
 
 - signal name, value, unit, and source (`proxy_local_obd` or
   `proxy_local_known_uds`);
-- local sample timestamp and `sample_age_ms`;
+- local sample timestamp, local send timestamp, and local/cloud age fields;
 - request signature and decoder id;
 - poll duration, return code, negative-response/backoff state, and whether
   foreground GDS2 traffic was prioritized.
+
+The cloud latest cache is written to
+`%PROGRAMDATA%\RPA_Diagnostic\observability\cloud\live_data\proxy_local_latest.json`
+using atomic replace. The cache stores `session_id`, server
+`connection_epoch`, `live_data_active_at_receive`, `latest_sample`, and
+`signals.engine_speed`.
 
 The cloud/client UI should keep the existing Java Agent GDS2 stream available
 as the complete page view and display proxy-local values as a separate or

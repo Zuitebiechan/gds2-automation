@@ -251,6 +251,60 @@ def test_send_registration_auth_mode_advertises_sweep_shadow_capability(monkeypa
     assert "sweep_shadow=1" in ProtocolDecoder.decode_auth_req_capabilities(body)
 
 
+def test_send_registration_auth_mode_negotiates_local_live_data_capability(monkeypatch) -> None:
+    config = ProxyConfig.from_args(
+        auth_token="shared-secret",
+        local_live_data_enabled=True,
+    )
+    client = ReverseProxyClient("example.com", 9000, config=config)
+    reader = _FakeReader(
+        ProtocolEncoder.encode_auth_rsp(
+            True,
+            "ok;local_live_data=1",
+            sequence=0,
+        )
+    )
+    writer = _FakeWriter()
+
+    monkeypatch.setattr("vci_proxy.reverse_client.time.time", lambda: 1_700_000_000)
+    monkeypatch.setattr(
+        "vci_proxy.reverse_client.compute_signature",
+        lambda token, timestamp: b"s" * 32,
+    )
+
+    result = asyncio.run(client._send_registration(reader, writer))
+
+    assert result is True
+    assert client._server_local_live_data_enabled is True
+    body = writer.writes[0][HEADER_SIZE:]
+    assert "local_live_data=1" in ProtocolDecoder.decode_auth_req_capabilities(body)
+
+
+def test_send_registration_auth_mode_keeps_local_live_data_disabled_without_ack(
+    monkeypatch,
+) -> None:
+    config = ProxyConfig.from_args(
+        auth_token="shared-secret",
+        local_live_data_enabled=True,
+    )
+    client = ReverseProxyClient("example.com", 9000, config=config)
+    reader = _FakeReader(ProtocolEncoder.encode_auth_rsp(True, "ok", sequence=0))
+    writer = _FakeWriter()
+
+    monkeypatch.setattr("vci_proxy.reverse_client.time.time", lambda: 1_700_000_000)
+    monkeypatch.setattr(
+        "vci_proxy.reverse_client.compute_signature",
+        lambda token, timestamp: b"s" * 32,
+    )
+
+    result = asyncio.run(client._send_registration(reader, writer))
+
+    assert result is True
+    assert client._server_local_live_data_enabled is False
+    body = writer.writes[0][HEADER_SIZE:]
+    assert "local_live_data=1" in ProtocolDecoder.decode_auth_req_capabilities(body)
+
+
 def test_proxy_config_from_args_populates_tls_settings() -> None:
     config = ProxyConfig.from_args(
         auth_token="shared-secret",
@@ -262,6 +316,25 @@ def test_proxy_config_from_args_populates_tls_settings() -> None:
     assert config.tls.enabled is True
     assert config.tls.ca_file == "C:/certs/ca.pem"
     assert config.tls.server_name == "diag.example"
+
+
+def test_send_registration_legacy_mode_keeps_local_live_data_push_disabled() -> None:
+    config = ProxyConfig.from_args(
+        auth_enabled=False,
+        local_live_data_enabled=True,
+    )
+    client = ReverseProxyClient("example.com", 9000, config=config)
+    reader = _FakeReader(ProtocolEncoder.encode_heartbeat_ack(sequence=0))
+    writer = _FakeWriter()
+
+    result = asyncio.run(client._send_registration(reader, writer))
+
+    assert result is True
+    assert client._server_local_live_data_enabled is False
+    assert [Message.decode_header(frame[:HEADER_SIZE])[2] for frame in writer.writes] == [
+        MsgType.HEARTBEAT,
+        MsgType.HEARTBEAT,
+    ]
 
 
 def test_build_tls_connection_options_uses_client_ca_and_server_name(monkeypatch) -> None:
@@ -2784,6 +2857,146 @@ def test_local_live_data_collector_foreground_busy_does_not_call_driver(monkeypa
         assert events[1][1]["foreground_priority_pause_count"] == 1
 
     asyncio.run(_run())
+
+
+def test_local_live_data_collector_logs_warning_for_return_code_with_data(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(
+            auth_token="secret",
+            local_live_data_enabled=True,
+        ),
+    )
+    client.running = True
+    client._server_connection_epoch = "epoch-test"
+    client._local_live_data_channel = LocalLiveDataChannel(channel_id=44, protocol_id=6)
+    client.driver = types.SimpleNamespace(
+        write_msgs=lambda _channel_id, _messages, _timeout: (0, 1),
+        read_msgs=lambda _channel_id, _num_msgs, _timeout: (
+            9,
+            [{"protocol_id": 6, "data": bytes.fromhex("000007e862000c0d98")}],
+        ),
+        get_error_name=lambda code: f"ERR_{code}",
+    )
+
+    async def _run() -> None:
+        events = await client._local_live_data_collector.poll_once()
+        assert any(event_type == "proxy.local_live_data.sample" for event_type, _ in events)
+
+    asyncio.run(_run())
+
+    rows = _read_local_events(tmp_path)
+    warning = next(
+        row
+        for row in rows
+        if row["event_type"] == "j2534.call.warning"
+        and row["operation_kind"] == "j2534:LOCAL_LIVE_DATA"
+    )
+    assert warning["status"] == "warning"
+    assert warning["return_code"] == 9
+    assert warning["reason"] == "driver_return_code_with_data"
+    assert not any(
+        row["event_type"] == "j2534.call.failed"
+        and row["operation_kind"] == "j2534:LOCAL_LIVE_DATA"
+        for row in rows
+    )
+
+
+def test_local_live_data_sample_send_writes_internal_tunnel_frame(monkeypatch) -> None:
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(
+            auth_token="secret",
+            local_live_data_enabled=True,
+        ),
+    )
+    writer = _FakeWriter()
+    client._active_writer = writer
+    client._server_local_live_data_enabled = True
+
+    monkeypatch.setattr(
+        "vci_proxy.reverse_client.utc_now_iso",
+        lambda *args, **kwargs: "2026-05-22T00:00:01Z",
+    )
+
+    sample = {
+        "signal_key": "engine_speed",
+        "display_name": "Engine Speed",
+        "unit": "RPM",
+        "value": 869.5,
+        "source": "proxy_local_known_uds",
+        "decoder_id": "uds_did_000c_engine_speed",
+        "sample_ts": "2026-05-22T00:00:00Z",
+        "request_origin": "local_live_data_collector",
+        "return_code": 9,
+        "j2534_return_code_warning": True,
+        "raw_prefix_hex": "000007e862000c0d96",
+    }
+
+    asyncio.run(client._send_local_live_data_sample(sample))
+
+    assert len(writer.writes) == 1
+    _magic, _length, msg_type, sequence = Message.decode_header(
+        writer.writes[0][:HEADER_SIZE]
+    )
+    payload = ProtocolDecoder.decode_local_live_data_sample(
+        writer.writes[0][HEADER_SIZE:]
+    )
+    assert msg_type == MsgType.LOCAL_LIVE_DATA_SAMPLE
+    assert sequence == 1
+    assert payload["schema_version"] == "proxy.local_live_data.sample.v1"
+    assert payload["signal_key"] == "engine_speed"
+    assert payload["local_send_ts"] == "2026-05-22T00:00:01Z"
+    assert payload["client_sample_seq"] == 1
+    assert "full_raw_payload" not in payload
+
+
+def test_local_live_data_sample_send_is_fail_open_on_writer_error(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(
+            auth_token="secret",
+            local_live_data_enabled=True,
+        ),
+    )
+    client._active_writer = _FakeWriter()
+    client._server_local_live_data_enabled = True
+
+    async def _fail_write(_writer, _frame):
+        raise ConnectionError("socket closed")
+
+    monkeypatch.setattr(client, "_write_tunnel_frame", _fail_write)
+
+    asyncio.run(
+        client._send_local_live_data_sample(
+            {
+                "signal_key": "engine_speed",
+                "display_name": "Engine Speed",
+                "unit": "RPM",
+                "value": 900.0,
+                "source": "proxy_local_known_uds",
+                "decoder_id": "uds_did_000c_engine_speed",
+            }
+        )
+    )
+
+    rows = _read_local_events(tmp_path)
+    failed = next(
+        row
+        for row in rows
+        if row["event_type"] == "proxy.local_live_data.tunnel_send_failed"
+    )
+    assert failed["status"] == "warning"
+    assert failed["reason"] == "tunnel_send_failed"
+    assert failed["client_sample_seq"] == 1
 
 
 def test_connect_and_serve_emits_lifecycle_events(monkeypatch, tmp_path: Path) -> None:

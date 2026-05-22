@@ -3,6 +3,7 @@ from __future__ import annotations
 import types
 
 from diagnostic_platform.contracts import BackendCapability
+from diagnostic_platform.proxy_local_live_data import write_proxy_local_live_data_latest
 from diagnostic_platform.runtime.navigation_errors import (
     NavigationDecisionMismatchError,
     NavigationNotAwaitingDecisionError,
@@ -382,6 +383,143 @@ def test_stream_live_data_events_returns_404_when_stream_is_inactive(monkeypatch
         "success": False,
         "error": "No active live data stream for session-live",
     }
+
+
+def test_proxy_local_latest_returns_404_when_session_missing(monkeypatch) -> None:
+    session = _session("session-live", capabilities=[BackendCapability.LIVE_DATA])
+    orch = _FakeOrchestrator(session)
+
+    monkeypatch.setattr(session_live_data_handlers, "get_orchestrator", lambda: orch)
+
+    payload, status = session_live_data_handlers.get_proxy_local_live_data_latest(
+        "missing-session"
+    )
+
+    assert status == 404
+    assert "missing-session" in payload["error"]
+
+
+def test_proxy_local_latest_returns_501_when_live_data_unsupported(monkeypatch) -> None:
+    session = _session("session-live", capabilities=[BackendCapability.READ_DTCS])
+    orch = _FakeOrchestrator(session)
+
+    monkeypatch.setattr(session_live_data_handlers, "get_orchestrator", lambda: orch)
+
+    payload, status = session_live_data_handlers.get_proxy_local_live_data_latest(
+        "session-live"
+    )
+
+    assert status == 501
+    assert payload["success"] is False
+
+
+def test_proxy_local_latest_returns_404_when_cache_missing(monkeypatch) -> None:
+    session = _session("session-live", capabilities=[BackendCapability.LIVE_DATA])
+    orch = _FakeOrchestrator(session)
+    runtime = WorkerRuntime()
+    runtime.bind_business_session("session-live")
+    runtime.set_live_data_active("session-live", True)
+    runtime.set_connection_epoch("session-live", "epoch-live-1")
+
+    monkeypatch.setattr(session_live_data_handlers, "get_orchestrator", lambda: orch)
+    monkeypatch.setattr(session_live_data_handlers, "_runtime", lambda: runtime)
+    monkeypatch.setattr(
+        session_live_data_handlers,
+        "read_proxy_local_live_data_latest",
+        lambda: None,
+    )
+
+    payload, status = session_live_data_handlers.get_proxy_local_live_data_latest(
+        "session-live"
+    )
+
+    assert status == 404
+    assert payload["reason"] == "no_sample_cache"
+
+
+def test_proxy_local_latest_returns_409_when_stream_inactive(monkeypatch, tmp_path) -> None:
+    session = _session("session-live", capabilities=[BackendCapability.LIVE_DATA])
+    orch = _FakeOrchestrator(session)
+    runtime = WorkerRuntime()
+    runtime.bind_business_session("session-live")
+    runtime.set_connection_epoch("session-live", "epoch-live-1")
+    latest = write_proxy_local_live_data_latest(
+        sample={
+            "schema_version": "proxy.local_live_data.sample.v1",
+            "signal_key": "engine_speed",
+            "display_name": "Engine Speed",
+            "unit": "RPM",
+            "value": 900.0,
+            "source": "proxy_local_known_uds",
+            "decoder_id": "uds_did_000c_engine_speed",
+        },
+        connection_epoch="epoch-live-1",
+        session_snapshot={"session_id": "session-live", "live_data_active": True},
+        path=tmp_path / "unused.json",
+        received_at_s=1_800_000_000.0,
+    )
+
+    monkeypatch.setattr(session_live_data_handlers, "get_orchestrator", lambda: orch)
+    monkeypatch.setattr(session_live_data_handlers, "_runtime", lambda: runtime)
+    monkeypatch.setattr(
+        session_live_data_handlers,
+        "read_proxy_local_live_data_latest",
+        lambda: latest,
+    )
+
+    payload, status = session_live_data_handlers.get_proxy_local_live_data_latest(
+        "session-live"
+    )
+
+    assert status == 409
+    assert payload["reason"] == "live_data_inactive"
+
+
+def test_proxy_local_latest_returns_200_for_fresh_matching_sample(monkeypatch, tmp_path) -> None:
+    session = _session("session-live", capabilities=[BackendCapability.LIVE_DATA])
+    orch = _FakeOrchestrator(session)
+    runtime = WorkerRuntime()
+    runtime.bind_business_session("session-live")
+    runtime.set_live_data_active("session-live", True)
+    runtime.set_connection_epoch("session-live", "epoch-live-1")
+    latest = write_proxy_local_live_data_latest(
+        sample={
+            "schema_version": "proxy.local_live_data.sample.v1",
+            "signal_key": "engine_speed",
+            "display_name": "Engine Speed",
+            "unit": "RPM",
+            "value": 900.0,
+            "source": "proxy_local_known_uds",
+            "decoder_id": "uds_did_000c_engine_speed",
+        },
+        connection_epoch="epoch-live-1",
+        session_snapshot={"session_id": "session-live", "live_data_active": True},
+        path=tmp_path / "unused.json",
+        received_at_s=1_800_000_000.0,
+    )
+
+    monkeypatch.setattr(session_live_data_handlers, "get_orchestrator", lambda: orch)
+    monkeypatch.setattr(session_live_data_handlers, "_runtime", lambda: runtime)
+    monkeypatch.setattr(
+        session_live_data_handlers,
+        "read_proxy_local_live_data_latest",
+        lambda: latest,
+    )
+    monkeypatch.setattr("diagnostic_platform.proxy_local_live_data.time.time", lambda: 1_800_000_001.0)
+
+    payload, status = session_live_data_handlers.get_proxy_local_live_data_latest(
+        "session-live",
+        max_age_ms=5000,
+    )
+
+    assert status == 200
+    assert payload["success"] is True
+    assert payload["available"] is True
+    assert payload["session_id"] == "session-live"
+    assert payload["source"] == "proxy_local_live_data"
+    assert payload["latest_sample"]["value"] == 900.0
+    assert payload["cloud_received_age_ms"] == 1000.0
+    assert payload["epoch_match_status"] == "matched"
 
 
 def test_read_session_dtcs_rejects_non_string_session_id() -> None:

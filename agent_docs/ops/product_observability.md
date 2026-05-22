@@ -343,6 +343,12 @@ for that lane must make the source boundary explicit: these values are not
 GDS2 Data Display rows and are not proof that the native GDS2 page refreshed
 faster.
 
+As of the 2026-05-19 Engine Speed decision, this lane is the primary next
+implementation target for Engine Speed. The first implementation pass stayed
+local-only. MVP 2 adds tunnel push, a cloud latest cache, and a guarded latest
+endpoint while still deferring cloud SSE fan-out and UI display.
+See `agent_docs/ops/proxy_local_live_data_fallback.md`.
+
 Required source labels:
 
 - `gds2_agent`: value came from the Java Agent scanning GDS2 Data Display and
@@ -377,6 +383,36 @@ needing raw payload reconstruction:
 - did GDS2 stay connected and avoid Data Display freeze/disconnect events;
 - were any samples sourced from GM `A9 81 xx` active polling. The expected
   answer is no under the current design.
+
+MVP 0 observability acceptance:
+
+- local raw logs contain `proxy.local_live_data.sample` with
+  `signal_key=engine_speed`, `value`, `unit=RPM`, `source`, `decoder_id`,
+  `sample_age_ms`, `return_code`, and redacted `raw_prefix_hex`;
+- `%APPDATA%\VCI_Proxy\live_data\latest.json` contains the latest local Engine
+  Speed sample for quick operator-side inspection;
+- `proxy.local_live_data.summary` reports sample count, p50/p95/max sample age,
+  poll duration, unsupported/timeout/negative-response counts, and foreground
+  priority pause counts;
+- cloud/session logs still show GDS2 stability separately from the proxy-local
+  stream.
+
+MVP 2 observability acceptance:
+
+- local auth success includes `local_live_data=1` only after server ack;
+- cloud `tunnel.auth.accepted` includes `local_live_data_supported=true`;
+- local `proxy.local_live_data.sample` includes `client_sample_seq`;
+- local `proxy.local_live_data.tunnel_send_failed` is absent during healthy
+  runs;
+- cloud `proxy.local_live_data.cloud_sample_received` records
+  `cloud_received_ts`, `cloud_received_age_ms`,
+  `local_to_cloud_clock_delta_ms`, `session_id`, `connection_epoch`,
+  `live_data_active_at_receive`, `source`, `decoder_id`, `value`, and `unit`;
+- cloud `proxy.local_live_data.cloud_sample_dropped` records invalid payloads
+  or missing capability negotiation;
+- cloud latest cache is stored under
+  `live_data\proxy_local_latest.json` below the cloud observability root and
+  uses schema `proxy.local_live_data.cloud_latest.v1`.
 
 ## Real-Vehicle Engine Speed Freshness Handoff - 2026-05-13
 

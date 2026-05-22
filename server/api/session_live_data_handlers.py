@@ -6,6 +6,11 @@ import logging
 from typing import Any
 
 from diagnostic_platform.contracts import BackendCapability, UnsupportedCapabilityError
+from diagnostic_platform.proxy_local_live_data import (
+    DEFAULT_MAX_AGE_MS,
+    read_proxy_local_live_data_latest,
+    validate_proxy_local_latest_for_session,
+)
 from diagnostic_platform.runtime.session_actions import (
     clear_dtcs,
     ensure_session_capability,
@@ -15,6 +20,7 @@ from diagnostic_platform.runtime.session_actions import (
     stop_live_data,
 )
 from diagnostic_platform.runtime.session_state import (
+    connection_epoch as active_connection_epoch,
     live_data_active as is_live_data_active,
 )
 from diagnostic_platform.session_models import SessionStatus
@@ -208,6 +214,46 @@ def stream_live_data_events(session_id: str, *, sse_response):
             ),
         )
     )
+
+
+def get_proxy_local_live_data_latest(
+    session_id: str,
+    *,
+    max_age_ms: int = DEFAULT_MAX_AGE_MS,
+) -> tuple[dict[str, Any], int]:
+    try:
+        if not session_id:
+            return {"success": False, "error": "session_id required"}, 400
+        if max_age_ms < 0:
+            return {"success": False, "error": "max_age_ms must be non-negative"}, 400
+
+        orch = get_orchestrator()
+        session = orch.get_session(session_id)
+        ensure_session_capability(session, BackendCapability.LIVE_DATA)
+
+        runtime = _runtime()
+        latest = read_proxy_local_live_data_latest()
+        validation = validate_proxy_local_latest_for_session(
+            latest,
+            session_id=session_id,
+            active_connection_epoch=active_connection_epoch(runtime, session_id),
+            live_data_active=is_live_data_active(runtime, session_id),
+            max_age_ms=max_age_ms,
+        )
+        return {
+            "session_id": session_id,
+            **validation.payload,
+        }, validation.status
+
+    except KeyError as exc:
+        return {"success": False, "error": str(exc)}, 404
+    except UnsupportedCapabilityError as exc:
+        return {"success": False, "error": str(exc)}, 501
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}, 400
+    except Exception:
+        logger.exception("session_proxy_local_live_data_latest failed")
+        return internal_error_payload(), 500
 
 
 def stop_live_data_session(data: dict[str, Any]) -> tuple[dict[str, Any], int]:

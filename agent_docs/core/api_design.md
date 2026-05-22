@@ -118,6 +118,7 @@ Current routes:
 - `POST /api/session/clear_dtcs`
 - `POST /api/session/live_data/start`
 - `GET /api/session/live_data/events`
+- `GET /api/session/live_data/proxy_local/latest`
 - `POST /api/session/live_data/stop`
 - `POST /api/session/navigate/start`
 - `GET /api/session/navigate/events`
@@ -140,6 +141,16 @@ Current routes:
 - read-oriented session routes such as `/events` and `/status` should not claim worker ownership, bind sessions, or create backend bundles as side effects
 - `/execute` is capability-gated by `GENERIC_ACTIONS`
 - session AI/live/navigation subroutes are all capability-gated
+- `GET /api/session/live_data/proxy_local/latest` returns the latest
+  source-labeled proxy-local Engine Speed value when a live-data stream is
+  active and the cloud latest cache matches the requested session and current
+  connection epoch. Query parameters are `session_id` and optional
+  `max_age_ms` (default `5000`). It returns `400` for invalid input, `404` for
+  missing session or missing cache, `501` when the backend lacks `LIVE_DATA`,
+  `409` for inactive/stale/session-mismatch/epoch-mismatch cache state, and
+  `200` with `available=true`, `source=proxy_local_live_data`,
+  `latest_sample`, `cloud_received_age_ms`, `connection_epoch`, and
+  `epoch_match_status` when valid.
 - session clear-DTC is capability-gated by `CLEAR_DTCS`
 - session clear-DTC is intended to run from the current `Data Display` page; explicit module/category input is optional and only needed when the caller wants forced context reconciliation
 - `/status` returns session state plus backend summary and network snapshot details when available

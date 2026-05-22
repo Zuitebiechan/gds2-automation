@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 import struct
+from pathlib import Path
 
+from diagnostic_platform.proxy_local_live_data import (
+    read_proxy_local_live_data_latest,
+    validate_proxy_local_latest_for_session,
+    write_proxy_local_live_data_latest,
+)
 from vci_proxy.cache_filter_dedup import FilterDeduplicationCache
 from vci_proxy.cache_ioctl import (
     IOCTL_GET_CONFIG,
@@ -17,6 +23,112 @@ from vci_proxy.config import (
 from vci_proxy.prefetch_read_msgs import PrefetchReadMsgsBuffer
 from vci_proxy.protocol import HEADER_SIZE, Message, MsgType, ProtocolDecoder
 from vci_proxy.protocol import ProtocolEncoder
+
+
+def _proxy_local_engine_speed_sample(value: float = 869.5) -> dict[str, object]:
+    return {
+        "schema_version": "proxy.local_live_data.sample.v1",
+        "signal_key": "engine_speed",
+        "display_name": "Engine Speed",
+        "unit": "RPM",
+        "value": value,
+        "source": "proxy_local_known_uds",
+        "decoder_id": "uds_did_000c_engine_speed",
+        "sample_ts": "2026-05-22T00:00:00Z",
+        "local_send_ts": "2026-05-22T00:00:00.100Z",
+        "client_sample_seq": 1,
+    }
+
+
+def test_proxy_local_live_data_cloud_latest_cache_round_trips(tmp_path: Path) -> None:
+    path = tmp_path / "proxy_local_latest.json"
+
+    payload = write_proxy_local_live_data_latest(
+        sample=_proxy_local_engine_speed_sample(900.0),
+        connection_epoch="epoch-live-1",
+        session_snapshot={"session_id": "session-live", "live_data_active": True},
+        path=path,
+        received_at_s=1_800_000_000.0,
+    )
+    latest = read_proxy_local_live_data_latest(path)
+
+    assert latest == payload
+    assert latest["schema_version"] == "proxy.local_live_data.cloud_latest.v1"
+    assert latest["session_id"] == "session-live"
+    assert latest["connection_epoch"] == "epoch-live-1"
+    assert latest["signals"]["engine_speed"]["value"] == 900.0
+
+
+def test_proxy_local_live_data_cloud_latest_cache_handles_missing_and_corrupt(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "proxy_local_latest.json"
+
+    assert read_proxy_local_live_data_latest(path) is None
+    path.write_text("{broken", encoding="utf-8")
+    assert read_proxy_local_live_data_latest(path) is None
+
+
+def test_proxy_local_live_data_latest_validation_gates_session_epoch_and_age(
+    tmp_path: Path,
+) -> None:
+    latest = write_proxy_local_live_data_latest(
+        sample=_proxy_local_engine_speed_sample(),
+        connection_epoch="epoch-live-1",
+        session_snapshot={"session_id": "session-live", "live_data_active": True},
+        path=tmp_path / "proxy_local_latest.json",
+        received_at_s=1_800_000_000.0,
+    )
+
+    ok = validate_proxy_local_latest_for_session(
+        latest,
+        session_id="session-live",
+        active_connection_epoch="epoch-live-1",
+        live_data_active=True,
+        max_age_ms=5000,
+        now_s=1_800_000_001.0,
+    )
+    stale = validate_proxy_local_latest_for_session(
+        latest,
+        session_id="session-live",
+        active_connection_epoch="epoch-live-1",
+        live_data_active=True,
+        max_age_ms=500,
+        now_s=1_800_000_001.0,
+    )
+    wrong_session = validate_proxy_local_latest_for_session(
+        latest,
+        session_id="other-session",
+        active_connection_epoch="epoch-live-1",
+        live_data_active=True,
+        max_age_ms=5000,
+        now_s=1_800_000_001.0,
+    )
+    wrong_epoch = validate_proxy_local_latest_for_session(
+        latest,
+        session_id="session-live",
+        active_connection_epoch="epoch-live-2",
+        live_data_active=True,
+        max_age_ms=5000,
+        now_s=1_800_000_001.0,
+    )
+    inactive = validate_proxy_local_latest_for_session(
+        latest,
+        session_id="session-live",
+        active_connection_epoch="epoch-live-1",
+        live_data_active=False,
+        max_age_ms=5000,
+        now_s=1_800_000_001.0,
+    )
+
+    assert ok.status == 200
+    assert ok.payload["latest_sample"]["value"] == 869.5
+    assert ok.payload["cloud_received_age_ms"] == 1000.0
+    assert stale.reason == "stale_sample"
+    assert stale.status == 409
+    assert wrong_session.reason == "session_mismatch"
+    assert wrong_epoch.reason == "epoch_mismatch"
+    assert inactive.reason == "live_data_inactive"
 
 
 def test_read_msgs_cache_serves_recent_buffer_empty_response(monkeypatch) -> None:

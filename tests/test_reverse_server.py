@@ -11,6 +11,7 @@ import json
 import pytest
 
 from diagnostic_platform.observability import flush_product_log_writers
+from diagnostic_platform.proxy_local_live_data import read_proxy_local_live_data_latest
 from vci_proxy.config import ProxyConfig
 from vci_proxy.cache_read_msgs import BUFFER_EMPTY
 from vci_proxy.protocol import HEADER_SIZE, Message, MsgType, ProtocolDecoder, ProtocolEncoder
@@ -98,6 +99,21 @@ def _read_product_log_events(tmp_path) -> list[dict[str, object]]:
             if line.strip()
         )
     return records
+
+
+def _proxy_local_engine_speed_sample(value: float = 869.5) -> dict[str, object]:
+    return {
+        "schema_version": "proxy.local_live_data.sample.v1",
+        "signal_key": "engine_speed",
+        "display_name": "Engine Speed",
+        "unit": "RPM",
+        "value": value,
+        "source": "proxy_local_known_uds",
+        "decoder_id": "uds_did_000c_engine_speed",
+        "sample_ts": "2026-05-22T00:00:00Z",
+        "local_send_ts": "2026-05-22T00:00:00.100Z",
+        "client_sample_seq": 1,
+    }
 
 
 def test_resolve_reverse_server_log_path_prefers_log_dir(tmp_path) -> None:
@@ -237,6 +253,33 @@ def test_authenticate_vci_negotiates_sweep_shadow_capability(monkeypatch) -> Non
     success, message = ProtocolDecoder.decode_auth_rsp(writer.writes[0][HEADER_SIZE:length])
     assert success is True
     assert "sweep_shadow=1" in message
+
+
+def test_authenticate_vci_negotiates_local_live_data_capability(monkeypatch) -> None:
+    server = ReverseProxyServer(config=ProxyConfig.from_args(auth_token="secret"))
+    reader = _FakeReader(
+        ProtocolEncoder.encode_auth_req(
+            123,
+            b"x" * 32,
+            sequence=7,
+            capabilities="local_live_data=1",
+        )
+    )
+    writer = _FakeWriter()
+    monkeypatch.setattr(
+        "vci_proxy.reverse_server.verify_signature",
+        lambda token, timestamp, signature: (True, "ok"),
+    )
+
+    accepted = asyncio.run(server._authenticate_vci(reader, writer))
+
+    assert accepted is True
+    assert server._vci_local_live_data_supported is True
+    _magic, length, msg_type, _sequence = Message.decode_header(writer.writes[0][:HEADER_SIZE])
+    assert msg_type == MsgType.AUTH_RSP
+    success, message = ProtocolDecoder.decode_auth_rsp(writer.writes[0][HEADER_SIZE:length])
+    assert success is True
+    assert "local_live_data=1" in message
 
 
 def test_authenticate_vci_emits_structured_capability_accept_event(monkeypatch, tmp_path) -> None:
@@ -408,6 +451,158 @@ def test_handle_vci_connection_treats_midstream_connection_reset_as_clean_discon
     assert "VCI tunnel lost connection" in caplog.text
     assert "VCI tunnel disconnected" in caplog.text
     assert not any(record.exc_info for record in caplog.records)
+
+
+def test_handle_vci_connection_writes_proxy_local_live_data_cloud_latest(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    async def _run() -> None:
+        monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+        server = ReverseProxyServer(config=ProxyConfig.from_args(auth_token="secret"))
+        auth_frame = ProtocolEncoder.encode_auth_req(
+            123,
+            b"x" * 32,
+            sequence=7,
+            capabilities="local_live_data=1",
+        )
+        sample_frame = ProtocolEncoder.encode_local_live_data_sample(
+            _proxy_local_engine_speed_sample(901.25),
+            sequence=11,
+        )
+        reader = _FakeReader(auth_frame, sample_frame)
+        writer = _FakeWriter(peername=("10.0.0.9", 9000))
+
+        monkeypatch.setattr(
+            "vci_proxy.reverse_server.verify_signature",
+            lambda token, timestamp, signature: (True, "ok"),
+        )
+        monkeypatch.setattr(
+            "vci_proxy.reverse_server.read_active_session_snapshot",
+            lambda: {"session_id": "session-live", "live_data_active": True},
+        )
+        monkeypatch.setattr("vci_proxy.reverse_server.time.time", lambda: 1_800_000_000.0)
+
+        await server._handle_vci_connection(reader, writer)
+
+    asyncio.run(_run())
+
+    latest = read_proxy_local_live_data_latest(
+        tmp_path
+        / "RPA_Diagnostic"
+        / "observability"
+        / "cloud"
+        / "live_data"
+        / "proxy_local_latest.json"
+    )
+    assert latest is not None
+    assert latest["session_id"] == "session-live"
+    assert latest["live_data_active_at_receive"] is True
+    assert latest["connection_epoch"].startswith("epoch-1800000000000-")
+    assert latest["latest_sample"]["value"] == 901.25
+
+    records = _read_product_log_events(tmp_path)
+    received = next(
+        record
+        for record in records
+        if record["event_type"] == "proxy.local_live_data.cloud_sample_received"
+    )
+    assert received["source"] == "proxy_local_known_uds"
+    assert received["decoder_id"] == "uds_did_000c_engine_speed"
+    assert received["session_id"] == "session-live"
+
+
+def test_handle_vci_connection_drops_proxy_local_sample_without_capability(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    async def _run() -> None:
+        monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+        server = ReverseProxyServer(config=ProxyConfig.from_args(auth_token="secret"))
+        auth_frame = ProtocolEncoder.encode_auth_req(
+            123,
+            b"x" * 32,
+            sequence=7,
+            capabilities="",
+        )
+        sample_frame = ProtocolEncoder.encode_local_live_data_sample(
+            _proxy_local_engine_speed_sample(),
+            sequence=11,
+        )
+        reader = _FakeReader(auth_frame, sample_frame)
+        writer = _FakeWriter(peername=("10.0.0.9", 9000))
+
+        monkeypatch.setattr(
+            "vci_proxy.reverse_server.verify_signature",
+            lambda token, timestamp, signature: (True, "ok"),
+        )
+
+        await server._handle_vci_connection(reader, writer)
+
+    asyncio.run(_run())
+
+    latest_path = (
+        tmp_path
+        / "RPA_Diagnostic"
+        / "observability"
+        / "cloud"
+        / "live_data"
+        / "proxy_local_latest.json"
+    )
+    assert not latest_path.exists()
+    records = _read_product_log_events(tmp_path)
+    dropped = next(
+        record
+        for record in records
+        if record["event_type"] == "proxy.local_live_data.cloud_sample_dropped"
+    )
+    assert dropped["reason"] == "capability_not_negotiated"
+
+
+def test_handle_vci_connection_routes_local_live_data_sample_before_response_future(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    async def _run() -> None:
+        monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+        server = ReverseProxyServer(config=ProxyConfig.from_args(auth_token="secret"))
+        pending = asyncio.get_running_loop().create_future()
+        server.response_futures[11] = pending
+
+        auth_frame = ProtocolEncoder.encode_auth_req(
+            123,
+            b"x" * 32,
+            sequence=7,
+            capabilities="local_live_data=1",
+        )
+        sample_frame = ProtocolEncoder.encode_local_live_data_sample(
+            _proxy_local_engine_speed_sample(),
+            sequence=11,
+        )
+        reader = _FakeReader(auth_frame, sample_frame)
+        writer = _FakeWriter(peername=("10.0.0.9", 9000))
+        handled: list[int] = []
+
+        monkeypatch.setattr(
+            "vci_proxy.reverse_server.verify_signature",
+            lambda token, timestamp, signature: (True, "ok"),
+        )
+
+        def _handle_sample(body: bytes, *, sequence: int) -> None:
+            ProtocolDecoder.decode_local_live_data_sample(body)
+            handled.append(sequence)
+            raise ConnectionResetError("stop after sample")
+
+        monkeypatch.setattr(server, "_handle_local_live_data_sample_frame", _handle_sample)
+        monkeypatch.setattr(server, "_cancel_pending_futures", lambda *args, **kwargs: None)
+
+        await server._handle_vci_connection(reader, writer)
+
+        assert handled == [11]
+        assert pending.done() is False
+        assert server.response_futures[11] is pending
+
+    asyncio.run(_run())
 
 
 def test_handle_vci_connection_skips_disconnect_event_during_shutdown(monkeypatch) -> None:

@@ -1129,6 +1129,32 @@ def session_live_data_events():
     return result
 
 
+@session_bp.route("/live_data/proxy_local/latest")
+def session_proxy_local_live_data_latest():
+    """Return the latest proxy-local Engine Speed sample for a session."""
+    try:
+        session_id = read_text_mapping_field(request.args, "session_id")
+        max_age_raw = read_text_mapping_field(
+            request.args,
+            "max_age_ms",
+            default="5000",
+        )
+        try:
+            max_age_ms = int(max_age_raw)
+        except ValueError:
+            return jsonify(
+                {"success": False, "error": "max_age_ms must be an integer"}
+            ), 400
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+
+    payload, status = session_live_data_handlers.get_proxy_local_live_data_latest(
+        session_id,
+        max_age_ms=max_age_ms,
+    )
+    return jsonify(payload), status
+
+
 @session_bp.route("/live_data/stop", methods=["POST"])
 def session_live_data_stop():
     """Stop live data streaming through the public session facade."""
