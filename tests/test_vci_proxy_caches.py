@@ -5,8 +5,11 @@ from pathlib import Path
 
 from diagnostic_platform.proxy_local_live_data import (
     read_proxy_local_live_data_latest,
+    read_proxy_local_live_data_session_state,
+    resolve_proxy_local_live_data_session_snapshot,
     validate_proxy_local_latest_for_session,
     write_proxy_local_live_data_latest,
+    write_proxy_local_live_data_session_state,
 )
 from vci_proxy.cache_filter_dedup import FilterDeduplicationCache
 from vci_proxy.cache_ioctl import (
@@ -129,6 +132,56 @@ def test_proxy_local_live_data_latest_validation_gates_session_epoch_and_age(
     assert wrong_session.reason == "session_mismatch"
     assert wrong_epoch.reason == "epoch_mismatch"
     assert inactive.reason == "live_data_inactive"
+
+
+def test_proxy_local_live_data_session_state_round_trips_and_resolves_snapshot(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "proxy_local_session_state.json"
+
+    state = write_proxy_local_live_data_session_state(
+        session_id="session-live",
+        connection_epoch="epoch-live-1",
+        live_data_active=True,
+        source_event_type="session.live_data.started",
+        operation_kind="live_data.start",
+        current_page="data_display",
+        selected_module="Engine Control Module",
+        selected_data_category="Engine Data",
+        path=path,
+        updated_at_s=1_800_000_000.0,
+    )
+
+    assert read_proxy_local_live_data_session_state(path) == state
+    resolved = resolve_proxy_local_live_data_session_snapshot(
+        active_snapshot={},
+        connection_epoch="epoch-live-1",
+        session_state=state,
+    )
+    assert resolved["session_id"] == "session-live"
+    assert resolved["live_data_active"] is True
+    assert resolved["selected_data_category"] == "Engine Data"
+
+
+def test_proxy_local_live_data_session_state_does_not_resolve_wrong_epoch(
+    tmp_path: Path,
+) -> None:
+    state = write_proxy_local_live_data_session_state(
+        session_id="session-live",
+        connection_epoch="epoch-live-1",
+        live_data_active=True,
+        source_event_type="session.live_data.started",
+        path=tmp_path / "proxy_local_session_state.json",
+        updated_at_s=1_800_000_000.0,
+    )
+
+    resolved = resolve_proxy_local_live_data_session_snapshot(
+        active_snapshot={},
+        connection_epoch="epoch-live-2",
+        session_state=state,
+    )
+
+    assert resolved == {}
 
 
 def test_read_msgs_cache_serves_recent_buffer_empty_response(monkeypatch) -> None:

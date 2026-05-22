@@ -200,6 +200,12 @@ Scope:
   only after that auth ack;
 - the cloud reverse server writes an atomic latest cache at
   `%PROGRAMDATA%\RPA_Diagnostic\observability\cloud\live_data\proxy_local_latest.json`;
+- the session runtime also writes a small cloud-visible activity ledger at
+  `%PROGRAMDATA%\RPA_Diagnostic\observability\cloud\live_data\proxy_local_session_state.json`
+  from `session.live_data.started`, live-data stop/error, and terminal session
+  events, so the reverse-server process can associate pushed samples with the
+  active live-data session even when `active_session_snapshot.json` is missing
+  or stale;
 - Flask exposes
   `GET /api/session/live_data/proxy_local/latest?session_id=...&max_age_ms=5000`.
 
@@ -215,6 +221,14 @@ The endpoint returns a sample only when all gates pass:
 - latest cache `session_id` matches the requested session;
 - latest cache `connection_epoch` matches the active worker epoch when present;
 - freshness is within `max_age_ms`, computed from cloud `cloud_received_ts`.
+
+When receiving a `LOCAL_LIVE_DATA_SAMPLE`, the reverse server first uses
+`active_session_snapshot.json` if it says live data is active for the current
+connection epoch. If that snapshot is absent or reports live data inactive, it
+falls back to `proxy_local_session_state.json` only when the state says live
+data is active and the connection epoch matches. Terminal session events and
+live-data stop/error events mark the ledger inactive, so post-abort samples
+remain unassociated instead of being served through the session endpoint.
 
 MVP 2 remains latest-value only. It does not add GUI, cloud SSE fan-out,
 additional signals, active replay, DLL response synthesis, Java Agent snapshot

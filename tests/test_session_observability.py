@@ -4,6 +4,9 @@ import types
 
 import diagnostic_platform.session_orchestrator as platform_session_orchestrator_module
 from diagnostic_platform.observability import read_active_session_snapshot
+from diagnostic_platform.proxy_local_live_data import (
+    read_proxy_local_live_data_session_state,
+)
 from diagnostic_platform.runtime.session_lifecycle import start_business_session
 from diagnostic_platform.runtime.session_preflight import run_start_diagnostics
 from diagnostic_platform.runtime.session_state import (
@@ -16,6 +19,7 @@ from diagnostic_platform.runtime.session_state import (
     set_session_selection,
 )
 from diagnostic_platform.runtime.worker_runtime import WorkerRuntime
+from diagnostic_platform.session_observability import emit_session_runtime_event
 from src.gds2_orchestration.session_orchestrator import SessionContext, SessionOrchestrator
 
 
@@ -57,6 +61,50 @@ def test_session_state_helpers_keep_active_session_snapshot_in_sync(tmp_path, mo
 
     clear_business_session(runtime, session.session_id)
     assert read_active_session_snapshot() is None
+
+
+def test_live_data_runtime_events_update_proxy_local_session_state(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+    runtime, _, session, _ = _start_gds2_session(monkeypatch)
+
+    set_connection_epoch(runtime, session, "epoch-1")
+    set_session_selection(
+        session,
+        module="Engine Control Module",
+        data_category="Engine Data",
+        runtime=runtime,
+    )
+    set_live_data_active(runtime, session, True)
+    emit_session_runtime_event(
+        "session.live_data.started",
+        runtime=runtime,
+        session=session,
+        operation_kind="live_data.start",
+        reason="live_data_started",
+    )
+
+    state = read_proxy_local_live_data_session_state()
+    assert state is not None
+    assert state["session_id"] == session.session_id
+    assert state["connection_epoch"] == "epoch-1"
+    assert state["live_data_active"] is True
+    assert state["source_event_type"] == "session.live_data.started"
+
+    set_live_data_active(runtime, session, False)
+    emit_session_runtime_event(
+        "session.live_data.stopped",
+        runtime=runtime,
+        session=session,
+        operation_kind="live_data.stop",
+        reason="live_data_stopped",
+    )
+    state = read_proxy_local_live_data_session_state()
+    assert state is not None
+    assert state["session_id"] == session.session_id
+    assert state["live_data_active"] is False
 
 
 def test_run_start_diagnostics_updates_snapshot_with_page_and_connection_epoch(

@@ -13,12 +13,21 @@ from diagnostic_platform.observability import (
     get_product_log_writer,
     read_active_session_snapshot,
 )
+from diagnostic_platform.proxy_local_live_data import (
+    write_proxy_local_live_data_session_state,
+)
 
 logger = logging.getLogger(__name__)
 _SESSION_TERMINAL_EVENT_TYPES = {
     "session.lifecycle.completed",
     "session.lifecycle.aborted",
     "session.lifecycle.failed",
+}
+_PROXY_LOCAL_LIVE_DATA_STATE_EVENTS = {
+    "session.live_data.started",
+    "session.live_data.stopped",
+    "live_data.stream.error",
+    *_SESSION_TERMINAL_EVENT_TYPES,
 }
 
 
@@ -105,20 +114,21 @@ def emit_session_runtime_event(
     connection_epoch: str | None = None,
     **extra: object,
 ) -> dict[str, Any]:
+    context = build_session_log_context(
+        runtime=runtime,
+        session=session,
+        backend=backend,
+        operation_kind=operation_kind,
+        page=page,
+        module=module,
+        data_category=data_category,
+        connection_epoch=connection_epoch,
+    )
     payload = emit_event(
         get_product_log_writer("session_runtime"),
         component="session_runtime",
         event_type=event_type,
-        context=build_session_log_context(
-            runtime=runtime,
-            session=session,
-            backend=backend,
-            operation_kind=operation_kind,
-            page=page,
-            module=module,
-            data_category=data_category,
-            connection_epoch=connection_epoch,
-        ),
+        context=context,
         status=status,
         failure_code=failure_code,
         failure_domain=failure_domain,
@@ -126,6 +136,8 @@ def emit_session_runtime_event(
         impact_scope=impact_scope,
         **extra,
     )
+    if event_type in _PROXY_LOCAL_LIVE_DATA_STATE_EVENTS:
+        _write_proxy_local_live_data_state(event_type, payload)
     if event_type in _SESSION_TERMINAL_EVENT_TYPES:
         try:
             from diagnostic_platform.observability_artifacts import start_session_artifact_materialization
@@ -145,6 +157,37 @@ def emit_session_runtime_event(
                 exc_info=True,
             )
     return payload
+
+
+def _write_proxy_local_live_data_state(
+    event_type: str,
+    payload: dict[str, Any],
+) -> None:
+    session_id = str(payload.get("session_id") or "").strip()
+    if not session_id:
+        return
+    try:
+        write_proxy_local_live_data_session_state(
+            session_id=session_id,
+            connection_epoch=(
+                str(payload.get("connection_epoch"))
+                if payload.get("connection_epoch") is not None
+                else None
+            ),
+            live_data_active=(event_type == "session.live_data.started"),
+            source_event_type=event_type,
+            operation_kind=str(payload.get("operation_kind") or "") or None,
+            current_page=str(payload.get("page") or "") or None,
+            selected_module=str(payload.get("module") or "") or None,
+            selected_data_category=str(payload.get("data_category") or "") or None,
+        )
+    except Exception:
+        logger.debug(
+            "Failed to update proxy-local live-data session state for event_type=%s session_id=%s",
+            event_type,
+            session_id,
+            exc_info=True,
+        )
 
 
 def emit_gds2_ui_event(

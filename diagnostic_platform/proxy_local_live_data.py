@@ -15,6 +15,7 @@ from diagnostic_platform.observability import get_cloud_observability_root, utc_
 
 
 CLOUD_LATEST_SCHEMA_VERSION = "proxy.local_live_data.cloud_latest.v1"
+SESSION_STATE_SCHEMA_VERSION = "proxy.local_live_data.session_state.v1"
 LOCAL_SAMPLE_SCHEMA_VERSION = "proxy.local_live_data.sample.v1"
 PRODUCT_SOURCE = "proxy_local_live_data"
 ENGINE_SPEED_SIGNAL_KEY = "engine_speed"
@@ -36,6 +37,16 @@ def get_proxy_local_live_data_latest_path(
         get_cloud_observability_root(programdata)
         / "live_data"
         / "proxy_local_latest.json"
+    )
+
+
+def get_proxy_local_live_data_session_state_path(
+    programdata: str | Path | None = None,
+) -> Path:
+    return (
+        get_cloud_observability_root(programdata)
+        / "live_data"
+        / "proxy_local_session_state.json"
     )
 
 
@@ -68,6 +79,44 @@ def write_proxy_local_live_data_latest(
     return payload
 
 
+def write_proxy_local_live_data_session_state(
+    *,
+    session_id: str,
+    connection_epoch: str | None,
+    live_data_active: bool,
+    source_event_type: str,
+    operation_kind: str | None = None,
+    current_page: str | None = None,
+    selected_module: str | None = None,
+    selected_data_category: str | None = None,
+    path: str | Path | None = None,
+    updated_at_s: float | None = None,
+) -> dict[str, Any]:
+    updated_at_s = time.time() if updated_at_s is None else float(updated_at_s)
+    session_id = str(session_id or "").strip()
+    if not session_id:
+        raise ValueError("session_id required")
+    payload = {
+        "schema_version": SESSION_STATE_SCHEMA_VERSION,
+        "updated_at": utc_now_iso(updated_at_s),
+        "session_id": session_id,
+        "connection_epoch": _clean_optional_text(connection_epoch),
+        "live_data_active": bool(live_data_active),
+        "source_event_type": str(source_event_type or "").strip(),
+        "operation_kind": _clean_optional_text(operation_kind),
+        "current_page": _clean_optional_text(current_page),
+        "selected_module": _clean_optional_text(selected_module),
+        "selected_data_category": _clean_optional_text(selected_data_category),
+    }
+    _atomic_write_json(
+        Path(path)
+        if path is not None
+        else get_proxy_local_live_data_session_state_path(),
+        payload,
+    )
+    return payload
+
+
 def read_proxy_local_live_data_latest(
     path: str | Path | None = None,
 ) -> dict[str, Any] | None:
@@ -80,6 +129,24 @@ def read_proxy_local_live_data_latest(
         return None
     try:
         return normalize_proxy_local_live_data_latest(raw)
+    except ValueError:
+        return None
+
+
+def read_proxy_local_live_data_session_state(
+    path: str | Path | None = None,
+) -> dict[str, Any] | None:
+    state_path = (
+        Path(path) if path is not None else get_proxy_local_live_data_session_state_path()
+    )
+    try:
+        raw = json.loads(state_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return normalize_proxy_local_live_data_session_state(raw)
     except ValueError:
         return None
 
@@ -107,6 +174,74 @@ def normalize_proxy_local_live_data_latest(
         "latest_sample": sample,
         "signals": {ENGINE_SPEED_SIGNAL_KEY: sample},
     }
+
+
+def normalize_proxy_local_live_data_session_state(
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    data = dict(payload)
+    if str(data.get("schema_version") or "") != SESSION_STATE_SCHEMA_VERSION:
+        raise ValueError("unsupported proxy-local session state schema")
+    return {
+        "schema_version": SESSION_STATE_SCHEMA_VERSION,
+        "updated_at": str(data.get("updated_at") or ""),
+        "session_id": _clean_optional_text(data.get("session_id")),
+        "connection_epoch": _clean_optional_text(data.get("connection_epoch")),
+        "live_data_active": bool(data.get("live_data_active", False)),
+        "source_event_type": str(data.get("source_event_type") or ""),
+        "operation_kind": _clean_optional_text(data.get("operation_kind")),
+        "current_page": _clean_optional_text(data.get("current_page")),
+        "selected_module": _clean_optional_text(data.get("selected_module")),
+        "selected_data_category": _clean_optional_text(
+            data.get("selected_data_category")
+        ),
+    }
+
+
+def resolve_proxy_local_live_data_session_snapshot(
+    *,
+    active_snapshot: Mapping[str, Any] | None,
+    connection_epoch: str | None,
+    session_state: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    snapshot = dict(active_snapshot or {})
+    if bool(snapshot.get("live_data_active", False)) and _epoch_matches(
+        snapshot.get("connection_epoch"),
+        connection_epoch,
+    ):
+        return snapshot
+
+    state = (
+        dict(session_state)
+        if session_state is not None
+        else read_proxy_local_live_data_session_state()
+    )
+    if not state:
+        return snapshot
+    try:
+        normalized = normalize_proxy_local_live_data_session_state(state)
+    except ValueError:
+        return snapshot
+    if not normalized.get("live_data_active"):
+        return snapshot
+    if not normalized.get("session_id"):
+        return snapshot
+    if not _epoch_matches(normalized.get("connection_epoch"), connection_epoch):
+        return snapshot
+
+    resolved = dict(snapshot)
+    resolved["session_id"] = normalized["session_id"]
+    resolved["connection_epoch"] = normalized.get("connection_epoch") or connection_epoch
+    resolved["live_data_active"] = True
+    for source_key, snapshot_key in (
+        ("operation_kind", "operation_kind"),
+        ("current_page", "current_page"),
+        ("selected_module", "selected_module"),
+        ("selected_data_category", "selected_data_category"),
+    ):
+        if not resolved.get(snapshot_key) and normalized.get(source_key):
+            resolved[snapshot_key] = normalized[source_key]
+    return resolved
 
 
 def validate_proxy_local_latest_for_session(
@@ -233,6 +368,18 @@ def _sanitize_latest_sample(sample: Mapping[str, Any]) -> dict[str, Any]:
     sanitized["signal_key"] = ENGINE_SPEED_SIGNAL_KEY
     sanitized["schema_version"] = LOCAL_SAMPLE_SCHEMA_VERSION
     return sanitized
+
+
+def _clean_optional_text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _epoch_matches(candidate: Any, expected: str | None) -> bool:
+    expected_text = _clean_optional_text(expected)
+    if expected_text is None:
+        return True
+    return _clean_optional_text(candidate) == expected_text
 
 
 def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> Path:

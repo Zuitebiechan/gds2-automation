@@ -31,6 +31,7 @@ from diagnostic_platform.observability import (
     read_active_session_snapshot,
 )
 from diagnostic_platform.proxy_local_live_data import (
+    resolve_proxy_local_live_data_session_snapshot,
     write_proxy_local_live_data_latest,
 )
 
@@ -485,7 +486,11 @@ class ReverseProxyServer:
             )
             return
 
-        snapshot = read_active_session_snapshot() or {}
+        active_snapshot = read_active_session_snapshot() or {}
+        snapshot = resolve_proxy_local_live_data_session_snapshot(
+            active_snapshot=active_snapshot,
+            connection_epoch=self._connection_epoch,
+        )
         received_at_s = time.time()
         try:
             latest = write_proxy_local_live_data_latest(
