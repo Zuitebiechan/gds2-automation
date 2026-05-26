@@ -2954,6 +2954,44 @@ def test_local_live_data_sample_send_writes_internal_tunnel_frame(monkeypatch) -
     assert "full_raw_payload" not in payload
 
 
+def test_local_live_data_sample_send_logs_success(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(
+            auth_token="secret",
+            local_live_data_enabled=True,
+        ),
+    )
+    client._active_writer = _FakeWriter()
+    client._server_local_live_data_enabled = True
+
+    asyncio.run(
+        client._send_local_live_data_sample(
+            {
+                "signal_key": "engine_speed",
+                "display_name": "Engine Speed",
+                "unit": "RPM",
+                "value": 900.0,
+                "source": "proxy_local_known_uds",
+                "decoder_id": "uds_did_000c_engine_speed",
+            }
+        )
+    )
+
+    rows = _read_local_events(tmp_path)
+    sent = next(
+        row
+        for row in rows
+        if row["event_type"] == "proxy.local_live_data.tunnel_sample_sent"
+    )
+    assert sent["reason"] == "tunnel_sample_sent"
+    assert sent["client_sample_seq"] == 1
+    assert sent["signal_key"] == "engine_speed"
+    assert sent["source"] == "proxy_local_known_uds"
+
+
 def test_local_live_data_sample_send_is_fail_open_on_writer_error(
     monkeypatch,
     tmp_path: Path,

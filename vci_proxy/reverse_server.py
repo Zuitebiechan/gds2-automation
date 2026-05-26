@@ -31,6 +31,8 @@ from diagnostic_platform.observability import (
     read_active_session_snapshot,
 )
 from diagnostic_platform.proxy_local_live_data import (
+    get_proxy_local_live_data_latest_path,
+    get_proxy_local_live_data_session_state_path,
     resolve_proxy_local_live_data_session_snapshot,
     write_proxy_local_live_data_latest,
 )
@@ -534,6 +536,7 @@ class ReverseProxyServer:
                 str(sample.get("local_send_ts") or ""),
                 received_at_s,
             ),
+            proxy_local_latest_path=str(get_proxy_local_live_data_latest_path()),
         )
 
     def _observe_sweep_write(
@@ -1852,6 +1855,12 @@ class ReverseProxyServer:
                 local_sweep_plan_delay_ms=self.config.local_sweep.plan_delay_ms,
                 local_sweep_include_uds_dids=list(self.config.local_sweep.include_uds_dids),
                 local_sweep_exclude_uds_dids=list(self.config.local_sweep.exclude_uds_dids),
+                product_log_cloud_root=os.environ.get("PRODUCT_LOG_CLOUD_ROOT"),
+                programdata=os.environ.get("PROGRAMDATA"),
+                proxy_local_latest_path=str(get_proxy_local_live_data_latest_path()),
+                proxy_local_session_state_path=str(
+                    get_proxy_local_live_data_session_state_path()
+                ),
             )
             self._emit_local_sweep_config_warnings()
 

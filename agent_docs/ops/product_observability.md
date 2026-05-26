@@ -360,6 +360,20 @@ Required source labels:
 - `proxy_local_observe_only`: raw or correlated payload evidence only; not a
   product decoded value.
 
+Current signal boundary as of 2026-05-25:
+
+- Proxy Local product decoding is implemented only for
+  `signal_key=engine_speed`.
+- Latest local raw logs show `proxy.local_live_data.sample` /
+  `proxy.local_live_data.summary` for `Engine Speed` with
+  `source=proxy_local_known_uds` and
+  `decoder_id=uds_did_000c_engine_speed`.
+- GDS2/Java Agent focused value events may monitor `Engine Speed`,
+  `Accelerator Pedal Position`, and `Battery Voltage`, but those are
+  `gds2_agent` path values, not Proxy Local raw decoder outputs.
+- Proxy payload candidate fields and sweep inventory hints remain correlation
+  evidence only until a decoder is allowlisted and covered by tests.
+
 The proxy-local stream should emit value-level events that are easy to paste
 and classify, for example `proxy.local_live_data.sample` and
 `proxy.local_live_data.summary`. Each sample should include:
@@ -402,17 +416,29 @@ MVP 2 observability acceptance:
 - local auth success includes `local_live_data=1` only after server ack;
 - cloud `tunnel.auth.accepted` includes `local_live_data_supported=true`;
 - local `proxy.local_live_data.sample` includes `client_sample_seq`;
+- local `proxy.local_live_data.tunnel_sample_sent` appears after the tunnel
+  frame write succeeds and records `client_sample_seq`, `signal_key`, `source`,
+  `decoder_id`, `value`, `unit`, and `local_send_ts`;
 - local `proxy.local_live_data.tunnel_send_failed` is absent during healthy
   runs;
 - cloud `proxy.local_live_data.cloud_sample_received` records
   `cloud_received_ts`, `cloud_received_age_ms`,
   `local_to_cloud_clock_delta_ms`, `session_id`, `connection_epoch`,
-  `live_data_active_at_receive`, `source`, `decoder_id`, `value`, and `unit`;
+  `live_data_active_at_receive`, `source`, `decoder_id`, `value`, `unit`, and
+  `proxy_local_latest_path`;
 - cloud `proxy.local_live_data.cloud_sample_dropped` records invalid payloads
   or missing capability negotiation;
 - cloud latest cache is stored under
   `live_data\proxy_local_latest.json` below the cloud observability root and
   uses schema `proxy.local_live_data.cloud_latest.v1`.
+- reverse-server `process.lifecycle.started` records `product_log_cloud_root`,
+  `programdata`, `proxy_local_latest_path`, and
+  `proxy_local_session_state_path` so cloud/API root mismatches can be
+  diagnosed from pasted logs;
+- the guarded latest endpoint returns `checked_paths` with
+  `reason=no_sample_cache`, including the configured `PRODUCT_LOG_CLOUD_ROOT`,
+  current `%PROGRAMDATA%` cloud root, and Windows fallback cloud root when
+  applicable.
 
 ## Real-Vehicle Engine Speed Freshness Handoff - 2026-05-13
 

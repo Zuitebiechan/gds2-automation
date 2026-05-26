@@ -67,6 +67,32 @@ The proxy-local stream must expose its source, value age, and decoder id so the
 operator can distinguish a complete GDS2-decoded row from a proxy-local decoded
 fast signal.
 
+## Current Signal Coverage - 2026-05-25
+
+The only productized Proxy Local decoded signal is currently Engine Speed:
+
+- `signal_key=engine_speed`
+- `display_name=Engine Speed`
+- supported decoder sources:
+  - OBD Mode 01 PID `0x0C`: `41 0C A B`
+  - validated CAN-ID-prefixed UDS DID `0x000C`: `62 00 0C A B`
+- formula: `rpm = ((A * 256) + B) / 4`
+- observed product source in the latest local logs:
+  `source=proxy_local_known_uds`,
+  `decoder_id=uds_did_000c_engine_speed`
+
+Do not treat other observed values as Proxy Local decoded product signals yet.
+The Java Agent / GDS2 Data Display focus stream can observe GDS2-decoded
+parameters such as `Engine Speed`, `Accelerator Pedal Position`, and
+`Battery Voltage`, but those values come from the GDS2 page/agent path. They
+are useful for comparison and freshness analysis, not evidence that the local
+VCI proxy has a raw decoder for those signals.
+
+Proxy-layer payload candidate fields, inventory hints, raw prefixes, and sweep
+observations are also not product decoded values. They may justify a future
+decoder proof only after a stable standard OBD or explicitly validated non-GM-A9
+UDS response shape is identified, allowlisted, tested, and documented.
+
 ## Safety Rules
 
 - Never synthesize DLL-visible `WRITE_MSGS_RSP` or `READ_MSGS_RSP` for GDS2 in
@@ -200,6 +226,11 @@ Scope:
   only after that auth ack;
 - the cloud reverse server writes an atomic latest cache at
   `%PROGRAMDATA%\RPA_Diagnostic\observability\cloud\live_data\proxy_local_latest.json`;
+- cache readers must also check the configured `PRODUCT_LOG_CLOUD_ROOT`, the
+  current `%PROGRAMDATA%` cloud root, and the product Windows fallback root
+  (`D:\RPA_Diagnostic\observability\cloud`) so a Flask/API process can still
+  surface the cache when its environment differs from the reverse-server
+  process that wrote it;
 - the session runtime also writes a small cloud-visible activity ledger at
   `%PROGRAMDATA%\RPA_Diagnostic\observability\cloud\live_data\proxy_local_session_state.json`
   from `session.live_data.started`, live-data stop/error, and terminal session
@@ -271,6 +302,7 @@ proxy.local_live_data.backoff
 proxy.local_live_data.unsupported
 proxy.local_live_data.collector.started
 proxy.local_live_data.collector.stopped
+proxy.local_live_data.tunnel_sample_sent
 proxy.local_live_data.tunnel_send_failed
 ```
 
@@ -306,6 +338,16 @@ MVP 2 cache fields:
 - `source=proxy_local_live_data`;
 - `latest_sample`;
 - `signals.engine_speed`.
+
+MVP 2 failure payloads:
+
+- endpoint `reason=no_sample_cache` returns `checked_paths` listing each
+  candidate `proxy_local_latest.json` path checked by the API process;
+- cloud `proxy.local_live_data.cloud_sample_received` includes
+  `proxy_local_latest_path`, the path the reverse-server process wrote;
+- reverse-server `process.lifecycle.started` includes `product_log_cloud_root`,
+  `programdata`, `proxy_local_latest_path`, and
+  `proxy_local_session_state_path`.
 
 ## Implemented Local Passes
 
@@ -372,15 +414,22 @@ Additional MVP 2 fields to inspect:
 - cloud `tunnel.auth.accepted` includes
   `local_live_data_supported=true`;
 - local sample events include `client_sample_seq`;
+- local `proxy.local_live_data.tunnel_sample_sent` appears after the tunnel
+  frame write succeeds and includes `client_sample_seq`, `signal_key`,
+  `source`, `decoder_id`, `value`, `unit`, and `local_send_ts`;
 - absence of `proxy.local_live_data.tunnel_send_failed`;
 - cloud `proxy.local_live_data.cloud_sample_received` includes
   `session_id`, `connection_epoch`, `cloud_received_ts`,
   `cloud_received_age_ms`, `local_to_cloud_clock_delta_ms`,
   `source=proxy_local_known_uds`, and
-  `decoder_id=uds_did_000c_engine_speed`;
+  `decoder_id=uds_did_000c_engine_speed`, plus `proxy_local_latest_path`;
 - latest endpoint returns `success=true`, `available=true`,
   `source=proxy_local_live_data`, `epoch_match_status=matched`, and a fresh
   `latest_sample.value`;
+- if the latest endpoint returns `reason=no_sample_cache`, inspect
+  `checked_paths` first to confirm whether the API process is looking at the
+  same cloud root where `proxy.local_live_data.cloud_sample_received` wrote
+  `proxy_local_latest_path`;
 - stale, inactive, wrong-session, or wrong-epoch checks return `409` rather
   than showing a misleading value.
 

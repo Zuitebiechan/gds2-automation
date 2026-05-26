@@ -282,6 +282,19 @@ class ReverseProxyClient:
             if writer is None:
                 return
             await self._write_tunnel_frame(writer, frame)
+            self._emit_client_event(
+                "proxy.local_live_data.tunnel_sample_sent",
+                context=self._sweep_log_context("LOCAL_LIVE_DATA"),
+                reason="tunnel_sample_sent",
+                impact_scope="proxy_local_live_data",
+                client_sample_seq=client_sample_seq,
+                signal_key=payload.get("signal_key"),
+                source=payload.get("source"),
+                decoder_id=payload.get("decoder_id"),
+                value=payload.get("value"),
+                unit=payload.get("unit"),
+                local_send_ts=payload.get("local_send_ts"),
+            )
         except Exception as exc:
             self._emit_client_event(
                 "proxy.local_live_data.tunnel_send_failed",

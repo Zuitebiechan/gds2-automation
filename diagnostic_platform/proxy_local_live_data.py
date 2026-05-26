@@ -20,6 +20,7 @@ LOCAL_SAMPLE_SCHEMA_VERSION = "proxy.local_live_data.sample.v1"
 PRODUCT_SOURCE = "proxy_local_live_data"
 ENGINE_SPEED_SIGNAL_KEY = "engine_speed"
 DEFAULT_MAX_AGE_MS = 5000
+_WINDOWS_DEFAULT_CLOUD_ROOT = Path("D:/RPA_Diagnostic/observability/cloud")
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,10 @@ def get_proxy_local_live_data_latest_path(
     )
 
 
+def get_proxy_local_live_data_latest_candidate_paths() -> list[Path]:
+    return _candidate_live_data_paths("proxy_local_latest.json")
+
+
 def get_proxy_local_live_data_session_state_path(
     programdata: str | Path | None = None,
 ) -> Path:
@@ -48,6 +53,10 @@ def get_proxy_local_live_data_session_state_path(
         / "live_data"
         / "proxy_local_session_state.json"
     )
+
+
+def get_proxy_local_live_data_session_state_candidate_paths() -> list[Path]:
+    return _candidate_live_data_paths("proxy_local_session_state.json")
 
 
 def write_proxy_local_live_data_latest(
@@ -120,35 +129,45 @@ def write_proxy_local_live_data_session_state(
 def read_proxy_local_live_data_latest(
     path: str | Path | None = None,
 ) -> dict[str, Any] | None:
-    latest_path = Path(path) if path is not None else get_proxy_local_live_data_latest_path()
-    try:
-        raw = json.loads(latest_path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return None
-    if not isinstance(raw, dict):
-        return None
-    try:
-        return normalize_proxy_local_live_data_latest(raw)
-    except ValueError:
-        return None
+    latest_paths = (
+        [Path(path)]
+        if path is not None
+        else get_proxy_local_live_data_latest_candidate_paths()
+    )
+    for latest_path in latest_paths:
+        try:
+            raw = json.loads(latest_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            continue
+        if not isinstance(raw, dict):
+            continue
+        try:
+            return normalize_proxy_local_live_data_latest(raw)
+        except ValueError:
+            continue
+    return None
 
 
 def read_proxy_local_live_data_session_state(
     path: str | Path | None = None,
 ) -> dict[str, Any] | None:
-    state_path = (
-        Path(path) if path is not None else get_proxy_local_live_data_session_state_path()
+    state_paths = (
+        [Path(path)]
+        if path is not None
+        else get_proxy_local_live_data_session_state_candidate_paths()
     )
-    try:
-        raw = json.loads(state_path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return None
-    if not isinstance(raw, dict):
-        return None
-    try:
-        return normalize_proxy_local_live_data_session_state(raw)
-    except ValueError:
-        return None
+    for state_path in state_paths:
+        try:
+            raw = json.loads(state_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            continue
+        if not isinstance(raw, dict):
+            continue
+        try:
+            return normalize_proxy_local_live_data_session_state(raw)
+        except ValueError:
+            continue
+    return None
 
 
 def normalize_proxy_local_live_data_latest(
@@ -256,7 +275,14 @@ def validate_proxy_local_latest_for_session(
     if not live_data_active:
         return _validation(False, "live_data_inactive", 409)
     if latest is None:
-        return _validation(False, "no_sample_cache", 404)
+        return _validation(
+            False,
+            "no_sample_cache",
+            404,
+            checked_paths=[
+                str(path) for path in get_proxy_local_live_data_latest_candidate_paths()
+            ],
+        )
 
     try:
         normalized = normalize_proxy_local_live_data_latest(latest)
@@ -334,6 +360,27 @@ def _validation(
             **extra,
         },
     )
+
+
+def _candidate_live_data_paths(file_name: str) -> list[Path]:
+    candidates = [get_cloud_observability_root()]
+    programdata_root = get_cloud_observability_root(
+        os.environ.get("PROGRAMDATA", "C:/ProgramData")
+    )
+    candidates.append(programdata_root)
+    if os.name == "nt":
+        candidates.append(_WINDOWS_DEFAULT_CLOUD_ROOT)
+
+    paths: list[Path] = []
+    seen: set[str] = set()
+    for root in candidates:
+        path = Path(root) / "live_data" / file_name
+        key = os.path.normcase(os.path.abspath(os.fspath(path)))
+        if key in seen:
+            continue
+        seen.add(key)
+        paths.append(path)
+    return paths
 
 
 def _sanitize_latest_sample(sample: Mapping[str, Any]) -> dict[str, Any]:

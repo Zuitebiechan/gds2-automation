@@ -435,6 +435,7 @@ def test_proxy_local_latest_returns_404_when_cache_missing(monkeypatch) -> None:
 
     assert status == 404
     assert payload["reason"] == "no_sample_cache"
+    assert payload["checked_paths"]
 
 
 def test_proxy_local_latest_returns_409_when_stream_inactive(monkeypatch, tmp_path) -> None:

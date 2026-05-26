@@ -5,14 +5,38 @@
 | Field | Content |
 | --- | --- |
 | Type | Long-term optimization design |
-| Status | Guarded `observe_only` implemented; `shadow_local` transport is available; `active_replay` is now an explicit experimental mode with a narrow exact-signature replay path, but latest ECU evidence requires GM `A9 81 xx` to stay observe-only / inventory-only in the current implementation |
+| Status | Guarded `observe_only` implemented; `shadow_local` transport is available; `active_replay` is an explicit exact-signature experiment, but 2026-05-19 Engine Speed evidence moves the next product lane to `Proxy Local Live Data` |
 | Owner scope | Cloud GDS2 Data Display freshness over the Proxy J2534 tunnel |
 | Primary code paths | `vci_proxy/reverse_server.py`, `vci_proxy/reverse_client.py`, `vci_proxy/protocol.py`, `vci_proxy/j2534_worker.py` |
-| Related docs | `agent_docs/ops/proxy_j2534_latency_optimization.md`, `agent_docs/ops/vci_proxy_and_tunnel.md`, `agent_docs/ops/product_observability.md` |
+| Related docs | `agent_docs/ops/proxy_j2534_latency_optimization.md`, `agent_docs/ops/vci_proxy_and_tunnel.md`, `agent_docs/ops/product_observability.md`, `agent_docs/ops/proxy_local_live_data_fallback.md` |
 
 ## One-Line Conclusion
 
-The implemented first stage learns repeated read-only Data Display sweeps and can run a local shadow executor for comparison, while real GDS2 requests continue through the existing proxy/tunnel behavior. That means `shadow_local` is not itself a latency optimization; it is the safety proof needed before any future serve/replay path can reduce write-side tunnel crossings. Recent Engine Speed evidence shows the read-side transport stack still leaves multi-second focus-DID cadence, so the next useful work is to prove a narrow non-GM-A9 read-only sweep can match foreground results before any DLL-facing replay is considered. GM `A9 81 xx` remains observe-only / inventory-only.
+The implemented first stage learns repeated read-only Data Display sweeps and can run a local shadow executor for comparison, while real GDS2 requests continue through the existing proxy/tunnel behavior. That means `shadow_local` is not itself a latency optimization; it is only the safety proof needed before any future serve/replay path can reduce write-side tunnel crossings. The latest Engine Speed tests show that dynamic `0x000C` exact raw matching is not stable enough for replay, so this workstream should pause as the Engine Speed product path. The next implementation lane is the separate `Proxy Local Live Data` fallback. GM `A9 81 xx` remains observe-only / inventory-only.
+
+## Direction Decision - 2026-05-19
+
+Pause the `active_replay` route for Engine Speed as the main product lane.
+
+The `READ_TIMEOUT_MS=15` focused real-vehicle run showed that local sweep can
+capture `UDS DID 0x000C` frequently, but exact shadow comparison still failed
+the replay gate:
+
+- two pre-abort `sweep.shadow.match` events appeared;
+- repeated `sweep.shadow.mismatch` remained;
+- every match had `sweep_shadow_clean_match_streak=1`, not the required clean
+  streak;
+- plans still cancelled on mismatch thresholds;
+- `active_replay_armed` and `active_replay_served` stayed absent.
+
+This is enough to stop timeout-only tuning for Engine Speed. Future replay work
+would need a separate semantic-fidelity design with decoded RPM tolerance and
+freshness windows. Do not mix that work into the next product pass.
+
+For the next session, implement the first `Proxy Local Live Data` MVP from
+`agent_docs/ops/proxy_local_live_data_fallback.md`: decode local `0x000C`
+Engine Speed into local observability and a local latest-value file without
+serving GDS2 or changing the UI.
 
 ## Reassessment - 2026-05-18
 

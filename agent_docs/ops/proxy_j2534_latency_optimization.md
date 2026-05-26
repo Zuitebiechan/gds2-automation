@@ -5,14 +5,43 @@
 | Field | Content |
 | --- | --- |
 | Type | Optimization plan / implementation guide |
-| Status | Phases 1-4 plus first Phase 5 observe/inventory implemented; guarded `shadow_local` transport exists and `active_replay` now has an explicit narrow experimental path, but latest ECU evidence requires GM `A9 81 xx` execution to stay out of the active optimization lane |
+| Status | Phases 1-4 plus first Phase 5 observe/inventory implemented; guarded `shadow_local` transport exists and `active_replay` remains an exact-signature experiment, but 2026-05-19 Engine Speed evidence moves the next product implementation lane to `Proxy Local Live Data` |
 | Owner scope | Proxy J2534 reverse tunnel latency, especially cloud GDS2 live data freshness |
 | Primary code paths | `vci_proxy/reverse_server.py`, `vci_proxy/reverse_client.py`, `vci_proxy/protocol.py`, `vci_proxy/cache_read_msgs.py` |
-| Related docs | `agent_docs/ops/vci_proxy_and_tunnel.md`, `agent_docs/reports/network_ms.md`, `agent_docs/ops/product_observability.md`, `agent_docs/ops/proxy_j2534_local_sweep_scheduler.md` |
+| Related docs | `agent_docs/ops/vci_proxy_and_tunnel.md`, `agent_docs/reports/network_ms.md`, `agent_docs/ops/product_observability.md`, `agent_docs/ops/proxy_j2534_local_sweep_scheduler.md`, `agent_docs/ops/proxy_local_live_data_fallback.md` |
 
 ## One-Line Conclusion
 
-Cloud GDS2 live data lag is mainly amplified by `J2534 serial request count x tunnel round-trip cost`. The current transport stack improves safety, observability, and some read-side costs, but recent Engine Speed evidence shows it has not yet delivered the core product outcome: visible Data Display freshness close to local GDS2. The remaining bottleneck is write-side/page-sweep crossing count; `shadow_local` is comparison infrastructure only, and real latency reduction requires a proven safe path that can answer repeated read-only GDS2 write/read pairs from fresh local-side sweep results instead of synchronously crossing the tunnel for each item.
+Cloud GDS2 live data lag is mainly amplified by `J2534 serial request count x tunnel round-trip cost`. The current transport stack improves safety, observability, and some read-side costs, but recent Engine Speed evidence shows it has not delivered the core product outcome: visible Data Display freshness close to local GDS2. The GDS2 replay/write-side crossing lane remains useful research for stable signatures, but the next Engine Speed product implementation should be `Proxy Local Live Data`: decode a tiny safe local signal allowlist and display it as a separate source rather than trying to make native GDS2 Data Display refresh faster.
+
+## Direction Decision - 2026-05-19
+
+Move Engine Speed work to the `Proxy Local Live Data` fallback as the primary
+next implementation lane. Do not continue timeout-only tuning or enable
+`active_replay` for Engine Speed from the current evidence.
+
+Latest focused real-vehicle tests showed:
+
+- `READ_TIMEOUT_MS=5` proved the focused `UDS DID 0x000C` shadow config was
+  active, but did not produce a usable pre-abort match streak.
+- `READ_TIMEOUT_MS=15` captured many local `0x000C` response frames and did
+  produce two pre-abort `sweep.shadow.match` events.
+- The same `15ms` run still produced repeated `sweep.shadow.mismatch`, only
+  `clean_match_streak=1`, multiple plan cancellations, and no
+  `active_replay_armed` / `active_replay_served`.
+- The remaining mismatch pattern is dynamic-value drift and occasional
+  echo/empty shape mismatch, not simply a local read timeout.
+
+Implication:
+
+- exact raw replay is not a good first product path for dynamic Engine Speed;
+- semantic replay would require tolerance/freshness design before it can be
+  considered safe;
+- the lower-risk product path is to decode local Engine Speed as a separate
+  `proxy_local_obd` or `proxy_local_known_uds` value stream.
+
+Implementation handoff is now in
+`agent_docs/ops/proxy_local_live_data_fallback.md`.
 
 ## Reassessment - 2026-05-18
 

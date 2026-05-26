@@ -4,6 +4,7 @@ import struct
 from pathlib import Path
 
 from diagnostic_platform.proxy_local_live_data import (
+    get_proxy_local_live_data_latest_candidate_paths,
     read_proxy_local_live_data_latest,
     read_proxy_local_live_data_session_state,
     resolve_proxy_local_live_data_session_snapshot,
@@ -70,6 +71,40 @@ def test_proxy_local_live_data_cloud_latest_cache_handles_missing_and_corrupt(
     assert read_proxy_local_live_data_latest(path) is None
     path.write_text("{broken", encoding="utf-8")
     assert read_proxy_local_live_data_latest(path) is None
+
+
+def test_proxy_local_live_data_latest_reader_checks_fallback_cloud_roots(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    configured = tmp_path / "configured" / "observability" / "cloud"
+    programdata = tmp_path / "programdata"
+    fallback_path = (
+        programdata
+        / "RPA_Diagnostic"
+        / "observability"
+        / "cloud"
+        / "live_data"
+        / "proxy_local_latest.json"
+    )
+    write_proxy_local_live_data_latest(
+        sample=_proxy_local_engine_speed_sample(901.0),
+        connection_epoch="epoch-live-1",
+        session_snapshot={"session_id": "session-live", "live_data_active": True},
+        path=fallback_path,
+        received_at_s=1_800_000_000.0,
+    )
+
+    monkeypatch.setenv("PRODUCT_LOG_CLOUD_ROOT", str(configured))
+    monkeypatch.setenv("PROGRAMDATA", str(programdata))
+
+    candidate_paths = get_proxy_local_live_data_latest_candidate_paths()
+    latest = read_proxy_local_live_data_latest()
+
+    assert candidate_paths[0] == configured / "live_data" / "proxy_local_latest.json"
+    assert fallback_path in candidate_paths
+    assert latest is not None
+    assert latest["latest_sample"]["value"] == 901.0
 
 
 def test_proxy_local_live_data_latest_validation_gates_session_epoch_and_age(

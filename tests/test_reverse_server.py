@@ -572,6 +572,11 @@ def test_handle_vci_connection_writes_proxy_local_live_data_cloud_latest(
     assert received["source"] == "proxy_local_known_uds"
     assert received["decoder_id"] == "uds_did_000c_engine_speed"
     assert received["session_id"] == "session-live"
+    assert received["proxy_local_latest_path"].endswith(
+        "live_data\\proxy_local_latest.json"
+    ) or received["proxy_local_latest_path"].endswith(
+        "live_data/proxy_local_latest.json"
+    )
 
 
 def test_handle_vci_connection_uses_proxy_local_session_state_when_snapshot_missing(
