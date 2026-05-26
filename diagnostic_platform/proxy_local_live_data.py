@@ -21,6 +21,8 @@ PRODUCT_SOURCE = "proxy_local_live_data"
 ENGINE_SPEED_SIGNAL_KEY = "engine_speed"
 DEFAULT_MAX_AGE_MS = 5000
 _WINDOWS_DEFAULT_CLOUD_ROOT = Path("D:/RPA_Diagnostic/observability/cloud")
+_ATOMIC_REPLACE_MAX_ATTEMPTS = 3
+_ATOMIC_REPLACE_RETRY_DELAY_S = 0.05
 
 
 @dataclass(frozen=True)
@@ -437,13 +439,29 @@ def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> Path:
             json.dumps(dict(payload), ensure_ascii=False, indent=2, sort_keys=True),
             encoding="utf-8",
         )
-        os.replace(temp_path, path)
+        for attempt in range(_ATOMIC_REPLACE_MAX_ATTEMPTS):
+            try:
+                os.replace(temp_path, path)
+                break
+            except OSError as exc:
+                if (
+                    attempt >= _ATOMIC_REPLACE_MAX_ATTEMPTS - 1
+                    or not _should_retry_atomic_replace(exc)
+                ):
+                    raise
+                time.sleep(_ATOMIC_REPLACE_RETRY_DELAY_S * (attempt + 1))
     finally:
         try:
             temp_path.unlink(missing_ok=True)
         except OSError:
             pass
     return path
+
+
+def _should_retry_atomic_replace(exc: OSError) -> bool:
+    if isinstance(exc, PermissionError):
+        return True
+    return getattr(exc, "winerror", None) in {5, 32}
 
 
 def _parse_iso_ts(value: str) -> float | None:

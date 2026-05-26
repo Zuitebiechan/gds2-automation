@@ -211,6 +211,11 @@ flag and let any in-flight J2534 call finish before teardown, then stop on
 disconnect, close, connection cleanup, or shutdown. It does not require
 `shadow_local` and does not arm/serve `active_replay`.
 
+In the MVP 2 tunnel-push build, collection also requires the authenticated
+reverse server to acknowledge `local_live_data=1`. If the server does not ack
+that capability, the client remembers the ISO15765 channel but does not start
+polling or pushing samples.
+
 ## MVP 2: Tunnel Push And Cloud Latest Endpoint
 
 MVP 2 makes the local Engine Speed sample visible to the cloud/session side
@@ -226,6 +231,11 @@ Scope:
   only after that auth ack;
 - the cloud reverse server writes an atomic latest cache at
   `%PROGRAMDATA%\RPA_Diagnostic\observability\cloud\live_data\proxy_local_latest.json`;
+- cloud latest-cache write failures are fail-open for the tunnel: a transient
+  Windows replace/access error must emit
+  `proxy.local_live_data.cloud_sample_dropped` with
+  `failure_code=cloud_cache_write_failed`, but must not disconnect the reverse
+  tunnel or stop GDS2 foreground traffic;
 - cache readers must also check the configured `PRODUCT_LOG_CLOUD_ROOT`, the
   current `%PROGRAMDATA%` cloud root, and the product Windows fallback root
   (`D:\RPA_Diagnostic\observability\cloud`) so a Flask/API process can still
@@ -345,6 +355,9 @@ MVP 2 failure payloads:
   candidate `proxy_local_latest.json` path checked by the API process;
 - cloud `proxy.local_live_data.cloud_sample_received` includes
   `proxy_local_latest_path`, the path the reverse-server process wrote;
+- cloud `proxy.local_live_data.cloud_sample_dropped` includes
+  `proxy_local_latest_path` and `failure_code=cloud_cache_write_failed` when a
+  sample was decoded but the latest cache could not be replaced;
 - reverse-server `process.lifecycle.started` includes `product_log_cloud_root`,
   `programdata`, `proxy_local_latest_path`, and
   `proxy_local_session_state_path`.
@@ -374,7 +387,11 @@ MVP 2:
 3. Push local Engine Speed samples through the tunnel only after ack.
 4. Write cloud latest cache using the server connection epoch.
 5. Add guarded Flask latest endpoint.
-6. Keep source labels separate from native GDS2 Data Display values.
+6. Keep Proxy Local collection recoverable across tunnel reconnects: preserve
+   the known ISO15765 channel during tunnel cleanup, restart the collector only
+   after the next auth ack includes `local_live_data=1`, and still clear it on
+   real channel/device disconnect.
+7. Keep source labels separate from native GDS2 Data Display values.
 
 Do not implement `active_replay`, semantic replay tolerance, cloud SSE, or GUI
 in these passes.

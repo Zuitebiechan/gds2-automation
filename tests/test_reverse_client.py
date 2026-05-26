@@ -280,6 +280,61 @@ def test_send_registration_auth_mode_negotiates_local_live_data_capability(monke
     assert "local_live_data=1" in ProtocolDecoder.decode_auth_req_capabilities(body)
 
 
+def test_send_registration_auth_mode_restarts_local_live_data_after_reconnect(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    config = ProxyConfig.from_args(
+        auth_token="shared-secret",
+        local_live_data_enabled=True,
+        local_live_data_interval_ms=1000,
+    )
+    client = ReverseProxyClient("example.com", 9000, config=config)
+    client._local_live_data_channel = LocalLiveDataChannel(channel_id=44, protocol_id=6)
+    client.driver = types.SimpleNamespace(
+        write_msgs=lambda _channel_id, _messages, _timeout: (0, 1),
+        read_msgs=lambda _channel_id, _num_msgs, _timeout: (
+            0,
+            [{"protocol_id": 6, "data": bytes.fromhex("000007e862000c0d98")}],
+        ),
+        get_error_name=lambda code: f"ERR_{code}",
+    )
+    reader = _FakeReader(
+        ProtocolEncoder.encode_auth_rsp(
+            True,
+            "ok;local_live_data=1",
+            sequence=0,
+        )
+    )
+    writer = _FakeWriter()
+
+    monkeypatch.setattr("vci_proxy.reverse_client.time.time", lambda: 1_700_000_000)
+    monkeypatch.setattr(
+        "vci_proxy.reverse_client.compute_signature",
+        lambda token, timestamp: b"s" * 32,
+    )
+
+    async def _run() -> None:
+        result = await client._send_registration(reader, writer)
+
+        assert result is True
+        assert client._server_local_live_data_enabled is True
+        assert client._local_live_data_channel is not None
+        assert client._local_live_data_collector.running is True
+        await client._stop_local_live_data_collector_async("test_cleanup")
+
+    asyncio.run(_run())
+
+    rows = _read_local_events(tmp_path)
+    started = next(
+        row
+        for row in rows
+        if row["event_type"] == "proxy.local_live_data.collector.started"
+    )
+    assert started["reason"] == "tunnel_reconnected"
+
+
 def test_send_registration_auth_mode_keeps_local_live_data_disabled_without_ack(
     monkeypatch,
 ) -> None:
@@ -288,6 +343,7 @@ def test_send_registration_auth_mode_keeps_local_live_data_disabled_without_ack(
         local_live_data_enabled=True,
     )
     client = ReverseProxyClient("example.com", 9000, config=config)
+    client._local_live_data_channel = LocalLiveDataChannel(channel_id=44, protocol_id=6)
     reader = _FakeReader(ProtocolEncoder.encode_auth_rsp(True, "ok", sequence=0))
     writer = _FakeWriter()
 
@@ -301,6 +357,8 @@ def test_send_registration_auth_mode_keeps_local_live_data_disabled_without_ack(
 
     assert result is True
     assert client._server_local_live_data_enabled is False
+    assert client._local_live_data_channel is not None
+    assert client._local_live_data_collector.running is False
     body = writer.writes[0][HEADER_SIZE:]
     assert "local_live_data=1" in ProtocolDecoder.decode_auth_req_capabilities(body)
 
@@ -2724,6 +2782,7 @@ def test_local_live_data_collector_starts_after_connect_and_stops_on_disconnect(
         ),
     )
     client.running = True
+    client._server_local_live_data_enabled = True
     client.driver = types.SimpleNamespace(
         connect=_connect,
         disconnect=_disconnect,
@@ -2761,6 +2820,45 @@ def test_local_live_data_collector_starts_after_connect_and_stops_on_disconnect(
     assert "proxy.local_live_data.collector.stopped" in event_types
 
 
+def test_local_live_data_connection_cleanup_preserves_channel_for_reconnect(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(
+            auth_token="secret",
+            local_live_data_enabled=True,
+            local_live_data_interval_ms=1000,
+        ),
+    )
+    client._server_local_live_data_enabled = True
+    client._local_live_data_channel = LocalLiveDataChannel(channel_id=44, protocol_id=6)
+    client.driver = types.SimpleNamespace(
+        write_msgs=lambda _channel_id, _messages, _timeout: (0, 1),
+        read_msgs=lambda _channel_id, _num_msgs, _timeout: (
+            0,
+            [{"protocol_id": 6, "data": bytes.fromhex("000007e862000c0d98")}],
+        ),
+        get_error_name=lambda code: f"ERR_{code}",
+    )
+
+    async def _run() -> None:
+        assert client._start_local_live_data_collector(reason="channel_connected") is True
+        assert client._local_live_data_collector.running is True
+        await client._stop_local_live_data_collector_async(
+            "connection_cleanup",
+            clear_channel=False,
+        )
+        assert client._local_live_data_collector.running is False
+        assert client._local_live_data_channel is not None
+        assert client._local_live_data_channel.channel_id == 44
+
+    asyncio.run(_run())
+
+
 def test_local_live_data_collector_stays_disabled_by_default_after_iso15765_connect(
     monkeypatch,
     tmp_path: Path,
@@ -2770,6 +2868,40 @@ def test_local_live_data_collector_stays_disabled_by_default_after_iso15765_conn
         "example.com",
         9000,
         config=ProxyConfig.from_args(auth_token="secret"),
+    )
+    client.running = True
+    client.driver = types.SimpleNamespace(
+        connect=lambda _device_id, _protocol_id, _flags, _baudrate: (0, 44),
+        get_error_name=lambda code: f"ERR_{code}",
+    )
+
+    async def _run() -> None:
+        connect_rsp = await client._handle_connect(
+            ProtocolEncoder.encode_connect_req(1, 6, 0, 500000)[HEADER_SIZE:],
+            sequence=1,
+        )
+        assert ProtocolDecoder.decode_connect_rsp(connect_rsp[HEADER_SIZE:]) == (0, 44)
+        assert client._local_live_data_channel is not None
+        assert client._local_live_data_collector.running is False
+
+    asyncio.run(_run())
+
+    rows = _read_local_events(tmp_path)
+    assert not any(
+        row["event_type"] == "proxy.local_live_data.collector.started"
+        for row in rows
+    )
+
+
+def test_local_live_data_collector_waits_for_server_ack_after_iso15765_connect(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    client = ReverseProxyClient(
+        "example.com",
+        9000,
+        config=ProxyConfig.from_args(auth_token="secret", local_live_data_enabled=True),
     )
     client.running = True
     client.driver = types.SimpleNamespace(

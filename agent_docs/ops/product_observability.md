@@ -426,11 +426,18 @@ MVP 2 observability acceptance:
   `local_to_cloud_clock_delta_ms`, `session_id`, `connection_epoch`,
   `live_data_active_at_receive`, `source`, `decoder_id`, `value`, `unit`, and
   `proxy_local_latest_path`;
-- cloud `proxy.local_live_data.cloud_sample_dropped` records invalid payloads
-  or missing capability negotiation;
+- cloud `proxy.local_live_data.cloud_sample_dropped` records invalid payloads,
+  missing capability negotiation, unsupported samples, or
+  `failure_code=cloud_cache_write_failed` when the sample was decoded but the
+  cloud latest cache could not be atomically replaced;
 - cloud latest cache is stored under
   `live_data\proxy_local_latest.json` below the cloud observability root and
   uses schema `proxy.local_live_data.cloud_latest.v1`.
+- cloud latest-cache write failures are fail-open for the reverse tunnel. They
+  should drop only that Proxy Local sample, preserve GDS2 foreground traffic,
+  and leave enough fields (`client_sample_seq`, `signal_key`, `source`,
+  `decoder_id`, `value`, `unit`, `proxy_local_latest_path`) to diagnose the
+  failing cache path.
 - reverse-server `process.lifecycle.started` records `product_log_cloud_root`,
   `programdata`, `proxy_local_latest_path`, and
   `proxy_local_session_state_path` so cloud/API root mismatches can be

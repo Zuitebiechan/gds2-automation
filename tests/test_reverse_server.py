@@ -579,6 +579,78 @@ def test_handle_vci_connection_writes_proxy_local_live_data_cloud_latest(
     )
 
 
+def test_handle_vci_connection_keeps_tunnel_alive_when_proxy_local_cache_write_fails(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    async def _run() -> None:
+        monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+        server = ReverseProxyServer(config=ProxyConfig.from_args(auth_token="secret"))
+        auth_frame = ProtocolEncoder.encode_auth_req(
+            123,
+            b"x" * 32,
+            sequence=7,
+            capabilities="local_live_data=1",
+        )
+        sample_frame = ProtocolEncoder.encode_local_live_data_sample(
+            _proxy_local_engine_speed_sample(901.25),
+            sequence=11,
+        )
+        reader = _FakeReader(auth_frame, sample_frame)
+        writer = _FakeWriter(peername=("10.0.0.9", 9000))
+
+        monkeypatch.setattr(
+            "vci_proxy.reverse_server.verify_signature",
+            lambda token, timestamp, signature: (True, "ok"),
+        )
+        monkeypatch.setattr(
+            "vci_proxy.reverse_server.read_active_session_snapshot",
+            lambda: {"session_id": "session-live", "live_data_active": True},
+        )
+
+        def _fail_latest_write(**_kwargs):
+            raise PermissionError(5, "access denied")
+
+        monkeypatch.setattr(
+            "vci_proxy.reverse_server.write_proxy_local_live_data_latest",
+            _fail_latest_write,
+        )
+
+        await server._handle_vci_connection(reader, writer)
+
+    asyncio.run(_run())
+
+    latest_path = (
+        tmp_path
+        / "RPA_Diagnostic"
+        / "observability"
+        / "cloud"
+        / "live_data"
+        / "proxy_local_latest.json"
+    )
+    assert not latest_path.exists()
+    records = _read_product_log_events(tmp_path)
+    dropped = next(
+        record
+        for record in records
+        if record["event_type"] == "proxy.local_live_data.cloud_sample_dropped"
+    )
+    assert dropped["failure_code"] == "cloud_cache_write_failed"
+    assert dropped["reason"] == "cloud_cache_write_failed"
+    assert dropped["client_sample_seq"] == 1
+    assert dropped["signal_key"] == "engine_speed"
+    assert "proxy_local_latest.json" in dropped["proxy_local_latest_path"]
+    assert not any(
+        record["event_type"] == "proxy.local_live_data.cloud_sample_received"
+        for record in records
+    )
+    assert not any(
+        record["event_type"] == "tunnel.lifecycle.disconnected"
+        and "PermissionError" in str(record.get("reason"))
+        for record in records
+    )
+
+
 def test_handle_vci_connection_uses_proxy_local_session_state_when_snapshot_missing(
     monkeypatch,
     tmp_path,

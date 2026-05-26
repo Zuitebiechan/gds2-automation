@@ -3,6 +3,7 @@ from __future__ import annotations
 import struct
 from pathlib import Path
 
+import diagnostic_platform.proxy_local_live_data as proxy_local_live_data_module
 from diagnostic_platform.proxy_local_live_data import (
     get_proxy_local_live_data_latest_candidate_paths,
     read_proxy_local_live_data_latest,
@@ -61,6 +62,38 @@ def test_proxy_local_live_data_cloud_latest_cache_round_trips(tmp_path: Path) ->
     assert latest["session_id"] == "session-live"
     assert latest["connection_epoch"] == "epoch-live-1"
     assert latest["signals"]["engine_speed"]["value"] == 900.0
+
+
+def test_proxy_local_live_data_cloud_latest_retries_transient_replace_error(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "proxy_local_latest.json"
+    replace_calls: list[tuple[object, object]] = []
+    real_replace = proxy_local_live_data_module.os.replace
+
+    def _flaky_replace(src, dst) -> None:
+        replace_calls.append((src, dst))
+        if len(replace_calls) == 1:
+            raise PermissionError(5, "access denied")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(proxy_local_live_data_module.os, "replace", _flaky_replace)
+    monkeypatch.setattr(proxy_local_live_data_module.time, "sleep", lambda _seconds: None)
+
+    write_proxy_local_live_data_latest(
+        sample=_proxy_local_engine_speed_sample(901.0),
+        connection_epoch="epoch-live-1",
+        session_snapshot={"session_id": "session-live", "live_data_active": True},
+        path=path,
+        received_at_s=1_800_000_000.0,
+    )
+
+    latest = read_proxy_local_live_data_latest(path)
+
+    assert latest is not None
+    assert latest["latest_sample"]["value"] == 901.0
+    assert len(replace_calls) == 2
 
 
 def test_proxy_local_live_data_cloud_latest_cache_handles_missing_and_corrupt(

@@ -494,11 +494,13 @@ class ReverseProxyServer:
             connection_epoch=self._connection_epoch,
         )
         received_at_s = time.time()
+        latest_path = get_proxy_local_live_data_latest_path()
         try:
             latest = write_proxy_local_live_data_latest(
                 sample=sample,
                 connection_epoch=self._connection_epoch,
                 session_snapshot=snapshot,
+                path=latest_path,
                 received_at_s=received_at_s,
             )
         except ValueError as exc:
@@ -513,6 +515,25 @@ class ReverseProxyServer:
                 signal_key=sample.get("signal_key"),
                 schema_version=sample.get("schema_version"),
                 error=str(exc),
+            )
+            return
+        except OSError as exc:
+            self._emit_tunnel_event(
+                "proxy.local_live_data.cloud_sample_dropped",
+                status="warning",
+                failure_code="cloud_cache_write_failed",
+                failure_domain="cloud_proxy_tunnel",
+                reason="cloud_cache_write_failed",
+                impact_scope="proxy_local_live_data",
+                sample_sequence=sequence,
+                client_sample_seq=sample.get("client_sample_seq"),
+                signal_key=sample.get("signal_key"),
+                source=sample.get("source"),
+                decoder_id=sample.get("decoder_id"),
+                value=sample.get("value"),
+                unit=sample.get("unit"),
+                proxy_local_latest_path=str(latest_path),
+                error=f"{type(exc).__name__}:{exc}",
             )
             return
         self._emit_tunnel_event(
@@ -536,7 +557,7 @@ class ReverseProxyServer:
                 str(sample.get("local_send_ts") or ""),
                 received_at_s,
             ),
-            proxy_local_latest_path=str(get_proxy_local_live_data_latest_path()),
+            proxy_local_latest_path=str(latest_path),
         )
 
     def _observe_sweep_write(

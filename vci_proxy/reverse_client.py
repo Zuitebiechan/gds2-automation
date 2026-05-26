@@ -338,12 +338,33 @@ class ReverseProxyClient:
         }
         return {key: value for key, value in fields.items() if value is not None}
 
-    def _stop_local_live_data_collector(self, reason: str) -> None:
-        self._local_live_data_channel = None
+    def _start_local_live_data_collector(self, *, reason: str) -> bool:
+        if self._local_live_data_channel is None:
+            return False
+        if not self.config.local_live_data.enabled:
+            return False
+        if not self._server_local_live_data_enabled:
+            return False
+        return self._local_live_data_collector.start(reason=reason)
+
+    def _stop_local_live_data_collector(
+        self,
+        reason: str,
+        *,
+        clear_channel: bool = True,
+    ) -> None:
+        if clear_channel:
+            self._local_live_data_channel = None
         self._local_live_data_collector.request_stop(reason)
 
-    async def _stop_local_live_data_collector_async(self, reason: str) -> None:
-        self._local_live_data_channel = None
+    async def _stop_local_live_data_collector_async(
+        self,
+        reason: str,
+        *,
+        clear_channel: bool = True,
+    ) -> None:
+        if clear_channel:
+            self._local_live_data_channel = None
         await self._local_live_data_collector.stop(reason)
 
     def _cancel_shadow_for_foreground_if_needed(self, msg_type: int, body: bytes) -> None:
@@ -871,7 +892,10 @@ class ReverseProxyClient:
                         self._describe_task_state(self._prewarm_task),
                     )
                     await self._cancel_prewarm_task()
-                    await self._stop_local_live_data_collector_async("connection_cleanup")
+                    await self._stop_local_live_data_collector_async(
+                        "connection_cleanup",
+                        clear_channel=False,
+                    )
                     await self._release_prewarmed_device()
                     await self._close_writer()
                     self._ioctl_cache.invalidate()
@@ -918,7 +942,10 @@ class ReverseProxyClient:
         self._server_sweep_shadow_enabled = False
         self._server_local_live_data_enabled = False
         self._server_connection_epoch = None
-        self._stop_local_live_data_collector("registration_reset")
+        await self._stop_local_live_data_collector_async(
+            "registration_reset",
+            clear_channel=False,
+        )
         if self.config.auth.enabled and self.config.auth.token:
             timestamp = int(time.time())
             signature = compute_signature(self.config.auth.token, timestamp)
@@ -986,6 +1013,10 @@ class ReverseProxyClient:
                             instance_id=self._instance_id,
                             attempt_label=attempt_label,
                         )
+                        if self._server_local_live_data_enabled:
+                            self._start_local_live_data_collector(
+                                reason="tunnel_reconnected"
+                            )
                     else:
                         logger.error(
                             "[CLIENT_CONN] instance=%s %s authentication failed: %s",
@@ -1293,7 +1324,7 @@ class ReverseProxyClient:
                     channel_id=int(channel_id),
                     protocol_id=int(protocol_id),
                 )
-                self._local_live_data_collector.start(reason="channel_connected")
+                self._start_local_live_data_collector(reason="channel_connected")
             elif self.config.local_live_data.enabled:
                 self._emit_client_event(
                     "proxy.local_live_data.unsupported",

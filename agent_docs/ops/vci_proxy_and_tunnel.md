@@ -868,6 +868,18 @@ using atomic replace. The cache stores `session_id`, server
 `connection_epoch`, `live_data_active_at_receive`, `latest_sample`, and
 `signals.engine_speed`.
 
+The latest-cache write path is fail-open for the tunnel. Transient Windows
+replace/access failures should retry briefly, then emit
+`proxy.local_live_data.cloud_sample_dropped` with
+`failure_code=cloud_cache_write_failed` and the failing
+`proxy_local_latest_path`; they must not propagate as tunnel `OSError` or stop
+foreground GDS2 traffic.
+
+On reverse-tunnel reconnect, the local client preserves the last known
+ISO15765 channel during connection cleanup and restarts the Proxy Local
+collector only after the next auth response acknowledges `local_live_data=1`.
+Real J2534 disconnect/close still clears the channel and stops collection.
+
 The cloud/client UI should keep the existing Java Agent GDS2 stream available
 as the complete page view and display proxy-local values as a separate or
 source-labeled fast signal set. Do not merge sources in a way that hides
