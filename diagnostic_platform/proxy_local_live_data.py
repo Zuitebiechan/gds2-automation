@@ -21,8 +21,7 @@ PRODUCT_SOURCE = "proxy_local_live_data"
 ENGINE_SPEED_SIGNAL_KEY = "engine_speed"
 DEFAULT_MAX_AGE_MS = 5000
 _WINDOWS_DEFAULT_CLOUD_ROOT = Path("D:/RPA_Diagnostic/observability/cloud")
-_ATOMIC_REPLACE_MAX_ATTEMPTS = 3
-_ATOMIC_REPLACE_RETRY_DELAY_S = 0.05
+_ATOMIC_REPLACE_RETRY_DELAYS_S = (0.05, 0.1, 0.2, 0.4, 0.8)
 
 
 @dataclass(frozen=True)
@@ -226,22 +225,42 @@ def resolve_proxy_local_live_data_session_snapshot(
     session_state: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     snapshot = dict(active_snapshot or {})
+    state = (
+        dict(session_state)
+        if session_state is not None
+        else read_proxy_local_live_data_session_state()
+    )
+    normalized: dict[str, Any] | None = None
+    if state:
+        try:
+            normalized = normalize_proxy_local_live_data_session_state(state)
+        except ValueError:
+            normalized = None
+
+    if normalized and normalized.get("session_id") and _epoch_matches(
+        normalized.get("connection_epoch"),
+        connection_epoch,
+    ):
+        snapshot_session_id = _clean_optional_text(snapshot.get("session_id"))
+        state_session_id = _clean_optional_text(normalized.get("session_id"))
+        if not normalized.get("live_data_active") and (
+            snapshot_session_id is None or snapshot_session_id == state_session_id
+        ):
+            resolved = dict(snapshot)
+            resolved["session_id"] = None
+            resolved["connection_epoch"] = (
+                normalized.get("connection_epoch") or connection_epoch
+            )
+            resolved["live_data_active"] = False
+            return resolved
+
     if bool(snapshot.get("live_data_active", False)) and _epoch_matches(
         snapshot.get("connection_epoch"),
         connection_epoch,
     ):
         return snapshot
 
-    state = (
-        dict(session_state)
-        if session_state is not None
-        else read_proxy_local_live_data_session_state()
-    )
-    if not state:
-        return snapshot
-    try:
-        normalized = normalize_proxy_local_live_data_session_state(state)
-    except ValueError:
+    if not normalized:
         return snapshot
     if not normalized.get("live_data_active"):
         return snapshot
@@ -291,6 +310,14 @@ def validate_proxy_local_latest_for_session(
     except ValueError:
         return _validation(False, "invalid_sample_cache", 409)
     latest_session_id = normalized.get("session_id")
+    if not normalized.get("live_data_active_at_receive"):
+        return _validation(
+            False,
+            "sample_received_while_live_data_inactive",
+            409,
+            cache_session_id=latest_session_id,
+            requested_session_id=session_id,
+        )
     if latest_session_id != session_id:
         return _validation(
             False,
@@ -439,17 +466,17 @@ def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> Path:
             json.dumps(dict(payload), ensure_ascii=False, indent=2, sort_keys=True),
             encoding="utf-8",
         )
-        for attempt in range(_ATOMIC_REPLACE_MAX_ATTEMPTS):
+        for attempt in range(len(_ATOMIC_REPLACE_RETRY_DELAYS_S) + 1):
             try:
                 os.replace(temp_path, path)
                 break
             except OSError as exc:
                 if (
-                    attempt >= _ATOMIC_REPLACE_MAX_ATTEMPTS - 1
+                    attempt >= len(_ATOMIC_REPLACE_RETRY_DELAYS_S)
                     or not _should_retry_atomic_replace(exc)
                 ):
                     raise
-                time.sleep(_ATOMIC_REPLACE_RETRY_DELAY_S * (attempt + 1))
+                time.sleep(_ATOMIC_REPLACE_RETRY_DELAYS_S[attempt])
     finally:
         try:
             temp_path.unlink(missing_ok=True)

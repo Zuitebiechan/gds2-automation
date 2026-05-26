@@ -437,7 +437,12 @@ MVP 2 observability acceptance:
   should drop only that Proxy Local sample, preserve GDS2 foreground traffic,
   and leave enough fields (`client_sample_seq`, `signal_key`, `source`,
   `decoder_id`, `value`, `unit`, `proxy_local_latest_path`) to diagnose the
-  failing cache path.
+  failing cache path. The cache writer should use bounded retry for transient
+  Windows replace/access errors before emitting the dropped-sample event.
+- terminal or stop/error live-data events in `proxy_local_session_state.json`
+  are authoritative over stale active snapshots for Proxy Local association,
+  so post-abort samples remain inactive/unassociated until a new live-data
+  session starts.
 - reverse-server `process.lifecycle.started` records `product_log_cloud_root`,
   `programdata`, `proxy_local_latest_path`, and
   `proxy_local_session_state_path` so cloud/API root mismatches can be

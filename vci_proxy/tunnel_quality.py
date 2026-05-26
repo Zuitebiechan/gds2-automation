@@ -14,6 +14,7 @@ from diagnostic_platform.observability import utc_now_iso
 DEFAULT_WINDOW_SIZE = 5
 DEFAULT_FRESHNESS_SECONDS = 10.0
 DEFAULT_HYSTERESIS_WINDOWS = 2
+_ATOMIC_REPLACE_RETRY_DELAYS_S = (0.05, 0.1, 0.2, 0.4, 0.8)
 
 
 def _utc_iso(ts: float | None = None) -> str:
@@ -153,7 +154,7 @@ def write_tunnel_quality_snapshot(snapshot: dict[str, Any], path: str | Path | N
 
     # Windows can transiently deny os.replace if another process briefly opens
     # the snapshot without delete sharing. Retry with unique temp paths.
-    for attempt in range(3):
+    for attempt in range(len(_ATOMIC_REPLACE_RETRY_DELAYS_S) + 1):
         temp_path = snapshot_path.with_name(
             f"{snapshot_path.name}.{os.getpid()}.{time.time_ns()}.tmp"
         )
@@ -167,9 +168,9 @@ def write_tunnel_quality_snapshot(snapshot: dict[str, Any], path: str | Path | N
                 temp_path.unlink(missing_ok=True)
             except OSError:
                 pass
-            if attempt >= 2:
+            if attempt >= len(_ATOMIC_REPLACE_RETRY_DELAYS_S):
                 raise
-            time.sleep(0.05 * (attempt + 1))
+            time.sleep(_ATOMIC_REPLACE_RETRY_DELAYS_S[attempt])
 
     if last_error is not None:
         raise last_error

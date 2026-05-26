@@ -869,16 +869,25 @@ using atomic replace. The cache stores `session_id`, server
 `signals.engine_speed`.
 
 The latest-cache write path is fail-open for the tunnel. Transient Windows
-replace/access failures should retry briefly, then emit
+replace/access failures should retry with a bounded backoff, then emit
 `proxy.local_live_data.cloud_sample_dropped` with
 `failure_code=cloud_cache_write_failed` and the failing
 `proxy_local_latest_path`; they must not propagate as tunnel `OSError` or stop
 foreground GDS2 traffic.
 
+The same Windows replace pattern applies to the tunnel-quality snapshot under
+`%PROGRAMDATA%\VCI_Proxy\tunnel_quality.json`: retry transient locks, but do
+not treat snapshot persistence failure as tunnel failure.
+
 On reverse-tunnel reconnect, the local client preserves the last known
 ISO15765 channel during connection cleanup and restarts the Proxy Local
 collector only after the next auth response acknowledges `local_live_data=1`.
 Real J2534 disconnect/close still clears the channel and stops collection.
+
+For Proxy Local sample association, terminal session/live-data state in
+`proxy_local_session_state.json` overrides a stale active-session snapshot. This
+prevents samples that arrive during abort cleanup from being exposed as active
+session data.
 
 The cloud/client UI should keep the existing Java Agent GDS2 stream available
 as the complete page view and display proxy-local values as a separate or

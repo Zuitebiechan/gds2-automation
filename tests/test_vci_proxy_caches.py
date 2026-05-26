@@ -96,6 +96,38 @@ def test_proxy_local_live_data_cloud_latest_retries_transient_replace_error(
     assert len(replace_calls) == 2
 
 
+def test_proxy_local_live_data_cloud_latest_survives_extended_replace_lock(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "proxy_local_latest.json"
+    replace_calls: list[tuple[object, object]] = []
+    real_replace = proxy_local_live_data_module.os.replace
+
+    def _flaky_replace(src, dst) -> None:
+        replace_calls.append((src, dst))
+        if len(replace_calls) <= 5:
+            raise PermissionError(5, "access denied")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(proxy_local_live_data_module.os, "replace", _flaky_replace)
+    monkeypatch.setattr(proxy_local_live_data_module.time, "sleep", lambda _seconds: None)
+
+    write_proxy_local_live_data_latest(
+        sample=_proxy_local_engine_speed_sample(902.0),
+        connection_epoch="epoch-live-1",
+        session_snapshot={"session_id": "session-live", "live_data_active": True},
+        path=path,
+        received_at_s=1_800_000_000.0,
+    )
+
+    latest = read_proxy_local_live_data_latest(path)
+
+    assert latest is not None
+    assert latest["latest_sample"]["value"] == 902.0
+    assert len(replace_calls) == 6
+
+
 def test_proxy_local_live_data_cloud_latest_cache_handles_missing_and_corrupt(
     tmp_path: Path,
 ) -> None:
@@ -202,6 +234,56 @@ def test_proxy_local_live_data_latest_validation_gates_session_epoch_and_age(
     assert inactive.reason == "live_data_inactive"
 
 
+def test_proxy_local_live_data_latest_validation_rejects_inactive_receive(
+    tmp_path: Path,
+) -> None:
+    latest = write_proxy_local_live_data_latest(
+        sample=_proxy_local_engine_speed_sample(),
+        connection_epoch="epoch-live-1",
+        session_snapshot={"session_id": "session-live", "live_data_active": False},
+        path=tmp_path / "proxy_local_latest.json",
+        received_at_s=1_800_000_000.0,
+    )
+
+    result = validate_proxy_local_latest_for_session(
+        latest,
+        session_id="session-live",
+        active_connection_epoch="epoch-live-1",
+        live_data_active=True,
+        max_age_ms=5000,
+        now_s=1_800_000_001.0,
+    )
+
+    assert result.status == 409
+    assert result.reason == "sample_received_while_live_data_inactive"
+
+
+def test_proxy_local_live_data_latest_validation_prefers_inactive_receive_reason(
+    tmp_path: Path,
+) -> None:
+    latest = write_proxy_local_live_data_latest(
+        sample=_proxy_local_engine_speed_sample(),
+        connection_epoch="epoch-live-1",
+        session_snapshot={"session_id": None, "live_data_active": False},
+        path=tmp_path / "proxy_local_latest.json",
+        received_at_s=1_800_000_000.0,
+    )
+
+    result = validate_proxy_local_latest_for_session(
+        latest,
+        session_id="session-live",
+        active_connection_epoch="epoch-live-1",
+        live_data_active=True,
+        max_age_ms=5000,
+        now_s=1_800_000_001.0,
+    )
+
+    assert result.status == 409
+    assert result.reason == "sample_received_while_live_data_inactive"
+    assert result.payload["cache_session_id"] is None
+    assert result.payload["requested_session_id"] == "session-live"
+
+
 def test_proxy_local_live_data_session_state_round_trips_and_resolves_snapshot(
     tmp_path: Path,
 ) -> None:
@@ -250,6 +332,59 @@ def test_proxy_local_live_data_session_state_does_not_resolve_wrong_epoch(
     )
 
     assert resolved == {}
+
+
+def test_proxy_local_live_data_inactive_session_state_overrides_stale_active_snapshot(
+    tmp_path: Path,
+) -> None:
+    state = write_proxy_local_live_data_session_state(
+        session_id="session-live",
+        connection_epoch="epoch-live-1",
+        live_data_active=False,
+        source_event_type="session.lifecycle.aborted",
+        path=tmp_path / "proxy_local_session_state.json",
+        updated_at_s=1_800_000_000.0,
+    )
+
+    resolved = resolve_proxy_local_live_data_session_snapshot(
+        active_snapshot={
+            "session_id": "session-live",
+            "connection_epoch": "epoch-live-1",
+            "live_data_active": True,
+        },
+        connection_epoch="epoch-live-1",
+        session_state=state,
+    )
+
+    assert resolved["session_id"] is None
+    assert resolved["connection_epoch"] == "epoch-live-1"
+    assert resolved["live_data_active"] is False
+
+
+def test_proxy_local_live_data_inactive_session_state_does_not_block_new_session(
+    tmp_path: Path,
+) -> None:
+    state = write_proxy_local_live_data_session_state(
+        session_id="old-session",
+        connection_epoch="epoch-live-1",
+        live_data_active=False,
+        source_event_type="session.lifecycle.aborted",
+        path=tmp_path / "proxy_local_session_state.json",
+        updated_at_s=1_800_000_000.0,
+    )
+
+    resolved = resolve_proxy_local_live_data_session_snapshot(
+        active_snapshot={
+            "session_id": "new-session",
+            "connection_epoch": "epoch-live-1",
+            "live_data_active": True,
+        },
+        connection_epoch="epoch-live-1",
+        session_state=state,
+    )
+
+    assert resolved["session_id"] == "new-session"
+    assert resolved["live_data_active"] is True
 
 
 def test_read_msgs_cache_serves_recent_buffer_empty_response(monkeypatch) -> None:

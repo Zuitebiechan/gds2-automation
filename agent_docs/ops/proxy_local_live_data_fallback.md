@@ -235,7 +235,9 @@ Scope:
   Windows replace/access error must emit
   `proxy.local_live_data.cloud_sample_dropped` with
   `failure_code=cloud_cache_write_failed`, but must not disconnect the reverse
-  tunnel or stop GDS2 foreground traffic;
+  tunnel or stop GDS2 foreground traffic. The writer should retry bounded
+  transient `WinError 5/32` replace failures first, then drop only that sample
+  if the cache is still locked;
 - cache readers must also check the configured `PRODUCT_LOG_CLOUD_ROOT`, the
   current `%PROGRAMDATA%` cloud root, and the product Windows fallback root
   (`D:\RPA_Diagnostic\observability\cloud`) so a Flask/API process can still
@@ -358,6 +360,10 @@ MVP 2 failure payloads:
 - cloud `proxy.local_live_data.cloud_sample_dropped` includes
   `proxy_local_latest_path` and `failure_code=cloud_cache_write_failed` when a
   sample was decoded but the latest cache could not be replaced;
+- terminal or stop/error live-data events in `proxy_local_session_state.json`
+  override a stale `active_session_snapshot.json`, so samples arriving during
+  abort cleanup are written as inactive/unassociated instead of being served
+  through the just-aborted session;
 - reverse-server `process.lifecycle.started` includes `product_log_cloud_root`,
   `programdata`, `proxy_local_latest_path`, and
   `proxy_local_session_state_path`.

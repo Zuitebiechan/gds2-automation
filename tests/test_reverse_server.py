@@ -773,6 +773,76 @@ def test_handle_vci_connection_does_not_use_proxy_local_session_state_for_wrong_
     assert latest["live_data_active_at_receive"] is False
 
 
+def test_handle_vci_connection_does_not_associate_proxy_local_sample_after_abort(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    async def _run() -> None:
+        monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+        server = ReverseProxyServer(config=ProxyConfig.from_args(auth_token="secret"))
+        auth_frame = ProtocolEncoder.encode_auth_req(
+            123,
+            b"x" * 32,
+            sequence=7,
+            capabilities="local_live_data=1",
+        )
+        sample_frame = ProtocolEncoder.encode_local_live_data_sample(
+            _proxy_local_engine_speed_sample(904.0),
+            sequence=11,
+        )
+        reader = _FakeReader(auth_frame, sample_frame)
+        writer = _FakeWriter(peername=("10.0.0.9", 9000))
+
+        monkeypatch.setattr(
+            "vci_proxy.reverse_server.verify_signature",
+            lambda token, timestamp, signature: (True, "ok"),
+        )
+        monkeypatch.setattr(
+            "vci_proxy.reverse_server.read_active_session_snapshot",
+            lambda: {
+                "session_id": "session-live",
+                "connection_epoch": "epoch-1800000000000-001",
+                "live_data_active": True,
+            },
+        )
+        monkeypatch.setattr(
+            "vci_proxy.reverse_server.time.time",
+            lambda: 1_800_000_000.0,
+        )
+        write_proxy_local_live_data_session_state(
+            session_id="session-live",
+            connection_epoch="epoch-1800000000000-001",
+            live_data_active=False,
+            source_event_type="session.lifecycle.aborted",
+        )
+
+        await server._handle_vci_connection(reader, writer)
+
+    asyncio.run(_run())
+
+    latest = read_proxy_local_live_data_latest(
+        tmp_path
+        / "RPA_Diagnostic"
+        / "observability"
+        / "cloud"
+        / "live_data"
+        / "proxy_local_latest.json"
+    )
+    assert latest is not None
+    assert latest["session_id"] is None
+    assert latest["live_data_active_at_receive"] is False
+    assert latest["latest_sample"]["value"] == 904.0
+
+    records = _read_product_log_events(tmp_path)
+    received = next(
+        record
+        for record in records
+        if record["event_type"] == "proxy.local_live_data.cloud_sample_received"
+    )
+    assert received["session_id"] is None
+    assert received["live_data_active_at_receive"] is False
+
+
 def test_handle_vci_connection_drops_proxy_local_sample_without_capability(
     monkeypatch,
     tmp_path,
